@@ -1,0 +1,6 @@
+[
+  { "id": "groq", "name": "Groq", "role": "Fast inference engine", "model": "Llama 3.3 70B", "icon": "⚡", "color": "#00f2ff" },
+  { "id": "gemini", "name": "Gemini", "role": "Multimodal reasoning", "model": "Gemini 2.0 Flash", "icon": "💎", "color": "#8b5cf6" },
+  { "id": "ollama", "name": "Ollama", "role": "Local model runtime", "model": "Configurable", "icon": "🦙", "color": "#4caf50" },
+  { "id": "claude", "name": "Claude", "role": "Deep architecture", "model": "Sonnet / Opus", "icon": "🧠", "color": "#ff9800" }
+]

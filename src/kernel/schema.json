@@ -1,0 +1,90 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "aeon://kernel/block-manifest",
+  "title": "AEON Block Manifest",
+  "manifestVersion": "1.0.0",
+  "description": "FROZEN 2026-07-01 per Ship Plan v2 K1. Do not extend silently — every change requires a version bump and a MIGRATION_POLICY.md entry. Normalizer: src/kernel/blockStandard.cjs.",
+  "type": "object",
+  "required": ["id", "label", "route", "version"],
+  "properties": {
+    "manifestVersion": { "type": "string", "description": "Schema version this manifest conforms to. Absent = 1.0.0 (pre-freeze manifests are grandfathered)." },
+    "id": { "type": "string", "pattern": "^[a-z0-9_]+$", "description": "Must equal the folder name under src/blocks/." },
+    "label": { "type": "string" },
+    "icon": { "type": "string" },
+    "route": { "type": "string", "pattern": "^/" },
+    "description": { "type": "string" },
+    "category": { "type": "string" },
+    "tier": { "type": "string", "enum": ["core", "plugin", "experimental", "unknown"] },
+    "version": { "type": "string" },
+    "api_routes": { "type": "boolean" },
+    "nav": {
+      "type": "object",
+      "properties": {
+        "group": { "type": "string" },
+        "order": { "type": "number" },
+        "label": { "type": "string" },
+        "icon": { "type": "string" },
+        "hidden": { "type": "boolean" }
+      }
+    },
+    "requires": {
+      "type": "object",
+      "properties": {
+        "apis": { "type": "array", "items": { "type": "string" } },
+        "env": { "type": "array", "items": { "type": "string" } },
+        "local": { "type": "array", "items": { "type": "string" } },
+        "blocks": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "provides": {
+      "type": "object",
+      "properties": {
+        "routes": { "type": "boolean" },
+        "api": { "type": "boolean" },
+        "models": { "type": "array" }
+      }
+    },
+    "contract": {
+      "type": "object",
+      "properties": {
+        "inputs": { "type": "array" },
+        "outputs": { "type": "array" },
+        "events": { "type": "array" },
+        "permissions": {
+          "type": "object",
+          "properties": {
+            "filesystem": { "enum": ["none", "read", "write"] },
+            "network": { "enum": ["none", "internal", "external"] },
+            "secrets": { "type": "boolean" },
+            "shell": { "type": "boolean" },
+            "ai": { "type": "boolean" },
+            "crossBlockRead": { "type": "array", "items": { "type": "string" }, "description": "Tier 1.5 — block ids this block may READ. Declared here, no approval gate. WRITE stays Tier 2." }
+          }
+        },
+        "storage": {
+          "type": "object",
+          "properties": {
+            "type": { "type": "string" },
+            "scope": { "type": "string" }
+          }
+        },
+        "ai": { "type": "object" },
+        "targets": { "type": "object" },
+        "commands": { "type": "array" },
+        "settings_keys": { "type": "array" }
+      }
+    },
+    "routes": { "type": "array" },
+    "env": { "type": "array" },
+    "ai": { "type": "object" },
+    "storage": { "type": "object" },
+    "dependencies": { "type": "array" },
+    "deployment": {
+      "type": "object",
+      "properties": {
+        "target": { "type": "string" },
+        "runtime": { "type": "string" }
+      }
+    }
+  }
+}

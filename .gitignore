@@ -1,0 +1,138 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build output
+dist/
+dist-electron/
+build/
+
+# Environment (contains API keys — use .env.example as template)
+.env
+.env.*
+!.env.example
+
+# Generated data (rebuild with: npm run index)
+src/brain-data.json
+.push-manifest.json
+.sync-manifest.json
+
+# Scratch / test-automation artifacts — browser profiles (cookies, login
+# data, history), screenshots, temp PDFs. Never belongs in git; a browser
+# profile got swept in via git add -A once, do not repeat that.
+tmp/
+
+# User data files (personal to each installation)
+training-data.json
+aeon_notes.json
+aeon_terminal_history.json
+chat_log.json
+audit_log.json
+clients.json
+inventory.json
+quick-links.json
+user_html.json
+token_ledger.json
+sdi_violations.json
+aeon-settings.json
+blocks.json
+cors.json
+
+# Logs
+logs/
+*.log
+server.log
+server_log.txt
+scan_report.txt
+detached_err.log
+detached_out.log
+npm-debug.log*
+
+# Secrets
+*.json.key
+*firebase-adminsdk*.json
+second-brain-*.json
+firebase.json
+firestore.rules
+
+# One-shot patch scripts (dev artifacts, not distribution code)
+patch_*.py
+patch_*.js
+replace_server*.js
+rewrite_charts*.py
+fix_server.py
+build_v7.py
+generate_static_includes.py
+patch_vercel_api.js
+
+# Test artifacts
+test_ddg*.html
+test_ddg*.js
+test-build.js
+test-models.js
+
+# Stale copies
+dashboard_copy.jsx
+
+# Temp
+temp_frames/
+scratch/
+_aeon_backups_*/
+*.tmp
+*.zip
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+.obsidian/
+*.swp
+*.swo
+
+# Vite
+.vite/
+vite.config.js.timestamp-*
+
+# Vercel
+.vercel/
+
+# Python cache
+__pycache__/
+
+# Electron packaging
+*.pfx
+
+# Inbox (user content)
+Inbox/
+
+# Half-Baked (dev experiments)
+Half-Baked/
+
+# AEON auto-generated / secret artifacts (flashed on boot, never committed)
+src/blocks/*/.aeon.runtime.json
+aeon-vault.json
+aeon-vault.json.tmp
+aeon-user.json
+aeon_user.json
+aeon-endpoints.json
+aeon-endpoints.json.tmp
+
+# ── AEON reorg: organized homes ──
+secrets/
+archive/
+data/
+Data/
+tools/bin/cloudflared.exe
+
+# AEON 3 additions
+secrets/
+data/
+db/host-runtime.json
+src/aeon-settings.json
+src/blocks/*/data/
+src/blocks/*/.aeon.runtime.json
+*.log

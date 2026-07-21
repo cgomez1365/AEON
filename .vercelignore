@@ -1,0 +1,76 @@
+# ── Build artifacts & dev tools ──────────────────────────────
+node_modules
+.git
+dist
+dist-electron
+electron
+
+# ── Local-only data files ────────────────────────────────────
+training-data.json
+file_manager_old.txt
+.push-manifest.json
+chat_log.json
+audit_log.json
+email_tracker.json
+clients.json
+inventory.json
+quick-links.json
+aeon_notes.json
+aeon_terminal_history.json
+
+# ── Heavy asset folders — NOT for Vercel ─────────────────────
+public/knowledge
+public/trainings
+public/models
+vault
+temp_frames
+Inbox
+Obsidian
+.obsidian
+
+# ── Reorg homes (local-only) ────────────────────────────────
+secrets/
+archive/
+scripts/
+logs/
+Half-Baked/
+
+# ── Desktop-only files ──────────────────────────────────────
+*.bat
+*.py
+desktop_bridge.py
+treasury.js
+
+# ── Local env overrides ──────────────────────────────────────
+.env.local
+.env.local.template
+
+# ── Data and AI Memory ───────────────────────────────────────
+Data/
+
+# ── Block local data dirs (ephemeral on Vercel — Supabase is source of truth) ──
+src/blocks/*/data/
+src/blocks/aeon_matrix/data/Vault/
+src/blocks/agent_core/data/
+Reading_Library/
+Workshop/
+
+# ── Token ledger + audit (local file — Supabase on Vercel) ──
+token_ledger.json
+token_log.json
+
+# ── Hardening pass 2026-07-17 — nothing personal rides to the cloud ──
+db/
+.env
+.env.*
+BUILD_LOG.md
+WORK_ORDER.md
+EMERGENCY_RESTORE.md
+AGENTS.md
+CLAUDE.md
+tests/
+docs/
+skills/
+supabase/
+tmp/
+*.bak-*

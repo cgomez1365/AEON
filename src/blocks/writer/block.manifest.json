@@ -1,0 +1,108 @@
+{
+  "manifestVersion": "1.0.0",
+  "id": "writer",
+  "label": "Writer",
+  "icon": "✍️",
+  "route": "/writer",
+  "description": "A full writing studio — documents, templates, version history, outline, focus mode, find & replace, AI co-writer with your Writing DNA, and one-click export to Word, HTML, Markdown, or PDF.",
+  "category": "intel",
+  "tier": "core",
+  "nav": {
+    "group": "system",
+    "order": 99,
+    "label": "Writer",
+    "icon": "✍️",
+    "hidden": false
+  },
+  "widget": null,
+  "requires": {
+    "apis": [],
+    "env": [],
+    "local": [],
+    "blocks": []
+  },
+  "provides": {
+    "routes": true,
+    "api": true,
+    "models": []
+  },
+  "api_routes": true,
+  "version": "2.0.0",
+  "contract": {
+    "inputs": [],
+    "outputs": [],
+    "events": [],
+    "permissions": {
+      "filesystem": "write",
+      "network": "internal",
+      "secrets": false,
+      "shell": false,
+      "ai": true
+    },
+    "storage": {
+      "type": "json",
+      "scope": "block"
+    },
+    "ai": {
+      "canGenerate": true,
+      "canAnalyze": true,
+      "canAutomate": false,
+      "roles": [
+        "creative"
+      ]
+    },
+    "targets": {
+      "local": true,
+      "vercel": true,
+      "docker": true,
+      "cloudflare": true
+    },
+    "commands": [
+      {
+        "cmd": "/write",
+        "desc": "Generate a draft — /write a follow-up email to a client",
+        "method": "POST",
+        "route": "/api/writer/generate",
+        "param": "prompt",
+        "display": "content"
+      },
+      {
+        "cmd": "/docs",
+        "desc": "List saved Writer documents",
+        "method": "GET",
+        "route": "/api/writer/docs"
+      }
+    ],
+    "settings_keys": [
+      "models.creative"
+    ],
+    "settings": []
+  },
+  "routes": [
+    {
+      "method": "ALL",
+      "path": "/writer/*",
+      "auth": true
+    }
+  ],
+  "env": [],
+  "ai": {
+    "capabilities": [
+      "generate",
+      "analyze"
+    ],
+    "canGenerate": true,
+    "canAnalyze": true,
+    "canAutomate": false
+  },
+  "storage": {
+    "provider": "json",
+    "tables": [],
+    "scope": "block"
+  },
+  "dependencies": [],
+  "deployment": {
+    "target": "universal",
+    "runtime": "any"
+  }
+}

@@ -1,0 +1,105 @@
+{
+  "manifestVersion": "1.0.0",
+  "id": "memory_core",
+  "label": "Memory Core",
+  "icon": "🧠",
+  "route": "/memory_core",
+  "description": "VP's persistent memory — typed facts (outline/algorithm/decision/milestone), vault-stored, injected into every terminal chat",
+  "category": "core",
+  "tier": "core",
+  "nav": {
+    "group": "system",
+    "order": 99,
+    "label": "Memory Core",
+    "icon": "🧠",
+    "hidden": false
+  },
+  "widget": null,
+  "requires": {
+    "apis": [],
+    "env": [],
+    "local": [],
+    "blocks": []
+  },
+  "provides": {
+    "routes": true,
+    "api": true,
+    "models": []
+  },
+  "api_routes": true,
+  "version": "1.0.0",
+  "contract": {
+    "inputs": [],
+    "outputs": [],
+    "events": [],
+    "permissions": {
+      "filesystem": "write",
+      "network": "internal",
+      "secrets": false,
+      "shell": false,
+      "ai": true
+    },
+    "storage": {
+      "type": "json",
+      "scope": "global"
+    },
+    "ai": {
+      "canGenerate": false,
+      "canAnalyze": true,
+      "canAutomate": false,
+      "roles": [
+        "chat"
+      ],
+      "role": "chat",
+      "blurb": "Distills and recalls VP memory"
+    },
+    "targets": {
+      "local": true,
+      "vercel": false,
+      "docker": true,
+      "cloudflare": false
+    },
+    "commands": [],
+    "settings_keys": [],
+    "settings": [
+      {
+        "key": "injection_budget",
+        "label": "Injection budget (chars)",
+        "type": "number",
+        "default": 4500
+      },
+      {
+        "key": "auto_distill",
+        "label": "Auto-distill sessions",
+        "type": "boolean",
+        "default": true
+      }
+    ]
+  },
+  "routes": [
+    {
+      "method": "ALL",
+      "path": "/memory/*",
+      "auth": true
+    }
+  ],
+  "env": [],
+  "ai": {
+    "capabilities": [
+      "analyze"
+    ],
+    "canGenerate": false,
+    "canAnalyze": true,
+    "canAutomate": false
+  },
+  "storage": {
+    "provider": "json",
+    "tables": [],
+    "scope": "global"
+  },
+  "dependencies": [],
+  "deployment": {
+    "target": "local",
+    "runtime": "nodejs"
+  }
+}

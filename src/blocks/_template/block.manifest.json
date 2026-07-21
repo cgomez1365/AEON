@@ -1,0 +1,85 @@
+{
+  "manifestVersion": "1.0.0",
+  "id": "_template",
+  "label": "Blank Block",
+  "icon": "🧩",
+  "route": "/_template",
+  "description": "Copy this folder, rename everything '_template' to your block id, and you have a live block. See README.md for what every field means.",
+  "category": "Template",
+  "tier": "experimental",
+  "nav": {
+    "group": "system",
+    "order": 999,
+    "label": "Blank Block",
+    "icon": "🧩",
+    "hidden": true
+  },
+  "requires": {
+    "apis": [],
+    "env": [],
+    "local": [],
+    "blocks": []
+  },
+  "provides": {
+    "routes": true,
+    "api": true,
+    "models": []
+  },
+  "api_routes": true,
+  "version": "0.1.0",
+  "contract": {
+    "inputs": [],
+    "outputs": [],
+    "events": [],
+    "permissions": {
+      "filesystem": "none",
+      "network": "none",
+      "secrets": false,
+      "shell": false,
+      "ai": false,
+      "crossBlockRead": []
+    },
+    "storage": {
+      "type": "json",
+      "scope": "block"
+    },
+    "ai": {
+      "canGenerate": false,
+      "canAnalyze": false,
+      "canAutomate": false,
+      "roles": []
+    },
+    "targets": {
+      "local": true,
+      "vercel": true,
+      "docker": true,
+      "cloudflare": true
+    },
+    "commands": [],
+    "settings_keys": []
+  },
+  "routes": [
+    {
+      "method": "ALL",
+      "path": "/_template/*",
+      "auth": true
+    }
+  ],
+  "env": [],
+  "ai": {
+    "capabilities": [],
+    "canGenerate": false,
+    "canAnalyze": false,
+    "canAutomate": false
+  },
+  "storage": {
+    "provider": "json",
+    "tables": [],
+    "scope": "block"
+  },
+  "dependencies": [],
+  "deployment": {
+    "target": "any",
+    "runtime": "nodejs"
+  }
+}

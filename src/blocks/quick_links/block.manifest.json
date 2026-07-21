@@ -1,0 +1,80 @@
+{
+  "manifestVersion": "1.0.0",
+  "id": "quick_links",
+  "label": "Quick Links",
+  "icon": "🔗",
+  "route": "/links",
+  "description": "Compact categorized bookmark manager with favicons",
+  "category": "tools",
+  "tier": "core",
+  "nav": {
+    "group": "tools",
+    "order": 2,
+    "label": "Quick Links",
+    "icon": "🔗",
+    "hidden": false
+  },
+  "widget": null,
+  "requires": {
+    "apis": [],
+    "env": [],
+    "local": [],
+    "blocks": []
+  },
+  "provides": {
+    "routes": true,
+    "api": false,
+    "models": []
+  },
+  "api_routes": false,
+  "version": "1.0.0",
+  "contract": {
+    "inputs": [],
+    "outputs": [],
+    "events": [],
+    "permissions": {
+      "filesystem": "none",
+      "network": "external",
+      "secrets": false,
+      "shell": false,
+      "ai": false
+    },
+    "storage": {
+      "type": "firebase",
+      "scope": "shared"
+    },
+    "ai": {
+      "canGenerate": false,
+      "canAnalyze": false,
+      "canAutomate": false,
+      "roles": []
+    },
+    "targets": {
+      "local": true,
+      "vercel": true,
+      "docker": true,
+      "cloudflare": true
+    },
+    "commands": [],
+    "settings_keys": [],
+    "settings": []
+  },
+  "routes": [],
+  "env": [],
+  "ai": {
+    "capabilities": [],
+    "canGenerate": false,
+    "canAnalyze": false,
+    "canAutomate": false
+  },
+  "storage": {
+    "provider": "firebase",
+    "tables": [],
+    "scope": "shared"
+  },
+  "dependencies": [],
+  "deployment": {
+    "target": "universal",
+    "runtime": "any"
+  }
+}

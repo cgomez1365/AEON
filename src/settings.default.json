@@ -1,0 +1,46 @@
+{
+  "models": {
+    "chat": {
+      "provider": "gemini",
+      "model": "gemini-3.1-pro-preview"
+    },
+    "grading": {
+      "provider": "ollama",
+      "model": "qwen2.5-coder:7b"
+    },
+    "research": {
+      "provider": "groq",
+      "model": "llama-3.1-8b-instant"
+    },
+    "creative": {
+      "provider": "ollama",
+      "model": "qwen2.5-coder:7b"
+    },
+    "agent_worker": {
+      "provider": "ollama",
+      "model": "qwen2.5-coder:7b"
+    },
+    "agent_heavy": {
+      "provider": "ollama",
+      "model": "qwen2.5-coder:7b"
+    },
+    "agent_final": {
+      "provider": "groq",
+      "model": "qwen/qwen3-32b"
+    },
+    "agent_final_advisor": {
+      "provider": "groq",
+      "model": "qwen/qwen3.6-27b"
+    },
+    "agent_memory_manager": {
+      "provider": "gemini",
+      "model": "gemini-2.5-flash"
+    },
+    "vision": {
+      "provider": "groq",
+      "model": "meta-llama/llama-4-scout-17b-16e-instruct"
+    }
+  },
+  "prefs": {},
+  "blockConfig": {}
+}

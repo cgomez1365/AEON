@@ -1,0 +1,40 @@
+{
+  "2026-07-18": {
+    "requests": 32,
+    "tokens": 23479,
+    "models": {
+      "tencent/hy3:free": {
+        "requests": 30,
+        "tokens": 23479
+      },
+      "openai/gpt-4o-mini": {
+        "requests": 1,
+        "tokens": 0
+      },
+      "gemini-3.1-pro-preview": {
+        "requests": 1,
+        "tokens": 0
+      }
+    }
+  },
+  "2026-07-19": {
+    "requests": 1,
+    "tokens": 0,
+    "models": {
+      "gemini-3.1-pro-preview": {
+        "requests": 1,
+        "tokens": 0
+      }
+    }
+  },
+  "2026-07-20": {
+    "requests": 1,
+    "tokens": 0,
+    "models": {
+      "gemini-3.1-pro-preview": {
+        "requests": 1,
+        "tokens": 0
+      }
+    }
+  }
+}

@@ -1,0 +1,95 @@
+{
+  "manifestVersion": "1.0.0",
+  "id": "orion_search",
+  "label": "Orion Search",
+  "icon": "🔭",
+  "route": "/orion",
+  "description": "Unified search across the web, the Second Brain, and the block registry — every result carries a real link.",
+  "category": "content",
+  "tier": "core",
+  "nav": {
+    "group": "content",
+    "order": 3,
+    "label": "Orion Search",
+    "icon": "🔭",
+    "hidden": false
+  },
+  "widget": null,
+  "requires": {
+    "apis": [],
+    "env": [],
+    "local": [],
+    "blocks": []
+  },
+  "provides": {
+    "routes": true,
+    "api": true,
+    "models": []
+  },
+  "api_routes": true,
+  "version": "1.0.0",
+  "contract": {
+    "inputs": [],
+    "outputs": [],
+    "events": [],
+    "permissions": {
+      "filesystem": "read",
+      "network": "external",
+      "secrets": false,
+      "shell": false,
+      "ai": false
+    },
+    "storage": {
+      "type": "none",
+      "scope": "block"
+    },
+    "ai": {
+      "canGenerate": false,
+      "canAnalyze": false,
+      "canAutomate": false,
+      "roles": []
+    },
+    "targets": {
+      "local": true,
+      "vercel": true,
+      "docker": true,
+      "cloudflare": true
+    },
+    "commands": [
+      {
+        "cmd": "/orion",
+        "desc": "Unified search: web + Second Brain + blocks",
+        "method": "POST",
+        "route": "/api/orion/search",
+        "param": "query",
+        "mode": "instant"
+      }
+    ],
+    "settings_keys": [],
+    "settings": []
+  },
+  "routes": [
+    {
+      "method": "ALL",
+      "path": "/orion/*",
+      "auth": true
+    }
+  ],
+  "env": [],
+  "ai": {
+    "capabilities": [],
+    "canGenerate": false,
+    "canAnalyze": false,
+    "canAutomate": false
+  },
+  "storage": {
+    "provider": "none",
+    "tables": [],
+    "scope": "block"
+  },
+  "dependencies": [],
+  "deployment": {
+    "target": "universal",
+    "runtime": "any"
+  }
+}

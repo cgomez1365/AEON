@@ -1,0 +1,171 @@
+{
+  "manifestVersion": "1.0.0",
+  "id": "aeon_matrix",
+  "label": "Aeon Matrix",
+  "icon": "🧠",
+  "route": "/brain",
+  "description": "The knowledge graph, document library, reading vault, and saved artifacts — AEON's long-term memory and human file system.",
+  "category": "Knowledge",
+  "tier": "plugin",
+  "nav": {
+    "group": "content",
+    "order": 4,
+    "label": "Aeon Matrix",
+    "icon": "🧠",
+    "hidden": false
+  },
+  "widget": null,
+  "requires": {
+    "apis": [
+      "gemini",
+      "ollama",
+      "supabase"
+    ],
+    "env": [
+      "GEMINI_PAID_KEY",
+      "GEMINI_API_KEY",
+      "GEMINI_FREE_KEY_1",
+      "OLLAMA_HOST",
+      "SUPABASE_URL",
+      "SUPABASE_SERVICE_ROLE_KEY"
+    ],
+    "local": [],
+    "blocks": []
+  },
+  "provides": {
+    "routes": true,
+    "api": true,
+    "models": []
+  },
+  "api_routes": true,
+  "version": "1.0.0",
+  "contract": {
+    "inputs": [],
+    "outputs": [],
+    "events": [],
+    "permissions": {
+      "filesystem": "write",
+      "network": "external",
+      "secrets": true,
+      "shell": false,
+      "ai": true
+    },
+    "storage": {
+      "type": "json",
+      "scope": "block"
+    },
+    "ai": {
+      "canGenerate": false,
+      "canAnalyze": false,
+      "canAutomate": false,
+      "roles": [],
+      "role": "chat",
+      "blurb": "Answers questions about your documents"
+    },
+    "targets": {
+      "local": true,
+      "vercel": true,
+      "docker": true,
+      "cloudflare": true
+    },
+    "commands": [
+      {
+        "cmd": "/index-brain",
+        "desc": "Rebuild the Second Brain index (new/changed/deleted files)",
+        "method": "POST",
+        "route": "/api/crn/second-brain/ingest/scan-docs",
+        "mode": "instant"
+      },
+      {
+        "cmd": "/vault-push",
+        "desc": "Mirror Second Brain docs to Supabase for mobile",
+        "method": "POST",
+        "route": "/api/crn/second-brain/vault-push",
+        "mode": "instant"
+      }
+    ],
+    "settings_keys": [
+      "aeon_matrix_settings"
+    ],
+    "settings": [
+      {
+        "key": "dimensions",
+        "label": "Matrix view",
+        "type": "select",
+        "options": [
+          "3D orbit",
+          "2D map"
+        ],
+        "default": "3D orbit",
+        "scope": "browser"
+      },
+      {
+        "key": "layout",
+        "label": "Organization",
+        "type": "select",
+        "options": [
+          "Auto-organize (vault tree)",
+          "Free physics"
+        ],
+        "default": "Auto-organize (vault tree)",
+        "scope": "browser"
+      },
+      {
+        "key": "nodeStyle",
+        "label": "Node style",
+        "type": "select",
+        "options": [
+          "Solid orbs",
+          "Fuzzy glow"
+        ],
+        "default": "Solid orbs",
+        "scope": "browser"
+      },
+      {
+        "key": "autoRotate",
+        "label": "Auto rotate camera",
+        "type": "boolean",
+        "default": false,
+        "scope": "browser"
+      },
+      {
+        "key": "focusMode",
+        "label": "Focus mode on hover",
+        "type": "boolean",
+        "default": false,
+        "scope": "browser"
+      }
+    ]
+  },
+  "routes": [
+    {
+      "method": "ALL",
+      "path": "/aeon_matrix/*",
+      "auth": true
+    }
+  ],
+  "env": [
+    "GEMINI_PAID_KEY",
+    "GEMINI_API_KEY",
+    "GEMINI_FREE_KEY_1",
+    "OLLAMA_HOST",
+    "SUPABASE_URL",
+    "SUPABASE_SERVICE_ROLE_KEY"
+  ],
+  "ai": {
+    "capabilities": [],
+    "canGenerate": false,
+    "canAnalyze": false,
+    "canAutomate": false
+  },
+  "storage": {
+    "provider": "json",
+    "tables": [],
+    "scope": "block"
+  },
+  "dependencies": [],
+  "deployment": {
+    "target": "any",
+    "runtime": "nodejs"
+  }
+}

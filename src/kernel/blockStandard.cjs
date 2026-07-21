@@ -1,0 +1,328 @@
+/**
+ * AEON Block Standard — the cartridge contract.
+ *
+ * One source of truth (block.manifest.json) + the machinery that lets AEON
+ * (the console) read any block (cartridge) dropped into src/blocks/ and wire
+ * it up automatically: normalize its manifest, derive its env requirements,
+ * check readiness against the live system, and flash a fresh runtime config
+ * into the block so it can talk to AEON's kernel/models/auth.
+ *
+ * Used both by a one-time CLI (scripts) and by server.cjs on every boot.
+ */
+const fs = require('fs');
+const path = require('path');
+
+const BLOCKS_DIR = path.join(__dirname, '..', 'blocks');
+
+// ── Provider → env var(s) that prove the connection exists ───────────
+const API_ENV = {
+  groq:     ['GROQ_API_KEY'],
+  gemini:   ['GEMINI_FREE_KEY_1', 'GEMINI_PAID_KEY'],   // any one
+  openai:   ['OPENAI_API_KEY'],
+  claude:   ['ANTHROPIC_API_KEY'],
+  supabase: ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY'], // all
+  firebase: ['VITE_FIREBASE_PROJECT_ID'],
+  gas:      ['VITE_GAS_URL'],
+  youtube:  ['YOUTUBE_REFRESH_TOKEN'],
+  coinbase: ['__FILE__cdp_api_key.json'],                // desktop file, not env
+  canva:    ['CANVA_API_KEY'],
+};
+// Providers requiring ALL listed vars (vs any-one).
+const API_ENV_ALL = new Set(['supabase']);
+
+// ── Kernel nav defaults — synced INTO each block's manifest on boot ──
+// The kernel owns sidebar layout. Blocks not listed here still load (system
+// group, order 99). A block's manifest.nav is always overwritten from this
+// map during syncAllBlocks — this IS manifest-as-truth: the kernel writes
+// the manifest, the frontend reads the manifest, nobody else declares nav.
+// Labels are NOT declared here — folder is truth (CEO rule, 2026-07-16):
+// the displayed name always derives from the folder name via labelFromFolder.
+// This map only owns layout: route, group, order, icon. Pruned to installed
+// blocks; an unlisted block still loads (system group, order 99).
+const NAV = {
+  // FINANCE — everything that makes or tracks money
+  dashboard:     { route: '/',           group: 'finance', order: 0, icon: '⚡' },
+  // AGENT — VP and everything that watches or staffs it
+  fleet_control: { route: '/fleet',      group: 'agent',   order: 0, icon: '📡' },
+  // WORK — client-facing operations
+  ats_engine:    { route: '/ats',        group: 'work',    order: 0, icon: '🎯' },
+  // CONTENT — knowledge and creation
+  cookbook:      { route: '/cookbook',   group: 'content', order: 1, icon: '🍳' },
+  deep_research: { route: '/research',   group: 'content', order: 2, icon: '🔬' },
+  orion_search:  { route: '/orion',      group: 'content', order: 3, icon: '🔭' },
+  aeon_matrix:   { route: '/brain',      group: 'content', order: 4, icon: '🧠' },
+  files:         { route: '/files',      group: 'content', order: 5, icon: '📁' },
+  portfolio:     { route: '/portfolio',  group: 'content', order: 6, icon: '🎨' },
+  // TOOLS — utilities
+  host_os:       { route: '/host',       group: 'tools',   order: 0, icon: '🖥️' },
+  council:       { route: '/council',    group: 'tools',   order: 1, icon: '🏛️' },
+  quick_links:   { route: '/links',      group: 'tools',   order: 2, icon: '🔗' },
+  // SYSTEM — the OS itself
+  settings:      { route: '/settings',   group: 'system',  order: 0, icon: '⚙️' },
+  activity:      { route: '/activity',   group: 'system',  order: 1, icon: '📊' },
+  master:        { route: '/master',     group: 'system',  order: 2, icon: '🧬' },
+};
+
+// ── Folder-is-truth naming — mirror of blockRegistry.js labelFromFolder ──
+const ACRONYMS = { ats: 'ATS', ai: 'AI', os: 'OS', vp: 'VP', llm: 'LLM', api: 'API' };
+function labelFromFolder(folder) {
+  return folder.split(/[_-]+/).filter(Boolean)
+    .map(w => ACRONYMS[w.toLowerCase()] || w[0].toUpperCase() + w.slice(1))
+    .join(' ');
+}
+
+const GROUP_META = {
+  finance: { label: 'FINANCE', icon: '⚡', order: 0 },
+  agent:   { label: 'AGENT',   icon: '🤖', order: 1 },
+  work:    { label: 'WORK',    icon: '💼', order: 2 },
+  content: { label: 'CONTENT', icon: '🔍', order: 3 },
+  tools:   { label: 'TOOLS',   icon: '🔧', order: 4 },
+  system:  { label: 'SYSTEM',  icon: '📊', order: 5 },
+};
+
+function listBlockFolders() {
+  if (!fs.existsSync(BLOCKS_DIR)) return [];
+  return fs.readdirSync(BLOCKS_DIR).filter(f => {
+    if (f.startsWith('_')) return false; // _template is scaffolding, never synced/mounted (K2)
+    try { return fs.statSync(path.join(BLOCKS_DIR, f)).isDirectory(); } catch { return false; }
+  });
+}
+
+function readManifest(folder) {
+  const p = path.join(BLOCKS_DIR, folder, 'block.manifest.json');
+  if (!fs.existsSync(p)) return null;
+  try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; }
+}
+
+/** Build the env-var list a block needs from its declared API requirements. */
+function deriveEnv(apis) {
+  const env = [];
+  for (const a of apis || []) {
+    for (const v of (API_ENV[a] || [])) if (!env.includes(v)) env.push(v);
+  }
+  return env;
+}
+
+/**
+ * Normalize one folder's manifest to the canonical schema. Pure: returns the
+ * new manifest object (caller decides whether to write). Preserves existing
+ * description/category/deployment; injects nav + derived env; pins route to
+ * the canonical NAV route when present (heals drift).
+ */
+function normalizeManifest(folder) {
+  const m = readManifest(folder) || {};
+  const nav = NAV[folder];
+  const apis = (m.requires && m.requires.apis) || [];
+  const hasApi = fs.existsSync(path.join(BLOCKS_DIR, folder, 'api'));
+
+  // ── AEON Block Contract v2 ─────────────────────────────────────────
+  // Every field the Neural Terminal needs to understand, wire, and
+  // control a block without parsing its source code.
+  const out = {
+    // K1: schema version travels with the manifest — absent = 1.0.0 (grandfathered).
+    // See src/kernel/schema.json + MIGRATION_POLICY.md before touching this shape.
+    manifestVersion: m.manifestVersion || '1.0.0',
+    id: folder,
+    label: labelFromFolder(folder),
+    icon: (nav && nav.icon) || m.icon || '📦',
+    route: (nav && nav.route) || m.route || `/${folder}`,
+    description: m.description || '',
+    category: m.category || (nav && nav.group) || 'system',
+    tier: m.tier || (['dashboard','fleet_control','settings','activity','master'].includes(folder) ? 'core' : 'plugin'),
+    nav: nav
+      ? { group: nav.group, order: nav.order, label: labelFromFolder(folder), icon: nav.icon, hidden: false }
+      : { group: 'system', order: 99, label: labelFromFolder(folder), icon: m.icon || '📦', hidden: m.nav?.hidden === true },
+    // Widget contract — quick-view the dashboard can render (weather-widget model)
+    widget: m.widget || null,
+    requires: {
+      apis,
+      env: (m.requires && m.requires.env) || deriveEnv(apis),
+      local: (m.requires && m.requires.local) || [],
+      blocks: (m.requires && m.requires.blocks) || [],
+    },
+    provides: {
+      routes: true,
+      api: hasApi,
+      models: (m.provides && m.provides.models) || [],
+    },
+    api_routes: hasApi,
+    version: m.version || '1.0.0',
+
+    // ── Block Contract: Intelligence Layer ───────────────────────────
+    // Tells the Neural Terminal and any AI model what this block can do.
+    contract: {
+      // What the block accepts as input (data types, file formats, etc)
+      inputs:  m.contract?.inputs  || [],
+      // What the block produces as output
+      outputs: m.contract?.outputs || [],
+      // Events this block emits (other blocks can subscribe)
+      events:  m.contract?.events  || [],
+      // Permissions the block requests from the OS sandbox
+      permissions: m.contract?.permissions || {
+        filesystem: hasApi ? 'read' : 'none',   // none | read | write
+        network:    apis.length > 0 ? 'external' : 'internal', // none | internal | external
+        secrets:    apis.length > 0,             // can access vault keys
+        shell:      false,                       // can execute shell commands
+        ai:         true,                        // can call kernelLLM
+      },
+      // Storage requirements
+      storage: m.contract?.storage || {
+        type:  'json',        // json | sqlite | supabase | firebase | none
+        scope: 'block',       // block | shared | global
+      },
+      // AI capabilities this block exposes
+      ai: m.contract?.ai || {
+        canGenerate:   false,  // block can generate content via LLM
+        canAnalyze:    false,  // block can analyze user data via LLM
+        canAutomate:   false,  // block supports autonomous task execution
+        roles:         [],     // which kernelLLM roles it uses: ['chat', 'research', ...]
+      },
+      // Deployment targets where this block is functional
+      targets: m.contract?.targets || {
+        local:      true,
+        vercel:     (typeof m.deployment === 'string' ? m.deployment : m.deployment?.target) !== 'local_required',
+        docker:     true,
+        cloudflare: (typeof m.deployment === 'string' ? m.deployment : m.deployment?.target) !== 'local_required',
+      },
+      // Terminal commands this block registers (e.g. /trading start)
+      commands: m.contract?.commands || [],
+      // Settings keys this block reads from aeon-settings.json
+      settings_keys: m.contract?.settings_keys || [],
+      // Declared settings controls — Settings renders these automatically.
+      // Block leaves → its controls leave; block arrives → they appear.
+      // Each: { key, label, desc, type: 'toggle'|'text'|'secret'|'select'|'number', default, options? }
+      // Values persist in aeon-settings.json → blockSettings[<id>][<key>].
+      settings: m.contract?.settings || [],
+    },
+
+    // ── Diagram-spec top-level fields (v4 enrichment) ─────────────────
+    routes: m.routes || (hasApi ? [{ method: 'ALL', path: `/${folder}/*`, auth: true }] : []),
+    env: m.env || deriveEnv(apis),
+    ai: {
+      capabilities: m.ai?.capabilities || m.contract?.ai?.roles || [],
+      canGenerate: m.ai?.canGenerate ?? m.contract?.ai?.canGenerate ?? false,
+      canAnalyze: m.ai?.canAnalyze ?? m.contract?.ai?.canAnalyze ?? false,
+      canAutomate: m.ai?.canAutomate ?? m.contract?.ai?.canAutomate ?? false,
+    },
+    storage: {
+      provider: m.storage?.provider || m.contract?.storage?.type || 'json',
+      tables: m.storage?.tables || [],
+      scope: m.storage?.scope || m.contract?.storage?.scope || 'block',
+    },
+    dependencies: m.dependencies || (m.requires?.blocks) || [],
+    deployment: {
+      target: typeof m.deployment === 'object' ? m.deployment.target : (m.deployment || 'universal'),
+      runtime: m.deployment?.runtime || (m.contract?.targets?.vercel === false ? 'local' : 'any'),
+    },
+  };
+  return out;
+}
+
+/** Check readiness of a block against live env + a desktop-file probe. */
+function checkReadiness(manifest, env) {
+  env = env || process.env;
+  const missing = [];
+  for (const a of manifest.requires.apis || []) {
+    const vars = API_ENV[a] || [];
+    if (!vars.length) continue;
+    const fileProbe = vars.find(v => v.startsWith('__FILE__'));
+    if (fileProbe) {
+      const fname = fileProbe.replace('__FILE__', '');
+      // Look inside the install first (secrets/), Desktop only as legacy.
+      const ok = [
+        path.join(__dirname, '..', '..', 'secrets', fname),
+        path.join(process.env.USERPROFILE || process.env.HOME || '', 'Desktop', fname),
+      ].some(p => { try { return fs.existsSync(p); } catch { return false; } });
+      if (!ok) missing.push(a);
+      continue;
+    }
+    const present = API_ENV_ALL.has(a)
+      ? vars.every(v => !!env[v])
+      : vars.some(v => !!env[v]);
+    if (!present) missing.push(a);
+  }
+  const depTarget = typeof manifest.deployment === 'object' ? manifest.deployment.target : manifest.deployment;
+  const localMissing = (depTarget === 'local_required' && process.env.VERCEL) ? ['desktop'] : [];
+  return {
+    ready: missing.length === 0 && localMissing.length === 0,
+    missingApis: missing,
+    localMissing,
+  };
+}
+
+/**
+ * Merge a block's own .env.block into the environment — a cartridge shipping
+ * its own defaults. AEON-CENTRAL ALWAYS WINS: a key already set globally (real
+ * .env / process.env) is never overwritten, so dropping a block can't clobber
+ * the operator's keys. Block-only keys (e.g. a block-specific base URL) fill in.
+ * Returns the list of keys the block contributed.
+ */
+function mergeBlockEnv(folder) {
+  const p = path.join(BLOCKS_DIR, folder, '.env.block');
+  if (!fs.existsSync(p)) return [];
+  const added = [];
+  try {
+    for (const line of fs.readFileSync(p, 'utf8').split('\n')) {
+      const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)$/);
+      if (!m) continue;
+      const key = m[1];
+      const val = m[2].trim().replace(/^["']|["']$/g, '');
+      if (process.env[key] === undefined || process.env[key] === '') {
+        process.env[key] = val;       // fill gap; central value wins if present
+        added.push(key);
+      }
+    }
+  } catch {}
+  return added;
+}
+
+/**
+ * Flash a fresh runtime config into a block — the console writing the save
+ * file onto the cartridge. Overwritten every boot so it's always in sync with
+ * central settings/models/auth. Blocks read this to reach AEON services.
+ */
+function writeRuntimeConfig(folder, manifest, ctx) {
+  const cfg = {
+    _generated: new Date().toISOString(),
+    _warning: 'AUTO-GENERATED by AEON on boot. Do not edit — changes are overwritten.',
+    blockId: folder,
+    apiBase: ctx.apiBase || '/api',
+    runtime: ctx.runtime || (process.env.VERCEL ? 'cloud' : 'local'),
+    auth: { required: !!ctx.requireLogin, mode: 'session+bearer' },
+    models: ctx.models || {},            // resolved role → {provider,model} snapshot
+    readiness: checkReadiness(manifest, process.env),
+  };
+  try {
+    fs.writeFileSync(path.join(BLOCKS_DIR, folder, '.aeon.runtime.json'), JSON.stringify(cfg, null, 2));
+    return true;
+  } catch { return false; }
+}
+
+/**
+ * Full boot pass: normalize every manifest (write), delete legacy block.json,
+ * flash runtime configs, and return the registry with readiness.
+ */
+function syncAllBlocks(ctx = {}) {
+  const registry = [];
+  for (const folder of listBlockFolders()) {
+    mergeBlockEnv(folder);                 // cartridge defaults fill gaps (central wins)
+    const manifest = normalizeManifest(folder);
+    // Persist normalized manifest (heals drift, adds nav/env).
+    try {
+      fs.writeFileSync(path.join(BLOCKS_DIR, folder, 'block.manifest.json'), JSON.stringify(manifest, null, 2));
+    } catch (e) { console.warn(`[BLOCK] manifest write failed ${folder}: ${e.message}`); }
+    // Kill the legacy duplicate.
+    const legacy = path.join(BLOCKS_DIR, folder, 'block.json');
+    if (fs.existsSync(legacy)) { try { fs.unlinkSync(legacy); } catch {} }
+    // Flash runtime config.
+    if (ctx.writeRuntime !== false) writeRuntimeConfig(folder, manifest, ctx);
+    registry.push({ ...manifest, readiness: checkReadiness(manifest, process.env) });
+  }
+  return registry;
+}
+
+module.exports = {
+  BLOCKS_DIR, NAV, GROUP_META, API_ENV,
+  listBlockFolders, readManifest, normalizeManifest, deriveEnv,
+  checkReadiness, writeRuntimeConfig, syncAllBlocks, mergeBlockEnv,
+};

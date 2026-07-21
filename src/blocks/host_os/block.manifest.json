@@ -1,0 +1,123 @@
+{
+  "manifestVersion": "1.0.0",
+  "id": "host_os",
+  "label": "Host OS",
+  "icon": "🖥️",
+  "route": "/host",
+  "description": "Kernel-level access to the host file system, terminal operations, processes, and operating system metrics.",
+  "category": "System",
+  "tier": "core",
+  "nav": {
+    "group": "tools",
+    "order": 0,
+    "label": "Host OS",
+    "icon": "🖥️",
+    "hidden": false
+  },
+  "widget": null,
+  "requires": {
+    "apis": [],
+    "env": [],
+    "local": [],
+    "blocks": []
+  },
+  "provides": {
+    "routes": true,
+    "api": true,
+    "models": []
+  },
+  "api_routes": true,
+  "version": "1.0.0",
+  "contract": {
+    "inputs": [],
+    "outputs": [],
+    "events": [],
+    "permissions": {
+      "filesystem": "write",
+      "network": "internal",
+      "secrets": false,
+      "shell": true,
+      "ai": false
+    },
+    "storage": {
+      "type": "json",
+      "scope": "block"
+    },
+    "ai": {
+      "canGenerate": false,
+      "canAnalyze": false,
+      "canAutomate": false,
+      "roles": []
+    },
+    "targets": {
+      "local": true,
+      "vercel": false,
+      "docker": true,
+      "cloudflare": true
+    },
+    "commands": [
+      {
+        "cmd": "/scan",
+        "desc": "Scan matrix & sync to Supabase",
+        "method": "POST",
+        "route": "/api/system/scan",
+        "mode": "instant"
+      },
+      {
+        "cmd": "/autopilot-status",
+        "desc": "Auto-Pilot daemon status",
+        "method": "GET",
+        "route": "/api/autopilot/status",
+        "mode": "instant"
+      },
+      {
+        "cmd": "/autopilot-start",
+        "desc": "Start the Auto-Pilot daemon",
+        "method": "POST",
+        "route": "/api/autopilot/start",
+        "mode": "instant",
+        "dangerous": true
+      },
+      {
+        "cmd": "/autopilot-stop",
+        "desc": "Stop the Auto-Pilot daemon",
+        "method": "POST",
+        "route": "/api/autopilot/stop",
+        "mode": "instant"
+      },
+      {
+        "cmd": "/upload",
+        "desc": "Auto-Pilot: upload now",
+        "method": "POST",
+        "route": "/api/autopilot/upload-now",
+        "mode": "instant"
+      }
+    ],
+    "settings_keys": [],
+    "settings": []
+  },
+  "routes": [
+    {
+      "method": "ALL",
+      "path": "/host_os/*",
+      "auth": true
+    }
+  ],
+  "env": [],
+  "ai": {
+    "capabilities": [],
+    "canGenerate": false,
+    "canAnalyze": false,
+    "canAutomate": false
+  },
+  "storage": {
+    "provider": "json",
+    "tables": [],
+    "scope": "block"
+  },
+  "dependencies": [],
+  "deployment": {
+    "target": "local",
+    "runtime": "nodejs"
+  }
+}

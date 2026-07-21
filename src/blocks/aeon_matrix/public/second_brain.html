@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AEON Brain Visualizer</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #0b0f19; font-family: 'Inter', 'Segoe UI', sans-serif; }
+        #graph-container { width: 100vw; height: 100vh; }
+        #hud {
+            position: absolute; top: 20px; left: 20px;
+            color: #00e5ff; text-transform: uppercase; letter-spacing: 2px;
+            pointer-events: none; z-index: 10; text-shadow: 0 0 10px #00e5ff;
+        }
+        h1 { margin: 0; font-size: 24px; font-weight: 300; }
+        p  { margin: 5px 0 0 0; font-size: 12px; color: #b0c4de; }
+        #search-wrap { margin-top: 20px; position: relative; pointer-events: auto; }
+        #search-input {
+            padding: 10px 15px; width: 250px;
+            background: rgba(0,0,0,0.6); border: 1px solid #00e5ff;
+            color: #fff; font-family: 'Inter', sans-serif; outline: none;
+            border-radius: 4px; box-shadow: 0 0 10px rgba(0,229,255,0.2);
+        }
+        #search-results {
+            position: absolute; top: 100%; left: 0; width: 100%;
+            background: rgba(0,0,0,0.85); border: 1px solid rgba(0,229,255,0.4);
+            border-top: none; max-height: 300px; overflow-y: auto;
+            display: none; border-radius: 0 0 4px 4px; z-index: 100;
+        }
+        .sr { padding: 10px 15px; cursor: pointer; border-bottom: 1px solid rgba(0,229,255,0.2); font-size: 13px; color: #fff; }
+        .sr:hover { background: rgba(0,229,255,0.2); }
+        .dg.ac { z-index: 20 !important; }
+    </style>
+    <!-- THREE must load before 3d-force-graph so the UMD build shares the instance -->
+    <!-- Local-first, version-locked: one esbuild bundle of three@0.184 +
+         3d-force-graph@1.80 from this repo's node_modules. The old CDN pair
+         (three@0.155 pinned + 3d-force-graph@1 floating) drifted apart and
+         died with "THREE.Timer is not a constructor" — blank graph. -->
+    <script type="module">
+        import { ForceGraph3D, THREE } from '/api/crn/second-brain/vendor/graph-bundle.mjs';
+        window.THREE = THREE;
+        window.ForceGraph3D = ForceGraph3D;
+        document.dispatchEvent(new Event('graphlibs-ready'));
+    </script>
+</head>
+<body>
+    <div id="hud">
+        <h1>AEON Matrix</h1>
+        <p>SYSTEM VISUALIZER</p>
+        <div id="search-wrap">
+            <input type="text" id="search-input" placeholder="Search matrix nodes...">
+            <div id="search-results"></div>
+        </div>
+    </div>
+    <div id="graph-container"></div>
+
+    <script>
+    // ── Matrix Settings — persistent, self-contained ────────────────────────────
+    // These controls used to live in a dat.GUI panel pulled from a CDN; when the
+    // CDN was unreachable the whole settings panel silently vanished. They are
+    // now native controls, persisted in localStorage, applied on every load.
+    const MATRIX_SETTINGS_KEY = 'aeon_matrix_settings';
+    // 2D map and Auto-organize (radial tree) options removed: numDimensions(2)
+    // never visually flattened an already-positioned graph, and the radial DAG
+    // just pinned everything around the vault center. 3D free physics only.
+    const MATRIX_DEFAULTS = {
+        nodeStyle: 'solid',     // 'solid' = defined orbs, 'fuzzy' = soft glow with no hard edge
+        focusMode: false,
+        linkOpacity: 0.35,
+        particles: false,
+        autoRotate: false,
+        hideOrphans: false,
+    };
+    function loadMatrixSettings() {
+        try { return { ...MATRIX_DEFAULTS, ...(JSON.parse(localStorage.getItem(MATRIX_SETTINGS_KEY)) || {}) }; }
+        catch { return { ...MATRIX_DEFAULTS }; }
+    }
+    function saveMatrixSettings(s) {
+        try { localStorage.setItem(MATRIX_SETTINGS_KEY, JSON.stringify(s)); } catch {}
+    }
+
+    // ── Sprite factory ──────────────────────────────────────────────────────────
+    // Flat canvas-texture sprites replace 3-D sphere meshes.
+    // A sphere at resolution 8 = ~240 vertices; a sprite = 4 vertices.
+    // Cached by color so the same material is reused across nodes.
+    const spriteCache = new Map();
+    function hexToRgba(hex, a) {
+        const n = parseInt(hex.replace('#', ''), 16);
+        return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+    }
+    function makeSprite(color, radius, style = 'solid') {
+        // Fuzzy nodes have no geometric edge — the falloff eats apparent size,
+        // so scale them up and let additive blending give the nebula glow.
+        const scale = style === 'fuzzy' ? radius * 1.9 : radius;
+        const key = style + ':' + color + ':' + radius;
+        if (spriteCache.has(key)) {
+            const s = new THREE.Sprite(spriteCache.get(key));
+            s.scale.set(scale, scale, 1);
+            return s;
+        }
+        const sz = 64;
+        const canvas = document.createElement('canvas');
+        canvas.width = canvas.height = sz;
+        const ctx = canvas.getContext('2d');
+        if (style === 'fuzzy') {
+            // Continuous gaussian-like falloff from center to transparent —
+            // no filled disc, no arc, no defined boundary at any radius.
+            const grd = ctx.createRadialGradient(sz/2, sz/2, 0, sz/2, sz/2, sz/2);
+            grd.addColorStop(0,    hexToRgba(color, 0.95));
+            grd.addColorStop(0.18, hexToRgba(color, 0.55));
+            grd.addColorStop(0.45, hexToRgba(color, 0.18));
+            grd.addColorStop(0.75, hexToRgba(color, 0.05));
+            grd.addColorStop(1,    hexToRgba(color, 0));
+            ctx.fillStyle = grd;
+            ctx.fillRect(0, 0, sz, sz);
+        } else {
+            // Solid orb: defined disc with a soft halo rim
+            const grd = ctx.createRadialGradient(sz/2, sz/2, sz*0.15, sz/2, sz/2, sz*0.48);
+            grd.addColorStop(0,   color);
+            grd.addColorStop(0.6, color);
+            grd.addColorStop(1,   'rgba(0,0,0,0)');
+            ctx.beginPath();
+            ctx.arc(sz/2, sz/2, sz*0.48, 0, 2*Math.PI);
+            ctx.fillStyle = grd;
+            ctx.fill();
+        }
+        const tex = new THREE.CanvasTexture(canvas);
+        const mat = new THREE.SpriteMaterial({
+            map: tex, transparent: true, depthWrite: false,
+            blending: style === 'fuzzy' ? THREE.AdditiveBlending : THREE.NormalBlending,
+        });
+        spriteCache.set(key, mat);
+        const s = new THREE.Sprite(mat);
+        s.scale.set(scale, scale, 1);
+        return s;
+    }
+
+    // ── Color helpers ───────────────────────────────────────────────────────────
+    // Aurora palette — mirrors src/aurora.css (--accent cyan, --accent2 violet)
+    const TYPE_COLORS = {
+        dir: '#00f2ff', md: '#7fe8f2', txt: '#dce8f5', json: '#b18cff',
+        pdf: '#ff6b9d', html: '#7c3aed', default: '#4a6a8a',
+    };
+    function nodeColor(node) {
+        if (node.root) return '#7c3aed';         // AEON VAULT center
+        const isDir = node.type === 'folder' || node.type === 'dir';
+        if (isDir) return '#00f2ff';
+        return TYPE_COLORS[node.ext] || node.color || TYPE_COLORS.default;
+    }
+
+    // ── Data fetch ──────────────────────────────────────────────────────────────
+    const _fetchGraph = async () => {
+        try {
+            const r = await fetch('/api/crn/second-brain/graph');
+            if (r.ok) return r.json();
+        } catch {}
+        return { nodes: [], links: [] };
+    };
+
+    // Wait for both the graph data AND the module bundle (module scripts are
+    // deferred, so ForceGraph3D may not exist when this classic script parses).
+    const _libsReady = new Promise(resolve => {
+        if (window.ForceGraph3D) resolve();
+        else document.addEventListener('graphlibs-ready', resolve, { once: true });
+    });
+    Promise.all([_fetchGraph(), _libsReady]).then(([data]) => {
+
+        // ── Pre-index neighbors and links ─────────────────────────────────────
+        const nodeMap = new Map();
+        data.nodes.forEach(n => { n.neighbors = []; nodeMap.set(n.id, n); });
+        const linksByNode = new Map();
+        data.links.forEach(link => {
+            const a = link.source.id || link.source;
+            const b = link.target.id || link.target;
+            const na = nodeMap.get(a), nb = nodeMap.get(b);
+            if (na) na.neighbors.push(b);
+            if (nb) nb.neighbors.push(a);
+            if (!linksByNode.has(a)) linksByNode.set(a, []);
+            if (!linksByNode.has(b)) linksByNode.set(b, []);
+            linksByNode.get(a).push(link);
+            linksByNode.get(b).push(link);
+        });
+
+        const settings = loadMatrixSettings();
+
+        let highlightNodes = new Set();
+        let highlightLinks = new Set();
+        let focusMode  = settings.focusMode;
+        let physicsOn  = true;   // turns false after engine stops
+        let spriteMode = true;   // try sprites; falls back to spheres
+
+        // ── Graph init ────────────────────────────────────────────────────────
+        const elem = document.getElementById('graph-container');
+        let Graph;
+        try {
+            // rendererConfig: disable antialias + request discrete GPU
+            Graph = ForceGraph3D({
+                rendererConfig: { antialias: false, powerPreference: 'high-performance' }
+            })(elem);
+        } catch {
+            Graph = ForceGraph3D()(elem);
+        }
+
+        // Cap pixel ratio — retina screens render 4× the pixels at ratio 2.
+        // 1.25 is the sweet spot for a graph view: 60% fewer pixels than retina,
+        // and node orbs/lines don't visibly degrade like text would.
+        try { Graph.renderer().setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.25)); } catch {}
+
+        // Stop rendering entirely when the tab or parent iframe is hidden —
+        // the matrix should never burn GPU in the background.
+        document.addEventListener('visibilitychange', () => {
+            try {
+                if (document.hidden) Graph.pauseAnimation();
+                else Graph.resumeAnimation();
+            } catch {}
+        });
+
+        // ── Node object: sprite (fast) or fallback sphere ─────────────────────
+        const DIR_RADIUS  = 14;
+        const FILE_RADIUS = 8;
+        Graph
+            .nodeThreeObject(node => {
+                if (!spriteMode) return null; // fallback: let library draw spheres
+                try {
+                    const r = (node.type === 'dir' || node.type === 'folder') ? DIR_RADIUS : FILE_RADIUS;
+                    return makeSprite(nodeColor(node), r, settings.nodeStyle);
+                } catch { spriteMode = false; return null; }
+            })
+            .nodeThreeObjectExtend(false) // sprite IS the object, don't add sphere underneath
+
+        // ── Link styling ──────────────────────────────────────────────────────
+        // linkWidth MUST stay 0: any non-zero width makes the library render
+        // each link as a cylinder MESH instead of a 1px GPU line — that is the
+        // main cause of rotation lag on large graphs.
+            .linkColor(() => `rgba(0,242,255,0.35)`)
+            .linkWidth(0)
+            .linkDirectionalParticles(0)          // off by default; enabled on hover
+            .linkDirectionalParticleWidth(2)
+            .linkDirectionalParticleSpeed(0.012)
+
+        // ── Graph data ────────────────────────────────────────────────────────
+            .graphData(data)
+            .nodeLabel('name')
+            .backgroundColor('#07080d')          // aurora --bg
+            .showNavInfo(false)
+
+        // ── Physics: settle fast ──────────────────────────────────────────────
+            .d3AlphaDecay(0.06)       // settle fast — radial DAG needs few ticks
+            .d3VelocityDecay(0.5)
+            .warmupTicks(60)          // precompute layout before first paint:
+                                      // rendering WHILE the 1.5k-node DAG
+                                      // relaxes pegs the main thread
+            .cooldownTicks(60)
+            .cooldownTime(4000)
+            .onEngineStop(() => { physicsOn = false; });
+
+        // ── Hover: throttled to 1 update per animation frame ─────────────────
+        // Without throttling, onNodeHover fires on every mousemove pixel.
+        let hoverRAF = null;
+        function applyHover(node) {
+            highlightNodes.clear();
+            highlightLinks.clear();
+            if (node) {
+                highlightNodes.add(node.id);
+                if (node.neighbors) node.neighbors.forEach(id => highlightNodes.add(id));
+                (linksByNode.get(node.id) || []).forEach(l => highlightLinks.add(l));
+            }
+            // Only rebuild link materials when in focus mode.
+            // Width stays 0 — highlighted links get brighter color + particles
+            // instead of thickness, so links remain cheap GPU lines.
+            if (focusMode) {
+                Graph.linkColor(link =>
+                    highlightLinks.size === 0 ? 'rgba(0,229,255,0.4)' :
+                    highlightLinks.has(link)  ? '#00e5ff' : 'rgba(0,0,0,0)'
+                );
+            }
+            // Particles light up on hovered links only
+            if (highlightLinks.size > 0) {
+                Graph.linkDirectionalParticles(link => highlightLinks.has(link) ? 3 : 0);
+            } else {
+                Graph.linkDirectionalParticles(0);
+            }
+            // Dim sprite opacity via material — no geometry rebuild needed
+            if (focusMode && spriteMode) {
+                data.nodes.forEach(n => {
+                    if (n.__threeObj && n.__threeObj.material) {
+                        n.__threeObj.material.opacity = highlightNodes.size === 0 ? 1
+                            : highlightNodes.has(n.id) ? 1 : 0.06;
+                        n.__threeObj.material.needsUpdate = true;
+                    }
+                });
+            }
+        }
+
+        Graph.onNodeHover(node => {
+            if (hoverRAF) return; // already queued for this frame
+            hoverRAF = requestAnimationFrame(() => { hoverRAF = null; applyHover(node); });
+        });
+
+        Graph.onLinkHover(link => {
+            if (hoverRAF) return;
+            hoverRAF = requestAnimationFrame(() => {
+                hoverRAF = null;
+                highlightNodes.clear(); highlightLinks.clear();
+                if (link) {
+                    highlightLinks.add(link);
+                    highlightNodes.add(link.source.id);
+                    highlightNodes.add(link.target.id);
+                }
+                applyHover(null);
+                // Ensure hovered link shows particle
+                if (link) Graph.linkDirectionalParticles(l => l === link ? 3 : 0);
+            });
+        });
+
+        Graph.onNodeClick(node => {
+            window.parent.postMessage(
+                { type: 'NODE_CLICK', nodeId: node.id, nodeType: node.type, nodeName: node.name || node.title },
+                '*'
+            );
+        });
+
+        // ── Force tuning ──────────────────────────────────────────────────────
+        // charge/link tweak EXISTING forces — no d3 global needed. The custom
+        // center/radial constructors DO need d3, which the vendored bundle does
+        // not expose: the bare `d3.forceCenter()` call threw a ReferenceError
+        // here that silently killed everything below it (search, auto-rotate,
+        // and the whole settings panel — the REAL "matrix settings lost" bug).
+        // The library ships its own center force by default; the radial pull
+        // was cosmetic. Guarded, never fatal.
+        Graph.d3Force('charge').strength(-180);
+        Graph.d3Force('link').distance(160);
+        if (typeof d3 !== 'undefined') {
+            try {
+                Graph.d3Force('center', d3.forceCenter());
+                Graph.d3Force('radial', d3.forceRadial(0).strength(0.02));
+            } catch {}
+        }
+
+        // ── Search ────────────────────────────────────────────────────────────
+        const searchInput   = document.getElementById('search-input');
+        const searchResults = document.getElementById('search-results');
+        searchInput.addEventListener('pointerdown', e => e.stopPropagation());
+        searchResults.addEventListener('pointerdown', e => e.stopPropagation());
+        searchInput.addEventListener('input', e => {
+            const q = e.target.value.toLowerCase().trim();
+            if (!q) { searchResults.style.display = 'none'; return; }
+            const hits = data.nodes.filter(n => (n.name || n.id || '').toLowerCase().includes(q)).slice(0, 10);
+            if (!hits.length) { searchResults.style.display = 'none'; return; }
+            searchResults.innerHTML = hits.map(n =>
+                `<div class="sr" data-id="${n.id}">${n.name || n.id}</div>`
+            ).join('');
+            searchResults.style.display = 'block';
+            searchResults.querySelectorAll('.sr').forEach(el => {
+                el.onclick = () => {
+                    const n = nodeMap.get(el.dataset.id);
+                    if (n && n.x != null) {
+                        const dist = 100;
+                        const ratio = 1 + dist / Math.hypot(n.x, n.y, n.z);
+                        Graph.cameraPosition(
+                            { x: n.x*ratio, y: n.y*ratio, z: n.z*ratio }, n, 1200
+                        );
+                    }
+                    searchInput.value = ''; searchResults.style.display = 'none';
+                };
+            });
+        });
+
+        // ── Auto-rotate (RAF-free when off) ───────────────────────────────────
+        let autoRotate = false, angle = 0, rotateRAF = null, isInteracting = false, interactTO = null;
+        // Adaptive resolution: render at low res while the user is dragging or
+        // zooming, snap back to full res when they stop. Motion hides the blur.
+        const IDLE_DPR   = Math.min(window.devicePixelRatio || 1, 1.25);
+        const MOTION_DPR = 0.75;
+        const setInteracting = () => {
+            if (!isInteracting) { try { Graph.renderer().setPixelRatio(MOTION_DPR); } catch {} }
+            isInteracting = true; clearTimeout(interactTO);
+            interactTO = setTimeout(() => {
+                isInteracting = false;
+                try { Graph.renderer().setPixelRatio(IDLE_DPR); } catch {}
+            }, 400);
+        };
+        elem.addEventListener('mousedown', setInteracting);
+        elem.addEventListener('wheel',     setInteracting, { passive: true });
+        elem.addEventListener('touchstart',setInteracting, { passive: true });
+        elem.addEventListener('touchmove', setInteracting, { passive: true });
+        // keep low-res mode alive for the whole drag, not just the first click
+        elem.addEventListener('mousemove', e => { if (e.buttons) setInteracting(); });
+        function startRotation() {
+            if (!autoRotate) { rotateRAF = null; return; }
+            if (!isInteracting) {
+                const { x, z } = Graph.cameraPosition();
+                const d = Math.sqrt(x*x + z*z) || 800;
+                angle += 0.001;
+                Graph.cameraPosition({ x: d*Math.sin(angle), z: d*Math.cos(angle) });
+            }
+            rotateRAF = requestAnimationFrame(startRotation);
+        }
+
+        // ── Matrix Settings panel — native, no CDN, keyboard accessible ───────
+        function applySettings(s, { relayout = false } = {}) {
+            focusMode = s.focusMode;
+            if (!s.focusMode) {
+                Graph.linkColor(() => `rgba(0,229,255,${s.linkOpacity})`).linkWidth(0);
+                data.nodes.forEach(n => {
+                    if (n.__threeObj?.material) { n.__threeObj.material.opacity = 1; n.__threeObj.material.needsUpdate = true; }
+                });
+            }
+            Graph.linkDirectionalParticles(s.particles ? 2 : 0);
+            const linked = new Set();
+            data.links.forEach(l => { linked.add(l.source.id || l.source); linked.add(l.target.id || l.target); });
+            Graph.graphData({
+                nodes: s.hideOrphans ? data.nodes.filter(n => linked.has(n.id) || n.root) : data.nodes,
+                links: data.links,
+            });
+            autoRotate = s.autoRotate;
+            if (autoRotate && !rotateRAF) startRotation();
+            if (relayout) Graph.d3ReheatSimulation();
+        }
+
+        const panel = document.createElement('div');
+        panel.innerHTML = `
+        <style>
+          #matrix-settings { position:absolute; top:20px; right:20px; z-index:30; font-family:'Inter','Segoe UI',sans-serif; }
+          #ms-toggle { background:rgba(0,0,0,0.7); color:#00e5ff; border:1px solid #00e5ff; border-radius:6px;
+                       padding:8px 14px; cursor:pointer; font-size:13px; letter-spacing:1px; }
+          #ms-toggle:focus-visible, #ms-body :focus-visible { outline:2px solid #FFD700; outline-offset:2px; }
+          #ms-body { display:none; margin-top:8px; background:rgba(0,0,0,0.85); border:1px solid rgba(0,229,255,0.4);
+                     border-radius:8px; padding:14px 16px; width:240px; color:#dce8f5; font-size:13px; }
+          #ms-body.open { display:block; }
+          #ms-body label { display:flex; justify-content:space-between; align-items:center; gap:10px; margin:10px 0; }
+          #ms-body fieldset { border:1px solid rgba(0,229,255,0.25); border-radius:6px; margin:0 0 10px; padding:6px 10px 10px; }
+          #ms-body legend { font-size:11px; color:#00e5ff; letter-spacing:1px; text-transform:uppercase; padding:0 4px; }
+          #ms-body select, #ms-body input[type=range] { accent-color:#00e5ff; background:#0b0f19; color:#fff;
+                     border:1px solid #244; border-radius:4px; }
+          #ms-body button.ms-act { width:100%; margin-top:4px; background:none; border:1px solid #00e5ff; color:#00e5ff;
+                     border-radius:5px; padding:6px; cursor:pointer; font-size:12px; }
+        </style>
+        <div id="matrix-settings">
+          <button id="ms-toggle" aria-expanded="false" aria-controls="ms-body">⚙ MATRIX SETTINGS</button>
+          <div id="ms-body" role="region" aria-label="Matrix settings">
+            <fieldset>
+              <legend>View</legend>
+              <label>Node style
+                <select id="ms-nodestyle" aria-label="Node style">
+                  <option value="solid">Solid orbs</option>
+                  <option value="fuzzy">Fuzzy glow</option>
+                </select>
+              </label>
+              <label>Auto rotate <input type="checkbox" id="ms-rotate"></label>
+            </fieldset>
+            <fieldset>
+              <legend>Detail</legend>
+              <label>Link opacity <input type="range" id="ms-opacity" min="0" max="1" step="0.05" aria-label="Link opacity"></label>
+              <label>Particles <input type="checkbox" id="ms-particles"></label>
+              <label>Focus mode <input type="checkbox" id="ms-focus"></label>
+              <label>Hide orphans <input type="checkbox" id="ms-orphans"></label>
+            </fieldset>
+            <button class="ms-act" id="ms-reheat">↻ Reheat physics</button>
+            <button class="ms-act" id="ms-reset">Reset to defaults</button>
+          </div>
+        </div>`;
+        document.body.appendChild(panel);
+        const $ = (id) => document.getElementById(id);
+        // Stop panel clicks from reaching the 3D canvas orbit controls
+        $('matrix-settings').addEventListener('pointerdown', e => e.stopPropagation());
+
+        // Swapping node style rebuilds every sprite: clear the material cache
+        // and hand the library a FRESH accessor (same-function re-assign is a
+        // no-op in 3d-force-graph; a new closure forces object regeneration).
+        function rebuildSprites() {
+            spriteCache.clear();
+            Graph.nodeThreeObject(node => {
+                if (!spriteMode) return null;
+                try {
+                    const r = (node.type === 'dir' || node.type === 'folder') ? DIR_RADIUS : FILE_RADIUS;
+                    return makeSprite(nodeColor(node), r, settings.nodeStyle);
+                } catch { spriteMode = false; return null; }
+            });
+        }
+
+        function syncPanel(s) {
+            $('ms-nodestyle').value = s.nodeStyle || 'solid';
+            $('ms-rotate').checked = s.autoRotate;
+            $('ms-opacity').value = s.linkOpacity;
+            $('ms-particles').checked = s.particles;
+            $('ms-focus').checked = s.focusMode;
+            $('ms-orphans').checked = s.hideOrphans;
+        }
+        syncPanel(settings);
+
+        $('ms-toggle').onclick = () => {
+            const body = $('ms-body');
+            const open = !body.classList.contains('open');
+            body.classList.toggle('open', open);
+            $('ms-toggle').setAttribute('aria-expanded', String(open));
+        };
+        const update = (patch, opts) => {
+            Object.assign(settings, patch);
+            saveMatrixSettings(settings);
+            applySettings(settings, opts);
+        };
+        $('ms-nodestyle').onchange= e => { update({ nodeStyle: e.target.value }); rebuildSprites(); };
+        $('ms-rotate').onchange   = e => update({ autoRotate: e.target.checked });
+        $('ms-opacity').oninput   = e => update({ linkOpacity: Number(e.target.value) });
+        $('ms-particles').onchange= e => update({ particles: e.target.checked });
+        $('ms-focus').onchange    = e => update({ focusMode: e.target.checked });
+        $('ms-orphans').onchange  = e => update({ hideOrphans: e.target.checked });
+        $('ms-reheat').onclick    = () => Graph.d3ReheatSimulation();
+        $('ms-reset').onclick     = () => { Object.assign(settings, MATRIX_DEFAULTS); saveMatrixSettings(settings); syncPanel(settings); applySettings(settings, { relayout: true }); };
+
+        // Apply persisted settings on load
+        applySettings(settings);
+
+    });
+    </script>
+</body>
+</html>

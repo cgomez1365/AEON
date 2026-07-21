@@ -1,0 +1,68 @@
+name: AEON CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Syntax-check server
+        run: node --check server.cjs
+
+      - name: Verify block manifests
+        run: node -e "
+          const fs = require('fs');
+          const path = require('path');
+          const dir = path.join('src', 'blocks');
+          const blocks = fs.readdirSync(dir).filter(f => fs.statSync(path.join(dir, f)).isDirectory());
+          let ok = 0, missing = 0;
+          for (const b of blocks) {
+            const m = path.join(dir, b, 'block.manifest.json');
+            if (fs.existsSync(m)) { ok++; } else { missing++; console.error('MISSING: ' + b); }
+          }
+          console.log(ok + ' manifests OK, ' + missing + ' missing');
+          if (missing > 0) process.exit(1);
+        "
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - name: Install dependencies
+        run: npm ci
+      - name: Dependency audit (high+ severity)
+        run: npm audit --audit-level=high
+        continue-on-error: true
+      - name: Assert no service_role key in client bundle paths
+        run: |
+          if grep -rIl --exclude-dir=node_modules --exclude-dir=.git \
+               -e "SUPABASE_SERVICE_ROLE_KEY" src/ 2>/dev/null | grep -v "kernel"; then
+            echo "::error::service_role key referenced outside kernel — potential client exposure"
+            exit 1
+          fi
+          echo "No client-side service_role references found."

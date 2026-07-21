@@ -1,0 +1,229 @@
+/**
+ * AEON Connectivity — the Roam layer, absorbed into Settings (one settings
+ * fits all). Supabase cloud mirror manage/test + Cloudflare quick tunnel
+ * (free public URL, zero account) for reaching this AEON from anywhere.
+ *
+ *   GET  /api/settings/connectivity                → full status
+ *   POST /api/settings/connectivity/supabase/test  { url, key }? → ping REST
+ *   POST /api/settings/connectivity/supabase/save  { url, key } → .env (restart to attach)
+ *   POST /api/settings/connectivity/tunnel/start   → { url: https://*.trycloudflare.com }
+ *   POST /api/settings/connectivity/tunnel/stop
+ */
+const fs = require('fs');
+const path = require('path');
+const { spawn } = require('child_process');
+
+const ROOT = path.join(__dirname, '..', '..', '..', '..');
+const BIN_DIR = path.join(ROOT, 'tools', 'bin');
+const CLOUDFLARED = path.join(BIN_DIR, 'cloudflared.exe');
+const CLOUDFLARED_URL = 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe';
+const ENV_PATH = path.join(ROOT, '.env');
+const PORT = 3001;
+
+const _tunnel = { proc: null, url: null, startedAt: null };
+
+function upsertEnv(pairs) {
+  let text = '';
+  try { text = fs.readFileSync(ENV_PATH, 'utf8'); } catch {}
+  for (const [k, v] of Object.entries(pairs)) {
+    const line = `${k}=${v}`;
+    const re = new RegExp(`^${k}=.*$`, 'm');
+    text = re.test(text) ? text.replace(re, line) : (text.replace(/\n?$/, '\n') + line + '\n');
+  }
+  fs.writeFileSync(ENV_PATH, text);
+}
+
+async function pingSupabase(url, key) {
+  const r = await fetch(`${url.replace(/\/$/, '')}/rest/v1/`, {
+    headers: { apikey: key, Authorization: `Bearer ${key}` },
+    signal: AbortSignal.timeout(8000),
+  });
+  // Reachable project answers 200 (root spec) or 404; auth failures answer 401/403.
+  if (r.status === 401 || r.status === 403) throw new Error('Project reached, but the key was rejected — paste the service_role key (Project Settings → API).');
+  if (!r.ok && r.status !== 404) throw new Error(`Supabase answered HTTP ${r.status}.`);
+  return true;
+}
+
+module.exports = (app, deps) => {
+  const supabase = deps && deps.supabase ? deps.supabase : null;
+
+  // ── Status ───────────────────────────────────────────────────────────
+  app.get('/api/settings/connectivity', async (req, res) => {
+    const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
+    res.json({
+      supabase: {
+        configured: !!url,
+        attached: !!supabase,              // live client on this boot
+        url: url ? url.replace(/^https:\/\//, '').slice(0, 30) : null,
+        localOnly: process.env.AEON_LOCAL_ONLY === '1',
+      },
+      tunnel: {
+        running: !!_tunnel.proc,
+        url: _tunnel.url,
+        startedAt: _tunnel.startedAt,
+        secured: !!process.env.AEON_MOBILE_SECRET, // tunnel traffic must Bearer-auth
+      },
+      runtime: process.env.VERCEL ? 'cloud' : 'local',
+    });
+  });
+
+  // ── Supabase: test (pasted values or current env) ────────────────────
+  app.post('/api/settings/connectivity/supabase/test', async (req, res) => {
+    try {
+      const url = (req.body && req.body.url) || process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+      const key = (req.body && req.body.key) || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
+      if (!url || !key) return res.status(400).json({ error: 'Paste your Supabase project URL and service_role key.' });
+      await pingSupabase(url, key);
+      res.json({ ok: true, message: 'Connected — project reachable and key accepted.' });
+    } catch (e) { res.status(400).json({ error: e.message }); }
+  });
+
+  // ── Supabase: save to .env (test first, never save a bad key) ────────
+  app.post('/api/settings/connectivity/supabase/save', async (req, res) => {
+    try {
+      const { url, key, connectionString } = req.body || {};
+      if (!url || !key) return res.status(400).json({ error: 'url and key required' });
+      await pingSupabase(url, key);
+      const envPairs = { SUPABASE_URL: url, SUPABASE_SERVICE_ROLE_KEY: key };
+      if (connectionString) envPairs.DATABASE_URL = connectionString;
+      upsertEnv(envPairs);
+      process.env.SUPABASE_URL = url;
+      process.env.SUPABASE_SERVICE_ROLE_KEY = key;
+      if (connectionString) process.env.DATABASE_URL = connectionString;
+      res.json({ ok: true, message: 'Saved & tested. Restart AEON to attach the cloud mirror.', restartRequired: true });
+    } catch (e) { res.status(400).json({ error: e.message }); }
+  });
+
+  // ── Cloudflare quick tunnel — free public URL, zero account ──────────
+  app.post('/api/settings/connectivity/tunnel/start', async (req, res) => {
+    try {
+      if (_tunnel.proc) return res.json({ ok: true, url: _tunnel.url, alreadyRunning: true });
+
+      if (!fs.existsSync(CLOUDFLARED)) {
+        if (!fs.existsSync(BIN_DIR)) fs.mkdirSync(BIN_DIR, { recursive: true });
+        const r = await fetch(CLOUDFLARED_URL, { redirect: 'follow' });
+        if (!r.ok) throw new Error(`Could not download Cloudflare Tunnel: HTTP ${r.status}`);
+        fs.writeFileSync(CLOUDFLARED, Buffer.from(await r.arrayBuffer()));
+        console.log('[CONNECTIVITY] Downloaded cloudflared');
+      }
+
+      const proc = spawn(CLOUDFLARED, ['tunnel', '--url', `http://localhost:${PORT}`], {
+        windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      _tunnel.proc = proc;
+      _tunnel.startedAt = new Date().toISOString();
+      _tunnel.url = null;
+
+      const url = await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('Tunnel did not produce a URL within 30s — check your internet connection.')), 30000);
+        const onData = (chunk) => {
+          const m = String(chunk).match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
+          if (m) { clearTimeout(timer); _tunnel.url = m[0]; resolve(m[0]); }
+        };
+        proc.stdout.on('data', onData);
+        proc.stderr.on('data', onData);
+        proc.on('exit', (code) => {
+          clearTimeout(timer);
+          _tunnel.proc = null;
+          if (!_tunnel.url) reject(new Error(`Tunnel exited (code ${code}) before starting.`));
+        });
+      });
+
+      proc.on('exit', () => { _tunnel.proc = null; _tunnel.url = null; });
+
+      res.json({
+        ok: true, url,
+        secured: !!process.env.AEON_MOBILE_SECRET,
+        note: process.env.AEON_MOBILE_SECRET
+          ? 'Live while this computer is on. API calls from outside require your AEON_MOBILE_SECRET as a Bearer token.'
+          : 'Live — but AEON_MOBILE_SECRET is not set, so all external API calls will be refused. Set it in .env to use the tunnel.',
+      });
+    } catch (e) {
+      if (_tunnel.proc) { try { _tunnel.proc.kill(); } catch {} _tunnel.proc = null; }
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/settings/connectivity/tunnel/stop', (req, res) => {
+    if (_tunnel.proc) { try { _tunnel.proc.kill(); } catch {} }
+    _tunnel.proc = null; _tunnel.url = null;
+    res.json({ ok: true });
+  });
+
+  // ── Cloud bootstrap — create all AEON tables in Supabase ───────────
+  app.post('/api/settings/connectivity/supabase/setup', async (req, res) => {
+    try {
+      const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+      const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+      if (!url || !key) return res.status(400).json({ error: 'Save your Supabase credentials first.' });
+
+      const { createClient } = require('@supabase/supabase-js');
+      const db = createClient(url, key);
+
+      const schemas = ['supabase_migration_aeon_blocks.sql', 'aeon_vault_schema.sql',
+                        'aeon_notes_schema.sql', 'cloud_relay_schema.sql', 'aeon_governance_schema.sql'];
+      const dbDir = path.join(ROOT, 'db');
+      const applied = [];
+      const skipped = [];
+
+      for (const file of schemas) {
+        const fp = path.join(dbDir, file);
+        if (!fs.existsSync(fp)) { skipped.push(file); continue; }
+        const sql = fs.readFileSync(fp, 'utf8');
+        const { error } = await db.rpc('exec_sql', { sql });
+        if (error) {
+          // If exec_sql doesn't exist, try the REST fallback
+          if (/exec_sql/.test(error.message)) {
+            return res.status(400).json({
+              error: 'exec_sql() RPC not found. Run this once in Supabase SQL Editor:\n\n' +
+                'CREATE OR REPLACE FUNCTION exec_sql(sql text) RETURNS void\n' +
+                '  LANGUAGE plpgsql SECURITY DEFINER AS $$ BEGIN EXECUTE sql; END; $$;\n' +
+                'REVOKE ALL ON FUNCTION exec_sql(text) FROM anon, authenticated;',
+            });
+          }
+          return res.status(500).json({ error: `${file}: ${error.message}` });
+        }
+        applied.push(file);
+      }
+
+      res.json({ ok: true, applied, skipped, message: `Cloud ready — ${applied.length} schema(s) applied.` });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ── Sync now — push local JSON data to Supabase aeon_blocks ────────
+  app.post('/api/settings/connectivity/supabase/sync', async (req, res) => {
+    try {
+      const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+      const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+      if (!url || !key) return res.status(400).json({ error: 'Supabase not configured.' });
+
+      const { createClient } = require('@supabase/supabase-js');
+      const db = createClient(url, key);
+      const dbDir = path.join(ROOT, 'db');
+
+      const jsonFiles = fs.existsSync(dbDir)
+        ? fs.readdirSync(dbDir).filter(f => f.endsWith('.json') && !f.startsWith('block.schema'))
+        : [];
+
+      let synced = 0;
+      for (const file of jsonFiles) {
+        const tag = file.replace('.json', '');
+        try {
+          const payload = JSON.parse(fs.readFileSync(path.join(dbDir, file), 'utf8'));
+          const { error } = await db.from('aeon_blocks').upsert(
+            { block_tag: tag, payload, updated_at: new Date().toISOString() },
+            { onConflict: 'block_tag' }
+          );
+          if (!error) synced++;
+        } catch {}
+      }
+
+      res.json({ ok: true, synced, total: jsonFiles.length, message: `Synced ${synced}/${jsonFiles.length} block(s) to cloud.` });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // Block teardown/rescan must not orphan the tunnel process.
+  if (deps.lifecycle) deps.lifecycle.onCleanup(() => {
+    if (_tunnel.proc) { try { _tunnel.proc.kill(); } catch {} _tunnel.proc = null; _tunnel.url = null; }
+  });
+};
