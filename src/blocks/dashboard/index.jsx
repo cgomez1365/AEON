@@ -4,7 +4,7 @@ import { StatCard, Card } from '../../components/aurora';
 import { Activity, Zap, Radio, BarChart3, Wifi, WifiOff, Server, Flame, Calendar, LayoutGrid, Bot, Briefcase, Search, Wrench, Cpu, Layers, Plus, Trash2, Pencil } from 'lucide-react';
 import { AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { useTelemetry } from '../../kernel/contexts/TelemetryContext';
-import { BLOCKS, GROUP_META } from '../../kernel/blockRegistry.js';
+import { getEffectiveBlockGroups } from '../../kernel/blockRegistry.js';
 
 import { SB_URL, SB_KEY } from '../../config.js';
 const CHART_COLORS = ['#00f2ff', '#f59e0b', '#4caf50', '#8b5cf6', '#ec4899', '#ff6b6b', '#00ff40', '#ff9800'];
@@ -40,20 +40,6 @@ function timeAgo(iso) {
   return `${Math.floor(h / 24)}d ago`;
 }
 
-// Installed blocks, grouped exactly like the sidebar nav (same registry,
-// same GROUP_META) — drop a block folder in and it appears here too.
-// No hardcoded block list: this IS the block-standard registry.
-const INSTALLED_BY_GROUP = (() => {
-  const byGroup = {};
-  for (const b of BLOCKS) {
-    if (b.uiMode === 'headless') continue;
-    (byGroup[b.group] ||= []).push(b);
-  }
-  return Object.entries(byGroup)
-    .map(([id, items]) => ({ id, meta: GROUP_META[id] || { label: id.toUpperCase(), icon: '📦', order: 99 }, items }))
-    .sort((a, b) => a.meta.order - b.meta.order);
-})();
-
 // Section-header icons — line icons, not emoji, until each block ships its
 // own real icon asset (see BlockIcon below). 'custom' is the default for
 // user-created sections.
@@ -87,7 +73,7 @@ function BlockIcon({ iconAsset, fallback, size = 14 }) {
   );
 }
 
-export default function Dashboard({ chatHistory = [], auditLogs = [] }) {
+export default function Dashboard({ chatHistory = [], auditLogs = [], blockLayout, onBlockLayoutChange }) {
   const { apiUsage } = useTelemetry();
   const [autopilot, setAutopilot] = useState(null);
   const [serverUp, setServerUp] = useState(false);
@@ -97,7 +83,6 @@ export default function Dashboard({ chatHistory = [], auditLogs = [] }) {
   const [activityRange, setActivityRange] = useState('heatmap');
   const [activityBarRange, setActivityBarRange] = useState('30d');
   const [blockStates, setBlockStates] = useState({});
-  const [layout, setLayout] = useState({ overrides: {}, customGroups: {}, groupOverrides: {} });
   const [dragBlockId, setDragBlockId] = useState(null);
   const [dragOverGroup, setDragOverGroup] = useState(null);
 
@@ -109,61 +94,20 @@ export default function Dashboard({ chatHistory = [], auditLogs = [] }) {
     } catch {}
   }, []);
 
-  // ── Dashboard block layout — user's own reclassification/sections. ──
-  // Lives in Settings (settings.blockLayout), same override pattern the
-  // Settings block already uses for blockConfig — Settings stays the one
-  // place that owns "what the operator changed," blocks stay unaware.
-  useEffect(() => {
-    fetch('/api/settings').then(r => r.json()).then(d => {
-      const l = d?.settings?.blockLayout;
-      if (l) setLayout({ overrides: l.overrides || {}, customGroups: l.customGroups || {}, groupOverrides: l.groupOverrides || {} });
-    }).catch(() => {});
-  }, []);
-
-  const saveLayout = useCallback((next) => {
-    setLayout(next);
-    // Full replace, not the generic /api/settings patch — that endpoint
-    // deep-merges and can never delete a key, which breaks reclassifying a
-    // block back to its default group or deleting a section.
-    fetch('/api/settings/block-layout', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(next),
-    }).catch(() => {});
-  }, []);
+  // Block layout (reclassification/renames/custom sections) is owned by the
+  // parent layout (DesktopLayout/MobileLayout) and passed down as a prop —
+  // it's the SAME state the sidebar reads, so dragging a block here updates
+  // the sidebar instantly instead of only on next reload. Lives in Settings
+  // (settings.blockLayout) on the backend, same override pattern the
+  // Settings block already uses for blockConfig.
+  const layout = blockLayout || { overrides: {}, customGroups: {}, groupOverrides: {} };
+  const saveLayout = onBlockLayoutChange || (() => {});
 
   // Manifest-default groups + the operator's own overrides/custom sections/
-  // renames, merged. Dragging a block just writes an override — nothing
-  // about the block itself changes, so removing the override always
-  // restores the manifest default. A default section can be renamed or
-  // deleted too, same as a custom one — "deleting" a manifest-driven
-  // section just hides it and reroutes its blocks (present and future) to
-  // Unsorted, since there's no lower fallback layer under a default group.
+  // renames, merged — the exact same computation the sidebar nav uses
+  // (getEffectiveBlockGroups), so the two can never disagree.
   const UNSORTED_ID = 'unsorted';
-  const effectiveGroups = useMemo(() => {
-    const overridesG = layout.groupOverrides || {};
-    const byGroup = {};
-    for (const g of INSTALLED_BY_GROUP) {
-      const ov = overridesG[g.id];
-      byGroup[g.id] = { id: g.id, meta: { ...g.meta, label: ov?.label || g.meta.label }, items: [], custom: false, hidden: !!ov?.hidden };
-    }
-    for (const [gid, cg] of Object.entries(layout.customGroups || {})) {
-      const ov = overridesG[gid];
-      byGroup[gid] = byGroup[gid] || { id: gid, meta: { label: ov?.label || cg.label, icon: cg.icon || 'custom', order: cg.order ?? 50 }, items: [], custom: true, hidden: !!ov?.hidden };
-    }
-    byGroup[UNSORTED_ID] = { id: UNSORTED_ID, meta: { label: 'UNSORTED', icon: 'custom', order: 1000 }, items: [], custom: false, hidden: false, safetyNet: true };
-
-    for (const g of INSTALLED_BY_GROUP) {
-      for (const b of g.items) {
-        const overrideGroup = layout.overrides?.[b.id];
-        let targetId = (overrideGroup && byGroup[overrideGroup]) ? overrideGroup : g.id;
-        if (byGroup[targetId]?.hidden) targetId = UNSORTED_ID;
-        byGroup[targetId].items.push(b);
-      }
-    }
-    return Object.values(byGroup)
-      .filter(g => !g.hidden && (!g.safetyNet || g.items.length > 0))
-      .sort((a, b) => (a.meta.order ?? 99) - (b.meta.order ?? 99));
-  }, [layout]);
+  const effectiveGroups = useMemo(() => getEffectiveBlockGroups(layout), [layout]);
 
   const addSection = useCallback(() => {
     const name = window.prompt('New section name (e.g. "Payroll")');

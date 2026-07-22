@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, Suspense } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef, Suspense } from "react";
 import { Routes, Route, Navigate, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "../kernel/hooks/useAuth";
 
@@ -21,9 +21,10 @@ const EXTRA_NAV = [];
 const EXTRA_ROUTES = [];
 
 // ── NAVIGATION SIDEBAR (LEFT COLUMN) — built from the registry ─────
-const NAV_GROUPS = getNavGroups(EXTRA_NAV);
+// NAV_GROUPS/MENU_ITEMS are now computed inside DesktopLayout (see below):
+// they depend on settings.blockLayout, which is fetched at runtime, so they
+// can't be static module-level constants anymore.
 const BLOCK_ROUTES = [...getRoutes(), ...EXTRA_ROUTES];
-const MENU_ITEMS = NAV_GROUPS.flatMap(g => g.items);
 
 export function RolodexNav({ groups, currentPath, onNavigate }) {
   const [activeGroup, setActiveGroup] = useState(() => {
@@ -100,7 +101,7 @@ export function RolodexNav({ groups, currentPath, onNavigate }) {
   );
 }
 
-function DesktopNav({ user }) {
+function DesktopNav({ user, groups }) {
   const nav = useNavigate();
   const loc = useLocation();
   const { logout } = useAuth();
@@ -188,7 +189,7 @@ function DesktopNav({ user }) {
       </div>
 
       {/* Rolodex Navigation */}
-      <RolodexNav groups={NAV_GROUPS} currentPath={loc.pathname} onNavigate={nav} />
+      <RolodexNav groups={groups} currentPath={loc.pathname} onNavigate={nav} />
 
       <div style={{ padding: "10px", borderTop: "1px solid rgba(255,255,255,0.05)", fontSize: "9px", color: "rgba(255,255,255,0.2)", textAlign: "center", fontFamily: "monospace", letterSpacing: "1px" }}>
         SYSTEM ONLINE · ALL SYNAPSES FIRE
@@ -208,6 +209,29 @@ export default function DesktopLayout({ chatHistory, auditLogs }) {
   const [selectedModel, setSelectedModel] = useState("gemini");
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+
+  // ── Block layout (settings.blockLayout) — the operator's own section
+  // reclassification/renames/custom sections. One fetch here, shared by the
+  // sidebar AND every routed block (Dashboard's grid included) via props,
+  // so dragging a block on the Dashboard updates the sidebar instantly
+  // instead of only on next reload.
+  const [blockLayout, setBlockLayout] = useState(null);
+  useEffect(() => {
+    fetch('/api/settings').then(r => r.json()).then(d => {
+      setBlockLayout(d?.settings?.blockLayout || { overrides: {}, customGroups: {}, groupOverrides: {} });
+    }).catch(() => setBlockLayout({ overrides: {}, customGroups: {}, groupOverrides: {} }));
+  }, []);
+
+  const saveBlockLayout = useCallback((next) => {
+    setBlockLayout(next);
+    fetch('/api/settings/block-layout', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(next),
+    }).catch(() => {});
+  }, []);
+
+  const NAV_GROUPS = useMemo(() => getNavGroups(EXTRA_NAV, blockLayout), [blockLayout]);
+  const MENU_ITEMS = useMemo(() => NAV_GROUPS.flatMap(g => g.items), [NAV_GROUPS]);
 
   const handleViewChange = useCallback((view) => {
     const viewMap = {
@@ -296,7 +320,7 @@ export default function DesktopLayout({ chatHistory, auditLogs }) {
       </div>
 
       {/* 2. LEFT PANEL (Navigation) */}
-      {menuOpen && <DesktopNav user={user} />}
+      {menuOpen && <DesktopNav user={user} groups={NAV_GROUPS} />}
 
       {/* 3. MIDDLE PANEL (Main Viewport) */}
       <div className="main-viewport">
@@ -316,14 +340,18 @@ export default function DesktopLayout({ chatHistory, auditLogs }) {
           <Routes>
             {/* Auto-generated from the block registry. Every block receives the
                 same props bag — extra props are harmless, so blocks that need
-                chatHistory/auditLogs/onViewChange get them and the rest ignore. */}
+                chatHistory/auditLogs/onViewChange/blockLayout get them and the
+                rest ignore them. */}
             {BLOCK_ROUTES.map(({ path, Component, id, uiMode, manifest }) => (
               <Route
                 key={id}
                 path={path}
                 element={
                   <BlockShell uiMode={uiMode} manifest={manifest}>
-                    <Component chatHistory={chatHistory} auditLogs={auditLogs} onViewChange={handleViewChange} />
+                    <Component
+                      chatHistory={chatHistory} auditLogs={auditLogs} onViewChange={handleViewChange}
+                      blockLayout={blockLayout} onBlockLayoutChange={saveBlockLayout}
+                    />
                   </BlockShell>
                 }
               />

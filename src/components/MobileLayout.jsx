@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, Suspense } from "react";
+import React, { useState, useEffect, useCallback, useMemo, Suspense } from "react";
 import { Routes, Route, Navigate, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "../kernel/hooks/useAuth";
 import MobileNav from "./MobileNav";
@@ -9,7 +9,8 @@ import { RolodexNav } from "./DesktopLayout";
 import NeuralTerminal from "./Terminal2"; // Terminal 2.0 — flip back to "./NeuralTerminal" to roll back
 
 // Everything is a block now — nav + routes come purely from the registry.
-const NAV_GROUPS = getNavGroups();
+// NAV_GROUPS is computed inside MobileLayout (depends on runtime-fetched
+// settings.blockLayout — see DesktopLayout for why it can't be static here).
 const BLOCK_ROUTES = getRoutes();
 
 // ── MinimalBlockCard — auto-rendered for uiMode === 'minimal' blocks ──────────
@@ -38,9 +39,9 @@ function MinimalBlockCard({ manifest }) {
 const UI_MODE_BY_PATH = Object.fromEntries(BLOCKS.map(b => [b.route, { uiMode: b.uiMode, manifest: b.manifest }]));
 
 // ── HEADER ───────────────────────────────────────────────────────
-function TopBar({ view, onMenuToggle, menuOpen }) {
+function TopBar({ view, onMenuToggle, menuOpen, groups }) {
   const loc = useLocation();
-  const allItems = NAV_GROUPS.flatMap(g => g.items);
+  const allItems = groups.flatMap(g => g.items);
   const match = allItems.find(i => i.path === loc.pathname);
   const label = match ? match.label : "AEON";
 
@@ -92,7 +93,7 @@ function TopBar({ view, onMenuToggle, menuOpen }) {
 // ── SLIDE-OUT DRAWER MENU — built from the block registry ───────
 // No hardcoded list. Nav items come from manifests via blockRegistry.
 
-function DrawerMenu({ open, onClose }) {
+function DrawerMenu({ open, onClose, groups }) {
   const nav = useNavigate();
   const loc = useLocation();
   const { user, logout } = useAuth();
@@ -176,7 +177,7 @@ function DrawerMenu({ open, onClose }) {
 
         {/* Nav links */}
         <div style={{ flex: 1, padding: "8px", display: "flex", flexDirection: "column", overflow: "hidden" }}>
-          <RolodexNav groups={NAV_GROUPS} currentPath={loc.pathname} onNavigate={(p) => { nav(p); onClose(); }} />
+          <RolodexNav groups={groups} currentPath={loc.pathname} onNavigate={(p) => { nav(p); onClose(); }} />
         </div>
 
         {/* Version footer */}
@@ -199,6 +200,25 @@ export default function MobileLayout({ chatHistory, auditLogs }) {
   // Mock brainData for mobile until global state is fully passed down
   const brainData = { nodes: [] };
   const [selectedModel, setSelectedModel] = useState(() => localStorage.getItem("aeon_active_agent") || "gemini-2.5-flash");
+
+  // See DesktopLayout for why this can't be a static module constant: the
+  // operator's section reclassification/renames live in settings.blockLayout.
+  const [blockLayout, setBlockLayout] = useState(null);
+  useEffect(() => {
+    fetch('/api/settings').then(r => r.json()).then(d => {
+      setBlockLayout(d?.settings?.blockLayout || { overrides: {}, customGroups: {}, groupOverrides: {} });
+    }).catch(() => setBlockLayout({ overrides: {}, customGroups: {}, groupOverrides: {} }));
+  }, []);
+
+  const saveBlockLayout = useCallback((next) => {
+    setBlockLayout(next);
+    fetch('/api/settings/block-layout', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(next),
+    }).catch(() => {});
+  }, []);
+
+  const NAV_GROUPS = useMemo(() => getNavGroups([], blockLayout), [blockLayout]);
 
   const handleViewChange = useCallback((view) => {
     const viewMap = {
@@ -235,8 +255,8 @@ export default function MobileLayout({ chatHistory, auditLogs }) {
 
   return (
     <div className="aeon-shell">
-      <TopBar menuOpen={menuOpen} onMenuToggle={() => setMenuOpen(v => !v)} />
-      <DrawerMenu open={menuOpen} onClose={() => setMenuOpen(false)} />
+      <TopBar menuOpen={menuOpen} onMenuToggle={() => setMenuOpen(v => !v)} groups={NAV_GROUPS} />
+      <DrawerMenu open={menuOpen} onClose={() => setMenuOpen(false)} groups={NAV_GROUPS} />
 
       <main className="aeon-content">
         <Suspense fallback={
@@ -251,7 +271,7 @@ export default function MobileLayout({ chatHistory, auditLogs }) {
               const { uiMode, manifest } = UI_MODE_BY_PATH[path] || {};
               const element = uiMode === 'minimal'
                 ? <MinimalBlockCard manifest={manifest} />
-                : <Component />;
+                : <Component blockLayout={blockLayout} onBlockLayoutChange={saveBlockLayout} />;
               return <Route key={id} path={path} element={element} />;
             })}
           <Route path="*" element={<Navigate to="/" replace />} />

@@ -85,26 +85,81 @@ for (const [p, loader] of Object.entries(componentModules)) {
 // Sort within group by order, then label.
 BLOCKS.sort((a, b) => a.order - b.order || a.label.localeCompare(b.label));
 
-/** Nav groups, each with its ordered items — drives the sidebar. */
-export function getNavGroups(extraItems = []) {
+// The operator's own reclassification/renames/custom sections — set via
+// Settings (settings.blockLayout) from the Dashboard's Installed Blocks grid.
+// Shared by getNavGroups (sidebar) AND the Dashboard, so dragging a block or
+// renaming a section in one place is the SAME truth the other reads — no
+// separate copy of "what group is this block in" to drift out of sync.
+const UNSORTED_GROUP_ID = 'unsorted';
+
+/**
+ * Blocks grouped per manifest defaults, with the operator's overrides
+ * applied on top: per-block group reassignment, custom sections, renamed/
+ * hidden default sections. A hidden default section's blocks (present and
+ * any future block sharing that manifest group) fall through to an
+ * always-available Unsorted section instead of disappearing.
+ */
+export function getEffectiveBlockGroups(blockLayout) {
+  const overrides = blockLayout?.overrides || {};
+  const customGroups = blockLayout?.customGroups || {};
+  const groupOverrides = blockLayout?.groupOverrides || {};
+
   const byGroup = {};
   for (const b of BLOCKS) {
-    if (b.uiMode === 'headless') continue; // headless blocks never appear in nav
-    (byGroup[b.group] ||= []).push({ path: b.route, label: b.label, icon: b.icon });
+    if (b.uiMode === 'headless') continue;
+    if (!byGroup[b.group]) {
+      const meta = GROUP_META[b.group] || { label: b.group.toUpperCase(), icon: '📦', order: 99 };
+      const ov = groupOverrides[b.group];
+      byGroup[b.group] = { id: b.group, meta: { ...meta, label: ov?.label || meta.label }, items: [], custom: false, hidden: !!ov?.hidden };
+    }
   }
+  for (const [gid, cg] of Object.entries(customGroups)) {
+    if (byGroup[gid]) continue;
+    const ov = groupOverrides[gid];
+    byGroup[gid] = { id: gid, meta: { label: ov?.label || cg.label, icon: cg.icon || 'custom', order: cg.order ?? 50 }, items: [], custom: true, hidden: !!ov?.hidden };
+  }
+  byGroup[UNSORTED_GROUP_ID] = { id: UNSORTED_GROUP_ID, meta: { label: 'UNSORTED', icon: 'custom', order: 1000 }, items: [], custom: false, hidden: false, safetyNet: true };
+
+  for (const b of BLOCKS) {
+    if (b.uiMode === 'headless') continue;
+    const overrideGroup = overrides[b.id];
+    let targetId = (overrideGroup && byGroup[overrideGroup]) ? overrideGroup : b.group;
+    if (byGroup[targetId]?.hidden) targetId = UNSORTED_GROUP_ID;
+    byGroup[targetId].items.push(b);
+  }
+
+  return Object.values(byGroup)
+    .filter(g => !g.hidden && (!g.safetyNet || g.items.length > 0))
+    .sort((a, b) => (a.meta.order ?? 99) - (b.meta.order ?? 99));
+}
+
+/**
+ * Nav groups, each with its ordered items — drives the sidebar. Pass the
+ * current blockLayout (from Settings) so the sidebar reflects the same
+ * reclassification/renames the Dashboard's block grid does.
+ */
+export function getNavGroups(extraItems = [], blockLayout = null) {
+  const groups = getEffectiveBlockGroups(blockLayout);
+  const out = groups.map(g => ({
+    id: g.id,
+    label: g.meta.label,
+    icon: g.meta.icon,
+    order: g.meta.order,
+    items: g.items.map(b => ({ path: b.route, label: b.label, icon: b.icon })),
+  }));
   // Inject non-block extras (e.g. Second Brain, a component not a block).
   for (const ex of extraItems) {
-    (byGroup[ex.group] ||= []).push({ path: ex.path, label: ex.label, icon: ex.icon });
+    const target = out.find(g => g.id === ex.group);
+    if (target) { target.items.push({ path: ex.path, label: ex.label, icon: ex.icon }); continue; }
+    out.push({
+      id: ex.group,
+      label: GROUP_META[ex.group]?.label || ex.group.toUpperCase(),
+      icon: GROUP_META[ex.group]?.icon || '📦',
+      order: GROUP_META[ex.group]?.order ?? 99,
+      items: [{ path: ex.path, label: ex.label, icon: ex.icon }],
+    });
   }
-  return Object.entries(byGroup)
-    .map(([id, items]) => ({
-      id,
-      label: GROUP_META[id]?.label || id.toUpperCase(),
-      icon: GROUP_META[id]?.icon || '📦',
-      order: GROUP_META[id]?.order ?? 99,
-      items,
-    }))
-    .sort((a, b) => a.order - b.order);
+  return out.sort((a, b) => a.order - b.order);
 }
 
 /** Route → Component list for <Routes>. Includes uiMode + manifest for BlockShell. */
