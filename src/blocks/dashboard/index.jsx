@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { StatCard, Card } from '../../components/aurora';
-import { Activity, Zap, Radio, BarChart3, Wifi, WifiOff, Server, Flame, Calendar, LayoutGrid, Bot, Briefcase, Search, Wrench, Cpu, Layers, Plus, Trash2 } from 'lucide-react';
+import { Activity, Zap, Radio, BarChart3, Wifi, WifiOff, Server, Flame, Calendar, LayoutGrid, Bot, Briefcase, Search, Wrench, Cpu, Layers, Plus, Trash2, Pencil } from 'lucide-react';
 import { AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { useTelemetry } from '../../kernel/contexts/TelemetryContext';
 import { BLOCKS, GROUP_META } from '../../kernel/blockRegistry.js';
@@ -97,7 +97,7 @@ export default function Dashboard({ chatHistory = [], auditLogs = [] }) {
   const [activityRange, setActivityRange] = useState('heatmap');
   const [activityBarRange, setActivityBarRange] = useState('30d');
   const [blockStates, setBlockStates] = useState({});
-  const [layout, setLayout] = useState({ overrides: {}, customGroups: {} });
+  const [layout, setLayout] = useState({ overrides: {}, customGroups: {}, groupOverrides: {} });
   const [dragBlockId, setDragBlockId] = useState(null);
   const [dragOverGroup, setDragOverGroup] = useState(null);
 
@@ -116,7 +116,7 @@ export default function Dashboard({ chatHistory = [], auditLogs = [] }) {
   useEffect(() => {
     fetch('/api/settings').then(r => r.json()).then(d => {
       const l = d?.settings?.blockLayout;
-      if (l) setLayout({ overrides: l.overrides || {}, customGroups: l.customGroups || {} });
+      if (l) setLayout({ overrides: l.overrides || {}, customGroups: l.customGroups || {}, groupOverrides: l.groupOverrides || {} });
     }).catch(() => {});
   }, []);
 
@@ -131,24 +131,38 @@ export default function Dashboard({ chatHistory = [], auditLogs = [] }) {
     }).catch(() => {});
   }, []);
 
-  // Manifest-default groups + the operator's own overrides/custom sections,
-  // merged. Dragging a block just writes an override — nothing about the
-  // block itself changes, so removing the override always restores the
-  // manifest default.
+  // Manifest-default groups + the operator's own overrides/custom sections/
+  // renames, merged. Dragging a block just writes an override — nothing
+  // about the block itself changes, so removing the override always
+  // restores the manifest default. A default section can be renamed or
+  // deleted too, same as a custom one — "deleting" a manifest-driven
+  // section just hides it and reroutes its blocks (present and future) to
+  // Unsorted, since there's no lower fallback layer under a default group.
+  const UNSORTED_ID = 'unsorted';
   const effectiveGroups = useMemo(() => {
+    const overridesG = layout.groupOverrides || {};
     const byGroup = {};
-    for (const g of INSTALLED_BY_GROUP) byGroup[g.id] = { id: g.id, meta: g.meta, items: [], custom: false };
-    for (const [gid, cg] of Object.entries(layout.customGroups || {})) {
-      byGroup[gid] = byGroup[gid] || { id: gid, meta: { label: cg.label, icon: cg.icon || 'custom', order: cg.order ?? 50 }, items: [], custom: true };
+    for (const g of INSTALLED_BY_GROUP) {
+      const ov = overridesG[g.id];
+      byGroup[g.id] = { id: g.id, meta: { ...g.meta, label: ov?.label || g.meta.label }, items: [], custom: false, hidden: !!ov?.hidden };
     }
+    for (const [gid, cg] of Object.entries(layout.customGroups || {})) {
+      const ov = overridesG[gid];
+      byGroup[gid] = byGroup[gid] || { id: gid, meta: { label: ov?.label || cg.label, icon: cg.icon || 'custom', order: cg.order ?? 50 }, items: [], custom: true, hidden: !!ov?.hidden };
+    }
+    byGroup[UNSORTED_ID] = { id: UNSORTED_ID, meta: { label: 'UNSORTED', icon: 'custom', order: 1000 }, items: [], custom: false, hidden: false, safetyNet: true };
+
     for (const g of INSTALLED_BY_GROUP) {
       for (const b of g.items) {
         const overrideGroup = layout.overrides?.[b.id];
-        const targetId = (overrideGroup && byGroup[overrideGroup]) ? overrideGroup : g.id;
+        let targetId = (overrideGroup && byGroup[overrideGroup]) ? overrideGroup : g.id;
+        if (byGroup[targetId]?.hidden) targetId = UNSORTED_ID;
         byGroup[targetId].items.push(b);
       }
     }
-    return Object.values(byGroup).sort((a, b) => (a.meta.order ?? 99) - (b.meta.order ?? 99));
+    return Object.values(byGroup)
+      .filter(g => !g.hidden && (!g.safetyNet || g.items.length > 0))
+      .sort((a, b) => (a.meta.order ?? 99) - (b.meta.order ?? 99));
   }, [layout]);
 
   const addSection = useCallback(() => {
@@ -159,13 +173,29 @@ export default function Dashboard({ chatHistory = [], auditLogs = [] }) {
     saveLayout({ ...layout, customGroups: { ...layout.customGroups, [gid]: { label: name.trim(), icon: 'custom', order: 50 } } });
   }, [layout, saveLayout]);
 
+  const renameSection = useCallback((group) => {
+    const name = window.prompt(`Rename "${group.meta.label}" to:`, group.meta.label);
+    if (!name || !name.trim() || name.trim() === group.meta.label) return;
+    saveLayout({ ...layout, groupOverrides: { ...layout.groupOverrides, [group.id]: { ...(layout.groupOverrides?.[group.id]), label: name.trim() } } });
+  }, [layout, saveLayout]);
+
   const deleteSection = useCallback((group) => {
-    if (!window.confirm(`Delete "${group.meta.label}"? Its blocks move back to their default section.`)) return;
-    const overrides = { ...layout.overrides };
-    for (const b of group.items) delete overrides[b.id];
-    const customGroups = { ...layout.customGroups };
-    delete customGroups[group.id];
-    saveLayout({ overrides, customGroups });
+    if (group.custom) {
+      if (!window.confirm(`Delete "${group.meta.label}"? Its blocks move back to their default section.`)) return;
+      const overrides = { ...layout.overrides };
+      for (const b of group.items) delete overrides[b.id];
+      const customGroups = { ...layout.customGroups };
+      delete customGroups[group.id];
+      const groupOverrides = { ...layout.groupOverrides };
+      delete groupOverrides[group.id];
+      saveLayout({ overrides, customGroups, groupOverrides });
+      return;
+    }
+    // A default (manifest-driven) section can't just "fall back" further —
+    // hide it and send its blocks (this one's and any future one sharing
+    // this manifest group) to Unsorted instead.
+    if (!window.confirm(`Delete "${group.meta.label}"? Its blocks move to Unsorted — this section will reappear if a new block installs into it later.`)) return;
+    saveLayout({ ...layout, groupOverrides: { ...layout.groupOverrides, [group.id]: { ...(layout.groupOverrides?.[group.id]), hidden: true } } });
   }, [layout, saveLayout]);
 
   // Reads the dragged block's id from the native DataTransfer payload, not
@@ -305,13 +335,21 @@ export default function Dashboard({ chatHistory = [], auditLogs = [] }) {
                 <span style={{ fontSize: '9px', fontWeight: 700, letterSpacing: '1px', color: 'var(--text-dim)' }}>
                   {g.meta.label}{g.items.length === 0 ? ' (empty — drop a block here)' : ''}
                 </span>
-                {g.custom && (
-                  <button onClick={() => deleteSection(g)} aria-label={`Delete ${g.meta.label} section`} title="Delete section" style={{
-                    marginLeft: 'auto', display: 'flex', alignItems: 'center', padding: '2px',
-                    background: 'transparent', border: 'none', color: 'var(--text-dim)', cursor: 'pointer',
-                  }}>
-                    <Trash2 size={11} aria-hidden="true" />
-                  </button>
+                {g.id !== UNSORTED_ID && (
+                  <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '2px' }}>
+                    <button onClick={() => renameSection(g)} aria-label={`Rename ${g.meta.label} section`} title="Rename section" style={{
+                      display: 'flex', alignItems: 'center', padding: '2px',
+                      background: 'transparent', border: 'none', color: 'var(--text-dim)', cursor: 'pointer',
+                    }}>
+                      <Pencil size={11} aria-hidden="true" />
+                    </button>
+                    <button onClick={() => deleteSection(g)} aria-label={`Delete ${g.meta.label} section`} title="Delete section" style={{
+                      display: 'flex', alignItems: 'center', padding: '2px',
+                      background: 'transparent', border: 'none', color: 'var(--text-dim)', cursor: 'pointer',
+                    }}>
+                      <Trash2 size={11} aria-hidden="true" />
+                    </button>
+                  </span>
                 )}
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '8px', minHeight: g.items.length === 0 ? '36px' : 0 }}>

@@ -748,9 +748,9 @@ module.exports = (app, deps) => {
   // drag/drop and "delete section" actions need real removal, e.g. an
   // override going away when a block is dragged back to its default group).
   app.post('/api/settings/block-layout', (req, res) => {
-    const { overrides, customGroups } = req.body || {};
+    const { overrides, customGroups, groupOverrides } = req.body || {};
     const settings = loadSettings();
-    settings.blockLayout = { overrides: overrides || {}, customGroups: customGroups || {} };
+    settings.blockLayout = { overrides: overrides || {}, customGroups: customGroups || {}, groupOverrides: groupOverrides || {} };
     saveSettings(settings);
     res.json({ ok: true, blockLayout: settings.blockLayout });
   });
