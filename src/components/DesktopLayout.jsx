@@ -125,8 +125,8 @@ function DesktopNav({ user }) {
 
   return (
     <div className="module-panel" style={{ height: "100%" }}>
-      <div className="panel-header">
-        <span style={{ fontSize: "16px" }}>📡</span>
+      <div className="panel-header" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+        <img src="/brand/aeon-icon.svg" alt="" width="16" height="16" style={{ borderRadius: '3px', flexShrink: 0 }} />
         AEON OS KERNEL
       </div>
       
@@ -263,6 +263,7 @@ export default function DesktopLayout({ chatHistory, auditLogs }) {
               <line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/>
             </svg>
           </button>
+          <img src="/brand/aeon-icon.svg" alt="" width="22" height="22" style={{ borderRadius: '5px', flexShrink: 0 }} />
           <div className="nav-title">AEON</div>
           <div style={{ fontSize: "10px", color: "rgba(0,242,255,0.7)", fontFamily: "monospace", border: "1px solid rgba(0,242,255,0.3)", padding: "2px 6px", borderRadius: "4px", background: "rgba(0,242,255,0.1)" }}>
             v5.0

@@ -3,13 +3,16 @@ const path = require('path');
 const { vaultSync } = require('../../../kernel/vaultSync.cjs');
 
 module.exports = (app, deps) => {
-  const { supabase, NOTES_FILE } = deps;
+  const { supabase, NOTES_FILE, getVaultFile } = deps;
   const isVercel = !!process.env.VERCEL;
   // On Vercel /tmp is the only writable dir — but it's ephemeral per-invocation.
   // Supabase is the source of truth; /tmp is just a within-request cache.
+  // Locally, documents live inside the Vault (Vault/blocks/writer/) so Writer
+  // gets real long-term storage and every doc is a first-class Matrix node —
+  // no separate secrets/ folder, no best-effort mirror to keep in sync.
   const DOCS_DIR = isVercel
     ? '/tmp/aeon_writer'
-    : path.join(__dirname, '..', '..', '..', '..', 'secrets', 'documents');
+    : (getVaultFile ? getVaultFile('blocks/writer') : path.join(__dirname, '..', '..', '..', '..', 'secrets', 'documents'));
   const STYLE_FILE = path.join(DOCS_DIR, '_style-profile.json');
   try { fs.mkdirSync(DOCS_DIR, { recursive: true }); } catch {}
 
@@ -105,16 +108,6 @@ module.exports = (app, deps) => {
 
     fs.writeFileSync(path.join(DOCS_DIR, `${docId}.md`), content || '');
 
-    // ── Vault mirror — finished writing belongs in the knowledge graph ──
-    // The Matrix indexes VAULT_ROOT, so every saved doc becomes a node.
-    try {
-      if (deps.getVaultFile && !isVercel) {
-        const safe = String(title || 'Untitled').replace(/[^A-Za-z0-9 _-]/g, '').trim().slice(0, 80) || docId;
-        const vaultDir = deps.getVaultFile('Writer');
-        fs.mkdirSync(vaultDir, { recursive: true });
-        fs.writeFileSync(path.join(vaultDir, `${safe}.md`), `# ${title || 'Untitled'}\n\n${content || ''}`);
-      }
-    } catch { /* mirror is best-effort */ }
     const docs = loadDocs().filter(d => d.id !== docId);
     docs.unshift({ id: docId, title: title || 'Untitled', tags: tags || [], updated: now, size: (content || '').length });
     saveDocs(docs);

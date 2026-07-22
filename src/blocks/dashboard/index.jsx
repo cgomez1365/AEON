@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { Link } from 'react-router-dom';
 import { StatCard, Card } from '../../components/aurora';
-import { Activity, Zap, Radio, BarChart3, Wifi, WifiOff, Server, Flame, Calendar } from 'lucide-react';
+import { Activity, Zap, Radio, BarChart3, Wifi, WifiOff, Server, Flame, Calendar, LayoutGrid } from 'lucide-react';
 import { AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { useTelemetry } from '../../kernel/contexts/TelemetryContext';
+import { BLOCKS, GROUP_META } from '../../kernel/blockRegistry.js';
 
 import { SB_URL, SB_KEY } from '../../config.js';
 const CHART_COLORS = ['#00f2ff', '#f59e0b', '#4caf50', '#8b5cf6', '#ec4899', '#ff6b6b', '#00ff40', '#ff9800'];
@@ -26,6 +28,32 @@ function fmt(n) {
   return String(n);
 }
 
+function timeAgo(iso) {
+  const ms = iso ? Date.now() - new Date(iso).getTime() : NaN;
+  if (!(ms >= 0)) return '';
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return 'just now';
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+
+// Installed blocks, grouped exactly like the sidebar nav (same registry,
+// same GROUP_META) — drop a block folder in and it appears here too.
+// No hardcoded block list: this IS the block-standard registry.
+const INSTALLED_BY_GROUP = (() => {
+  const byGroup = {};
+  for (const b of BLOCKS) {
+    if (b.uiMode === 'headless') continue;
+    (byGroup[b.group] ||= []).push(b);
+  }
+  return Object.entries(byGroup)
+    .map(([id, items]) => ({ id, meta: GROUP_META[id] || { label: id.toUpperCase(), icon: '📦', order: 99 }, items }))
+    .sort((a, b) => a.meta.order - b.meta.order);
+})();
+
 export default function Dashboard({ chatHistory = [], auditLogs = [] }) {
   const { apiUsage } = useTelemetry();
   const [autopilot, setAutopilot] = useState(null);
@@ -35,6 +63,15 @@ export default function Dashboard({ chatHistory = [], auditLogs = [] }) {
   const [heatmapSummary, setHeatmapSummary] = useState(null);
   const [activityRange, setActivityRange] = useState('heatmap');
   const [activityBarRange, setActivityBarRange] = useState('30d');
+  const [blockStates, setBlockStates] = useState({});
+
+  // ── Live per-block state (Vault/blocks/*/state.json via vaultSync) ──
+  const loadBlockStates = useCallback(async () => {
+    try {
+      const r = await fetch('/blocks/state');
+      if (r.ok) setBlockStates(await r.json());
+    } catch {}
+  }, []);
 
   // ── Fleet + Heatmap data polling ──
   const loadFleetData = useCallback(async () => {
@@ -78,8 +115,9 @@ export default function Dashboard({ chatHistory = [], auditLogs = [] }) {
     } catch {}
   }, []);
 
-  useEffect(() => { loadFleetData(); loadHeatmap(); }, []);
+  useEffect(() => { loadFleetData(); loadHeatmap(); loadBlockStates(); }, []);
   useEffect(() => { const i = setInterval(loadFleetData, 5000); return () => clearInterval(i); }, [loadFleetData]);
+  useEffect(() => { const i = setInterval(loadBlockStates, 10000); return () => clearInterval(i); }, [loadBlockStates]);
 
   const totalCalls = apiUsage?.totalRequests || 0;
   const totalTokens = apiUsage?.totalTokens || 0;
@@ -120,6 +158,44 @@ export default function Dashboard({ chatHistory = [], auditLogs = [] }) {
         <StatCard label="LLM Engines" value={activeEngines || totalCalls > 0 ? activeEngines : '—'} accent="cyan" sub={`${totalCalls} calls | ${fmt(totalTokens)} tok`} icon={<Activity size={14} aria-hidden="true" />} />
         <StatCard label="Server" value={serverUp ? 'ONLINE' : 'CLOUD'} accent={serverUp ? 'emerald' : 'amber'} sub={serverUp ? 'Local kernel' : 'Supabase relay'} icon={serverUp ? <Wifi size={14} aria-hidden="true" /> : <WifiOff size={14} aria-hidden="true" />} />
         <StatCard label="Autopilot" value={autopilot?.status || '—'} accent={autopilot?.producerRunning ? 'emerald' : 'cyan'} sub={autopilot ? `${autopilot.totalProduced || 0} produced` : 'Unknown'} icon={<Server size={14} aria-hidden="true" />} />
+      </div>
+
+      {/* ═══ INSTALLED BLOCKS — auto-organized from the block registry ═══ */}
+      <div style={{ marginBottom: '20px' }}>
+        <Card hover={false}>
+          <PanelHeader
+            icon={<LayoutGrid size={14} style={{ color: '#00f2ff' }} aria-hidden="true" />}
+            title={`INSTALLED BLOCKS (${INSTALLED_BY_GROUP.reduce((n, g) => n + g.items.length, 0)})`}
+          />
+          {INSTALLED_BY_GROUP.map(g => (
+            <div key={g.id} style={{ marginBottom: '14px' }}>
+              <div style={{ fontSize: '9px', fontWeight: 700, letterSpacing: '1px', color: 'var(--text-dim)', marginBottom: '6px' }}>
+                {g.meta.icon} {g.meta.label}
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '8px' }}>
+                {g.items.map(b => {
+                  const live = blockStates[b.id];
+                  const summary = live?.state?._summary;
+                  return (
+                    <Link key={b.id} to={b.route} style={{ textDecoration: 'none', color: 'inherit' }}>
+                      <div style={{ padding: '8px 10px', borderRadius: '8px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', display: 'flex', flexDirection: 'column', gap: '4px', height: '100%' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <span style={{ fontSize: '13px' }} aria-hidden="true">{b.icon}</span>
+                          <span style={{ fontSize: '11px', fontWeight: 700 }}>{b.label}</span>
+                          <span aria-hidden="true" style={{ width: '5px', height: '5px', borderRadius: '50%', background: live ? '#00ff40' : 'rgba(255,255,255,0.15)', marginLeft: 'auto' }} />
+                        </div>
+                        <div style={{ fontSize: '9px', color: 'var(--text-dim)', lineHeight: 1.4 }}>
+                          {summary || (live ? 'Active — no summary reported' : 'Not reporting activity yet')}
+                        </div>
+                        {live?.lastSync && <div style={{ fontSize: '8px', color: 'var(--text-dim)', opacity: 0.6 }}>{timeAgo(live.lastSync)}</div>}
+                      </div>
+                    </Link>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </Card>
       </div>
 
       {/* ═══ FLEET: LLM ENGINE TELEMETRY ═══ */}

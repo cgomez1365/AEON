@@ -62,10 +62,10 @@ const TEMPLATES = [
 
 module.exports = (app, deps) => {
   const isVercel = !!process.env.VERCEL;
-  // Must match writer.js exactly — same store, same folder.
+  // Must match writer.js exactly — same store, same folder (Vault/blocks/writer/).
   const DOCS_DIR = isVercel
     ? '/tmp/aeon_writer'
-    : path.join(__dirname, '..', '..', '..', '..', 'secrets', 'documents');
+    : (deps?.getVaultFile ? deps.getVaultFile('blocks/writer') : path.join(__dirname, '..', '..', '..', '..', 'secrets', 'documents'));
   try { fs.mkdirSync(DOCS_DIR, { recursive: true }); } catch {}
 
   const docTitle = (id) => {

@@ -213,7 +213,7 @@ const _routerDeps = {
   kernelLLM: ai.kernelLLM, kernelVision: ai.kernelVision, _trackLLM: ai._trackLLM,
   _skippedRoutes, getLocalFile: storage.getLocalFile, aeonTerminalStream,
   getProviderHealth: ai.getProviderHealth, confirmLocal: ai.confirmLocal, isLocalConfirmed: ai.isLocalConfirmed,
-  getKeyPoolInfo: ai.getKeyPoolInfo,
+  getKeyPoolInfo: ai.getKeyPoolInfo, VAULT_ROOT: storage.VAULT_ROOT,
 };
 
 // Build pipeline + approvals + IDE mode + BGI Store

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="AEON icon">
+  <rect x="40" y="40" width="944" height="944" rx="178" fill="#02070d"/>
+  <path d="M238 760 384 250h104L356 760Z M668 760 536 250h104l146 510Z M386 565h252l-28 85H414Z" fill="#f5fafc"/>
+  <path d="M512 356 598 566H426Z M452 760l60-84 60 84Z" fill="#020a0f"/>
+  <path d="M276 756 384 392 438 280" fill="none" stroke="#00e2ff" stroke-width="34" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="512" cy="232" r="27" fill="#00e2ff" opacity=".68"/>
+  <circle cx="512" cy="232" r="13" fill="#00e2ff"/>
+</svg>

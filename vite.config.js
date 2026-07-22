@@ -27,7 +27,7 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.svg'],
+      includeAssets: ['favicon.ico', 'brand/aeon-icon.svg', 'brand/aeon-icon-192.png', 'brand/aeon-icon-512.png'],
       workbox: {
         maximumFileSizeToCacheInBytes: 5000000,
         cleanupOutdatedCaches: true,
@@ -59,7 +59,11 @@ export default defineConfig({
         theme_color: '#020508',
         background_color: '#020508',
         display: 'standalone',
-        icons: [{ src: '/favicon.svg', sizes: '192x192', type: 'image/svg+xml' }]
+        icons: [
+          { src: '/brand/aeon-icon-192.png', sizes: '192x192', type: 'image/png' },
+          { src: '/brand/aeon-icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+          { src: '/logo.png', sizes: '512x512', type: 'image/png' },
+        ]
       }
     })
   ],
