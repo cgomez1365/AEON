@@ -284,6 +284,10 @@ module.exports = (app, deps) => {
   const OPEN_PATHS = [
     /^\/api\/auth\//,            // login, status, setup, 2FA
     /^\/api\/security\/otp\//,   // email OTP rescue
+    /^\/api\/security\/policy$/, // the gate itself needs to read idleMinutes/
+                                  // lockEveryLaunch/bootSequence while locked
+                                  // to render correctly. Writes (POST) stay
+                                  // protected by that route's own requireSession.
     /^\/$/,                      // health check
   ];
   const GUARDED_PREFIX = /^\/(api|block|core|events)\b/;
@@ -340,6 +344,7 @@ module.exports = (app, deps) => {
         idleMinutes: p.idleMinutes,
         flushOnLock: p.flushOnLock,
         shield: p.shield,
+        bootSequence: !!p.bootSequence,
       },
       accountConfigured: !!loadUser(),
       lastFlush: p.lastFlush,
@@ -357,6 +362,7 @@ module.exports = (app, deps) => {
     if (b.idleMinutes !== undefined) p.idleMinutes = Math.min(240, Math.max(1, Number(b.idleMinutes) || 5));
     if (b.flushOnLock !== undefined) p.flushOnLock = !!b.flushOnLock;
     if (b.shield !== undefined) p.shield = !!b.shield;
+    if (b.bootSequence !== undefined) p.bootSequence = !!b.bootSequence;
     savePolicy(p);
     await mirrorToSettings(p);
     if (deps.writeOSAudit) { try { deps.writeOSAudit('GUARDIAN_POLICY', JSON.stringify(b).slice(0, 200), 200, 0); } catch {} }

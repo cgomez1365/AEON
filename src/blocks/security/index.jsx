@@ -6,6 +6,7 @@
  * Talks to /api/auth/* (auth core) and /api/security/* (guardian).
  */
 import React, { useState, useEffect, useCallback } from 'react';
+import AeonBootGate from './AeonBootGate';
 
 const S = {
   page: { padding: 24, maxWidth: 860, margin: '0 auto', color: '#dce8f5', fontFamily: 'Inter, sans-serif' },
@@ -150,6 +151,14 @@ export default function Security() {
   const p = (policy && policy.policy) || {};
   const protectedNow = status.configured && (p.guardEnabled ?? true);
 
+  // Opted into the cinematic boot sequence (Protection → "Use the AEON
+  // boot sequence") — full-screen takeover, bypasses the padded settings
+  // page entirely. Falls straight back to the plain form below if this is
+  // ever off, missing, or the account isn't set up yet.
+  if (status.configured && !status.authenticated && p.bootSequence) {
+    return <AeonBootGate onAuthed={refresh} />;
+  }
+
   return (
     <div style={S.page}>
       {msg && (
@@ -246,6 +255,14 @@ export default function Security() {
               onChange={e => setPolicyField({ idleMinutes: Number(e.target.value) })}>
               {[1, 5, 10, 15, 30, 60].map(m => <option key={m} value={m}>after {m} min</option>)}
             </select>
+          </div>
+
+          <div style={S.row}>
+            <div>
+              <div style={S.label}>Use the AEON boot sequence to sign in</div>
+              <div style={S.hint}>An animated, full-screen sign-in — instead of the plain form below — shown every time AEON asks for your password.</div>
+            </div>
+            <Toggle id="bootSequence" checked={!!p.bootSequence} onChange={v => setPolicyField({ bootSequence: v })} />
           </div>
 
           <div style={S.row}>

@@ -1,0 +1,74 @@
+/* AeonBootGate — scoped under .aeon-boot so nothing here leaks into the
+   rest of the app. Colors read AEON's real theme tokens (aurora.css)
+   with safe fallbacks, so it follows whatever accent the operator has
+   already chosen in Settings → Appearance. */
+
+.aeon-boot {
+  position: fixed;
+  inset: 0;
+  z-index: 500;
+  width: 100vw;
+  height: 100dvh;
+  overflow: hidden;
+  background: var(--bg, #07080d);
+  isolation: isolate;
+  font-family: var(--font-body, "Space Grotesk", "Segoe UI", system-ui, sans-serif);
+  color: var(--text, #dce8f5);
+}
+
+.aeon-boot-aurora { position: absolute; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; }
+.aeon-boot-orb { position: absolute; border-radius: 50%; opacity: .72; filter: blur(58px); will-change: transform; transform: translate3d(0, 0, 0); }
+.aeon-boot-orb--cyan { left: -16vmax; top: -25vmax; width: 58vmax; height: 58vmax; background: radial-gradient(circle, color-mix(in srgb, var(--accent, #00f2ff) 19%, transparent) 0%, transparent 66%); }
+.aeon-boot-orb--violet { right: -17vmax; top: 5vmax; width: 52vmax; height: 52vmax; background: radial-gradient(circle, color-mix(in srgb, var(--accent2, #7c3aed) 15%, transparent) 0%, transparent 66%); }
+.aeon-boot-orb--emerald { left: 27vw; bottom: -28vmax; width: 44vmax; height: 44vmax; background: radial-gradient(circle, color-mix(in srgb, var(--emerald, #10b981) 11%, transparent) 0%, transparent 66%); }
+
+.aeon-boot-canvas { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; display: block; cursor: pointer; }
+
+.aeon-boot-copy { position: absolute; z-index: 2; left: 50%; bottom: 4.5%; width: min(92vw, 680px); transform: translateX(-50%); text-align: center; pointer-events: none; }
+.aeon-boot-copy > * { opacity: 0; transform: translateY(10px); transition: opacity 1.7s ease, transform 1.7s cubic-bezier(.2, .75, .25, 1); will-change: opacity, transform; }
+.aeon-boot-copy.ready > * { opacity: 1; transform: translateY(0); }
+.aeon-boot-copy.ready .aeon-boot-brand { transition-delay: .08s; }
+.aeon-boot-copy.ready .aeon-boot-tag { transition-delay: .40s; }
+.aeon-boot-copy.ready .aeon-boot-enter { transition-delay: .78s; pointer-events: auto; }
+.aeon-boot-brand { font-size: clamp(1.5rem, 3vw, 2.7rem); font-weight: 300; letter-spacing: .14em; }
+.aeon-boot-tag { margin-top: 8px; color: color-mix(in srgb, var(--accent, #00f2ff) 52%, var(--text-dim, #4a6a8a)); font: .7rem var(--font-mono, "JetBrains Mono", monospace); letter-spacing: .32em; text-transform: uppercase; }
+.aeon-boot-enter { margin-top: 17px; border: 0; background: none; color: color-mix(in srgb, var(--accent, #00f2ff) 40%, var(--text, #dce8f5)); font: .68rem var(--font-mono, "JetBrains Mono", monospace); letter-spacing: .2em; text-transform: uppercase; cursor: pointer; pointer-events: none; }
+.aeon-boot-enter::after { content: ""; display: block; width: 0; height: 1px; margin: 8px auto 0; background: var(--accent, #00f2ff); transition: width .3s; }
+.aeon-boot-enter:hover::after, .aeon-boot-enter:focus-visible::after { width: 100%; }
+
+.aeon-boot-auth { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 18px; background: color-mix(in srgb, var(--bg, #07080d) 76%, transparent); opacity: 0; visibility: hidden; backdrop-filter: blur(0); transition: .75s; }
+.aeon-boot-auth.open { opacity: 1; visibility: visible; backdrop-filter: blur(14px) saturate(150%); }
+.aeon-boot-panel { position: relative; width: min(92vw, 430px); max-height: calc(100vh - 36px); overflow: auto; padding: 30px; border: 1px solid var(--border-hi, rgba(0,242,255,.28)); border-radius: 6px; background: linear-gradient(145deg, color-mix(in srgb, var(--bg-card, #0c101a) 94%, var(--accent, #00f2ff) 6%), color-mix(in srgb, var(--bg, #07080d) 96%, black)); box-shadow: 0 0 70px color-mix(in srgb, var(--accent, #00f2ff) 18%, transparent); transform: scale(.88) translateY(22px); opacity: 0; transition: .75s cubic-bezier(.18, .86, .25, 1); }
+.aeon-boot-auth.open .aeon-boot-panel { transform: none; opacity: 1; }
+.aeon-boot-panel::before, .aeon-boot-panel::after { content: ""; position: absolute; width: 27px; height: 27px; border-color: var(--accent, #00f2ff); opacity: .7; pointer-events: none; }
+.aeon-boot-panel::before { left: -1px; top: -1px; border-left: 2px solid; border-top: 2px solid; }
+.aeon-boot-panel::after { right: -1px; bottom: -1px; border-right: 2px solid; border-bottom: 2px solid; }
+.aeon-boot-close { position: absolute; right: 12px; top: 10px; width: 34px; height: 34px; border: 0; background: transparent; color: var(--text-dim, #4a6a8a); font-size: 22px; cursor: pointer; }
+.aeon-boot-panel h1 { margin: 0; font-size: 1.1rem; font-weight: 400; letter-spacing: .16em; text-transform: uppercase; }
+.aeon-boot-sub { margin: 7px 0 22px; color: var(--text-dim, #4a6a8a); font-size: .72rem; }
+.aeon-boot-google, .aeon-boot-submit { width: 100%; height: 44px; border: 1px solid var(--border-hi, rgba(0,242,255,.28)); border-radius: 4px; background: var(--surface-2, rgba(13,17,28,.82)); color: var(--text, #dce8f5); cursor: pointer; transition: .25s; font: inherit; }
+.aeon-boot-google:hover, .aeon-boot-submit:hover { border-color: var(--accent, #00f2ff); background: color-mix(in srgb, var(--surface-2, rgba(13,17,28,.82)) 78%, var(--accent, #00f2ff) 22%); box-shadow: 0 0 22px var(--accent-dim, rgba(0,242,255,.1)); }
+.aeon-boot-divider { display: flex; align-items: center; gap: 10px; margin: 20px 0; color: var(--text-dim, #4a6a8a); font: .65rem var(--font-mono, "JetBrains Mono", monospace); letter-spacing: .12em; text-transform: uppercase; }
+.aeon-boot-divider::before, .aeon-boot-divider::after { content: ""; height: 1px; flex: 1; background: var(--border, rgba(255,255,255,.1)); }
+.aeon-boot-field-label { display: block; margin: 12px 0 6px; color: color-mix(in srgb, var(--text, #dce8f5) 64%, var(--text-dim, #4a6a8a)); font: .66rem var(--font-mono, "JetBrains Mono", monospace); letter-spacing: .11em; text-transform: uppercase; }
+.aeon-boot-field { width: 100%; height: 43px; border: 1px solid var(--border, rgba(255,255,255,.1)); border-radius: 4px; background: color-mix(in srgb, var(--bg, #07080d) 88%, transparent); color: var(--text, #dce8f5); padding: 0 12px; outline: 0; font: inherit; box-sizing: border-box; }
+.aeon-boot-field:focus { border-color: var(--accent, #00f2ff); box-shadow: 0 0 0 2px var(--accent-dim, rgba(0,242,255,.1)); }
+.aeon-boot-submit { margin-top: 8px; background: color-mix(in srgb, var(--surface-2, rgba(13,17,28,.82)) 72%, var(--accent, #00f2ff) 28%); font-weight: 600; }
+.aeon-boot-submit:disabled { opacity: .5; cursor: default; }
+.aeon-boot-message { min-height: 18px; margin: 10px 0 0; text-align: center; color: var(--accent, #00f2ff); font-size: .7rem; }
+.aeon-boot-fine { margin: 10px 0 0; text-align: center; font-size: .68rem; }
+.aeon-boot-link { background: none; border: 0; padding: 0; color: var(--text-dim, #4a6a8a); text-decoration: underline; cursor: pointer; font: inherit; }
+.aeon-boot-link:hover { color: var(--accent, #00f2ff); }
+
+@media (max-height: 720px) {
+  .aeon-boot-copy { bottom: 2%; }
+  .aeon-boot-panel { padding: 22px; }
+  .aeon-boot-sub { margin-bottom: 14px; }
+  .aeon-boot-divider { margin: 14px 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .aeon-boot *, .aeon-boot *::before, .aeon-boot *::after {
+    transition-duration: .01ms !important;
+    animation-duration: .01ms !important;
+  }
+}
