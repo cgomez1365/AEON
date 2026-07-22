@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import {
   Cpu, HardDrive, Download, Play, Square, RefreshCw, Trash2, Copy, Check,
   ChevronDown, ChevronUp, Search, Settings, Zap, ExternalLink, X, Server,
-  MemoryStick, Monitor, Sliders, AlertTriangle, CheckCircle, Info,
+  MemoryStick, Monitor, Sliders, AlertTriangle, CheckCircle, Info, BookOpen,
 } from 'lucide-react';
 
 const TABS = [
@@ -11,7 +11,155 @@ const TABS = [
   { id: 'cached', label: 'Models', icon: HardDrive },
   { id: 'download', label: 'Download', icon: Download },
   { id: 'running', label: 'Active', icon: Zap },
+  { id: 'guide', label: 'Guide', icon: BookOpen },
 ];
+
+// ── Guide — plain-language reference for the terms this block throws at
+// you (Q4_K_M, 14B, VRAM, "fits GPU"...). Written for someone with zero
+// backend/ML background, one short idea per page. ──────────────────────
+const GUIDE_PAGES = [
+  {
+    title: 'Why this page exists',
+    body: [
+      "Cookbook shows labels like \"Q4_K_M\", \"14B\", and \"GPU + Offload\" right next to every model. None of that is explained anywhere else in AEON — so here it is.",
+      "Nothing here assumes you've written code, built a PC, or studied AI. Each page covers one idea. Use the list on the left to jump around, or just hit Next.",
+    ],
+  },
+  {
+    title: 'Cloud vs. Local — what’s the actual difference?',
+    body: [
+      "A “cloud” model (like the ones behind Gemini, GPT, or Claude) runs on someone else's computer, somewhere on the internet. You send it a question, it sends back an answer, and usually you pay for that trip.",
+      "A “local” model runs on your own computer instead. No trip over the internet, no per-question bill — but it borrows your machine's own memory and processing power to think.",
+    ],
+    callout: "Cookbook is entirely about the second kind: models that live and run on your machine.",
+  },
+  {
+    title: 'Tokens — what you’re actually being charged for',
+    body: [
+      "A token is a small chunk of text — roughly 4 characters, or about ¾ of a word. “Hello there” is about 3 tokens.",
+      "Cloud services almost always bill per token: a little for every token you send in, a little for every token it sends back. That's the “pay-as-you-go” meter running.",
+      "Local models don't meter tokens at all — there's no bill to run up, because you're not renting time on anyone else's computer.",
+    ],
+  },
+  {
+    title: 'Context window — the model’s short-term memory',
+    body: [
+      "The context window is how much text — measured in tokens — a model can “see” at one time. Your question, the conversation so far, and its reply all have to fit inside that window together.",
+      "A small window means it starts “forgetting” the beginning of a long conversation. A bigger window remembers more — but needs more of your computer's memory to hold it.",
+    ],
+    callout: "That's what the \"8k ctx\" / \"32k ctx\" dropdown in What Fits controls — 8k ≈ 8,000 tokens of memory for the conversation.",
+  },
+  {
+    title: 'Pay-as-you-go vs. Local — the real cost tradeoff',
+    body: [
+      "Cloud: nothing to set up, but every question adds to a running tab. Use it a lot, and the bill scales right up with you.",
+      "Local: the “cost” is mostly already behind you — your computer's hardware, plus a one-time model download. After that, each question is essentially free (aside from a little electricity).",
+    ],
+  },
+  {
+    title: 'VRAM vs. RAM — the two memories that matter here',
+    body: [
+      "RAM is your computer's general-purpose short-term memory — used by your browser, your apps, everything at once.",
+      "VRAM is different: it's memory built into your graphics card (GPU), specifically for heavy visual or math-heavy work — gaming, video, and AI models.",
+      "Local AI models run much faster when they fit inside VRAM, because a GPU crunches this particular kind of math far quicker than your computer's main processor can.",
+    ],
+    callout: "That's why Hardware shows your GPU's VRAM size front and center — it's the number that decides what runs smoothly.",
+  },
+  {
+    title: 'Reading the fit badges',
+    body: [
+      "Every model in What Fits gets a colored badge telling you how well it matches your hardware, right now:",
+      "● Fits GPU (green) — loads entirely into your graphics card's VRAM. Fastest option.",
+      "● GPU + Offload (orange) — mostly on the GPU, with the overflow handled by regular RAM. Still works well, just a bit slower.",
+      "● CPU/RAM (blue) — runs on your main processor and RAM instead of the GPU. Works, but noticeably slower.",
+      "● Too Large (red) — doesn't fit in your available memory at all, at least not at this quantization/context size.",
+    ],
+  },
+  {
+    title: 'Quantization — what “Q4”, “Q8”, “FP16” mean',
+    body: [
+      "A model's “brain” (its weights) can be saved at different levels of precision — similar to saving a photo at different quality settings.",
+      "FP16 is the full-precision original: biggest file, most exact, needs the most memory.",
+      "Q8, Q6, Q4, Q2 are compressed versions — smaller and faster, with a small, usually unnoticeable dip in quality. “Q4_K_M” just means “compressed to about 4 bits per weight, using the K_M method.”",
+    ],
+    callout: "Rule of thumb: lower number after the Q = smaller file, less memory needed, runs on more modest hardware.",
+  },
+  {
+    title: 'That “14B”, “7B”, “70B” number',
+    body: [
+      "“14B” means 14 billion parameters — think of parameters as the number of adjustable “knobs” the model tuned while it was trained.",
+      "More knobs generally means a more capable model — better at nuance, reasoning, following instructions. It also means a bigger file and more memory needed to run it.",
+      "This is the main tradeoff in What Fits: a bigger B number is usually smarter, but only worth it if your hardware can actually hold it.",
+    ],
+  },
+  {
+    title: 'Quick glossary',
+    body: [
+      "Token — a small chunk of text (≈ 4 characters). What cloud AI meters and bills.",
+      "Context window — how much conversation (in tokens) a model can hold in mind at once.",
+      "VRAM — memory on your graphics card; the fast lane for local AI.",
+      "RAM — your computer's general memory; the fallback lane.",
+      "Quantization (Q4/Q8/FP16) — how compressed the model file is. Lower Q = smaller, lighter, still usually good.",
+      "Parameters (7B/14B/70B) — the model's size/capacity. Bigger number = generally smarter, needs more memory.",
+      "Offload — splitting the model between GPU and regular RAM when it doesn't fully fit in VRAM.",
+    ],
+  },
+];
+
+function GuideTab() {
+  const [page, setPage] = useState(0);
+  const p = GUIDE_PAGES[page];
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '190px 1fr', gap: '16px' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+        {GUIDE_PAGES.map((gp, i) => (
+          <button key={gp.title} onClick={() => setPage(i)} style={{
+            textAlign: 'left', padding: '8px 10px', borderRadius: '6px', fontSize: '11px',
+            border: i === page ? '1px solid var(--color-primary, #00f2ff)' : '1px solid transparent',
+            background: i === page ? 'rgba(0,242,255,0.08)' : 'transparent',
+            color: i === page ? 'var(--color-primary, #00f2ff)' : 'var(--text-dim, #888)',
+            cursor: 'pointer', fontWeight: i === page ? 700 : 500, lineHeight: 1.35,
+          }}>
+            {i + 1}. {gp.title}
+          </button>
+        ))}
+      </div>
+      <div style={{
+        border: '1px solid var(--border, #2a2a2a)', borderRadius: '10px', padding: '20px',
+        minHeight: '380px', display: 'flex', flexDirection: 'column',
+      }}>
+        <div style={{ fontSize: '10px', color: 'var(--text-dim, #888)', marginBottom: '6px', fontFamily: 'var(--font-mono, monospace)' }}>
+          PAGE {page + 1} OF {GUIDE_PAGES.length}
+        </div>
+        <h3 style={{ margin: '0 0 12px 0', fontSize: '1.15em' }}>{p.title}</h3>
+        <div style={{ fontSize: '13px', lineHeight: 1.7, color: 'var(--text, #ddd)', flex: 1 }}>
+          {p.body.map((para, i) => <p key={i} style={{ margin: '0 0 12px 0' }}>{para}</p>)}
+          {p.callout && (
+            <div style={{
+              marginTop: '4px', padding: '10px 12px', borderRadius: '8px',
+              border: '1px solid rgba(0,242,255,0.25)', background: 'rgba(0,242,255,0.05)', fontSize: '12px',
+            }}>
+              {p.callout}
+            </div>
+          )}
+        </div>
+        <div style={{
+          display: 'flex', justifyContent: 'space-between', marginTop: '16px',
+          paddingTop: '12px', borderTop: '1px solid var(--border, #2a2a2a)',
+        }}>
+          <button onClick={() => setPage(cur => Math.max(0, cur - 1))} disabled={page === 0}
+            style={{ ...btnStyle, opacity: page === 0 ? 0.4 : 1, cursor: page === 0 ? 'default' : 'pointer' }}>
+            ← Back
+          </button>
+          <button onClick={() => setPage(cur => Math.min(GUIDE_PAGES.length - 1, cur + 1))} disabled={page === GUIDE_PAGES.length - 1}
+            style={{ ...btnStyle, opacity: page === GUIDE_PAGES.length - 1 ? 0.4 : 1, cursor: page === GUIDE_PAGES.length - 1 ? 'default' : 'pointer' }}>
+            Next →
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 const FIT_COLORS = {
   gpu: '#4caf50',
@@ -706,6 +854,9 @@ export default function CookbookHardware() {
           )}
         </div>
       )}
+
+      {/* ── Guide Tab ── */}
+      {tab === 'guide' && <GuideTab />}
     </div>
   );
 }
