@@ -742,6 +742,19 @@ module.exports = (app, deps) => {
     res.json(result);
   });
 
+  // ── POST /api/settings/block-layout — Dashboard's block grid layout ──
+  // Full replace of settings.blockLayout (NOT the generic /api/settings
+  // patch, which deep-merges and can never delete a key — the Dashboard's
+  // drag/drop and "delete section" actions need real removal, e.g. an
+  // override going away when a block is dragged back to its default group).
+  app.post('/api/settings/block-layout', (req, res) => {
+    const { overrides, customGroups } = req.body || {};
+    const settings = loadSettings();
+    settings.blockLayout = { overrides: overrides || {}, customGroups: customGroups || {} };
+    saveSettings(settings);
+    res.json({ ok: true, blockLayout: settings.blockLayout });
+  });
+
   // ── POST /api/settings/block-config — save per-block provider/model ──
   app.post('/api/settings/block-config', (req, res) => {
     const { blockId, provider, model } = req.body || {};

@@ -23,6 +23,11 @@
   --accent:       #00f2ff;
   --accent-dim:   rgba(0, 242, 255, 0.1);
   --accent-glow:  rgba(0, 242, 255, 0.32);
+  /* Block/section icons (CSS-masked SVGs) recolor off this — defaults to
+     --accent so they follow whatever the operator picks in Settings →
+     Appearance for free. Override separately here if icons should ever
+     diverge from the general accent. */
+  --icon-accent:  var(--accent);
   --accent2:      #7c3aed;
   --accent2-dim:  rgba(124, 58, 237, 0.12);
   --violet:       #7c3aed;
@@ -290,9 +295,19 @@ h1, h2, h3, h4, h5, h6 {
     inset 0 0 60px rgba(0,242,255,0.015);
 }
 
+/* Opacity-only — no transform. .main-viewport wraps every block's content;
+   a transform here (even a fill-mode:both identity one, translateY(0)
+   scale(1)) makes it the containing block for position:fixed descendants,
+   which silently trapped every block's fixed-position modal (e.g. Files'
+   text editor Save/Cancel) inside this panel's box instead of the true
+   viewport — clipped by its own overflow:hidden depending on content
+   height/zoom. Confirmed this holds even mid-animation under
+   prefers-reduced-motion's near-zero animation-duration override, so
+   "make the end keyframe transform:none" isn't safe enough — never put
+   the mount effect on transform here at all. Found 2026-07-21. */
 @keyframes panel-mount {
-  from { opacity: 0; transform: translateY(8px) scale(0.99); }
-  to   { opacity: 1; transform: translateY(0)   scale(1); }
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 
 .panel-header {
@@ -1571,9 +1586,13 @@ h1, h2, h3, h4, h5, h6 {
 }
 .pulse { animation: pulse 2.2s ease-in-out infinite; }
 
+/* Opacity-only — see panel-mount above. This one matters even more:
+   .main-viewport > div is the DIRECT parent of every block's rendered
+   content, so it's the innermost trap for that content's own fixed
+   modals. */
 @keyframes content-enter {
-  from { opacity: 0; transform: translateY(5px); }
-  to   { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 
 .spin { animation: spin 0.8s linear infinite; }

@@ -71,6 +71,9 @@ for (const [p, loader] of Object.entries(componentModules)) {
     route: manifest.route || `/${folder}`,
     label,
     icon: (manifest.nav && manifest.nav.icon) || manifest.icon || '📦',
+    // Real icon asset filename in public/brand/block-icons/ (e.g. "writer.svg").
+    // Optional — unset means "still on the emoji fallback."
+    iconAsset: (manifest.nav && manifest.nav.iconAsset) || null,
     group: (manifest.nav && manifest.nav.group) || manifest.category || 'system',
     order: (manifest.nav && manifest.nav.order != null) ? manifest.nav.order : 99,
     uiMode: manifest.ui ?? 'full',

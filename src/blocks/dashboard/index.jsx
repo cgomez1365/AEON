@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { StatCard, Card } from '../../components/aurora';
-import { Activity, Zap, Radio, BarChart3, Wifi, WifiOff, Server, Flame, Calendar, LayoutGrid } from 'lucide-react';
+import { Activity, Zap, Radio, BarChart3, Wifi, WifiOff, Server, Flame, Calendar, LayoutGrid, Bot, Briefcase, Search, Wrench, Cpu, Layers, Plus, Trash2 } from 'lucide-react';
 import { AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { useTelemetry } from '../../kernel/contexts/TelemetryContext';
 import { BLOCKS, GROUP_META } from '../../kernel/blockRegistry.js';
@@ -54,6 +54,39 @@ const INSTALLED_BY_GROUP = (() => {
     .sort((a, b) => a.meta.order - b.meta.order);
 })();
 
+// Section-header icons — line icons, not emoji, until each block ships its
+// own real icon asset (see BlockIcon below). 'custom' is the default for
+// user-created sections.
+const GROUP_ICON_COMPONENTS = {
+  finance: Zap, agent: Bot, work: Briefcase, content: Search, tools: Wrench, system: Cpu,
+  command: Zap, business: Briefcase, intel: Search, ops: Wrench, custom: Layers,
+};
+function GroupIcon({ id, size = 12 }) {
+  const Comp = GROUP_ICON_COMPONENTS[id] || Layers;
+  return <Comp size={size} aria-hidden="true" />;
+}
+
+// A block's real icon, once it has one (manifest nav.iconAsset → an SVG in
+// public/brand/block-icons/). Rendered as a CSS mask so --icon-accent
+// recolors every block icon at once — no per-icon color baked into the
+// asset. Falls back to the manifest emoji until that block has an asset.
+function BlockIcon({ iconAsset, fallback, size = 14 }) {
+  if (!iconAsset) return <span aria-hidden="true" style={{ fontSize: size }}>{fallback}</span>;
+  return (
+    <span
+      aria-hidden="true"
+      style={{
+        display: 'inline-block', width: size, height: size, flexShrink: 0,
+        backgroundColor: 'var(--icon-accent, var(--accent, #00e2ff))',
+        WebkitMaskImage: `url(/brand/block-icons/${iconAsset})`, maskImage: `url(/brand/block-icons/${iconAsset})`,
+        WebkitMaskSize: 'contain', maskSize: 'contain',
+        WebkitMaskRepeat: 'no-repeat', maskRepeat: 'no-repeat',
+        WebkitMaskPosition: 'center', maskPosition: 'center',
+      }}
+    />
+  );
+}
+
 export default function Dashboard({ chatHistory = [], auditLogs = [] }) {
   const { apiUsage } = useTelemetry();
   const [autopilot, setAutopilot] = useState(null);
@@ -64,6 +97,9 @@ export default function Dashboard({ chatHistory = [], auditLogs = [] }) {
   const [activityRange, setActivityRange] = useState('heatmap');
   const [activityBarRange, setActivityBarRange] = useState('30d');
   const [blockStates, setBlockStates] = useState({});
+  const [layout, setLayout] = useState({ overrides: {}, customGroups: {} });
+  const [dragBlockId, setDragBlockId] = useState(null);
+  const [dragOverGroup, setDragOverGroup] = useState(null);
 
   // ── Live per-block state (Vault/blocks/*/state.json via vaultSync) ──
   const loadBlockStates = useCallback(async () => {
@@ -72,6 +108,76 @@ export default function Dashboard({ chatHistory = [], auditLogs = [] }) {
       if (r.ok) setBlockStates(await r.json());
     } catch {}
   }, []);
+
+  // ── Dashboard block layout — user's own reclassification/sections. ──
+  // Lives in Settings (settings.blockLayout), same override pattern the
+  // Settings block already uses for blockConfig — Settings stays the one
+  // place that owns "what the operator changed," blocks stay unaware.
+  useEffect(() => {
+    fetch('/api/settings').then(r => r.json()).then(d => {
+      const l = d?.settings?.blockLayout;
+      if (l) setLayout({ overrides: l.overrides || {}, customGroups: l.customGroups || {} });
+    }).catch(() => {});
+  }, []);
+
+  const saveLayout = useCallback((next) => {
+    setLayout(next);
+    // Full replace, not the generic /api/settings patch — that endpoint
+    // deep-merges and can never delete a key, which breaks reclassifying a
+    // block back to its default group or deleting a section.
+    fetch('/api/settings/block-layout', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(next),
+    }).catch(() => {});
+  }, []);
+
+  // Manifest-default groups + the operator's own overrides/custom sections,
+  // merged. Dragging a block just writes an override — nothing about the
+  // block itself changes, so removing the override always restores the
+  // manifest default.
+  const effectiveGroups = useMemo(() => {
+    const byGroup = {};
+    for (const g of INSTALLED_BY_GROUP) byGroup[g.id] = { id: g.id, meta: g.meta, items: [], custom: false };
+    for (const [gid, cg] of Object.entries(layout.customGroups || {})) {
+      byGroup[gid] = byGroup[gid] || { id: gid, meta: { label: cg.label, icon: cg.icon || 'custom', order: cg.order ?? 50 }, items: [], custom: true };
+    }
+    for (const g of INSTALLED_BY_GROUP) {
+      for (const b of g.items) {
+        const overrideGroup = layout.overrides?.[b.id];
+        const targetId = (overrideGroup && byGroup[overrideGroup]) ? overrideGroup : g.id;
+        byGroup[targetId].items.push(b);
+      }
+    }
+    return Object.values(byGroup).sort((a, b) => (a.meta.order ?? 99) - (b.meta.order ?? 99));
+  }, [layout]);
+
+  const addSection = useCallback(() => {
+    const name = window.prompt('New section name (e.g. "Payroll")');
+    if (!name || !name.trim()) return;
+    const base = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    const gid = 'custom_' + (base || Date.now());
+    saveLayout({ ...layout, customGroups: { ...layout.customGroups, [gid]: { label: name.trim(), icon: 'custom', order: 50 } } });
+  }, [layout, saveLayout]);
+
+  const deleteSection = useCallback((group) => {
+    if (!window.confirm(`Delete "${group.meta.label}"? Its blocks move back to their default section.`)) return;
+    const overrides = { ...layout.overrides };
+    for (const b of group.items) delete overrides[b.id];
+    const customGroups = { ...layout.customGroups };
+    delete customGroups[group.id];
+    saveLayout({ overrides, customGroups });
+  }, [layout, saveLayout]);
+
+  // Reads the dragged block's id from the native DataTransfer payload, not
+  // React state — state set in onDragStart isn't guaranteed to have flushed
+  // into this closure by the time drop fires (drag gestures span multiple
+  // event-loop ticks outside React's control).
+  const dropOnGroup = useCallback((blockId, groupId) => {
+    if (!blockId) return;
+    saveLayout({ ...layout, overrides: { ...layout.overrides, [blockId]: groupId } });
+    setDragBlockId(null);
+    setDragOverGroup(null);
+  }, [layout, saveLayout]);
 
   // ── Fleet + Heatmap data polling ──
   const loadFleetData = useCallback(async () => {
@@ -163,24 +269,70 @@ export default function Dashboard({ chatHistory = [], auditLogs = [] }) {
       {/* ═══ INSTALLED BLOCKS — auto-organized from the block registry ═══ */}
       <div style={{ marginBottom: '20px' }}>
         <Card hover={false}>
-          <PanelHeader
-            icon={<LayoutGrid size={14} style={{ color: '#00f2ff' }} aria-hidden="true" />}
-            title={`INSTALLED BLOCKS (${INSTALLED_BY_GROUP.reduce((n, g) => n + g.items.length, 0)})`}
-          />
-          {INSTALLED_BY_GROUP.map(g => (
-            <div key={g.id} style={{ marginBottom: '14px' }}>
-              <div style={{ fontSize: '9px', fontWeight: 700, letterSpacing: '1px', color: 'var(--text-dim)', marginBottom: '6px' }}>
-                {g.meta.icon} {g.meta.label}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+            <PanelHeader
+              icon={<LayoutGrid size={14} style={{ color: '#00f2ff' }} aria-hidden="true" />}
+              title={`INSTALLED BLOCKS (${effectiveGroups.reduce((n, g) => n + g.items.length, 0)})`}
+            />
+            <button onClick={addSection} style={{
+              display: 'flex', alignItems: 'center', gap: '4px', padding: '4px 10px', borderRadius: '6px',
+              fontSize: '9px', fontWeight: 700, cursor: 'pointer', border: '1px solid var(--border, #2a2a2a)',
+              background: 'transparent', color: 'var(--text-dim)',
+            }}>
+              <Plus size={11} aria-hidden="true" /> NEW SECTION
+            </button>
+          </div>
+          <div style={{ fontSize: '9px', color: 'var(--text-dim)', marginBottom: '10px' }}>
+            Drag a block onto a different section to reclassify it.
+          </div>
+          {effectiveGroups.map(g => (
+            <div
+              key={g.id}
+              onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }}
+              onDragEnter={() => setDragOverGroup(g.id)}
+              onDragLeave={() => setDragOverGroup(cur => (cur === g.id ? null : cur))}
+              onDrop={(e) => { e.preventDefault(); dropOnGroup(e.dataTransfer.getData('text/plain') || dragBlockId, g.id); }}
+              style={{
+                marginBottom: '14px', padding: '6px', borderRadius: '8px',
+                border: dragOverGroup === g.id ? '1px dashed var(--color-primary, #00f2ff)' : '1px solid transparent',
+                background: dragOverGroup === g.id ? 'rgba(0,242,255,0.04)' : 'transparent',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '6px' }}>
+                <span style={{ display: 'flex', alignItems: 'center', color: 'var(--text-dim)' }}>
+                  <GroupIcon id={g.custom ? (g.meta.icon || 'custom') : g.id} size={11} />
+                </span>
+                <span style={{ fontSize: '9px', fontWeight: 700, letterSpacing: '1px', color: 'var(--text-dim)' }}>
+                  {g.meta.label}{g.items.length === 0 ? ' (empty — drop a block here)' : ''}
+                </span>
+                {g.custom && (
+                  <button onClick={() => deleteSection(g)} aria-label={`Delete ${g.meta.label} section`} title="Delete section" style={{
+                    marginLeft: 'auto', display: 'flex', alignItems: 'center', padding: '2px',
+                    background: 'transparent', border: 'none', color: 'var(--text-dim)', cursor: 'pointer',
+                  }}>
+                    <Trash2 size={11} aria-hidden="true" />
+                  </button>
+                )}
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '8px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '8px', minHeight: g.items.length === 0 ? '36px' : 0 }}>
                 {g.items.map(b => {
                   const live = blockStates[b.id];
                   const summary = live?.state?._summary;
                   return (
-                    <Link key={b.id} to={b.route} style={{ textDecoration: 'none', color: 'inherit' }}>
-                      <div style={{ padding: '8px 10px', borderRadius: '8px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', display: 'flex', flexDirection: 'column', gap: '4px', height: '100%' }}>
+                    <Link
+                      key={b.id} to={b.route} style={{ textDecoration: 'none', color: 'inherit' }}
+                      draggable
+                      onDragStart={(e) => { setDragBlockId(b.id); e.dataTransfer.setData('text/plain', b.id); e.dataTransfer.effectAllowed = 'move'; }}
+                      onDragEnd={() => { setDragBlockId(null); setDragOverGroup(null); }}
+                      onClick={(e) => { if (dragBlockId) e.preventDefault(); }}
+                    >
+                      <div style={{
+                        padding: '8px 10px', borderRadius: '8px', background: 'rgba(255,255,255,0.02)',
+                        border: '1px solid rgba(255,255,255,0.05)', display: 'flex', flexDirection: 'column', gap: '4px',
+                        height: '100%', cursor: 'grab', opacity: dragBlockId === b.id ? 0.4 : 1,
+                      }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                          <span style={{ fontSize: '13px' }} aria-hidden="true">{b.icon}</span>
+                          <BlockIcon iconAsset={b.iconAsset} fallback={b.icon} size={13} />
                           <span style={{ fontSize: '11px', fontWeight: 700 }}>{b.label}</span>
                           <span aria-hidden="true" style={{ width: '5px', height: '5px', borderRadius: '50%', background: live ? '#00ff40' : 'rgba(255,255,255,0.15)', marginLeft: 'auto' }} />
                         </div>
