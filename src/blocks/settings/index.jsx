@@ -645,9 +645,9 @@ function AccountIdentities({ endpoints, nervousSystem }) {
                     <button type="button" className="settings-btn settings-btn--primary" disabled={!acct._pendingKey}
                       onClick={async () => {
                         try {
-                          const r = await fetch('/api/settings/env', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                          const r = await fetch('/api/settings/secrets', { method: 'POST', headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ vars: { [svc.envKey]: acct._pendingKey } }) });
-                          if (r.ok) { showToast(`${svc.label} key saved — restart to apply`); update(svc.id, '_pendingKey', ''); }
+                          if (r.ok) { showToast(`${svc.label} key saved to encrypted Vault`); update(svc.id, '_pendingKey', ''); }
                           else showToast('Save failed', 'error');
                         } catch { showToast('Save failed', 'error'); }
                       }}>
@@ -1319,7 +1319,7 @@ function SetupWizard({ onComplete }) {
   const [acct, setAcct] = useState({ username: '', displayName: '', email: '', password: '', confirm: '' });
   const [keys, setKeys] = useState({ GROQ_API_KEY: '', GEMINI_FREE_KEY_1: '', OPENAI_API_KEY: '', ANTHROPIC_API_KEY: '', GROK_API_KEY: '', OPENROUTER_API_KEY: '' });
   const [fb, setFb] = useState({ paste: '', VITE_FIREBASE_API_KEY: '', VITE_FIREBASE_AUTH_DOMAIN: '', VITE_FIREBASE_PROJECT_ID: '', VITE_FIREBASE_STORAGE_BUCKET: '', VITE_FIREBASE_MESSAGING_SENDER_ID: '', VITE_FIREBASE_APP_ID: '' });
-  const [sb, setSb] = useState({ SUPABASE_URL: '', SUPABASE_ANON_KEY: '', SUPABASE_SERVICE_ROLE_KEY: '' });
+  const [sb, setSb] = useState({ SUPABASE_URL: '', SUPABASE_ANON_KEY: '' });
   const [envPresence, setEnvPresence] = useState({});
 
   const refresh = useCallback(async () => {
@@ -1328,8 +1328,17 @@ function SetupWizard({ onComplete }) {
   }, []);
   useEffect(() => { refresh(); }, [refresh]);
 
-  const writeEnv = async (vars) => {
-    const r = await fetch('/api/settings/env', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ vars }) });
+  const saveSecrets = async (vars) => {
+    const r = await fetch('/api/settings/secrets', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ vars }) });
+    return r.ok ? r.json() : Promise.reject(await r.json().catch(() => ({})));
+  };
+
+  const saveCloudProvider = async (provider, config) => {
+    const r = await fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cloudProvider: { provider, config } }),
+    });
     return r.ok ? r.json() : Promise.reject(await r.json().catch(() => ({})));
   };
 
@@ -1342,15 +1351,15 @@ function SetupWizard({ onComplete }) {
       if (step === 'apiKeys') {
         const vars = Object.fromEntries(Object.entries(keys).filter(([, v]) => v));
         if (!Object.keys(vars).length) { showToast('Enter at least one API key', 'error'); setBusy(false); return; }
-        await writeEnv(vars); showToast('API keys saved'); next();
+        await saveSecrets(vars); showToast('API keys saved to encrypted Vault'); next();
       } else if (step === 'firebase') {
         const vars = fb.paste ? parseFirebaseConfig(fb.paste) : Object.fromEntries(Object.entries(fb).filter(([k, v]) => k.startsWith('VITE_') && v));
         if (!Object.keys(vars).length) { showToast('Paste your Firebase config or fill the fields', 'error'); setBusy(false); return; }
-        await writeEnv(vars); showToast('Firebase saved'); next();
+        await saveCloudProvider('firebase', vars); showToast('Firebase saved to encrypted Vault'); next();
       } else if (step === 'supabase') {
         const vars = Object.fromEntries(Object.entries(sb).filter(([, v]) => v));
-        if (!vars.SUPABASE_URL || !vars.SUPABASE_SERVICE_ROLE_KEY) { showToast('URL + service role key required', 'error'); setBusy(false); return; }
-        await writeEnv(vars); showToast('Supabase saved'); next();
+        if (!vars.SUPABASE_URL || !vars.SUPABASE_ANON_KEY) { showToast('URL + anon key required', 'error'); setBusy(false); return; }
+        await saveCloudProvider('supabase', vars); showToast('Supabase saved to encrypted Vault'); next();
       } else if (step === 'settings') {
         showToast('Models use the assignment below — adjust anytime'); next();
       }
@@ -1404,7 +1413,7 @@ function SetupWizard({ onComplete }) {
       <div className="wizard-body">
         {step.key === 'apiKeys' && (
           <div className="wizard-fields">
-            <p className="wizard-desc">At least one LLM key. Stored in .env (and mirrored for the frontend).{done('apiKeys') && ' ✓ already configured — re-enter to replace.'}</p>
+            <p className="wizard-desc">At least one LLM key. Stored in the encrypted Security Vault and never returned to the browser.{done('apiKeys') && ' ✓ already configured — re-enter to replace.'}</p>
             {[
               ['GROQ_API_KEY', 'Groq API key (gsk_…)'],
               ['GEMINI_FREE_KEY_1', 'Gemini API key'],
@@ -1443,7 +1452,6 @@ function SetupWizard({ onComplete }) {
             <p className="wizard-desc">From Supabase ▸ Project Settings ▸ API.{done('supabase') && ' ✓ configured.'}</p>
             <input className="settings-select" placeholder="Project URL (https://xxx.supabase.co)" aria-label="Supabase project URL" value={sb.SUPABASE_URL} onChange={e => setSb(s => ({ ...s, SUPABASE_URL: e.target.value }))} />
             <input className="settings-select" type="password" placeholder="anon public key" aria-label="Supabase anon public key" value={sb.SUPABASE_ANON_KEY} onChange={e => setSb(s => ({ ...s, SUPABASE_ANON_KEY: e.target.value }))} />
-            <input className="settings-select" type="password" placeholder="service_role key (secret)" aria-label="Supabase service_role key" value={sb.SUPABASE_SERVICE_ROLE_KEY} onChange={e => setSb(s => ({ ...s, SUPABASE_SERVICE_ROLE_KEY: e.target.value }))} />
           </div>
         )}
         {step.key === 'settings' && (
@@ -1601,7 +1609,7 @@ function SearchKeysPanel({ providers, onReload }) {
     }
     if (!Object.keys(vars).length) { setSaving(false); return; }
     try {
-      await fetch('/api/settings/env', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ vars }) });
+      await fetch('/api/settings/secrets', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ vars }) });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
       if (onReload) onReload();
@@ -1648,7 +1656,7 @@ function SearchKeysPanel({ providers, onReload }) {
           background: saved ? 'rgba(0,255,128,0.2)' : 'var(--accent, #00f2ff)', color: saved ? '#00ff80' : '#000' }}>
         {saved ? '✓ Saved' : saving ? 'Saving…' : 'Save Keys'}
       </button>
-      <div style={{ fontSize: 11, opacity: 0.45, marginTop: 8 }}>Keys are written to your local .env — no restart needed, active immediately.</div>
+      <div style={{ fontSize: 11, opacity: 0.45, marginTop: 8 }}>Keys are encrypted in the Security Vault and activated in memory immediately.</div>
     </div>
   );
 }
@@ -1750,36 +1758,40 @@ function UnifiedConnectionsPanel({ providers, nervousSystem, onReload }) {
 // ── Supabase + Firebase config (extracted from ConnectivityPanel) ────
 function SupabaseFirebasePanel() {
   const [status, setStatus] = useState(null);
-  const [sb, setSb] = useState({ connStr: '', url: '', key: '' });
+  const [sb, setSb] = useState({ url: '', anonKey: '' });
   const [fb, setFb] = useState({ paste: '' });
   const [busy, setBusy] = useState(false);
   const [fbSaved, setFbSaved] = useState(false);
 
-  const load = () => fetch('/api/settings/connectivity').then(r => r.json()).then(setStatus).catch(() => {});
+  const load = () => fetch('/api/settings')
+    .then(r => r.json())
+    .then(d => {
+      setStatus(d.cloudProviders || null);
+      setFbSaved(!!d.cloudProviders?.firebase?.configured);
+    })
+    .catch(() => {});
   useEffect(() => { load(); }, []);
 
-  const call = async (endpoint, body) => {
+  const saveCloud = async (provider, config) => {
     setBusy(true);
     try {
-      const r = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+      const r = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cloudProvider: { provider, config } }),
+      });
       const d = await r.json();
-      if (d.error) showToast(d.error, 'error');
-      else showToast(d.message || 'Done', 'success');
+      if (!r.ok) showToast(d.error || 'Save failed', 'error');
+      else showToast(`${provider === 'supabase' ? 'Supabase' : 'Firebase'} saved to encrypted Vault`, 'success');
       load();
       return d;
     } catch (e) { showToast(e.message, 'error'); } finally { setBusy(false); }
   };
 
   const saveFirebase = async () => {
-    setBusy(true);
-    try {
-      const vars = fb.paste ? parseFirebaseConfig(fb.paste) : {};
-      if (!Object.keys(vars).length) { showToast('Paste your Firebase config', 'error'); setBusy(false); return; }
-      const r = await fetch('/api/settings/env', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ vars }) });
-      if (r.ok) { showToast('Firebase config saved — restart to apply'); setFbSaved(true); }
-      else showToast('Save failed', 'error');
-    } catch (e) { showToast(e.message, 'error'); }
-    setBusy(false);
+    const config = fb.paste ? parseFirebaseConfig(fb.paste) : {};
+    if (!Object.keys(config).length) return showToast('Paste your Firebase config', 'error');
+    await saveCloud('firebase', config);
   };
 
   const inputStyle = { width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border, #242d2e)', background: 'rgba(255,255,255,0.03)', color: 'inherit', fontSize: 13, fontFamily: 'inherit' };
@@ -1796,7 +1808,7 @@ function SupabaseFirebasePanel() {
           <span style={{ fontSize: 16 }}>☁️</span>
           <span style={{ fontWeight: 800, fontSize: 14, letterSpacing: 1 }}>SUPABASE</span>
           <span style={{ marginLeft: 'auto', fontSize: 11, padding: '4px 12px', borderRadius: 8, background: status?.supabase?.attached ? 'rgba(16,185,129,0.15)' : 'rgba(255,255,255,0.06)', color: status?.supabase?.attached ? '#10b981' : '#94a3b8', fontWeight: 700 }}>
-            {status?.supabase?.attached ? 'connected' : 'not set up'}
+            {status?.supabase?.configured ? 'configured' : 'not set up'}
           </span>
         </div>
         <div style={{ fontSize: 12, opacity: 0.6, marginBottom: 16, lineHeight: 1.5 }}>
@@ -1810,44 +1822,17 @@ function SupabaseFirebasePanel() {
               Create a free account — <a href="https://supabase.com" target="_blank" rel="noreferrer" style={{ color: 'var(--accent)', textDecoration: 'underline' }}>supabase.com</a>
             </div>
             <div style={{ fontSize: 11, opacity: 0.55, marginBottom: 10, lineHeight: 1.6 }}>
-              Sign up → "New project" → click {accent('Connect')} → choose {accent('Session pooler')} → copy that string (replace [YOUR-PASSWORD]). Also grab {accent('Project Settings → API')}: Project URL + {accent('service_role')} key.
+              In Project Settings → API, copy the Project URL and the publishable {accent('anon')} key.
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <input value={sb.connStr} onChange={e => setSb({ ...sb, connStr: e.target.value })} placeholder="postgresql://postgres.xxxx:[password]@..." aria-label="Supabase connection string" style={inputStyle} />
               <input value={sb.url} onChange={e => setSb({ ...sb, url: e.target.value })} placeholder="Project URL — https://xxxx.supabase.co" aria-label="Supabase project URL" style={inputStyle} />
               <div style={{ display: 'flex', gap: 8 }}>
-                <input type="password" value={sb.key} onChange={e => setSb({ ...sb, key: e.target.value })} placeholder="service_role key — starts with eyJ..." aria-label="Supabase service_role key" style={{ ...inputStyle, flex: 1 }} />
-                <button type="button" disabled={busy || !sb.url || !sb.key} onClick={() => call('/api/settings/connectivity/supabase/save', { url: sb.url, key: sb.key, connectionString: sb.connStr })}
+                <input type="password" value={sb.anonKey} onChange={e => setSb({ ...sb, anonKey: e.target.value })} placeholder="anon public key" aria-label="Supabase anon public key" style={{ ...inputStyle, flex: 1 }} />
+                <button type="button" disabled={busy || !sb.url || !sb.anonKey} onClick={() => saveCloud('supabase', { url: sb.url, anonKey: sb.anonKey })}
                   style={{ padding: '10px 20px', borderRadius: 8, border: 'none', background: 'var(--accent, #00f2ff)', color: '#000', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap', fontSize: 13 }}>
-                  {busy ? 'Testing…' : 'Save & test'}
+                  {busy ? 'Saving…' : 'Save'}
                 </button>
               </div>
-            </div>
-          </div>
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'flex-start', marginBottom: 16 }}>
-          {stepNum(2)}
-          <div style={{ flex: 1 }}>
-            <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>
-              Set up cloud tables — <span style={{ fontWeight: 400, opacity: 0.6 }}>no SQL. Safe to click again.</span>
-            </div>
-            <button type="button" disabled={busy || !status?.supabase?.configured} onClick={() => call('/api/settings/connectivity/supabase/setup')}
-              style={{ marginTop: 8, padding: '10px 24px', borderRadius: 8, border: 'none', background: '#7c3aed', color: '#fff', fontWeight: 700, cursor: 'pointer', fontSize: 13, opacity: status?.supabase?.configured ? 1 : 0.4 }}>
-              {busy ? 'Setting up…' : 'Set up my cloud'}
-            </button>
-          </div>
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'flex-start' }}>
-          {stepNum(3)}
-          <div style={{ flex: 1 }}>
-            <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Sync</div>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button type="button" disabled={busy || !status?.supabase?.attached} onClick={() => call('/api/settings/connectivity/supabase/sync')}
-                style={{ padding: '10px 24px', borderRadius: 8, border: 'none', background: '#10b981', color: '#fff', fontWeight: 700, cursor: 'pointer', fontSize: 13, opacity: status?.supabase?.attached ? 1 : 0.4 }}>
-                {busy ? 'Syncing…' : 'Sync now'}
-              </button>
             </div>
           </div>
         </div>

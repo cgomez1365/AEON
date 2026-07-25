@@ -1,5 +1,5 @@
 {
-  "manifestVersion": "1.0.0",
+  "manifestVersion": "1.1.0",
   "id": "_template",
   "label": "Blank Block",
   "icon": "🧩",
@@ -40,9 +40,12 @@
       "crossBlockRead": []
     },
     "storage": {
-      "type": "json",
-      "scope": "block"
+      "type": "none",
+      "scope": "block",
+      "local": { "indexed": false, "retention": "operational" },
+      "access": "scoped"
     },
+    "memory": { "mode": "none", "indexed": false, "userConfigurable": false },
     "ai": {
       "canGenerate": false,
       "canAnalyze": false,

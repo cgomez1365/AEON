@@ -1,8 +1,8 @@
 {
-  "manifestVersion": "1.0.0",
+  "manifestVersion": "1.1.0",
   "id": "master",
   "label": "Master",
-  "icon": "🧬",
+  "icon": "Cpu",
   "route": "/master",
   "description": "The canonical block. Every new block starts as a copy of this folder — manifest, UI, API, and widget contract in their reference form.",
   "category": "system",
@@ -11,7 +11,9 @@
     "group": "system",
     "order": 2,
     "label": "Master",
-    "icon": "🧬",
+    "icon": "Cpu",
+    "iconAsset": "/brand/block-icons/master.svg",
+    "iconAssetPng": "/brand/block-icons/png/master.png",
     "hidden": false
   },
   "widget": {
@@ -45,7 +47,17 @@
     },
     "storage": {
       "type": "json",
-      "scope": "block"
+      "scope": "block",
+      "local": {
+        "indexed": false,
+        "retention": "operational"
+      },
+      "access": "compatibility"
+    },
+    "memory": {
+      "mode": "none",
+      "indexed": false,
+      "userConfigurable": false
     },
     "ai": {
       "canGenerate": false,

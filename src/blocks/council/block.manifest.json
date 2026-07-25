@@ -1,8 +1,8 @@
 {
-  "manifestVersion": "1.0.0",
+  "manifestVersion": "1.1.0",
   "id": "council",
   "label": "Council",
-  "icon": "🏛️",
+  "icon": "Landmark",
   "route": "/council",
   "description": "Multi-model deliberation council — a persistent roster debates a question and the chair writes a verdict, saved to the vault",
   "category": "tools",
@@ -11,7 +11,9 @@
     "group": "tools",
     "order": 1,
     "label": "Council",
-    "icon": "🏛️",
+    "icon": "Landmark",
+    "iconAsset": "/brand/block-icons/council.svg",
+    "iconAssetPng": "/brand/block-icons/png/council.png",
     "hidden": false
   },
   "widget": null,
@@ -41,7 +43,17 @@
     },
     "storage": {
       "type": "json",
-      "scope": "block"
+      "scope": "block",
+      "local": {
+        "indexed": false,
+        "retention": "operational"
+      },
+      "access": "compatibility"
+    },
+    "memory": {
+      "mode": "document",
+      "indexed": true,
+      "userConfigurable": false
     },
     "ai": {
       "canGenerate": false,

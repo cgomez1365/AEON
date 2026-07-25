@@ -3,8 +3,17 @@ const path = require('path');
 
 module.exports = (app, deps) => {
   const APP_ROOT = path.join(__dirname, '..', '..', '..', '..');
-  const SETTINGS_FILE = path.join(APP_ROOT, 'src', 'aeon-settings.json');
+  // Kernel endpoint registry — the single source of truth for local hosts (BO7).
+  const kernelEndpoints = require(path.join(__dirname, '..', '..', '..', 'kernel', 'endpoints.cjs'));
+  const settingsService = require(path.join(APP_ROOT, 'services', 'settings.js'));
+  const SETTINGS_FILE = settingsService.SETTINGS_FILE;
   const ENV_FILE = path.join(APP_ROOT, '.env');
+  const cloudCredentials = deps && Object.prototype.hasOwnProperty.call(deps, 'cloudCredentials')
+    ? deps.cloudCredentials
+    : settingsService.createCloudCredentialStore();
+  const providerCredentials = deps && Object.prototype.hasOwnProperty.call(deps, 'providerCredentials')
+    ? deps.providerCredentials
+    : settingsService.createProviderCredentialStore();
   // Cookbook-owned registry of local models/runtimes (data/local-runtime.json)
   let readLocalRuntime;
   try { ({ readLocalRuntime } = require(path.join(APP_ROOT, 'services', 'storage.js'))); }
@@ -25,10 +34,8 @@ module.exports = (app, deps) => {
 
   // ── Settings file I/O ──────────────────────────────────────────────
   function loadSettings() {
-    if (fs.existsSync(SETTINGS_FILE)) {
-      try { return JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')); } catch {}
-    }
-    return _defaults();
+    const loaded = settingsService.loadSettings();
+    return loaded && typeof loaded === 'object' ? loaded : _defaults();
   }
 
   // Role defaults resolve to whichever provider is actually alive right now —
@@ -63,7 +70,7 @@ module.exports = (app, deps) => {
   }
 
   function saveSettings(data) {
-    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(data, null, 2));
+    settingsService.saveSettings(data);
   }
 
   function deepMerge(target, patch) {
@@ -81,7 +88,8 @@ module.exports = (app, deps) => {
 
   // ── GET /api/settings — full settings + env key status ─────────────
   app.get('/api/settings', async (req, res) => {
-    const settings = loadSettings();
+    const settings = settingsService.sanitizeSettings(loadSettings());
+    const cloudProviders = cloudCredentials.metadata();
     const envKeys = {};
     if (fs.existsSync(ENV_FILE)) {
       const lines = fs.readFileSync(ENV_FILE, 'utf8').split('\n');
@@ -130,7 +138,18 @@ module.exports = (app, deps) => {
         }
       }
     } catch {}
-    res.json({ settings, envKeys });
+    if (cloudProviders.supabase.configured) {
+      envKeys.SUPABASE_URL = 'vault';
+      envKeys.SUPABASE_ANON_KEY = 'vault';
+      if (cloudProviders.supabase.hasServiceRoleKey) envKeys.SUPABASE_SERVICE_ROLE_KEY = 'vault';
+    }
+    if (cloudProviders.firebase.configured) {
+      envKeys.VITE_FIREBASE_API_KEY = 'vault';
+      envKeys.VITE_FIREBASE_PROJECT_ID = 'vault';
+      envKeys.VITE_FIREBASE_APP_ID = 'vault';
+    }
+    Object.assign(envKeys, providerCredentials.metadata());
+    res.json({ settings, envKeys, cloudProviders });
   });
 
   // ── POST /api/settings — merge a patch (preferred) or replace whole file ──
@@ -138,7 +157,15 @@ module.exports = (app, deps) => {
   //                       concurrent writers can't clobber each other)
   // { settings: {...} } → full replace, kept ONLY for explicit import/restore
   app.post('/api/settings', (req, res) => {
-    const { settings, patch } = req.body;
+    const { settings, patch, cloudProvider } = req.body;
+    if (cloudProvider) {
+      try {
+        const metadata = cloudCredentials.save(cloudProvider.provider, cloudProvider.config);
+        return res.json({ ok: true, stored: 'encrypted-vault', cloudProviders: metadata });
+      } catch (error) {
+        return res.status(error.statusCode || 500).json({ error: error.message });
+      }
+    }
     if (patch && typeof patch === 'object') {
       const current = loadSettings();
       saveSettings(deepMerge(current, patch));
@@ -147,6 +174,25 @@ module.exports = (app, deps) => {
     if (!settings) return res.status(400).json({ error: 'patch or settings object required' });
     saveSettings(settings);
     res.json({ ok: true });
+  });
+
+  app.delete('/api/settings/cloud-provider/:provider', (req, res) => {
+    try {
+      const metadata = cloudCredentials.remove(req.params.provider);
+      res.json({ ok: true, cloudProviders: metadata });
+    } catch (error) {
+      res.status(error.statusCode || 500).json({ error: error.message });
+    }
+  });
+
+  app.post('/api/settings/secrets', (req, res) => {
+    try {
+      const written = providerCredentials.save(req.body?.vars);
+      providerCredentials.hydrate(process.env);
+      res.json({ ok: true, written, stored: 'encrypted-vault', restartRequired: false });
+    } catch (error) {
+      res.status(error.statusCode || 500).json({ error: error.message });
+    }
   });
 
   // ── POST /api/settings/nl — natural-language settings from the terminal ──
@@ -301,6 +347,7 @@ module.exports = (app, deps) => {
   // it drifted (tavily/serper were missing) and can never drift again.
   async function buildNervousSystem() {
     const env = process.env;
+    const cloudProviderMetadata = cloudCredentials.metadata();
 
     // ── 1. Scan manifests for all declared providers ──
     const srcBlocks = path.join(__dirname, '..', '..');
@@ -341,7 +388,7 @@ module.exports = (app, deps) => {
       // after a leftover .env value reported "ollama" alive with nothing running.
       ollama:     { keys: [], kind: 'local', icon: '🦙', base: env.OLLAMA_HOST || 'http://localhost:11434', detect: !!readLocalRuntime()?.runtimes?.ollama?.installed },
       grok:       { keys: ['GROK_API_KEY'], kind: 'cloud', icon: '🤖', base: 'https://api.x.ai/v1' },
-      lmstudio:   { keys: [], kind: 'local', icon: '🖥️', base: 'http://localhost:1234/v1' },
+      lmstudio:   { keys: [], kind: 'local', icon: '🖥️', base: `${kernelEndpoints.lmStudioHost()}/v1` },
       supabase:   { keys: ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY'], kind: 'infra', icon: '🟢', allRequired: true },
       firebase:   { keys: ['VITE_FIREBASE_PROJECT_ID'], kind: 'infra', icon: '🔥' },
       youtube:    { keys: ['YOUTUBE_REFRESH_TOKEN'], kind: 'service', icon: '📺' },
@@ -376,18 +423,20 @@ module.exports = (app, deps) => {
       const keysPresent = meta.allRequired
         ? meta.keys.every(k => !!env[k])
         : meta.keys.some(k => !!env[k]);
-      const configured = keysPresent || meta.detect || !!registryProviders[id];
+      const configured = keysPresent || meta.detect || !!registryProviders[id]
+        || !!cloudProviderMetadata[id]?.configured;
       const blocks = providerBlockMap[id] || [];
 
       // Auto-read details (display-safe, no secrets)
       const details = {};
-      if (id === 'supabase' && env.SUPABASE_URL) {
-        details.projectUrl = env.SUPABASE_URL;
-        details.projectId = env.SUPABASE_URL.replace('https://', '').replace('.supabase.co', '');
+      if (id === 'supabase' && (cloudProviderMetadata.supabase.projectUrl || env.SUPABASE_URL)) {
+        details.projectUrl = cloudProviderMetadata.supabase.projectUrl || env.SUPABASE_URL;
+        details.projectId = cloudProviderMetadata.supabase.projectId
+          || env.SUPABASE_URL.replace('https://', '').replace('.supabase.co', '');
       }
       if (id === 'firebase') {
-        if (env.VITE_FIREBASE_PROJECT_ID) details.projectId = env.VITE_FIREBASE_PROJECT_ID;
-        if (env.VITE_FIREBASE_AUTH_DOMAIN) details.authDomain = env.VITE_FIREBASE_AUTH_DOMAIN;
+        details.projectId = cloudProviderMetadata.firebase.projectId || env.VITE_FIREBASE_PROJECT_ID || null;
+        details.authDomain = cloudProviderMetadata.firebase.authDomain || env.VITE_FIREBASE_AUTH_DOMAIN || null;
       }
       if (id === 'ollama') {
         if (env.OLLAMA_HOST) details.host = env.OLLAMA_HOST;
@@ -473,6 +522,7 @@ module.exports = (app, deps) => {
   // Never returns secrets — only display-safe metadata.
   app.get('/api/settings/provider-details', (req, res) => {
     const env = process.env;
+    const cloud = cloudCredentials.metadata();
     const details = {
       groq: {
         configured: !!env.GROQ_API_KEY,
@@ -492,14 +542,14 @@ module.exports = (app, deps) => {
         keyHint: env.ANTHROPIC_API_KEY ? `sk-ant-...${env.ANTHROPIC_API_KEY.slice(-4)}` : null,
       },
       supabase: {
-        configured: !!(env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY),
-        projectUrl: env.SUPABASE_URL || null,
-        projectId: env.SUPABASE_URL ? env.SUPABASE_URL.replace('https://', '').replace('.supabase.co', '') : null,
+        configured: cloud.supabase.configured,
+        projectUrl: cloud.supabase.projectUrl,
+        projectId: cloud.supabase.projectId,
       },
       firebase: {
-        configured: !!env.VITE_FIREBASE_PROJECT_ID,
-        projectId: env.VITE_FIREBASE_PROJECT_ID || null,
-        authDomain: env.VITE_FIREBASE_AUTH_DOMAIN || null,
+        configured: cloud.firebase.configured,
+        projectId: cloud.firebase.projectId,
+        authDomain: cloud.firebase.authDomain,
       },
       ollama: {
         configured: !!readLocalRuntime()?.runtimes?.ollama?.installed,
@@ -533,7 +583,7 @@ module.exports = (app, deps) => {
       },
       lmstudio: {
         configured: false,
-        host: 'http://localhost:1234',
+        host: kernelEndpoints.lmStudioHost(),
       },
       cloudflare: {
         configured: false,
@@ -621,10 +671,11 @@ module.exports = (app, deps) => {
       }
 
       if (id === 'supabase') {
-        if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) return res.json({ ok: false, error: 'Missing Supabase config' });
+        const saved = cloudCredentials.credentials('supabase');
+        if (!saved?.url || !saved?.anonKey) return res.json({ ok: false, error: 'Missing Supabase config' });
         const r = await Promise.race([
-          fetch(`${env.SUPABASE_URL}/rest/v1/`, {
-            headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` }
+          fetch(`${saved.url}/rest/v1/`, {
+            headers: { apikey: saved.anonKey, Authorization: `Bearer ${saved.anonKey}` }
           }),
           timeout(5000)
         ]);
@@ -632,7 +683,7 @@ module.exports = (app, deps) => {
       }
 
       if (id === 'firebase') {
-        return res.json({ ok: !!env.VITE_FIREBASE_PROJECT_ID, note: 'Client-side SDK — key presence verified' });
+        return res.json({ ok: cloudCredentials.metadata().firebase.configured, note: 'Web Config presence verified' });
       }
 
       if (id === 'youtube') {
@@ -681,12 +732,12 @@ module.exports = (app, deps) => {
       }
 
       if (id === 'lmstudio') {
-        const host = 'http://localhost:1234';
+        const host = kernelEndpoints.lmStudioHost();
         try {
           const r = await Promise.race([fetch(`${host}/v1/models`), timeout(5000)]);
           const data = await r.json();
           return res.json({ ok: true, models: (data.data || []).map(m => m.id) });
-        } catch { return res.json({ ok: false, error: 'LM Studio not reachable at localhost:1234' }); }
+        } catch { return res.json({ ok: false, error: `LM Studio not reachable at ${host}` }); }
       }
 
       if (id === 'openrouter') {
@@ -882,12 +933,12 @@ module.exports = (app, deps) => {
   });
 
   // ════════════════════════════════════════════════════════════════════
-  //  ONBOARDING / CONFIG-FROM-UI  — write .env so the operator never has
-  //  to hand-edit a file. One-time guided setup; restart applies it.
+  //  ONBOARDING / CONFIG-FROM-UI — provider credentials go to encrypted
+  //  Vault storage; this legacy env route only accepts non-secret settings.
   // ════════════════════════════════════════════════════════════════════
 
-  // The setup groups, in the operator's flow order. Each var is collected
-  // from the wizard and written to .env. VITE_ mirrors are auto-derived.
+  // The setup groups, in the operator's flow order. Secret groups are saved
+  // through /api/settings/secrets or the cloud-provider branch above.
   const ENV_GROUPS = {
     apiKeys: {
       label: 'API keys',
@@ -949,6 +1000,7 @@ module.exports = (app, deps) => {
   // ── GET /api/settings/setup-status — wizard progress (no secrets) ──
   app.get('/api/settings/setup-status', (req, res) => {
     const env = { ...process.env, ...parseEnvFile() }; // live + file (covers not-yet-restarted)
+    const cloudProviders = cloudCredentials.metadata();
     const groupStatus = {};
     for (const [key, g] of Object.entries(ENV_GROUPS)) {
       const need = g.allOf || g.anyOf || g.vars;
@@ -957,6 +1009,8 @@ module.exports = (app, deps) => {
                : g.vars.some(v => !!env[v]);
       groupStatus[key] = { label: g.label, configured: ok, vars: g.vars };
     }
+    groupStatus.firebase.configured = cloudProviders.firebase.configured;
+    groupStatus.supabase.configured = cloudProviders.supabase.configured;
     // account status comes from the security block; models from settings file.
     let hasAccount = false;
     try { hasAccount = fs.existsSync(path.join(__dirname, '..', '..', '..', '..', 'secrets', 'aeon-user.json')); } catch {}
@@ -976,13 +1030,16 @@ module.exports = (app, deps) => {
     });
   });
 
-  // ── POST /api/settings/env — write a group's keys to .env (localhost) ─
+  // ── POST /api/settings/env — non-secret runtime config only ─────────
   app.post('/api/settings/env', (req, res) => {
     const host = req.get('host') || '';
     if (!(host.includes('localhost') || host.includes('127.0.0.1')) && !process.env.AEON_ALLOW_REMOTE_ENV)
       return res.status(403).json({ error: 'Env writes are localhost-only (the desktop is the source of truth).' });
     const { vars } = req.body || {};
     if (!vars || typeof vars !== 'object') return res.status(400).json({ error: 'vars object required' });
+    if (Object.keys(vars).some((key) => /(?:KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL)/.test(key))) {
+      return res.status(400).json({ error: 'Credentials are Vault-only; save provider keys through POST /api/settings/secrets.' });
+    }
 
     const updates = {};
     for (const [k, v] of Object.entries(vars)) {

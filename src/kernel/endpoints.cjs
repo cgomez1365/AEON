@@ -26,6 +26,13 @@ try { if (!isVercel) fs.mkdirSync(SECRETS_DIR, { recursive: true }); } catch {}
 const REG_FILE = path.join(SECRETS_DIR, 'aeon-endpoints.json');
 const REG_ROW_ID = 1;
 
+// Single source of truth for the local LM Studio host (env-overridable). Settings
+// and the transport profile below both resolve through this, so the default lives
+// in exactly one place instead of being hardcoded per call site. (BO7)
+function lmStudioHost() {
+  return process.env.LMSTUDIO_HOST || 'http://localhost:1234';
+}
+
 // ── Provider transport profiles (how to actually call them) ──────────
 const PROVIDER_TRANSPORT = {
   groq:   { style: 'openai', base: 'https://api.groq.com/openai/v1', list: '/models',     reach: ['local', 'cloud'] },
@@ -35,7 +42,7 @@ const PROVIDER_TRANSPORT = {
   grok:   { style: 'openai', base: 'https://api.x.ai/v1',             list: '/models',    reach: ['local', 'cloud'] },
   openrouter: { style: 'openai', base: 'https://openrouter.ai/api/v1', list: '/models', reach: ['local', 'cloud'] },
   ollama: { style: 'ollama', base: 'http://localhost:11434',         list: '/api/tags',   reach: ['local'] },
-  lmstudio: { style: 'openai', base: 'http://localhost:1234/v1',     list: '/models',     reach: ['local'] },
+  lmstudio: { style: 'openai', base: `${lmStudioHost()}/v1`,          list: '/models',     reach: ['local'] },
 };
 
 function defaultRegistry() {
@@ -217,4 +224,5 @@ module.exports = {
   PROVIDER_TRANSPORT, load, save,
   addEndpoint, removeEndpoint, assignRole,
   discoverModels, resolveForRole, isVercel,
+  lmStudioHost,
 };

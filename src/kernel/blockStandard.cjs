@@ -41,26 +41,57 @@ const API_ENV_ALL = new Set(['supabase']);
 // blocks; an unlisted block still loads (system group, order 99).
 const NAV = {
   // FINANCE — everything that makes or tracks money
-  dashboard:     { route: '/',           group: 'finance', order: 0, icon: '⚡' },
+  dashboard:     { route: '/',           group: 'finance', order: 0, icon: 'CircleGauge' },
   // AGENT — VP and everything that watches or staffs it
-  fleet_control: { route: '/fleet',      group: 'agent',   order: 0, icon: '📡' },
+  fleet_control: { route: '/fleet',      group: 'agent',   order: 0, icon: 'Radio' },
   // WORK — client-facing operations
-  ats_engine:    { route: '/ats',        group: 'work',    order: 0, icon: '🎯' },
+  ats_engine:    { route: '/ats',        group: 'work',    order: 0, icon: 'Users' },
   // CONTENT — knowledge and creation
-  cookbook:      { route: '/cookbook',   group: 'content', order: 1, icon: '🍳' },
-  deep_research: { route: '/research',   group: 'content', order: 2, icon: '🔬' },
-  orion_search:  { route: '/orion',      group: 'content', order: 3, icon: '🔭' },
-  aeon_matrix:   { route: '/brain',      group: 'content', order: 4, icon: '🧠' },
-  files:         { route: '/files',      group: 'content', order: 5, icon: '📁' },
-  portfolio:     { route: '/portfolio',  group: 'content', order: 6, icon: '🎨' },
+  cookbook:      { route: '/cookbook',   group: 'content', order: 1, icon: 'BookOpen' },
+  deep_research: { route: '/research',   group: 'content', order: 2, icon: 'FlaskConical' },
+  orion_search:  { route: '/orion',      group: 'content', order: 3, icon: 'Telescope' },
+  aeon_matrix:   { route: '/brain',      group: 'content', order: 4, icon: 'Workflow' },
+  files:         { route: '/files',      group: 'content', order: 5, icon: 'Folder' },
+  portfolio:     { route: '/portfolio',  group: 'content', order: 6, icon: 'FileText' },
   // TOOLS — utilities
-  host_os:       { route: '/host',       group: 'tools',   order: 0, icon: '🖥️' },
-  council:       { route: '/council',    group: 'tools',   order: 1, icon: '🏛️' },
-  quick_links:   { route: '/links',      group: 'tools',   order: 2, icon: '🔗' },
+  host_os:       { route: '/host',       group: 'tools',   order: 0, icon: 'Monitor' },
+  council:       { route: '/council',    group: 'tools',   order: 1, icon: 'Landmark' },
+  quick_links:   { route: '/links',      group: 'tools',   order: 2, icon: 'Link' },
   // SYSTEM — the OS itself
-  settings:      { route: '/settings',   group: 'system',  order: 0, icon: '⚙️' },
-  activity:      { route: '/activity',   group: 'system',  order: 1, icon: '📊' },
-  master:        { route: '/master',     group: 'system',  order: 2, icon: '🧬' },
+  settings:      { route: '/settings',   group: 'system',  order: 0, icon: 'Settings' },
+  activity:      { route: '/activity',   group: 'system',  order: 1, icon: 'Activity' },
+  master:        { route: '/master',     group: 'system',  order: 2, icon: 'Cpu' },
+};
+
+const ICON_FALLBACKS = {
+  activity: 'Activity',
+  aeon_matrix: 'Workflow',
+  ats_engine: 'Users',
+  cookbook: 'BookOpen',
+  council: 'Landmark',
+  dashboard: 'CircleGauge',
+  deep_research: 'FlaskConical',
+  files: 'Folder',
+  fleet_control: 'Radio',
+  host_os: 'Monitor',
+  master: 'Cpu',
+  memory_core: 'Workflow',
+  orion_search: 'Telescope',
+  quick_links: 'Link',
+  security: 'Shield',
+  settings: 'Settings',
+  writer: 'PenLine',
+};
+
+// Installed blocks are explicit about where their durable output belongs.
+// "compatibility" keeps the existing APIs alive while those blocks are migrated
+// one at a time; staged and newly created blocks must use "scoped".
+const MEMORY_POLICY = {
+  activity: 'none', aeon_matrix: 'document', ats_engine: 'none', cookbook: 'none',
+  council: 'document', dashboard: 'none', deep_research: 'summary', files: 'summary',
+  fleet_control: 'none', host_os: 'summary', master: 'none', memory_core: 'document',
+  orion_search: 'none', quick_links: 'none', security: 'none', settings: 'none',
+  writer: 'document', _blank: 'none', _template: 'none',
 };
 
 // ── Folder-is-truth naming — mirror of blockRegistry.js labelFromFolder ──
@@ -112,6 +143,9 @@ function deriveEnv(apis) {
 function normalizeManifest(folder) {
   const m = readManifest(folder) || {};
   const nav = NAV[folder];
+  const icon = (nav && nav.icon) || ICON_FALLBACKS[folder] || m.nav?.icon || m.icon || 'Boxes';
+  const iconAsset = `/brand/block-icons/${folder}.svg`;
+  const iconAssetPng = `/brand/block-icons/png/${folder}.png`;
   const apis = (m.requires && m.requires.apis) || [];
   const hasApi = fs.existsSync(path.join(BLOCKS_DIR, folder, 'api'));
 
@@ -121,17 +155,17 @@ function normalizeManifest(folder) {
   const out = {
     // K1: schema version travels with the manifest — absent = 1.0.0 (grandfathered).
     // See src/kernel/schema.json + MIGRATION_POLICY.md before touching this shape.
-    manifestVersion: m.manifestVersion || '1.0.0',
+    manifestVersion: '1.1.0',
     id: folder,
     label: labelFromFolder(folder),
-    icon: (nav && nav.icon) || m.icon || '📦',
+    icon,
     route: (nav && nav.route) || m.route || `/${folder}`,
     description: m.description || '',
     category: m.category || (nav && nav.group) || 'system',
     tier: m.tier || (['dashboard','fleet_control','settings','activity','master'].includes(folder) ? 'core' : 'plugin'),
     nav: nav
-      ? { group: nav.group, order: nav.order, label: labelFromFolder(folder), icon: nav.icon, hidden: false }
-      : { group: 'system', order: 99, label: labelFromFolder(folder), icon: m.icon || '📦', hidden: m.nav?.hidden === true },
+      ? { group: nav.group, order: nav.order, label: labelFromFolder(folder), icon, iconAsset, iconAssetPng, hidden: false }
+      : { group: 'system', order: 99, label: labelFromFolder(folder), icon, iconAsset, iconAssetPng, hidden: m.nav?.hidden === true },
     // Widget contract — quick-view the dashboard can render (weather-widget model)
     widget: m.widget || null,
     requires: {
@@ -166,9 +200,17 @@ function normalizeManifest(folder) {
         ai:         true,                        // can call kernelLLM
       },
       // Storage requirements
-      storage: m.contract?.storage || {
-        type:  'json',        // json | sqlite | supabase | firebase | none
-        scope: 'block',       // block | shared | global
+      storage: {
+        type: m.contract?.storage?.type || 'json',
+        scope: m.contract?.storage?.scope || 'block',
+        local: { indexed: false, retention: m.contract?.storage?.local?.retention || 'operational' },
+        access: m.contract?.storage?.access || (folder.startsWith('_') ? 'scoped' : 'compatibility'),
+      },
+      // Durable user memory belongs in the Vault only. Local block data is not indexed.
+      memory: {
+        mode: m.contract?.memory?.mode || MEMORY_POLICY[folder] || 'none',
+        indexed: (m.contract?.memory?.mode || MEMORY_POLICY[folder] || 'none') !== 'none',
+        userConfigurable: m.contract?.memory?.userConfigurable === true,
       },
       // AI capabilities this block exposes
       ai: m.contract?.ai || {
@@ -322,7 +364,7 @@ function syncAllBlocks(ctx = {}) {
 }
 
 module.exports = {
-  BLOCKS_DIR, NAV, GROUP_META, API_ENV,
+  BLOCKS_DIR, NAV, GROUP_META, API_ENV, MEMORY_POLICY,
   listBlockFolders, readManifest, normalizeManifest, deriveEnv,
   checkReadiness, writeRuntimeConfig, syncAllBlocks, mergeBlockEnv,
 };

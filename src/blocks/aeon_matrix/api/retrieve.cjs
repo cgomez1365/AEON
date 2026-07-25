@@ -49,13 +49,12 @@ function isRecallQuery(query) {
 module.exports = function retrieveFactory(deps) {
   const router = express.Router();
 
-  const DATA_ROOT  = path.join(__dirname, '..', 'data');
+  const DATA_ROOT  = deps?.DATA_ROOT || path.join(__dirname, '..', 'data');
   const INDEX_FILE = path.join(DATA_ROOT, 'vault_index.json');
   const VAULT_ROOT = deps?.VAULT_ROOT || path.join(DATA_ROOT, 'Vault');
 
-  // Stored index paths are "Vault/relative/path" — resolve against the
-  // shared VAULT_ROOT (not DATA_ROOT) so this stays correct even if VAULT_PATH
-  // is overridden to point somewhere other than the default aeon_matrix location.
+  // Stored index paths are Vault-relative — resolve against the shared root so
+  // a configured Vault relocation changes neither citations nor retrieval.
   function resolveIndexedPath(relPath) {
     const rel = relPath.startsWith('Vault/') ? relPath.slice('Vault/'.length) : relPath;
     const full = path.resolve(VAULT_ROOT, rel);

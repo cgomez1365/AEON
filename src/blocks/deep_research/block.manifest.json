@@ -1,8 +1,8 @@
 {
-  "manifestVersion": "1.0.0",
+  "manifestVersion": "1.1.0",
   "id": "deep_research",
   "label": "Deep Research",
-  "icon": "🔬",
+  "icon": "FlaskConical",
   "route": "/research",
   "description": "Multi-step web research with LLM-in-the-loop agent pipeline",
   "category": "intelligence",
@@ -11,7 +11,9 @@
     "group": "content",
     "order": 2,
     "label": "Deep Research",
-    "icon": "🔬",
+    "icon": "FlaskConical",
+    "iconAsset": "/brand/block-icons/deep_research.svg",
+    "iconAssetPng": "/brand/block-icons/png/deep_research.png",
     "hidden": false
   },
   "widget": null,
@@ -51,7 +53,17 @@
     },
     "storage": {
       "type": "json",
-      "scope": "block"
+      "scope": "block",
+      "local": {
+        "indexed": false,
+        "retention": "operational"
+      },
+      "access": "compatibility"
+    },
+    "memory": {
+      "mode": "summary",
+      "indexed": true,
+      "userConfigurable": false
     },
     "ai": {
       "canGenerate": false,

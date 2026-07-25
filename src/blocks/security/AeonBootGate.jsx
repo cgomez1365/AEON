@@ -8,7 +8,8 @@
  * prefs-sync system (aurora.css already owns that).
  */
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { login as apiLogin } from '../../kernel/auth';
+import { login as apiLogin, setToken } from '../../kernel/auth';
+import RecoveryModal from './components/RecoveryModal.jsx';
 import './AeonBootGate.css';
 
 export default function AeonBootGate({ onAuthed }) {
@@ -19,6 +20,52 @@ export default function AeonBootGate({ onAuthed }) {
   const [form, setForm] = useState({ username: '', password: '' });
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
+  const [cloudConfig, setCloudConfig] = useState(null);
+  const [recoveryOpen, setRecoveryOpen] = useState(false);
+
+  const exchangeProviderToken = useCallback(async (token) => {
+    const response = await fetch('/api/security/oauth/exchange', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token }),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || 'OAuth exchange failed.');
+    if (result.token) localStorage.setItem('aeon_session_token', result.token);
+    onAuthed && onAuthed();
+  }, [onAuthed]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await fetch('/api/security/oauth/client-config');
+        if (response.status === 204) return;
+        if (!response.ok) return;
+        const config = await response.json();
+        if (cancelled) return;
+        setCloudConfig(config);
+
+        const code = new URLSearchParams(window.location.search).get('code');
+        if (config.provider === 'supabase' && code) {
+          setBusy(true);
+          const { createClient } = await import('@supabase/supabase-js');
+          const client = createClient(config.config.url, config.config.anonKey, {
+            auth: { flowType: 'pkce', persistSession: true, detectSessionInUrl: true },
+          });
+          const { data, error } = await client.auth.exchangeCodeForSession(code);
+          if (error || !data.session?.access_token) throw error || new Error('Supabase session was not returned.');
+          window.history.replaceState({}, '', window.location.pathname);
+          await exchangeProviderToken(data.session.access_token);
+        }
+      } catch (error) {
+        if (!cancelled) setMessage(error?.message || 'Cloud sign-in could not be initialized.');
+      } finally {
+        if (!cancelled) setBusy(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [exchangeProviderToken]);
 
   // ── Canvas motion — the orbital "boot" animation ──────────────────────
   useEffect(() => {
@@ -267,6 +314,52 @@ export default function AeonBootGate({ onAuthed }) {
     }
   }, [form, onAuthed]);
 
+  const handleGoogle = useCallback(async () => {
+    if (!cloudConfig) return setMessage('Cloud sign-in is not configured.');
+    setBusy(true);
+    setMessage('');
+    try {
+      if (cloudConfig.provider === 'supabase') {
+        const { createClient } = await import('@supabase/supabase-js');
+        const client = createClient(cloudConfig.config.url, cloudConfig.config.anonKey, {
+          auth: { flowType: 'pkce', persistSession: true, detectSessionInUrl: true },
+        });
+        const { error } = await client.auth.signInWithOAuth({
+          provider: 'google',
+          options: { redirectTo: `${window.location.origin}${window.location.pathname}` },
+        });
+        if (error) throw error;
+        return;
+      }
+
+      const [{ initializeApp, getApp, getApps }, { getAuth, GoogleAuthProvider, signInWithPopup }] = await Promise.all([
+        import('firebase/app'),
+        import('firebase/auth'),
+      ]);
+      const app = getApps().some(item => item.name === 'aeon-security')
+        ? getApp('aeon-security')
+        : initializeApp(cloudConfig.config, 'aeon-security');
+      const result = await signInWithPopup(getAuth(app), new GoogleAuthProvider());
+      await exchangeProviderToken(await result.user.getIdToken());
+    } catch (error) {
+      setMessage(error?.message || 'Google sign-in failed.');
+      setBusy(false);
+    }
+  }, [cloudConfig, exchangeProviderToken]);
+
+  const completeRecovery = useCallback((token) => {
+    setToken(token);
+    setRecoveryOpen(false);
+    onAuthed && onAuthed();
+  }, [onAuthed]);
+
+  const emergencyLogin = useCallback(async (username, passphrase) => {
+    const result = await apiLogin(username, passphrase);
+    if (!result.ok) throw new Error(result.error || 'Temporary passphrase was not accepted.');
+    setRecoveryOpen(false);
+    onAuthed && onAuthed();
+  }, [onAuthed]);
+
   return (
     <div className="aeon-boot">
       <div className="aeon-boot-aurora" aria-hidden="true">
@@ -281,6 +374,7 @@ export default function AeonBootGate({ onAuthed }) {
         onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && ready) { e.preventDefault(); openAuth(); } }}
       />
       <div className={`aeon-boot-copy${ready ? ' ready' : ''}`}>
+        <img src="/brand/aeon-mark/aeon-icon-64.png" alt="" width="48" height="48" />
         <div className="aeon-boot-brand">AEON</div>
         <div className="aeon-boot-tag">Modular. Local. Yours.</div>
         <button type="button" className="aeon-boot-enter" onClick={openAuth}>Initialize connection</button>
@@ -291,30 +385,38 @@ export default function AeonBootGate({ onAuthed }) {
           <button type="button" className="aeon-boot-close" aria-label="Close" onClick={closeAuth}>&times;</button>
           <h1>Connect to AEON</h1>
           <p className="aeon-boot-sub">Your second brain is ready.</p>
-          <button
-            type="button" className="aeon-boot-google"
-            onClick={() => setMessage("Google sign-in isn't connected yet — use your username and password below.")}
-          >
-            Continue with Google
-          </button>
-          <div className="aeon-boot-divider">or use your account</div>
-          <label className="aeon-boot-field-label" htmlFor="aeon-boot-identity">Username</label>
-          <input id="aeon-boot-identity" className="aeon-boot-field" autoComplete="username" required
-            value={form.username} onChange={e => setForm(f => ({ ...f, username: e.target.value }))} />
-          <label className="aeon-boot-field-label" htmlFor="aeon-boot-password">Password</label>
-          <input id="aeon-boot-password" className="aeon-boot-field" type="password" autoComplete="current-password" required
-            value={form.password} onChange={e => setForm(f => ({ ...f, password: e.target.value }))} />
-          <button className="aeon-boot-submit" type="submit" disabled={busy || !form.username || !form.password}>
-            {busy ? 'Signing in…' : 'Sign in'}
-          </button>
+          {cloudConfig ? (
+            <button type="button" className="aeon-boot-google" onClick={handleGoogle} disabled={busy}>
+              {busy ? 'Connecting…' : 'Sign in with Google'}
+            </button>
+          ) : (
+            <>
+              <label className="aeon-boot-field-label" htmlFor="aeon-boot-identity">Username</label>
+              <input id="aeon-boot-identity" className="aeon-boot-field" autoComplete="username" required
+                value={form.username} onChange={e => setForm(f => ({ ...f, username: e.target.value }))} />
+              <label className="aeon-boot-field-label" htmlFor="aeon-boot-password">Password</label>
+              <input id="aeon-boot-password" className="aeon-boot-field" type="password" autoComplete="current-password" required
+                value={form.password} onChange={e => setForm(f => ({ ...f, password: e.target.value }))} />
+              <button className="aeon-boot-submit" type="submit" disabled={busy || !form.username || !form.password}>
+                {busy ? 'Signing in…' : 'Sign in'}
+              </button>
+            </>
+          )}
           {message && <div className="aeon-boot-message" role="alert">{message}</div>}
           <p className="aeon-boot-fine">
-            <button type="button" className="aeon-boot-link" onClick={() => setMessage('Forgot your password? Ask whoever set up this AEON install to reset it from Settings → Security on the machine itself — there is no email-based reset yet.')}>
+            <button type="button" className="aeon-boot-link" onClick={() => setRecoveryOpen(true)}>
               Forgot password?
             </button>
           </p>
         </form>
       </div>
+      <RecoveryModal
+        open={recoveryOpen}
+        initialUsername={form.username}
+        onClose={() => setRecoveryOpen(false)}
+        onRecovered={completeRecovery}
+        onEmergencyLogin={emergencyLogin}
+      />
     </div>
   );
 }

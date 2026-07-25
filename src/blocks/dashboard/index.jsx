@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { StatCard, Card } from '../../components/aurora';
-import { Activity, Zap, Radio, BarChart3, Wifi, WifiOff, Server, Flame, Calendar, LayoutGrid, Bot, Briefcase, Search, Wrench, Cpu, Layers, Plus, Trash2, Pencil } from 'lucide-react';
+import { Activity, Zap, Radio, BarChart3, Wifi, WifiOff, Server, Flame, Calendar, LayoutGrid, Plus, Trash2, Pencil } from 'lucide-react';
 import { AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { useTelemetry } from '../../kernel/contexts/TelemetryContext';
 import { getEffectiveBlockGroups } from '../../kernel/blockRegistry.js';
+import { BlockIcon, SectionIcon } from '../../components/BlockIcon.jsx';
 
 import { SB_URL, SB_KEY } from '../../config.js';
 const CHART_COLORS = ['#00f2ff', '#f59e0b', '#4caf50', '#8b5cf6', '#ec4899', '#ff6b6b', '#00ff40', '#ff9800'];
@@ -38,39 +39,6 @@ function timeAgo(iso) {
   const h = Math.floor(m / 60);
   if (h < 24) return `${h}h ago`;
   return `${Math.floor(h / 24)}d ago`;
-}
-
-// Section-header icons — line icons, not emoji, until each block ships its
-// own real icon asset (see BlockIcon below). 'custom' is the default for
-// user-created sections.
-const GROUP_ICON_COMPONENTS = {
-  finance: Zap, agent: Bot, work: Briefcase, content: Search, tools: Wrench, system: Cpu,
-  command: Zap, business: Briefcase, intel: Search, ops: Wrench, custom: Layers,
-};
-function GroupIcon({ id, size = 12 }) {
-  const Comp = GROUP_ICON_COMPONENTS[id] || Layers;
-  return <Comp size={size} aria-hidden="true" />;
-}
-
-// A block's real icon, once it has one (manifest nav.iconAsset → an SVG in
-// public/brand/block-icons/). Rendered as a CSS mask so --icon-accent
-// recolors every block icon at once — no per-icon color baked into the
-// asset. Falls back to the manifest emoji until that block has an asset.
-function BlockIcon({ iconAsset, fallback, size = 14 }) {
-  if (!iconAsset) return <span aria-hidden="true" style={{ fontSize: size }}>{fallback}</span>;
-  return (
-    <span
-      aria-hidden="true"
-      style={{
-        display: 'inline-block', width: size, height: size, flexShrink: 0,
-        backgroundColor: 'var(--icon-accent, var(--accent, #00e2ff))',
-        WebkitMaskImage: `url(/brand/block-icons/${iconAsset})`, maskImage: `url(/brand/block-icons/${iconAsset})`,
-        WebkitMaskSize: 'contain', maskSize: 'contain',
-        WebkitMaskRepeat: 'no-repeat', maskRepeat: 'no-repeat',
-        WebkitMaskPosition: 'center', maskPosition: 'center',
-      }}
-    />
-  );
 }
 
 export default function Dashboard({ chatHistory = [], auditLogs = [], blockLayout, onBlockLayoutChange }) {
@@ -274,7 +242,7 @@ export default function Dashboard({ chatHistory = [], auditLogs = [], blockLayou
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '6px' }}>
                 <span style={{ display: 'flex', alignItems: 'center', color: 'var(--text-dim)' }}>
-                  <GroupIcon id={g.custom ? (g.meta.icon || 'custom') : g.id} size={11} />
+                  <SectionIcon id={g.custom ? (g.meta.icon || 'custom') : g.id} size={11} />
                 </span>
                 <span style={{ fontSize: '9px', fontWeight: 700, letterSpacing: '1px', color: 'var(--text-dim)' }}>
                   {g.meta.label}{g.items.length === 0 ? ' (empty — drop a block here)' : ''}
@@ -314,7 +282,12 @@ export default function Dashboard({ chatHistory = [], auditLogs = [], blockLayou
                         height: '100%', cursor: 'grab', opacity: dragBlockId === b.id ? 0.4 : 1,
                       }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                          <BlockIcon iconAsset={b.iconAsset} fallback={b.icon} size={13} />
+                          <BlockIcon
+                            iconAsset={b.iconAsset}
+                            iconAssetPng={b.iconAssetPng}
+                            fallback={b.icon}
+                            size={20}
+                          />
                           <span style={{ fontSize: '11px', fontWeight: 700 }}>{b.label}</span>
                           <span aria-hidden="true" style={{ width: '5px', height: '5px', borderRadius: '50%', background: live ? '#00ff40' : 'rgba(255,255,255,0.15)', marginLeft: 'auto' }} />
                         </div>

@@ -7,7 +7,7 @@ folder → rename → restart → live. Folders starting with `_` are never moun
 
 | Field | Meaning |
 |---|---|
-| `manifestVersion` | Schema version (`src/kernel/schema.json`). Leave at 1.0.0. |
+| `manifestVersion` | Schema version (`src/kernel/schema.json`). New blocks use 1.1.0. |
 | `id` | MUST equal the folder name. Lowercase, digits, underscores. |
 | `label` / `icon` | What nav and the dashboard show. |
 | `route` | URL the block mounts at. Leading slash. |
@@ -19,7 +19,8 @@ folder → rename → restart → live. Folders starting with `_` are never moun
 | `requires` | What must exist before block is "ready": env vars, other blocks, local files. Drives readiness checks. |
 | `provides` | What this block offers others. |
 | `contract.permissions` | THE security declaration. `filesystem`/`network`/`secrets`/`shell`/`ai` gate which deps the sandbox hands you. `crossBlockRead: ["other_id"]` = Tier 1.5 declared read. Cross-block WRITE is Tier 2 (approval). Shell is Tier 3. |
-| `contract.storage` | Where your data lives (`json` scope `block` = your own `data/`). |
+| `contract.storage` | Operational local data only. It is block-scoped and never indexed. `local.indexed` must remain `false`; new blocks use `access: "scoped"`. |
+| `contract.memory` | Declares durable user memory: `none`, `summary`, or `document`. Enabled memory is written to the Vault and indexed by AEON Matrix. |
 | `contract.commands` | Slash-commands to surface in the Neural Terminal. `{cmd, desc, route, method, param}`. |
 | `contract.settings_keys` | Keys you read/write in Settings (the nervous system). |
 | `routes` | Route table with `auth` flags. |
@@ -29,4 +30,4 @@ folder → rename → restart → live. Folders starting with `_` are never moun
 
 1. The manifest is the only declaration — the kernel knows nothing not written here.
 2. New blocks go through `staging/` + `npm run aeon lint` before `src/blocks/`.
-3. Never write outside your own folder without declaring it.
+3. Use the injected `blockStorage` dependency for all block-owned files. `writeData()` is for local operational state; `publishState()` and `writeMemoryDocument()` are for declared Vault memory. Never calculate a storage path yourself.

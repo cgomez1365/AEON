@@ -1,8 +1,8 @@
 {
-  "manifestVersion": "1.0.0",
+  "manifestVersion": "1.1.0",
   "id": "aeon_matrix",
   "label": "Aeon Matrix",
-  "icon": "🧠",
+  "icon": "Workflow",
   "route": "/brain",
   "description": "The knowledge graph, document library, reading vault, and saved artifacts — AEON's long-term memory and human file system.",
   "category": "Knowledge",
@@ -11,7 +11,9 @@
     "group": "content",
     "order": 4,
     "label": "Aeon Matrix",
-    "icon": "🧠",
+    "icon": "Workflow",
+    "iconAsset": "/brand/block-icons/aeon_matrix.svg",
+    "iconAssetPng": "/brand/block-icons/png/aeon_matrix.png",
     "hidden": false
   },
   "widget": null,
@@ -52,7 +54,17 @@
     },
     "storage": {
       "type": "json",
-      "scope": "block"
+      "scope": "block",
+      "local": {
+        "indexed": false,
+        "retention": "operational"
+      },
+      "access": "compatibility"
+    },
+    "memory": {
+      "mode": "document",
+      "indexed": true,
+      "userConfigurable": false
     },
     "ai": {
       "canGenerate": false,

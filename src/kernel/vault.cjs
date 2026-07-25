@@ -19,16 +19,44 @@ const crypto = require('crypto');
 
 const isVercel = !!process.env.VERCEL;
 const APP_ROOT = path.join(__dirname, '..', '..');           // Command_Center_App
-const SECRETS_DIR = path.join(APP_ROOT, 'secrets');
+const SECRETS_DIR = process.env.AEON_SECRETS_DIR || path.join(APP_ROOT, 'secrets');
 try { if (!isVercel) fs.mkdirSync(SECRETS_DIR, { recursive: true }); } catch {}
 const VAULT_FILE = path.join(SECRETS_DIR, 'aeon-vault.json'); // local authoritative (desktop)
 const VAULT_ROW_ID = 1;                                       // singleton row in Supabase
 
-function masterKey() {
+// Envelope keyslots — the DEK (which actually encrypts the vault) is wrapped
+// under one or more protectors (the .env/file key, a recovery code, later a
+// keychain or passphrase). The DEK is stable, so re-keying a protector never
+// re-encrypts vault data. This is what lets the same install move .env → keychain
+// → passphrase, and recover from a lost .env, without ever losing the stores.
+const KEYSLOTS_FILE = path.join(SECRETS_DIR, 'aeon-keyslots.json');
+let _dek = null;                 // cached 32-byte data-encryption key
+let _dekEnvKey = null;           // the AEON_VAULT_MASTER_KEY that _dek was resolved under
+let _pendingRecoveryCode = null; // revealed once after first-run generation
+
+// The .env master key hashed to 32 bytes — the "file" protector's KEK.
+function envKek() {
   const raw = process.env.AEON_VAULT_MASTER_KEY;
-  if (!raw) return null;
-  // Derive a stable 32-byte key from whatever the operator set.
-  return crypto.createHash('sha256').update(String(raw)).digest();
+  return raw ? crypto.createHash('sha256').update(String(raw)).digest() : null;
+}
+
+// Resolve the DEK (read-only, no writes). With keyslots present the DEK is
+// unwrapped from the file slot; without them it IS the env-derived key —
+// identical to the pre-envelope behavior, so existing stores read unchanged.
+// Cache is keyed on the current env value so a rotated key re-resolves (never
+// returns a stale DEK — important for fail-closed decryption).
+function masterKey() {
+  const raw = process.env.AEON_VAULT_MASTER_KEY || null;
+  if (_dek && _dekEnvKey === raw) return _dek;
+  _dek = null; _dekEnvKey = raw;
+  const kek = envKek();
+  const slots = readKeyslots();
+  if (slots?.slots?.file && kek) {
+    try { _dek = unwrapDEK(slots.slots.file, kek); return _dek; }
+    catch { _dek = null; return null; } // env key doesn't match this vault → locked
+  }
+  if (kek) { _dek = kek; return _dek; }
+  return null;
 }
 
 // ── AES-256-GCM ──────────────────────────────────────────────────────
@@ -50,6 +78,114 @@ function decrypt(blob) {
   const out = Buffer.concat([decipher.update(Buffer.from(blob.data, 'hex')), decipher.final()]);
   return JSON.parse(out.toString('utf8'));
 }
+
+// Scoped Vault stores use the same authenticated encryption without joining
+// the endpoint secret map. The caller still owns the file location and schema.
+function seal(value) { return encrypt(value); }
+function unseal(blob) { return decrypt(blob); }
+
+// ── Envelope keyslots ────────────────────────────────────────────────
+function normalizeCode(code) {
+  return String(code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+function genRecoveryCode() {
+  return `AEON-${crypto.randomBytes(10).toString('hex').toUpperCase().match(/.{1,4}/g).join('-')}`;
+}
+// Wrap/unwrap the DEK under a 32-byte KEK with authenticated encryption.
+function wrapDEK(dek, kek) {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', kek, iv);
+  const data = Buffer.concat([cipher.update(dek), cipher.final()]);
+  return { iv: iv.toString('hex'), tag: cipher.getAuthTag().toString('hex'), data: data.toString('hex') };
+}
+function unwrapDEK(slot, kek) {
+  const decipher = crypto.createDecipheriv('aes-256-gcm', kek, Buffer.from(slot.iv, 'hex'));
+  decipher.setAuthTag(Buffer.from(slot.tag, 'hex'));
+  return Buffer.concat([decipher.update(Buffer.from(slot.data, 'hex')), decipher.final()]);
+}
+function readKeyslots() {
+  if (!fs.existsSync(KEYSLOTS_FILE)) return null;
+  try { return JSON.parse(fs.readFileSync(KEYSLOTS_FILE, 'utf8')); } catch { return null; }
+}
+function writeKeyslots(slots) {
+  const tmp = KEYSLOTS_FILE + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(slots, null, 2), { mode: 0o600 });
+  fs.renameSync(tmp, KEYSLOTS_FILE);
+}
+function writeEnvKey(hexKey) {
+  const envFile = path.join(APP_ROOT, '.env');
+  let env = '';
+  try { env = fs.existsSync(envFile) ? fs.readFileSync(envFile, 'utf8') : ''; } catch {}
+  if (/^AEON_VAULT_MASTER_KEY=.*$/m.test(env)) {
+    env = env.replace(/^AEON_VAULT_MASTER_KEY=.*$/m, `AEON_VAULT_MASTER_KEY=${hexKey}`);
+  } else {
+    env += `${env.endsWith('\n') || !env ? '' : '\n'}AEON_VAULT_MASTER_KEY=${hexKey}\n`;
+  }
+  fs.writeFileSync(envFile, env, { mode: 0o600 });
+}
+
+/**
+ * First-run envelope init (idempotent, desktop-only — Vercel FS is read-only).
+ * Wraps the current DEK under the .env protector AND a recovery-code slot, and
+ * stashes a one-time recovery code for the caller to reveal. Because the DEK is
+ * unchanged, this never re-encrypts existing stores.
+ */
+function ensureKeyslots() {
+  if (isVercel) return { created: false, reason: 'cloud-readonly' };
+  const kek = envKek();
+  if (!kek) return { created: false, reason: 'no-env-key' };
+  if (readKeyslots()) return { created: false, reason: 'exists' };
+  const dek = masterKey(); // = envKek() here (no keyslots yet)
+  if (!dek) return { created: false, reason: 'locked' };
+  const code = genRecoveryCode();
+  const salt = crypto.randomBytes(16);
+  const recKek = crypto.scryptSync(normalizeCode(code), salt, 32);
+  writeKeyslots({
+    v: 1,
+    slots: {
+      file: wrapDEK(dek, kek),
+      recovery: { salt: salt.toString('hex'), ...wrapDEK(dek, recKek) },
+    },
+    createdAt: new Date().toISOString(),
+  });
+  _pendingRecoveryCode = code;
+  console.log(`\n${'='.repeat(64)}\n[VAULT] Recovery code (write this down — shown once):\n\n        ${code}\n\n[VAULT] Restores vault access if this device or its .env is lost.\n${'='.repeat(64)}\n`);
+  return { created: true };
+}
+
+/**
+ * Break-glass: unwrap the DEK with the recovery code, then reissue a fresh .env
+ * (file) protector. The DEK is unchanged, so every encrypted store stays
+ * readable — this is the guarantee that a lost .env never bricks the vault.
+ */
+function recoverWithCode(code) {
+  if (isVercel) return { ok: false, error: 'unsupported-on-cloud' };
+  const slots = readKeyslots();
+  if (!slots?.slots?.recovery) return { ok: false, error: 'no-recovery-slot' };
+  let dek;
+  try {
+    const kek = crypto.scryptSync(normalizeCode(code), Buffer.from(slots.slots.recovery.salt, 'hex'), 32);
+    dek = unwrapDEK(slots.slots.recovery, kek);
+  } catch { return { ok: false, error: 'invalid-code' }; }
+  const newEnv = crypto.randomBytes(32).toString('hex');
+  slots.slots.file = wrapDEK(dek, crypto.createHash('sha256').update(newEnv).digest());
+  writeKeyslots(slots);
+  process.env.AEON_VAULT_MASTER_KEY = newEnv;
+  _dek = dek; _dekEnvKey = newEnv;
+  try { writeEnvKey(newEnv); } catch (e) { return { ok: true, envKeyReissued: false, warn: e.message }; }
+  return { ok: true, envKeyReissued: true };
+}
+
+function consumePendingRecoveryCode() { const c = _pendingRecoveryCode; _pendingRecoveryCode = null; return c; }
+function getRecoveryStatus() {
+  const slots = readKeyslots();
+  return {
+    hasKeyslots: !!slots,
+    hasRecoverySlot: !!slots?.slots?.recovery,
+    protectors: slots ? Object.keys(slots.slots || {}) : [],
+  };
+}
+function __resetForTest() { _dek = null; _dekEnvKey = null; _pendingRecoveryCode = null; }
 
 // ── Storage backends ─────────────────────────────────────────────────
 function readLocalBlob() {
@@ -131,5 +267,8 @@ function isUnlocked() { return !!masterKey(); }
 
 module.exports = {
   loadSecrets, getSecret, setSecret, removeSecret, listRefs,
-  syncToCloud, isUnlocked, isVercel,
+  syncToCloud, isUnlocked, isVercel, seal, unseal,
+  // Envelope keyslots
+  ensureKeyslots, recoverWithCode, consumePendingRecoveryCode, getRecoveryStatus,
+  wrapDEK, unwrapDEK, __resetForTest,
 };

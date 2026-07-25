@@ -14,6 +14,7 @@ import { getNavGroups, getRoutes } from "../kernel/blockRegistry";
 import { Terminal } from 'lucide-react';
 import BlockShell from './BlockShell';
 import AuroraField from './AuroraField';
+import { BlockIcon, SectionIcon } from './BlockIcon';
 
 // Everything is a block now — nav + routes come purely from the registry.
 // Add non-block component routes here only if something can't be a cartridge.
@@ -57,7 +58,7 @@ export function RolodexNav({ groups, currentPath, onNavigate }) {
                 background: isActive ? 'rgba(0,242,255,0.08)' : 'transparent',
                 transition: 'all 0.15s', minWidth: '36px',
               }}>
-              <span style={{ fontSize: '14px' }}>{g.icon}</span>
+              <SectionIcon id={g.id} size={14} />
               <span style={{ fontSize: '7px', fontWeight: 700, letterSpacing: '0.5px', color: isActive ? '#00f2ff' : 'rgba(255,255,255,0.3)', transition: 'color 0.15s' }}>
                 {g.label.slice(0, 4)}
               </span>
@@ -90,7 +91,14 @@ export function RolodexNav({ groups, currentPath, onNavigate }) {
               }}
               onMouseOver={e => { if (!active) { e.currentTarget.style.background = 'rgba(255,255,255,0.03)'; e.currentTarget.style.color = '#fff'; } }}
               onMouseOut={e => { if (!active) { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'rgba(229,226,225,0.6)'; } }}>
-              <span style={{ fontSize: '13px', width: '20px', textAlign: 'center' }}>{item.icon}</span>
+              <span style={{ width: '20px', display: 'grid', placeItems: 'center' }}>
+                <BlockIcon
+                  iconAsset={item.iconAsset}
+                  iconAssetPng={item.iconAssetPng}
+                  fallback={item.icon}
+                  size={16}
+                />
+              </span>
               {item.label}
               {active && <div style={{ marginLeft: 'auto', width: 5, height: 5, borderRadius: '50%', background: '#00f2ff', boxShadow: '0 0 6px #00f2ff' }} />}
             </button>
@@ -127,7 +135,7 @@ function DesktopNav({ user, groups }) {
   return (
     <div className="module-panel" style={{ height: "100%" }}>
       <div className="panel-header" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-        <img src="/brand/aeon-icon.svg" alt="" width="16" height="16" style={{ borderRadius: '3px', flexShrink: 0 }} />
+        <img src="/brand/aeon-mark/aeon-icon-64.png" alt="" width="16" height="16" style={{ borderRadius: '3px', flexShrink: 0 }} />
         AEON OS KERNEL
       </div>
       
@@ -277,6 +285,7 @@ export default function DesktopLayout({ chatHistory, auditLogs }) {
       {/* 1. TOP NAV (Span All) */}
       <div className="top-nav" style={{ gridColumn: "1 / -1" }}>
         <div className="nav-brand" style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <img src="/brand/aeon-mark/aeon-icon-64.png" alt="" width="22" height="22" style={{ borderRadius: '5px', flexShrink: 0 }} />
           <button
             onClick={() => setMenuOpen(!menuOpen)}
             aria-label={menuOpen ? 'Hide navigation menu' : 'Show navigation menu'}
@@ -287,7 +296,6 @@ export default function DesktopLayout({ chatHistory, auditLogs }) {
               <line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/>
             </svg>
           </button>
-          <img src="/brand/aeon-icon.svg" alt="" width="22" height="22" style={{ borderRadius: '5px', flexShrink: 0 }} />
           <div className="nav-title">AEON</div>
           <div style={{ fontSize: "10px", color: "rgba(0,242,255,0.7)", fontFamily: "monospace", border: "1px solid rgba(0,242,255,0.3)", padding: "2px 6px", borderRadius: "4px", background: "rgba(0,242,255,0.1)" }}>
             v5.0

@@ -1,8 +1,8 @@
 {
-  "manifestVersion": "1.0.0",
+  "manifestVersion": "1.1.0",
   "id": "security",
   "label": "Security",
-  "icon": "🛡️",
+  "icon": "Shield",
   "route": "/security",
   "description": "The Guardian — password on every launch, idle auto-lock, encrypted sync-then-forget on walk-away, and a deployment shield that keeps CDNs from caching your data.",
   "category": "core",
@@ -11,7 +11,9 @@
     "group": "system",
     "order": 99,
     "label": "Security",
-    "icon": "🛡️",
+    "icon": "Shield",
+    "iconAsset": "/brand/block-icons/security.svg",
+    "iconAssetPng": "/brand/block-icons/png/security.png",
     "hidden": false
   },
   "widget": null,
@@ -42,7 +44,17 @@
     },
     "storage": {
       "type": "json",
-      "scope": "block"
+      "scope": "block",
+      "local": {
+        "indexed": false,
+        "retention": "operational"
+      },
+      "access": "compatibility"
+    },
+    "memory": {
+      "mode": "none",
+      "indexed": false,
+      "userConfigurable": false
     },
     "ai": {
       "canGenerate": false,

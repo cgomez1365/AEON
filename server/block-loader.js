@@ -8,6 +8,7 @@
  */
 const fs = require('fs');
 const path = require('path');
+const { createBlockStorage } = require('../src/kernel/blockStorage.cjs');
 
 module.exports = ({ app, ROOT, isVercel, loadSettings, baseDeps }) => {
 
@@ -47,6 +48,23 @@ module.exports = ({ app, ROOT, isVercel, loadSettings, baseDeps }) => {
   function createScopedDeps(base, manifest, blockId) {
     const scoped = { ...base };
     const perms = manifest?.contract?.permissions || {};
+    const usesScopedStorage = manifest?.contract?.storage?.access === 'scoped';
+
+    if (usesScopedStorage && perms.filesystem !== 'none') {
+      scoped.blockStorage = createBlockStorage({
+        blockId,
+        contract: manifest.contract,
+        getBlockDataFile: base.getBlockDataFile,
+        getBlockVaultFile: base.getBlockVaultFile,
+        vaultSync: base.vaultSync,
+        requestIndex: base.requestIndex,
+      });
+      // v1.1 blocks must use their declared, block-scoped storage surface.
+      delete scoped.VAULT_ROOT;
+      delete scoped.DATA_ROOT;
+      delete scoped.getVaultFile;
+      delete scoped.getDataFile;
+    }
 
     if (perms.secrets === false) {
       delete scoped.GEMINI_KEY_POOL;
@@ -59,6 +77,7 @@ module.exports = ({ app, ROOT, isVercel, loadSettings, baseDeps }) => {
     if (perms.filesystem === 'none') {
       delete scoped.WORKSPACE;
       delete scoped.ALLOWED_ROOTS;
+      delete scoped.blockStorage;
     }
     if (perms.ai === false) {
       delete scoped.kernelLLM;
@@ -66,6 +85,13 @@ module.exports = ({ app, ROOT, isVercel, loadSettings, baseDeps }) => {
       delete scoped.groqRequest;
       delete scoped.ollamaRequest;
       delete scoped.GEMINI_KEY_POOL;
+    }
+    if (blockId !== 'security') {
+      delete scoped.getCloudCredentials;
+      delete scoped.getCloudProviderMetadata;
+      delete scoped.vaultSeal;
+      delete scoped.vaultUnseal;
+      delete scoped.requestRestart;
     }
     // Early middleware is the most powerful dep there is (it sees every
     // request). Only blocks that explicitly declare it may register.
@@ -96,6 +122,7 @@ module.exports = ({ app, ROOT, isVercel, loadSettings, baseDeps }) => {
       writeOSAudit: baseDeps.writeOSAudit, path, fs,
       VAULT_ROOT: baseDeps.VAULT_ROOT, DATA_ROOT: baseDeps.DATA_ROOT,
       getVaultFile: baseDeps.getVaultFile, getDataFile: baseDeps.getDataFile,
+      getBlockVaultFile: baseDeps.getBlockVaultFile, getBlockDataFile: baseDeps.getBlockDataFile,
     });
   } else {
     const blocksDir = path.join(ROOT, 'src', 'blocks');

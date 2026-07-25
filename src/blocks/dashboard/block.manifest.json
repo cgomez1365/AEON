@@ -1,8 +1,8 @@
 {
-  "manifestVersion": "1.0.0",
+  "manifestVersion": "1.1.0",
   "id": "dashboard",
   "label": "Dashboard",
-  "icon": "⚡",
+  "icon": "CircleGauge",
   "route": "/",
   "description": "Unified command hub with live LLM telemetry, API spend, activity heatmap, and live audit feed",
   "category": "core",
@@ -11,7 +11,9 @@
     "group": "finance",
     "order": 0,
     "label": "Dashboard",
-    "icon": "⚡",
+    "icon": "CircleGauge",
+    "iconAsset": "/brand/block-icons/dashboard.svg",
+    "iconAssetPng": "/brand/block-icons/png/dashboard.png",
     "hidden": false
   },
   "widget": null,
@@ -50,7 +52,17 @@
     },
     "storage": {
       "type": "json",
-      "scope": "block"
+      "scope": "block",
+      "local": {
+        "indexed": false,
+        "retention": "operational"
+      },
+      "access": "compatibility"
+    },
+    "memory": {
+      "mode": "none",
+      "indexed": false,
+      "userConfigurable": false
     },
     "ai": {
       "canGenerate": false,

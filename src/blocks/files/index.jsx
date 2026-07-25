@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Folder, FileText, Upload, FolderPlus, ChevronRight, Home, ArrowLeft, X, RefreshCw, Trash2, Download, Cloud, Monitor, Save, Columns } from 'lucide-react';
 import { supabase } from '../../kernel/supabase';
 import { WORKSPACE } from '../../config.js';
+import ModalPortal from '../../components/ModalPortal.jsx';
 
 const BUCKET = 'aeon-files';
 const IS_LOCAL_ENV = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
@@ -426,38 +427,42 @@ export default function FileManager() {
 
       {/* PREVIEW MODAL */}
       {previewUrl && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.88)', backdropFilter: 'blur(8px)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', zIndex: 2000 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '92%', maxWidth: '1100px', marginBottom: '16px' }}>
-            <div style={{ color: previewMode === 'cloud' ? '#3ECF8E' : '#00f2ff', fontSize: '14px', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <FileText size={18} /> {previewName}
+        <ModalPortal ariaLabel={`Preview file: ${previewName}`} onEscape={() => setPreviewUrl(null)}>
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.88)', backdropFilter: 'blur(8px)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', zIndex: 2000 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '92%', maxWidth: '1100px', marginBottom: '16px' }}>
+              <div style={{ color: previewMode === 'cloud' ? '#3ECF8E' : '#00f2ff', fontSize: '14px', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <FileText size={18} /> {previewName}
+              </div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button onClick={() => window.open(previewUrl, '_blank')} style={{ background: 'rgba(255,255,255,0.1)', border: 'none', color: '#fff', padding: '8px 16px', borderRadius: '8px', cursor: 'pointer', fontSize: '13px', fontWeight: 600 }}>Open Full</button>
+                <button onClick={() => setPreviewUrl(null)} style={{ background: 'rgba(255,255,255,0.1)', border: 'none', color: '#fff', padding: '8px 16px', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: 600 }}><X size={16} /> Close</button>
+              </div>
             </div>
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <button onClick={() => window.open(previewUrl, '_blank')} style={{ background: 'rgba(255,255,255,0.1)', border: 'none', color: '#fff', padding: '8px 16px', borderRadius: '8px', cursor: 'pointer', fontSize: '13px', fontWeight: 600 }}>Open Full</button>
-              <button onClick={() => setPreviewUrl(null)} style={{ background: 'rgba(255,255,255,0.1)', border: 'none', color: '#fff', padding: '8px 16px', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: 600 }}><X size={16} /> Close</button>
-            </div>
+            {previewName.match(/\.(png|jpg|jpeg|gif|svg)$/i) ? (
+              <img src={previewUrl} alt={previewName} style={{ maxWidth: '92%', maxHeight: '80vh', borderRadius: '12px', objectFit: 'contain', border: '1px solid rgba(255,255,255,0.1)' }} />
+            ) : (
+              <iframe src={previewUrl} style={{ width: '92%', maxWidth: '1100px', height: '82vh', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.1)', background: '#fff' }} title="Viewer" />
+            )}
           </div>
-          {previewName.match(/\.(png|jpg|jpeg|gif|svg)$/i) ? (
-            <img src={previewUrl} alt={previewName} style={{ maxWidth: '92%', maxHeight: '80vh', borderRadius: '12px', objectFit: 'contain', border: '1px solid rgba(255,255,255,0.1)' }} />
-          ) : (
-            <iframe src={previewUrl} style={{ width: '92%', maxWidth: '1100px', height: '82vh', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.1)', background: '#fff' }} title="Viewer" />
-          )}
-        </div>
+        </ModalPortal>
       )}
 
       {/* TEXT EDITOR MODAL */}
       {editContent !== null && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(6px)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', zIndex: 2000 }}>
-          <div style={{ width: '90%', maxWidth: '1000px', display: 'flex', flexDirection: 'column', height: '85vh', background: '#0a0a0f', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.1)' }}>
-            <div style={{ padding: '16px', borderBottom: '1px solid rgba(255,255,255,0.1)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div style={{ color: '#00f2ff', fontSize: '14px', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '8px' }}><FileText size={18} /> {previewName} {saveStatus && <span style={{ color: '#3ECF8E', marginLeft: '10px' }}>{saveStatus}</span>}</div>
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <button onClick={handleLocalSave} style={{ background: '#00f2ff', color: '#000', border: 'none', padding: '8px 16px', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '6px' }}><Save size={16} /> Save</button>
-                <button onClick={() => setEditContent(null)} style={{ background: 'transparent', border: '1px solid rgba(255,255,255,0.2)', color: '#fff', padding: '8px 16px', borderRadius: '6px', cursor: 'pointer' }}>Cancel</button>
+        <ModalPortal ariaLabel={`Edit file: ${previewName}`} onEscape={() => setEditContent(null)}>
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(6px)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', zIndex: 2000 }}>
+            <div style={{ width: '90%', maxWidth: '1000px', display: 'flex', flexDirection: 'column', height: '85vh', background: '#0a0a0f', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.1)' }}>
+              <div style={{ padding: '16px', borderBottom: '1px solid rgba(255,255,255,0.1)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ color: '#00f2ff', fontSize: '14px', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '8px' }}><FileText size={18} /> {previewName} {saveStatus && <span style={{ color: '#3ECF8E', marginLeft: '10px' }}>{saveStatus}</span>}</div>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button onClick={handleLocalSave} style={{ background: '#00f2ff', color: '#000', border: 'none', padding: '8px 16px', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '6px' }}><Save size={16} /> Save</button>
+                  <button onClick={() => setEditContent(null)} style={{ background: 'transparent', border: '1px solid rgba(255,255,255,0.2)', color: '#fff', padding: '8px 16px', borderRadius: '6px', cursor: 'pointer' }}>Cancel</button>
+                </div>
               </div>
+              <textarea value={editContent} onChange={e => setEditContent(e.target.value)} spellCheck="false" aria-label={`Edit file: ${previewName}`} onFocus={e => { e.currentTarget.style.boxShadow = 'inset 0 0 0 2px #00f2ff40'; }} onBlur={e => { e.currentTarget.style.boxShadow = 'none'; }} style={{ flex: 1, width: '100%', background: 'transparent', border: 'none', color: '#e4e4e7', padding: '16px', fontFamily: 'monospace', fontSize: '14px', resize: 'none', outline: 'none' }} />
             </div>
-            <textarea value={editContent} onChange={e => setEditContent(e.target.value)} spellCheck="false" aria-label={`Edit file: ${previewName}`} onFocus={e => { e.currentTarget.style.boxShadow = 'inset 0 0 0 2px #00f2ff40'; }} onBlur={e => { e.currentTarget.style.boxShadow = 'none'; }} style={{ flex: 1, width: '100%', background: 'transparent', border: 'none', color: '#e4e4e7', padding: '16px', fontFamily: 'monospace', fontSize: '14px', resize: 'none', outline: 'none' }} />
           </div>
-        </div>
+        </ModalPortal>
       )}
     </div>
   );

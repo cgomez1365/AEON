@@ -38,6 +38,17 @@ if (!isVercel && !process.env.AEON_VAULT_MASTER_KEY) {
   } catch (e) { console.warn('[FIRST RUN] vault key guard failed:', e.message); }
 }
 
+// ── Envelope keyslots — wrap the DEK under the .env protector PLUS a recovery
+// slot so a lost or rotated .env never bricks the vault. Runs for fresh AND
+// existing installs (idempotent); the DEK is stable, so no store is re-encrypted.
+// Desktop only — Vercel has no writable FS and sources the key from env.
+if (!isVercel) {
+  try {
+    const r = require('../src/kernel/vault.cjs').ensureKeyslots();
+    if (r.created) console.log('[FIRST RUN] Vault keyslots initialized (file + recovery).');
+  } catch (e) { console.warn('[FIRST RUN] keyslot init failed:', e.message); }
+}
+
 // ── Terminal event bus ──
 const aeonTerminalStream = new EventEmitter();
 global.broadcastTerminalEvent = (type, message, meta = null) => {
@@ -56,7 +67,12 @@ try {
 } catch (e) { console.warn('[FIRST RUN] settings guard failed:', e.message); }
 
 // ── Services ──
-const { loadSettings } = require('../services/settings.js');
+const settingsService = require('../services/settings.js');
+const { loadSettings, hydrateProviderSecrets } = settingsService;
+hydrateProviderSecrets(process.env);
+const cloudCredentialStore = settingsService.createCloudCredentialStore();
+const vaultCrypto = require('../src/kernel/vault.cjs');
+const vaultSync = require('../src/kernel/vaultSync.cjs');
 const storage = require('../services/storage.js');
 const { supabase } = require('../services/cloud.js');
 const security = require('../security/security.js')({
@@ -113,20 +129,16 @@ app.use('/api', security.tunnelGate);
 // early in the chain for every request. This is how a cartridge adds
 // cross-cutting policy (auth guard, no-store cache shield) without the
 // kernel knowing the block exists.
-const _earlyware = [];
+// Registry is replace-by-id (see earlyware.cjs) — a Security rescan re-registers
+// 'security-guardian' and REPLACES the prior instance instead of stacking one
+// Guardian per rescan (BO4).
+const earlyware = require('./earlyware.cjs').createEarlyware();
 const registerEarlyMiddleware = (fn, label = 'anonymous') => {
-  if (typeof fn === 'function') { _earlyware.push(fn); console.log(`[EARLYWARE] +${label} (${_earlyware.length} active)`); }
+  if (typeof fn !== 'function') return;
+  const { replaced, count } = earlyware.register(fn, label);
+  console.log(`[EARLYWARE] ${replaced ? '~' : '+'}${label} (${count} active)`);
 };
-app.use((req, res, next) => {
-  let i = 0;
-  const run = (err) => {
-    if (err) return next(err);
-    const fn = _earlyware[i++];
-    if (!fn) return next();
-    try { fn(req, res, run); } catch (e) { next(e); }
-  };
-  run();
-});
+app.use(earlyware.middleware);
 
 // Chat log bootstrap
 if (!fs.existsSync(storage.LOG_FILE)) {
@@ -190,14 +202,30 @@ const baseDeps = {
   finalizeVideoStitch: media.finalizeVideoStitch,
   VAULT_ROOT: storage.VAULT_ROOT, DATA_ROOT: storage.DATA_ROOT,
   getVaultFile: storage.getVaultFile, getDataFile: storage.getDataFile,
+  getBlockVaultFile: storage.getBlockVaultFile, getBlockDataFile: storage.getBlockDataFile,
+  vaultSync: vaultSync.vaultSync, requestIndex: vaultSync.requestIndex,
+  getCloudCredentials: (provider) => cloudCredentialStore.credentials(provider),
+  getCloudProviderMetadata: () => cloudCredentialStore.metadata(),
+  vaultSeal: vaultCrypto.seal, vaultUnseal: vaultCrypto.unseal,
+  requestRestart: () => {
+    const restartScript = path.join(ROOT, 'restart.bat');
+    if (fs.existsSync(restartScript)) {
+      require('child_process').spawn('cmd.exe', ['/c', restartScript], {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+      }).unref();
+    } else {
+      process.exit(0);
+    }
+  },
   defaultLocalModel: ai.defaultLocalModel,
   localRuntimePresent: ai.localRuntimePresent,
   DEFAULT_LOCAL_MODEL: ai.defaultLocalModel(), // legacy snapshot for old block deps
 };
 
 // ── Operator auth gate — MUST mount before any block/kernel routes ──
-// Dormant unless AEON_OPERATOR_PASSWORD is set (local dev unchanged);
-// the public Vercel deployment always sets it. See src/kernel/authGate.cjs.
+// Security owns /api/auth/*; the kernel enforces its Vault-backed policy.
 const _authGate = require('../src/kernel/authGate.cjs');
 _authGate.mountAuth(app);
 app.use(_authGate.guard);
@@ -304,7 +332,10 @@ try {
 }
 
 // Second Brain RAG
-const _sbDeps = { supabase, isVercel, geminiRequest: ai.geminiRequest };
+const _sbDeps = {
+  supabase, isVercel, geminiRequest: ai.geminiRequest,
+  VAULT_ROOT: storage.VAULT_ROOT, DATA_ROOT: storage.DATA_ROOT,
+};
 try {
   const sbIngest = require('../src/blocks/aeon_matrix/api/ingest.cjs')(_sbDeps);
   const sbRetrieve = require('../src/blocks/aeon_matrix/api/retrieve.cjs')(_sbDeps);
@@ -315,6 +346,17 @@ try {
     app.use('/api', sbIngest);
   }
   console.log('[SECOND BRAIN] RAG routes ready: /api/crn/second-brain/retrieve, /api/crn/second-brain/ingest/*');
+
+  // Coalesce block memory writes into one Matrix refresh instead of a scan per write.
+  let matrixIndexTimer = null;
+  vaultSync.setIndexScheduler(() => {
+    if (isVercel || typeof sbIngest.runSecondBrainScan !== 'function') return;
+    clearTimeout(matrixIndexTimer);
+    matrixIndexTimer = setTimeout(() => {
+      sbIngest.runSecondBrainScan().catch(e => console.error('[SECOND BRAIN] Memory refresh failed:', e.message));
+    }, 500);
+    matrixIndexTimer.unref?.();
+  });
 
   // Boot auto-sync (aeon-213 pattern): incremental scan EVERY boot, delayed,
   // background, non-fatal. First boot does the full index; later boots pick

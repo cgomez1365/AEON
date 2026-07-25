@@ -5,7 +5,7 @@
  *
  *   GET  /api/settings/connectivity                → full status
  *   POST /api/settings/connectivity/supabase/test  { url, key }? → ping REST
- *   POST /api/settings/connectivity/supabase/save  { url, key } → .env (restart to attach)
+ *   POST /api/settings/connectivity/supabase/save  { url, anonKey } → encrypted Vault
  *   POST /api/settings/connectivity/tunnel/start   → { url: https://*.trycloudflare.com }
  *   POST /api/settings/connectivity/tunnel/stop
  */
@@ -17,21 +17,9 @@ const ROOT = path.join(__dirname, '..', '..', '..', '..');
 const BIN_DIR = path.join(ROOT, 'tools', 'bin');
 const CLOUDFLARED = path.join(BIN_DIR, 'cloudflared.exe');
 const CLOUDFLARED_URL = 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe';
-const ENV_PATH = path.join(ROOT, '.env');
 const PORT = 3001;
 
 const _tunnel = { proc: null, url: null, startedAt: null };
-
-function upsertEnv(pairs) {
-  let text = '';
-  try { text = fs.readFileSync(ENV_PATH, 'utf8'); } catch {}
-  for (const [k, v] of Object.entries(pairs)) {
-    const line = `${k}=${v}`;
-    const re = new RegExp(`^${k}=.*$`, 'm');
-    text = re.test(text) ? text.replace(re, line) : (text.replace(/\n?$/, '\n') + line + '\n');
-  }
-  fs.writeFileSync(ENV_PATH, text);
-}
 
 async function pingSupabase(url, key) {
   const r = await fetch(`${url.replace(/\/$/, '')}/rest/v1/`, {
@@ -39,20 +27,23 @@ async function pingSupabase(url, key) {
     signal: AbortSignal.timeout(8000),
   });
   // Reachable project answers 200 (root spec) or 404; auth failures answer 401/403.
-  if (r.status === 401 || r.status === 403) throw new Error('Project reached, but the key was rejected — paste the service_role key (Project Settings → API).');
+  if (r.status === 401 || r.status === 403) throw new Error('Project reached, but the key was rejected.');
   if (!r.ok && r.status !== 404) throw new Error(`Supabase answered HTTP ${r.status}.`);
   return true;
 }
 
 module.exports = (app, deps) => {
   const supabase = deps && deps.supabase ? deps.supabase : null;
+  const settingsService = require(path.join(ROOT, 'services', 'settings.js'));
+  const cloudCredentials = settingsService.createCloudCredentialStore();
 
   // ── Status ───────────────────────────────────────────────────────────
   app.get('/api/settings/connectivity', async (req, res) => {
-    const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
+    const cloud = cloudCredentials.metadata();
+    const url = cloud.supabase.projectUrl || '';
     res.json({
       supabase: {
-        configured: !!url,
+        configured: cloud.supabase.configured,
         attached: !!supabase,              // live client on this boot
         url: url ? url.replace(/^https:\/\//, '').slice(0, 30) : null,
         localOnly: process.env.AEON_LOCAL_ONLY === '1',
@@ -70,28 +61,25 @@ module.exports = (app, deps) => {
   // ── Supabase: test (pasted values or current env) ────────────────────
   app.post('/api/settings/connectivity/supabase/test', async (req, res) => {
     try {
-      const url = (req.body && req.body.url) || process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
-      const key = (req.body && req.body.key) || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
-      if (!url || !key) return res.status(400).json({ error: 'Paste your Supabase project URL and service_role key.' });
+      const saved = cloudCredentials.credentials('supabase');
+      const url = (req.body && req.body.url) || saved?.url;
+      const key = (req.body && (req.body.anonKey || req.body.key)) || saved?.anonKey;
+      if (!url || !key) return res.status(400).json({ error: 'Paste your Supabase project URL and anon key.' });
       await pingSupabase(url, key);
       res.json({ ok: true, message: 'Connected — project reachable and key accepted.' });
     } catch (e) { res.status(400).json({ error: e.message }); }
   });
 
-  // ── Supabase: save to .env (test first, never save a bad key) ────────
+  // ── Supabase: save to encrypted Vault (test first) ─────────────────
   app.post('/api/settings/connectivity/supabase/save', async (req, res) => {
     try {
-      const { url, key, connectionString } = req.body || {};
-      if (!url || !key) return res.status(400).json({ error: 'url and key required' });
-      await pingSupabase(url, key);
-      const envPairs = { SUPABASE_URL: url, SUPABASE_SERVICE_ROLE_KEY: key };
-      if (connectionString) envPairs.DATABASE_URL = connectionString;
-      upsertEnv(envPairs);
-      process.env.SUPABASE_URL = url;
-      process.env.SUPABASE_SERVICE_ROLE_KEY = key;
-      if (connectionString) process.env.DATABASE_URL = connectionString;
-      res.json({ ok: true, message: 'Saved & tested. Restart AEON to attach the cloud mirror.', restartRequired: true });
-    } catch (e) { res.status(400).json({ error: e.message }); }
+      const { url, anonKey, key, serviceRoleKey } = req.body || {};
+      const publishableKey = anonKey || key;
+      if (!url || !publishableKey) return res.status(400).json({ error: 'url and anonKey required' });
+      await pingSupabase(url, publishableKey);
+      const metadata = cloudCredentials.save('supabase', { url, anonKey: publishableKey, serviceRoleKey });
+      res.json({ ok: true, message: 'Saved & tested in encrypted Vault.', cloudProviders: metadata });
+    } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); }
   });
 
   // ── Cloudflare quick tunnel — free public URL, zero account ──────────
@@ -153,9 +141,10 @@ module.exports = (app, deps) => {
   // ── Cloud bootstrap — create all AEON tables in Supabase ───────────
   app.post('/api/settings/connectivity/supabase/setup', async (req, res) => {
     try {
-      const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
-      const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-      if (!url || !key) return res.status(400).json({ error: 'Save your Supabase credentials first.' });
+      const saved = cloudCredentials.credentials('supabase');
+      const url = saved?.url;
+      const key = saved?.serviceRoleKey;
+      if (!url || !key) return res.status(400).json({ error: 'A Vault-stored Supabase service role is required for schema setup.' });
 
       const { createClient } = require('@supabase/supabase-js');
       const db = createClient(url, key);
@@ -193,9 +182,10 @@ module.exports = (app, deps) => {
   // ── Sync now — push local JSON data to Supabase aeon_blocks ────────
   app.post('/api/settings/connectivity/supabase/sync', async (req, res) => {
     try {
-      const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
-      const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-      if (!url || !key) return res.status(400).json({ error: 'Supabase not configured.' });
+      const saved = cloudCredentials.credentials('supabase');
+      const url = saved?.url;
+      const key = saved?.serviceRoleKey;
+      if (!url || !key) return res.status(400).json({ error: 'A Vault-stored Supabase service role is required for sync.' });
 
       const { createClient } = require('@supabase/supabase-js');
       const db = createClient(url, key);

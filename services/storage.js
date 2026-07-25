@@ -86,6 +86,23 @@ const getDataFile = (relPath) => {
   return path.join(DATA_ROOT, relPath);
 };
 
+function getScopedFile(root, blockId, relPath = '') {
+  if (!/^[a-z0-9_]+$/.test(String(blockId || ''))) {
+    throw new Error('block id must be lowercase [a-z0-9_]');
+  }
+  const blockRoot = path.resolve(root, blockId);
+  const target = path.resolve(blockRoot, relPath || '.');
+  if (target !== blockRoot && !target.startsWith(`${blockRoot}${path.sep}`)) {
+    throw new Error('block storage path escapes its namespace');
+  }
+  return target;
+}
+
+// Blocks get a namespace, never an unrestricted root. Vault content is
+// durable/indexed; Data content is operational and intentionally unindexed.
+const getBlockVaultFile = (blockId, relPath = '') => getScopedFile(path.join(VAULT_ROOT, 'blocks'), blockId, relPath);
+const getBlockDataFile = (blockId, relPath = '') => getScopedFile(process.env.VERCEL ? '/tmp' : DATA_ROOT, blockId, relPath);
+
 // data/local-runtime.json — written by the Cookbook block (the owner of local
 // models): models_dir, available runtimes, and every installed local model.
 // Settings/kernel/blocks read THIS instead of probing or hardcoding Ollama.
@@ -101,7 +118,27 @@ const TOKEN_LEDGER_FILE = getLocalFile('token_ledger.json');
 const TERMINAL_HISTORY_FILE = getLocalFile('aeon_terminal_history.json');
 const NOTES_FILE = getLocalFile('aeon_notes.json');
 
-// Drag-and-drop uploads (50MB cap)
+// A stored filename is always reduced to a bare basename. A client-supplied
+// originalname like "../../evil" must never place a file outside the chosen
+// target dir — the owner picks the folder (targetDir), never a traversal path.
+function safeUploadName(originalname) {
+  const base = path.basename(String(originalname || '').replace(/\\/g, '/'));
+  return base && base !== '.' && base !== '..' ? base : `upload_${Date.now()}`;
+}
+
+// Bounds for multipart parsing. multer 2.2.0 already fixes the deeply-nested
+// field-name DoS and aborted-upload temp cleanup (CVE fixes); these explicit
+// caps are defense-in-depth so a request can't fan out fields/parts unbounded.
+const UPLOAD_LIMITS = {
+  fileSize: 50 * 1024 * 1024, // 50 MB per file
+  files: 20,                  // matches upload.array('files', 20)
+  fields: 50,
+  parts: 100,
+  fieldNameSize: 300,
+  fieldSize: 1024 * 1024,     // 1 MB per text field
+};
+
+// Drag-and-drop uploads (50MB cap, basename-sanitized, bounded parts)
 const upload = multer({
   storage: multer.diskStorage({
     destination: (req, file, cb) => {
@@ -109,12 +146,15 @@ const upload = multer({
       if (!fs.existsSync(dest)) fs.mkdirSync(dest, { recursive: true });
       cb(null, dest);
     },
-    filename: (req, file, cb) => cb(null, file.originalname)
+    filename: (req, file, cb) => cb(null, safeUploadName(file.originalname))
   }),
-  limits: { fileSize: 50 * 1024 * 1024 }
+  limits: UPLOAD_LIMITS
 });
 
-const videoUpload = multer({ dest: getLocalFile('temp_frames') });
+const videoUpload = multer({
+  dest: getLocalFile('temp_frames'),
+  limits: { fileSize: 200 * 1024 * 1024, files: 1, parts: 20 }
+});
 
 const logTrivial = (e) => {
   try {
@@ -150,7 +190,7 @@ function cleanupOrphans() {
 }
 
 module.exports = {
-  ROOT, getLocalFile, WORKSPACE, upload, videoUpload, cleanupOrphans, logTrivial,
+  ROOT, getLocalFile, WORKSPACE, upload, videoUpload, safeUploadName, UPLOAD_LIMITS, cleanupOrphans, logTrivial,
   LOG_FILE, AUDIT_FILE, SDI_VIOLATION_LOG, TOKEN_LEDGER_FILE, TERMINAL_HISTORY_FILE, NOTES_FILE,
-  VAULT_ROOT, DATA_ROOT, getVaultFile, getDataFile, readLocalRuntime,
+  VAULT_ROOT, DATA_ROOT, getVaultFile, getDataFile, getBlockVaultFile, getBlockDataFile, readLocalRuntime,
 };

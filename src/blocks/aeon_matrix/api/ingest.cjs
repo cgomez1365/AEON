@@ -23,6 +23,7 @@ const { loadExtractors, extractText, embed } = require('./_lib.cjs');
 
 const NIGHTLY_HOUR  = 3; // local hour to auto re-index, once per day
 const INDEXABLE_EXT = /\.(md|txt|json|pdf|docx)$/i;
+const NON_INDEXED_VAULT_PATHS = new Set(['blocks/security']);
 const SUMMARY_CHARS = 280;
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -55,13 +56,24 @@ function deriveTags(relPosix) {
 
 module.exports = function ingestFactory(deps) {
   const router   = express.Router();
-  const { isVercel, VAULT_ROOT } = deps;
+  const { isVercel, VAULT_ROOT, DATA_ROOT: injectedDataRoot } = deps;
 
-  const DATA_ROOT  = path.join(__dirname, '..', 'data');
+  const DATA_ROOT  = injectedDataRoot || path.join(__dirname, '..', 'data');
   const BRAIN_DIR  = VAULT_ROOT || path.join(DATA_ROOT, 'Vault');
   const MANIFEST_FILE = path.join(DATA_ROOT, 'index_manifest.json'); // hash-based change detection only
   const STATUS_FILE   = path.join(DATA_ROOT, 'index_status.json');
   const INDEX_FILE    = path.join(DATA_ROOT, 'vault_index.json');    // the Table of Contents
+
+  function vaultRelative(fullPath) {
+    return path.relative(BRAIN_DIR, fullPath).replace(/\\/g, '/');
+  }
+
+  function resolveVaultPath(relPath) {
+    const root = path.resolve(BRAIN_DIR);
+    const resolved = path.resolve(root, relPath);
+    if (resolved !== root && !resolved.startsWith(`${root}${path.sep}`)) return null;
+    return resolved;
+  }
 
   function readManifest() {
     if (!fs.existsSync(MANIFEST_FILE)) return {};
@@ -132,6 +144,8 @@ module.exports = function ingestFactory(deps) {
       const files = [];
       for (const name of fs.readdirSync(dir)) {
         const full = path.join(dir, name);
+        const relPosix = vaultRelative(full).replace(/\\/g, '/');
+        if (NON_INDEXED_VAULT_PATHS.has(relPosix)) continue;
         if (fs.statSync(full).isDirectory()) { files.push(...walk(full)); continue; }
         if (INDEXABLE_EXT.test(name)) files.push(full);
       }
@@ -156,7 +170,7 @@ module.exports = function ingestFactory(deps) {
     };
 
     for (const full of files) {
-      const rel = path.relative(DATA_ROOT, full);
+      const rel = path.relative(BRAIN_DIR, full);
       const relPosix = rel.replace(/\\/g, '/');
       seen.add(rel);
       try {
@@ -227,7 +241,7 @@ module.exports = function ingestFactory(deps) {
   // ── Nightly auto re-index — self-contained, no external scheduler needed.
   //    Checked hourly; runs once per calendar day at NIGHTLY_HOUR local time.
   if (!isVercel) {
-    setInterval(() => {
+    const nightlyTimer = setInterval(() => {
       const now = new Date();
       if (now.getHours() !== NIGHTLY_HOUR) return;
       const status = readStatus();
@@ -236,6 +250,7 @@ module.exports = function ingestFactory(deps) {
       console.log('[SECOND BRAIN] Nightly auto-index starting...');
       runScan().then(r => console.log(`[SECOND BRAIN] Nightly auto-index done: ${r.ingested} ingested, ${r.skipped} skipped, ${r.deleted} deleted.`));
     }, 60 * 60 * 1000);
+    nightlyTimer.unref?.();
   }
 
   if (isVercel) return router; // vault lives on the local filesystem — routes below are local-only
@@ -263,7 +278,7 @@ module.exports = function ingestFactory(deps) {
 
       const text = fs.readFileSync(full, 'utf8');
       const stat = fs.statSync(full);
-      const relPosix = path.relative(DATA_ROOT, full).replace(/\\/g, '/');
+      const relPosix = vaultRelative(full);
       const index = readIndex();
       index.documents[relPosix] = await buildEntry(full, relPosix, text, stat);
       writeIndex(index);
@@ -284,8 +299,8 @@ module.exports = function ingestFactory(deps) {
     const { file_path, content: bodyContent } = req.body || {};
     if (!file_path) return res.status(400).json({ error: 'file_path required' });
 
-    const resolved = path.resolve(DATA_ROOT, file_path);
-    if (!resolved.startsWith(DATA_ROOT)) return res.status(403).json({ error: 'Access denied' });
+    const resolved = resolveVaultPath(file_path);
+    if (!resolved) return res.status(403).json({ error: 'Access denied' });
 
     if (bodyContent && !fs.existsSync(resolved)) {
       fs.mkdirSync(path.dirname(resolved), { recursive: true });
@@ -300,13 +315,13 @@ module.exports = function ingestFactory(deps) {
 
     try {
       const stat = fs.statSync(resolved);
-      const relPosix = path.relative(DATA_ROOT, resolved).replace(/\\/g, '/');
+      const relPosix = vaultRelative(resolved);
       const index = readIndex();
       index.documents[relPosix] = await buildEntry(resolved, relPosix, text, stat);
       writeIndex(index);
 
       const manifest = readManifest();
-      manifest[path.relative(DATA_ROOT, resolved)] = { hash: fileHash(stat), indexedAt: Date.now() };
+      manifest[path.relative(BRAIN_DIR, resolved)] = { hash: fileHash(stat), indexedAt: Date.now() };
       writeManifest(manifest);
 
       res.json({ ok: true, ingested: 1, file: relPosix });
@@ -326,8 +341,8 @@ module.exports = function ingestFactory(deps) {
     if (!file_path) return res.status(400).json({ error: 'file_path required' });
     if (typeof content !== 'string') return res.status(400).json({ error: 'content (string) required' });
 
-    const resolved = path.resolve(DATA_ROOT, file_path);
-    if (!resolved.startsWith(DATA_ROOT)) return res.status(403).json({ error: 'Access denied' });
+    const resolved = resolveVaultPath(file_path);
+    if (!resolved) return res.status(403).json({ error: 'Access denied' });
     if (!fs.existsSync(resolved)) return res.status(404).json({ error: 'File not found' });
 
     try {
@@ -336,7 +351,7 @@ module.exports = function ingestFactory(deps) {
       loadExtractors();
       const text = await extractText(resolved);
       const stat = fs.statSync(resolved);
-      const relPosix = path.relative(DATA_ROOT, resolved).replace(/\\/g, '/');
+      const relPosix = vaultRelative(resolved);
 
       if (text && text.trim().length >= 20) {
         const index = readIndex();
@@ -344,7 +359,7 @@ module.exports = function ingestFactory(deps) {
         writeIndex(index);
 
         const manifest = readManifest();
-        manifest[path.relative(DATA_ROOT, resolved)] = { hash: fileHash(stat), indexedAt: Date.now() };
+        manifest[path.relative(BRAIN_DIR, resolved)] = { hash: fileHash(stat), indexedAt: Date.now() };
         writeManifest(manifest);
       }
 

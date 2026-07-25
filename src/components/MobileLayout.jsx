@@ -7,6 +7,7 @@ import { Terminal } from 'lucide-react';
 import { getNavGroups, getRoutes, BLOCKS } from "../kernel/blockRegistry";
 import { RolodexNav } from "./DesktopLayout";
 import NeuralTerminal from "./Terminal2"; // Terminal 2.0 — flip back to "./NeuralTerminal" to roll back
+import { BlockIcon } from "./BlockIcon";
 
 // Everything is a block now — nav + routes come purely from the registry.
 // NAV_GROUPS is computed inside MobileLayout (depends on runtime-fetched
@@ -18,7 +19,12 @@ function MinimalBlockCard({ manifest }) {
   return (
     <div style={{ padding: '24px 16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-        <span style={{ fontSize: '2rem' }}>{manifest.nav?.icon || manifest.icon || '⚙️'}</span>
+        <BlockIcon
+          iconAsset={manifest.nav?.iconAsset}
+          iconAssetPng={manifest.nav?.iconAssetPng}
+          fallback={manifest.nav?.icon || manifest.icon || 'Settings'}
+          size={32}
+        />
         <div>
           <div style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text)' }}>{manifest.label}</div>
           <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>{manifest.description || 'Running in background'}</div>
@@ -54,14 +60,13 @@ function TopBar({ view, onMenuToggle, menuOpen, groups }) {
       borderBottom: "1px solid rgba(255,255,255,0.07)",
       position: "sticky", top: 0, zIndex: 90,
     }}>
-      <span style={{
-        fontSize: "11px", fontWeight: 700, letterSpacing: "0.18em",
-        textTransform: "uppercase", color: "#00f2ff",
-        textShadow: "0 0 12px rgba(0,242,255,0.5)",
-        fontFamily: "'JetBrains Mono', monospace"
-      }}>
-        AEON
-      </span>
+      <img
+        src="/brand/aeon-mark/aeon-icon-64.png"
+        alt="AEON"
+        width="28"
+        height="28"
+        style={{ borderRadius: "5px", flexShrink: 0 }}
+      />
       <span style={{ fontSize: "13px", fontWeight: 600, color: "rgba(229,226,225,0.7)", letterSpacing: "0.01em" }}>
         {label}
       </span>

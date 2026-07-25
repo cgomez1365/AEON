@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { getNavGroups, BLOCKS } from "../kernel/blockRegistry";
+import { BlockIcon } from "./BlockIcon";
 
 // Full menu derives from the live block registry — same source as the desktop sidebar.
 // Adding a new block with a manifest automatically shows it here too.
@@ -10,6 +11,8 @@ function buildMenuFromRegistry() {
     path:  item.path,
     label: item.label,
     icon:  item.icon,
+    iconAsset: item.iconAsset,
+    iconAssetPng: item.iconAssetPng,
   })));
 }
 
@@ -23,11 +26,23 @@ function buildQuickTabs() {
   const picks = BLOCKS
     .filter(b => b.route && b.route !== '/' && b.uiMode !== 'headless')
     .slice(0, 3)
-    .map(b => ({ path: b.route, label: b.label, icon: b.icon }));
+    .map(b => ({
+      path: b.route,
+      label: b.label,
+      icon: b.icon,
+      iconAsset: b.iconAsset,
+      iconAssetPng: b.iconAssetPng,
+    }));
   return [
-    { path: "/", label: "Home", icon: "⚡" },
+    {
+      path: "/",
+      label: "Home",
+      icon: "CircleGauge",
+      iconAsset: "/brand/block-icons/dashboard.svg",
+      iconAssetPng: "/brand/block-icons/png/dashboard.png",
+    },
     ...picks,
-    { path: "/_menu", label: "More", icon: "☰" },
+    { path: "/_menu", label: "More", icon: "Boxes" },
   ];
 }
 
@@ -76,7 +91,12 @@ export default function MobileNav() {
                     fontSize: '10px', fontWeight: 600, cursor: 'pointer',
                   }}
                 >
-                  <span style={{ fontSize: '20px' }}>{item.icon}</span>
+                  <BlockIcon
+                    iconAsset={item.iconAsset}
+                    iconAssetPng={item.iconAssetPng}
+                    fallback={item.icon}
+                    size={22}
+                  />
                   {item.label}
                 </button>
               );
@@ -99,7 +119,12 @@ export default function MobileNav() {
               }}
               aria-label={t.label}
             >
-              <span style={{ fontSize: '20px' }}>{t.icon}</span>
+              <BlockIcon
+                iconAsset={t.iconAsset}
+                iconAssetPng={t.iconAssetPng}
+                fallback={t.icon}
+                size={20}
+              />
               <span className="nav-label">{t.label}</span>
             </button>
           );

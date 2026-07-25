@@ -1,8 +1,8 @@
 {
-  "manifestVersion": "1.0.0",
+  "manifestVersion": "1.1.0",
   "id": "host_os",
   "label": "Host OS",
-  "icon": "🖥️",
+  "icon": "Monitor",
   "route": "/host",
   "description": "Kernel-level access to the host file system, terminal operations, processes, and operating system metrics.",
   "category": "System",
@@ -11,7 +11,9 @@
     "group": "tools",
     "order": 0,
     "label": "Host OS",
-    "icon": "🖥️",
+    "icon": "Monitor",
+    "iconAsset": "/brand/block-icons/host_os.svg",
+    "iconAssetPng": "/brand/block-icons/png/host_os.png",
     "hidden": false
   },
   "widget": null,
@@ -41,7 +43,17 @@
     },
     "storage": {
       "type": "json",
-      "scope": "block"
+      "scope": "block",
+      "local": {
+        "indexed": false,
+        "retention": "operational"
+      },
+      "access": "compatibility"
+    },
+    "memory": {
+      "mode": "summary",
+      "indexed": true,
+      "userConfigurable": false
     },
     "ai": {
       "canGenerate": false,

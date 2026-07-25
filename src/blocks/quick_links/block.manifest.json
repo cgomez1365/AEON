@@ -1,8 +1,8 @@
 {
-  "manifestVersion": "1.0.0",
+  "manifestVersion": "1.1.0",
   "id": "quick_links",
   "label": "Quick Links",
-  "icon": "🔗",
+  "icon": "Link",
   "route": "/links",
   "description": "Compact categorized bookmark manager with favicons",
   "category": "tools",
@@ -11,7 +11,9 @@
     "group": "tools",
     "order": 2,
     "label": "Quick Links",
-    "icon": "🔗",
+    "icon": "Link",
+    "iconAsset": "/brand/block-icons/quick_links.svg",
+    "iconAssetPng": "/brand/block-icons/png/quick_links.png",
     "hidden": false
   },
   "widget": null,
@@ -41,7 +43,17 @@
     },
     "storage": {
       "type": "firebase",
-      "scope": "shared"
+      "scope": "shared",
+      "local": {
+        "indexed": false,
+        "retention": "operational"
+      },
+      "access": "compatibility"
+    },
+    "memory": {
+      "mode": "none",
+      "indexed": false,
+      "userConfigurable": false
     },
     "ai": {
       "canGenerate": false,

@@ -6,6 +6,7 @@
  * headless: no UI; safety guard (blockRegistry already excludes these from routes).
  */
 import React from 'react';
+import { BlockIcon } from './BlockIcon';
 
 export default function BlockShell({ uiMode = 'full', manifest, children }) {
   if (uiMode === 'headless') return null;
@@ -27,9 +28,12 @@ export default function BlockShell({ uiMode = 'full', manifest, children }) {
           top: 0,
           zIndex: 10,
         }}>
-          {manifest?.icon && (
-            <span style={{ fontSize: '16px', lineHeight: 1 }}>{manifest.icon}</span>
-          )}
+          <BlockIcon
+            iconAsset={manifest?.nav?.iconAsset}
+            iconAssetPng={manifest?.nav?.iconAssetPng}
+            fallback={manifest?.nav?.icon || manifest?.icon || 'Boxes'}
+            size={16}
+          />
           <span style={{
             fontFamily: 'var(--font-mono)',
             fontSize: '11px',

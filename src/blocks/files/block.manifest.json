@@ -1,8 +1,8 @@
 {
-  "manifestVersion": "1.0.0",
+  "manifestVersion": "1.1.0",
   "id": "files",
   "label": "Files",
-  "icon": "📁",
+  "icon": "Folder",
   "route": "/files",
   "description": "File browser and document manager with cloud sync and Second Brain integration",
   "category": "core",
@@ -11,7 +11,9 @@
     "group": "content",
     "order": 5,
     "label": "Files",
-    "icon": "📁",
+    "icon": "Folder",
+    "iconAsset": "/brand/block-icons/files.svg",
+    "iconAssetPng": "/brand/block-icons/png/files.png",
     "hidden": false
   },
   "widget": null,
@@ -46,7 +48,17 @@
     },
     "storage": {
       "type": "json",
-      "scope": "block"
+      "scope": "block",
+      "local": {
+        "indexed": false,
+        "retention": "operational"
+      },
+      "access": "compatibility"
+    },
+    "memory": {
+      "mode": "summary",
+      "indexed": true,
+      "userConfigurable": false
     },
     "ai": {
       "canGenerate": false,

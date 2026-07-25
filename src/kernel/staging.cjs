@@ -27,6 +27,19 @@ function validateManifest(m) {
     if (perms.filesystem && !['none', 'read', 'write'].includes(perms.filesystem)) errors.push(`invalid permissions.filesystem: ${perms.filesystem}`);
     if (perms.network && !['none', 'internal', 'external'].includes(perms.network)) errors.push(`invalid permissions.network: ${perms.network}`);
   }
+  const [major, minor] = String(m.manifestVersion || '1.0.0').split('.').map(Number);
+  if (major > 1 || (major === 1 && minor >= 1)) {
+    const storage = m.contract?.storage;
+    const memory = m.contract?.memory;
+    if (!storage?.local || storage.local.indexed !== false) errors.push('v1.1 requires contract.storage.local.indexed=false');
+    if (!['operational', 'ephemeral'].includes(storage?.local?.retention)) errors.push('v1.1 requires operational or ephemeral local retention');
+    if (storage?.access !== 'scoped') errors.push('new v1.1 blocks must use contract.storage.access=scoped');
+    if (!memory || !['none', 'summary', 'document'].includes(memory.mode)) errors.push('v1.1 requires contract.memory.mode');
+    if (memory && memory.indexed !== (memory.mode !== 'none')) errors.push('contract.memory.indexed must match whether memory.mode is enabled');
+    if ((storage?.type !== 'none' || memory?.mode !== 'none') && perms?.filesystem !== 'write') {
+      errors.push('declared storage or memory requires permissions.filesystem=write');
+    }
+  }
   return errors;
 }
 

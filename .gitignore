@@ -116,6 +116,8 @@ Half-Baked/
 src/blocks/*/.aeon.runtime.json
 aeon-vault.json
 aeon-vault.json.tmp
+aeon-keyslots.json
+aeon-keyslots.json.tmp
 aeon-user.json
 aeon_user.json
 aeon-endpoints.json

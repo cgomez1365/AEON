@@ -1,6 +1,6 @@
 # Manifest Schema Migration Policy (K1 — Ship Plan v2)
 
-Schema: `src/kernel/schema.json` · Current: **manifestVersion 1.0.0** · Frozen 2026-07-01
+Schema: `src/kernel/schema.json` · Current: **manifestVersion 1.1.0** · Frozen 2026-07-01
 Owner of freeze: the operator. Every "can we add one field" request goes through them.
 
 ## Rules
@@ -26,4 +26,5 @@ Owner of freeze: the operator. Every "can we add one field" request goes through
 
 | manifestVersion | Date | Change |
 |---|---|---|
+| 1.1.0 | 2026-07-23 | Added `contract.storage.local` and `contract.memory`. Local block data is operational/unindexed; declared durable memory is Vault-only and Matrix-indexed. New and installed v1.1 blocks receive only the scoped `blockStorage` API. |
 | 1.0.0 | 2026-07-01 | Initial freeze. Canonical shape = BLOCK_STANDARD.md + blockStandard.cjs normalizer output. Added `contract.permissions.crossBlockRead` (Tier 1.5 declaration, Ship Plan GAP 1). |

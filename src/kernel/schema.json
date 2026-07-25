@@ -2,8 +2,8 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "aeon://kernel/block-manifest",
   "title": "AEON Block Manifest",
-  "manifestVersion": "1.0.0",
-  "description": "FROZEN 2026-07-01 per Ship Plan v2 K1. Do not extend silently — every change requires a version bump and a MIGRATION_POLICY.md entry. Normalizer: src/kernel/blockStandard.cjs.",
+  "manifestVersion": "1.1.0",
+  "description": "v1.1 adds declared local storage and durable Vault memory. Normalizer: src/kernel/blockStandard.cjs.",
   "type": "object",
   "required": ["id", "label", "route", "version"],
   "properties": {
@@ -23,6 +23,8 @@
         "group": { "type": "string" },
         "order": { "type": "number" },
         "label": { "type": "string" },
+        "iconAsset": { "type": "string" },
+        "iconAssetPng": { "type": "string" },
         "icon": { "type": "string" },
         "hidden": { "type": "boolean" }
       }
@@ -65,7 +67,23 @@
           "type": "object",
           "properties": {
             "type": { "type": "string" },
-            "scope": { "type": "string" }
+            "scope": { "type": "string" },
+            "local": {
+              "type": "object",
+              "properties": {
+                "indexed": { "type": "boolean", "const": false },
+                "retention": { "enum": ["operational", "ephemeral"] }
+              }
+            },
+            "access": { "enum": ["scoped", "compatibility"] }
+          }
+        },
+        "memory": {
+          "type": "object",
+          "properties": {
+            "mode": { "enum": ["none", "summary", "document"] },
+            "indexed": { "type": "boolean" },
+            "userConfigurable": { "type": "boolean" }
           }
         },
         "ai": { "type": "object" },

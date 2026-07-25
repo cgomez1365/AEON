@@ -70,10 +70,9 @@ for (const [p, loader] of Object.entries(componentModules)) {
     id: folder,
     route: manifest.route || `/${folder}`,
     label,
-    icon: (manifest.nav && manifest.nav.icon) || manifest.icon || '📦',
-    // Real icon asset filename in public/brand/block-icons/ (e.g. "writer.svg").
-    // Optional — unset means "still on the emoji fallback."
-    iconAsset: (manifest.nav && manifest.nav.iconAsset) || null,
+    icon: (manifest.nav && manifest.nav.icon) || manifest.icon || 'Boxes',
+    iconAsset: (manifest.nav && manifest.nav.iconAsset) || `/brand/block-icons/${folder}.svg`,
+    iconAssetPng: (manifest.nav && manifest.nav.iconAssetPng) || `/brand/block-icons/png/${folder}.png`,
     group: (manifest.nav && manifest.nav.group) || manifest.category || 'system',
     order: (manifest.nav && manifest.nav.order != null) ? manifest.nav.order : 99,
     uiMode: manifest.ui ?? 'full',
@@ -145,18 +144,39 @@ export function getNavGroups(extraItems = [], blockLayout = null) {
     label: g.meta.label,
     icon: g.meta.icon,
     order: g.meta.order,
-    items: g.items.map(b => ({ path: b.route, label: b.label, icon: b.icon })),
+    items: g.items.map(b => ({
+      path: b.route,
+      label: b.label,
+      icon: b.icon,
+      iconAsset: b.iconAsset,
+      iconAssetPng: b.iconAssetPng,
+    })),
   }));
   // Inject non-block extras (e.g. Second Brain, a component not a block).
   for (const ex of extraItems) {
     const target = out.find(g => g.id === ex.group);
-    if (target) { target.items.push({ path: ex.path, label: ex.label, icon: ex.icon }); continue; }
+    if (target) {
+      target.items.push({
+        path: ex.path,
+        label: ex.label,
+        icon: ex.icon,
+        iconAsset: ex.iconAsset,
+        iconAssetPng: ex.iconAssetPng,
+      });
+      continue;
+    }
     out.push({
       id: ex.group,
       label: GROUP_META[ex.group]?.label || ex.group.toUpperCase(),
       icon: GROUP_META[ex.group]?.icon || '📦',
       order: GROUP_META[ex.group]?.order ?? 99,
-      items: [{ path: ex.path, label: ex.label, icon: ex.icon }],
+      items: [{
+        path: ex.path,
+        label: ex.label,
+        icon: ex.icon,
+        iconAsset: ex.iconAsset,
+        iconAssetPng: ex.iconAssetPng,
+      }],
     });
   }
   return out.sort((a, b) => a.order - b.order);

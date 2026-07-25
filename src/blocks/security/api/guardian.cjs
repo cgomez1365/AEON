@@ -23,65 +23,33 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-
-const BOOT_TIME = Date.now();
+const sessions = require('../../../kernel/server-utils/sessionValidator.cjs');
 
 module.exports = (app, deps) => {
   const isVercel = !!process.env.VERCEL;
   const APP_ROOT = path.join(__dirname, '..', '..', '..', '..');
-  const USER_FILE = path.join(APP_ROOT, 'secrets', 'aeon-user.json');
-  const getDataFile = deps.getDataFile || ((rel) => path.join(APP_ROOT, 'data', rel));
-  const POLICY_DIR = getDataFile('security');
-  const POLICY_FILE = path.join(POLICY_DIR, 'policy.json');
-  try { fs.mkdirSync(POLICY_DIR, { recursive: true }); } catch {}
-
   const PORT = Number(process.env.PORT) || 3001;
-
-  const DEFAULT_POLICY = {
-    guardEnabled: null,        // null = auto: on once an account exists
-    lockEveryLaunch: true,     // password every time AEON opens
-    idleMinutes: 5,            // walk-away lock
-    flushOnLock: true,         // sync-then-forget on lock/idle/logout
-    shield: true,              // no-store cache headers on data routes
-    lockedAt: 0,               // lock-now stamp: tokens created before this are dead
-    lastFlush: null,
-    updatedAt: null,
-  };
-
-  // ── Policy store ────────────────────────────────────────────────────
-  function loadPolicy() {
-    try { return { ...DEFAULT_POLICY, ...JSON.parse(fs.readFileSync(POLICY_FILE, 'utf8')) }; }
-    catch { return { ...DEFAULT_POLICY }; }
-  }
-  function savePolicy(p) {
-    p.updatedAt = new Date().toISOString();
-    fs.writeFileSync(POLICY_FILE, JSON.stringify(p, null, 2));
-    return p;
-  }
-
-  function loadUser() {
-    try { return JSON.parse(fs.readFileSync(USER_FILE, 'utf8')); } catch { return null; }
-  }
-  function saveUser(u) {
-    fs.writeFileSync(USER_FILE, JSON.stringify(u, null, 2), { mode: 0o600 });
-  }
-
-  function hasAccount() {
-    // Either identity system counts: the kernel's env-based operator
-    // (AEON_OPERATOR_PASSWORD) or this block's local user file.
-    return !!process.env.AEON_OPERATOR_PASSWORD || !!loadUser();
-  }
-  function guardActive(policy) {
-    const p = policy || loadPolicy();
-    return p.guardEnabled === null ? hasAccount() : (!!p.guardEnabled && hasAccount());
-  }
+  const {
+    loadPolicy,
+    savePolicy,
+    loadUser,
+    saveUser,
+    hasAccount,
+    guardActive,
+    validateSession,
+    revokeAllSessions,
+    pruneIdleSessions,
+  } = sessions;
 
   // Mirror the guard state into Settings so the nervous system (and the
   // kernel's own AuthGate) agree with the Guardian. Never bypass Settings.
-  async function mirrorToSettings(policy) {
+  async function mirrorToSettings(policy, req) {
     try {
+      const headers = { 'Content-Type': 'application/json' };
+      if (req?.headers?.authorization) headers.Authorization = req.headers.authorization;
+      if (req?.headers?.cookie) headers.Cookie = req.headers.cookie;
       await fetch(`http://127.0.0.1:${PORT}/api/settings`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers,
         body: JSON.stringify({ patch: { prefs: {
           require_login: guardActive(policy),
           security_idle_minutes: policy.idleMinutes,
@@ -105,70 +73,6 @@ module.exports = (app, deps) => {
       console.log('[GUARDIAN] Boot revoke: all previous sessions cleared (lock-every-launch).');
     }
   })();
-
-  // ── Session validation (shares aeon-user.json with the auth core) ───
-  function getToken(req) {
-    const h = req.headers.authorization || '';
-    if (h.startsWith('Bearer ')) return h.slice(7).trim();
-    if (req.query && req.query.token) return String(req.query.token); // SSE can't set headers
-    const m = (req.headers.cookie || '').match(/(?:^|;\s*)aeon_session=([^;]+)/);
-    return m ? decodeURIComponent(m[1]) : null;
-  }
-
-  // Two token families pass through here:
-  //   • Block sessions (aeon-user.json) — stateful, revocable on disk.
-  //   • Kernel HMAC tokens ("exp.mac", TTL 7d) — stateless; the Guardian
-  //     applies POLICY only (boot-freshness, idle, lock stamp) and leaves
-  //     signature verification to the kernel gate later in the chain, so a
-  //     forged exp dies there. Creation time = exp − TTL.
-  const KERNEL_TOKEN_TTL_MS = 7 * 24 * 3600 * 1000; // mirrors kernel authGate
-  const tokenActivity = new Map();                   // kernel token → { lastSeen }
-  let _lastGlobalActivity = Date.now();
-  let _lastTouchWrite = 0;
-
-  function validateSession(req, policy) {
-    const token = getToken(req);
-    if (!token) return { ok: false, reason: 'no-session' };
-    const now = Date.now();
-    const idleMs = Math.max(1, policy.idleMinutes) * 60 * 1000;
-
-    // Path A: stateful block session
-    const u = loadUser();
-    const meta = u && u.sessions && u.sessions[token];
-    if (meta) {
-      if (!meta.expires || meta.expires < now) return { ok: false, reason: 'expired' };
-      if (policy.lockEveryLaunch && (meta.created || 0) < BOOT_TIME) return { ok: false, reason: 'stale-boot' };
-      if ((meta.created || 0) < (policy.lockedAt || 0)) return { ok: false, reason: 'locked' };
-      const lastSeen = meta.lastSeen || meta.created || 0;
-      if (now - lastSeen > idleMs) {
-        delete u.sessions[token]; saveUser(u); queueFlush('idle-lock');
-        return { ok: false, reason: 'idle' };
-      }
-      meta.lastSeen = now; _lastGlobalActivity = now;
-      if (now - _lastTouchWrite > 30_000) { _lastTouchWrite = now; saveUser(u); }
-      return { ok: true, kind: 'session' };
-    }
-
-    // Path B: stateless kernel token — policy checks only
-    const dot = token.indexOf('.');
-    if (dot > 0) {
-      const exp = Number(token.slice(0, dot));
-      if (Number.isFinite(exp) && exp > now) {
-        const created = exp - KERNEL_TOKEN_TTL_MS;
-        if (policy.lockEveryLaunch && created < BOOT_TIME) return { ok: false, reason: 'stale-boot' };
-        if (created < (policy.lockedAt || 0)) return { ok: false, reason: 'locked' };
-        const act = tokenActivity.get(token) || { lastSeen: now };
-        if (now - act.lastSeen > idleMs) {
-          tokenActivity.delete(token); queueFlush('idle-lock');
-          return { ok: false, reason: 'idle' };
-        }
-        act.lastSeen = now; tokenActivity.set(token, act); _lastGlobalActivity = now;
-        return { ok: true, kind: 'kernel' };
-      }
-      if (Number.isFinite(exp)) return { ok: false, reason: 'expired' };
-    }
-    return { ok: false, reason: 'no-session' };
-  }
 
   // ── Flush engine — sync-then-forget ─────────────────────────────────
   // Encrypts the sensitive local stores with the vault master key and
@@ -239,64 +143,40 @@ module.exports = (app, deps) => {
     setTimeout(() => { flushNow(reason).finally(() => { _flushQueued = false; }); }, 100);
   }
 
-  function revokeAllSessions() {
-    const u = loadUser();
-    if (u) { u.sessions = {}; saveUser(u); }
-  }
-
   // ── Walk-away watchdog — locks even when no requests arrive ─────────
+  // Lifecycle-owned so a Security rescan tears the interval down (BO4 #6). Falls
+  // back to a raw unref'd interval only on an older kernel that predates the
+  // block lifecycle — there it is best-effort, exactly as before.
   if (!isVercel) {
     let _idleFlushed = false;
-    const watchdog = setInterval(() => {
+    const tick = () => {
       try {
         const p = loadPolicy();
         if (!guardActive(p)) return;
         const now = Date.now();
         const idleMs = Math.max(1, p.idleMinutes) * 60 * 1000;
 
-        // Stateful block sessions: revoke on disk.
-        const u = loadUser();
-        let revoked = 0;
-        if (u && u.sessions) {
-          for (const [tok, meta] of Object.entries(u.sessions)) {
-            const lastSeen = meta.lastSeen || meta.created || 0;
-            if (now - lastSeen > idleMs) { delete u.sessions[tok]; revoked++; }
-          }
-          if (revoked) saveUser(u);
-        }
-        // Stateless kernel tokens: forget their activity records.
-        for (const [tok, act] of tokenActivity) {
-          if (now - act.lastSeen > idleMs) { tokenActivity.delete(tok); revoked++; }
-        }
+        const revoked = pruneIdleSessions(p);
         // One flush per idle period, even if the browser is closed.
-        if (now - _lastGlobalActivity > idleMs) {
+        if (now - sessions.getLastGlobalActivity() > idleMs) {
           if (!_idleFlushed) { _idleFlushed = true; if (revoked) console.log(`[GUARDIAN] Idle watchdog: ${revoked} session(s) locked.`); queueFlush('idle-watchdog'); }
         } else {
           _idleFlushed = false;
         }
       } catch {}
-    }, 60 * 1000);
-    watchdog.unref();
+    };
+    const watchdog = deps.lifecycle
+      ? deps.lifecycle.setInterval(tick, 60 * 1000)
+      : setInterval(tick, 60 * 1000);
+    if (typeof watchdog.unref === 'function') watchdog.unref();
   }
 
   // ── The earlyware: shield headers + global guard ─────────────────────
-  // Paths that must stay reachable while locked (the gate itself).
-  const OPEN_PATHS = [
-    /^\/api\/auth\//,            // login, status, setup, 2FA
-    /^\/api\/security\/otp\//,   // email OTP rescue
-    /^\/api\/security\/policy$/, // the gate itself needs to read idleMinutes/
-                                  // lockEveryLaunch/bootSequence while locked
-                                  // to render correctly. Writes (POST) stay
-                                  // protected by that route's own requireSession.
-    /^\/$/,                      // health check
-  ];
-  const GUARDED_PREFIX = /^\/(api|block|core|events)\b/;
-
   function guardian(req, res, next) {
     const p = loadPolicy();
 
     // 1. Deployment shield — data responses are never cacheable.
-    if (p.shield && GUARDED_PREFIX.test(req.path)) {
+    if (p.shield && sessions.isGuardedPath(req.path)) {
       res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
       res.setHeader('Pragma', 'no-cache');
       res.setHeader('Expires', '0');
@@ -304,17 +184,13 @@ module.exports = (app, deps) => {
 
     // 2. Global guard — every data route needs a live session.
     if (!guardActive(p)) return next();
-    if (!GUARDED_PREFIX.test(req.path)) return next();          // static UI loads; AuthGate does the asking
-    if (OPEN_PATHS.some(rx => rx.test(req.path))) return next();
-    if (process.env.AEON_MOBILE_SECRET &&
-        req.headers.authorization === `Bearer ${process.env.AEON_MOBILE_SECRET}`) return next();
+    if (!sessions.isGuardedPath(req.path)) return next();
+    if (sessions.isPreAuthRequest(req)) return next();
 
     const v = validateSession(req, p);
     if (v.ok) return next();
-    return res.status(401).json({
-      error: 'AEON is locked. Sign in to continue.',
-      locked: true, reason: v.reason,
-    });
+    if (v.reason === 'idle') queueFlush('idle-lock');
+    return sessions.unauthorized(res, v.reason);
   }
 
   if (typeof deps.registerEarlyMiddleware === 'function') {
@@ -330,7 +206,8 @@ module.exports = (app, deps) => {
     const p = loadPolicy();
     if (!hasAccount()) return res.status(409).json({ error: 'Create your account first (Security → Set up).' });
     const v = validateSession(req, p);
-    if (!v.ok) return res.status(401).json({ error: 'Sign in required.', locked: true, reason: v.reason });
+    if (!v.ok) return sessions.unauthorized(res, v.reason);
+    req.aeonSession = v;
     next();
   }
 
@@ -346,7 +223,7 @@ module.exports = (app, deps) => {
         shield: p.shield,
         bootSequence: !!p.bootSequence,
       },
-      accountConfigured: !!loadUser(),
+      accountConfigured: hasAccount(),
       lastFlush: p.lastFlush,
       runtime: isVercel ? 'cloud' : 'local',
       syncConfigured: !!deps.supabase,
@@ -364,7 +241,7 @@ module.exports = (app, deps) => {
     if (b.shield !== undefined) p.shield = !!b.shield;
     if (b.bootSequence !== undefined) p.bootSequence = !!b.bootSequence;
     savePolicy(p);
-    await mirrorToSettings(p);
+    await mirrorToSettings(p, req);
     if (deps.writeOSAudit) { try { deps.writeOSAudit('GUARDIAN_POLICY', JSON.stringify(b).slice(0, 200), 200, 0); } catch {} }
     res.json({ ok: true, policy: p });
   });
@@ -377,7 +254,7 @@ module.exports = (app, deps) => {
     p.lockedAt = Date.now();
     savePolicy(p);
     revokeAllSessions();
-    tokenActivity.clear();
+    sessions.clearActivity();
     let flush = null;
     if (p.flushOnLock) flush = await flushNow('manual-lock');
     res.setHeader('Set-Cookie', 'aeon_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0');
@@ -405,45 +282,6 @@ module.exports = (app, deps) => {
       headers: p.shield ? 'Cache-Control: no-store on /api, /block, /core, /events' : 'disabled',
       note: 'On personal deployments (Vercel, Cloudflare, tunnels) the shield stops any CDN or edge cache from storing your data.',
     });
-  });
-
-  // ── Email OTP rescue via the user's own Supabase (free tier) ────────
-  // Optional second factor / recovery path. Uses Supabase GoTrue magic-code.
-  const SB_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
-  const SB_ANON = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
-
-  app.post('/api/security/otp/send', async (req, res) => {
-    if (!SB_URL || !SB_ANON) return res.status(501).json({ error: 'Email codes need Supabase — add SUPABASE_URL + anon key in Settings → Connections (free at supabase.com).' });
-    const u = loadUser();
-    const email = (req.body && req.body.email) || (u && u.email);
-    if (!email) return res.status(400).json({ error: 'No email on file. Add one in Security → Profile.' });
-    try {
-      const r = await fetch(`${SB_URL}/auth/v1/otp`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', apikey: SB_ANON },
-        body: JSON.stringify({ email, create_user: true }),
-      });
-      if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.msg || d.error_description || `Supabase ${r.status}`); }
-      res.json({ ok: true, text: `Code sent to ${email}. It expires in a few minutes.` });
-    } catch (e) { res.status(502).json({ error: 'Could not send code: ' + e.message }); }
-  });
-
-  app.post('/api/security/otp/verify', async (req, res) => {
-    if (!SB_URL || !SB_ANON) return res.status(501).json({ error: 'Email codes need Supabase configured in Settings.' });
-    const u = loadUser();
-    const { code, email } = req.body || {};
-    const addr = email || (u && u.email);
-    if (!addr || !code) return res.status(400).json({ error: 'email and code required' });
-    try {
-      const r = await fetch(`${SB_URL}/auth/v1/verify`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', apikey: SB_ANON },
-        body: JSON.stringify({ type: 'email', email: addr, token: String(code).trim() }),
-      });
-      const d = await r.json().catch(() => ({}));
-      if (!r.ok || !d.access_token) return res.status(401).json({ error: 'Invalid or expired code.' });
-      res.json({ ok: true, verified: true });
-    } catch (e) { res.status(502).json({ error: 'Verification failed: ' + e.message }); }
   });
 
   console.log('[GUARDIAN] Security 2.0 active — lock-on-launch, idle auto-lock, flush engine, deployment shield.');

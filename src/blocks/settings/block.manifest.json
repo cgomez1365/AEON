@@ -1,8 +1,8 @@
 {
-  "manifestVersion": "1.0.0",
+  "manifestVersion": "1.1.0",
   "id": "settings",
   "label": "Settings",
-  "icon": "⚙️",
+  "icon": "Settings",
   "route": "/settings",
   "description": "System configuration — API keys, model-per-role assignment, and block management",
   "category": "core",
@@ -11,7 +11,9 @@
     "group": "system",
     "order": 0,
     "label": "Settings",
-    "icon": "⚙️",
+    "icon": "Settings",
+    "iconAsset": "/brand/block-icons/settings.svg",
+    "iconAssetPng": "/brand/block-icons/png/settings.png",
     "hidden": false
   },
   "widget": null,
@@ -41,7 +43,17 @@
     },
     "storage": {
       "type": "json",
-      "scope": "block"
+      "scope": "block",
+      "local": {
+        "indexed": false,
+        "retention": "operational"
+      },
+      "access": "compatibility"
+    },
+    "memory": {
+      "mode": "none",
+      "indexed": false,
+      "userConfigurable": false
     },
     "ai": {
       "canGenerate": false,

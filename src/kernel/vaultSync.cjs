@@ -16,11 +16,21 @@
 const fs   = require('fs');
 const path = require('path');
 const os   = require('os');
+const storage = require('../../services/storage.js');
 
-const VAULT_BLOCKS_DIR = path.join(
-  __dirname,
-  '../blocks/aeon_matrix/data/Vault/blocks'
-);
+let indexScheduler = null;
+
+function setIndexScheduler(scheduler) {
+  indexScheduler = typeof scheduler === 'function' ? scheduler : null;
+}
+
+function requestIndex(change) {
+  if (!indexScheduler) return;
+  try {
+    const result = indexScheduler(change);
+    if (result && typeof result.catch === 'function') result.catch(() => {});
+  } catch {}
+}
 
 /**
  * @param {string} blockId   — matches the block folder name, e.g. "trading"
@@ -43,7 +53,7 @@ function vaultSync(blockId, stateObj) {
     throw new Error('vaultSync: stateObj must be a plain object');
   }
 
-  const blockDir = path.join(VAULT_BLOCKS_DIR, blockId);
+  const blockDir = storage.getBlockVaultFile(blockId);
   fs.mkdirSync(blockDir, { recursive: true });
 
   const ts = new Date().toISOString();
@@ -75,6 +85,7 @@ function vaultSync(blockId, stateObj) {
   mdLines.push('', '## Summary', summary, '');
 
   atomicWrite(path.join(blockDir, 'state.md'), mdLines.join('\n'));
+  requestIndex({ blockId, kind: 'state-summary' });
 }
 
 // ── helpers ─────────────────────────────────────────────────────────────────
@@ -118,4 +129,4 @@ function _autoSummary(blockId, stateObj) {
   return `${_labelFromId(blockId)} — ${pairs.join(', ')}.`;
 }
 
-module.exports = { vaultSync };
+module.exports = { vaultSync, setIndexScheduler, requestIndex };

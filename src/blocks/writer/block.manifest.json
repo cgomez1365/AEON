@@ -1,8 +1,8 @@
 {
-  "manifestVersion": "1.0.0",
+  "manifestVersion": "1.1.0",
   "id": "writer",
   "label": "Writer",
-  "icon": "✍️",
+  "icon": "PenLine",
   "route": "/writer",
   "description": "A full writing studio — documents, templates, version history, outline, focus mode, find & replace, AI co-writer with your Writing DNA, and one-click export to Word, HTML, Markdown, or PDF.",
   "category": "intel",
@@ -11,7 +11,9 @@
     "group": "system",
     "order": 99,
     "label": "Writer",
-    "icon": "✍️",
+    "icon": "PenLine",
+    "iconAsset": "/brand/block-icons/writer.svg",
+    "iconAssetPng": "/brand/block-icons/png/writer.png",
     "hidden": false
   },
   "widget": null,
@@ -41,7 +43,17 @@
     },
     "storage": {
       "type": "json",
-      "scope": "block"
+      "scope": "block",
+      "local": {
+        "indexed": false,
+        "retention": "operational"
+      },
+      "access": "compatibility"
+    },
+    "memory": {
+      "mode": "document",
+      "indexed": true,
+      "userConfigurable": false
     },
     "ai": {
       "canGenerate": true,

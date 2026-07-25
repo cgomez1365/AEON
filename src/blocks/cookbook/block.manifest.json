@@ -1,8 +1,8 @@
 {
-  "manifestVersion": "1.0.0",
+  "manifestVersion": "1.1.0",
   "id": "cookbook",
   "label": "Cookbook",
-  "icon": "🍳",
+  "icon": "BookOpen",
   "route": "/cookbook",
   "description": "Local AI model management with GPU probing, download, serve, and hardware fitness",
   "category": "tools",
@@ -11,7 +11,9 @@
     "group": "content",
     "order": 1,
     "label": "Cookbook",
-    "icon": "🍳",
+    "icon": "BookOpen",
+    "iconAsset": "/brand/block-icons/cookbook.svg",
+    "iconAssetPng": "/brand/block-icons/png/cookbook.png",
     "hidden": false
   },
   "widget": null,
@@ -45,7 +47,17 @@
     },
     "storage": {
       "type": "json",
-      "scope": "block"
+      "scope": "block",
+      "local": {
+        "indexed": false,
+        "retention": "operational"
+      },
+      "access": "compatibility"
+    },
+    "memory": {
+      "mode": "none",
+      "indexed": false,
+      "userConfigurable": false
     },
     "ai": {
       "canGenerate": false,

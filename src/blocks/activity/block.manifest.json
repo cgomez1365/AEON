@@ -1,8 +1,8 @@
 {
-  "manifestVersion": "1.0.0",
+  "manifestVersion": "1.1.0",
   "id": "activity",
   "label": "Activity",
-  "icon": "📊",
+  "icon": "Activity",
   "route": "/activity",
   "description": "GitHub-style 365-day token usage heatmap with model breakdown",
   "category": "analytics",
@@ -11,7 +11,9 @@
     "group": "system",
     "order": 1,
     "label": "Activity",
-    "icon": "📊",
+    "icon": "Activity",
+    "iconAsset": "/brand/block-icons/activity.svg",
+    "iconAssetPng": "/brand/block-icons/png/activity.png",
     "hidden": false
   },
   "widget": null,
@@ -46,7 +48,17 @@
     },
     "storage": {
       "type": "json",
-      "scope": "block"
+      "scope": "block",
+      "local": {
+        "indexed": false,
+        "retention": "operational"
+      },
+      "access": "compatibility"
+    },
+    "memory": {
+      "mode": "none",
+      "indexed": false,
+      "userConfigurable": false
     },
     "ai": {
       "canGenerate": false,

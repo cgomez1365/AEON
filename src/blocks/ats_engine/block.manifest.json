@@ -1,8 +1,8 @@
 {
-  "manifestVersion": "1.0.0",
+  "manifestVersion": "1.1.0",
   "id": "ats_engine",
   "label": "ATS Engine",
-  "icon": "🎯",
+  "icon": "Users",
   "route": "/ats",
   "description": "Resume and job description PDF grading with AI-powered scoring",
   "category": "business",
@@ -11,7 +11,9 @@
     "group": "work",
     "order": 0,
     "label": "ATS Engine",
-    "icon": "🎯",
+    "icon": "Users",
+    "iconAsset": "/brand/block-icons/ats_engine.svg",
+    "iconAssetPng": "/brand/block-icons/png/ats_engine.png",
     "hidden": false
   },
   "widget": null,
@@ -49,7 +51,17 @@
     },
     "storage": {
       "type": "json",
-      "scope": "block"
+      "scope": "block",
+      "local": {
+        "indexed": false,
+        "retention": "operational"
+      },
+      "access": "compatibility"
+    },
+    "memory": {
+      "mode": "none",
+      "indexed": false,
+      "userConfigurable": false
     },
     "ai": {
       "canGenerate": false,
