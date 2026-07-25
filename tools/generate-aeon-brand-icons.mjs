@@ -3,8 +3,8 @@ import path from 'node:path';
 import { createCanvas, loadImage } from '@napi-rs/canvas';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
-const SOURCE = path.join(ROOT, 'public', 'brand', 'aeon-mark', 'aeon-mark.svg');
-const OUTPUT_DIR = path.dirname(SOURCE);
+const SOURCE = path.join(ROOT, 'public', 'brand', 'aeon-primary-logo.png');
+const OUTPUT_DIR = path.join(ROOT, 'public', 'brand', 'aeon-mark');
 const SIZES = [16, 32, 48, 64, 128, 192, 256, 512, 1024];
 
 function createIco(frames) {
@@ -32,17 +32,8 @@ function createIco(frames) {
 }
 
 fs.mkdirSync(OUTPUT_DIR, { recursive: true });
-const sourceSvg = fs.readFileSync(SOURCE);
-const rasterSvg = Buffer.from(
-  sourceSvg.toString('utf8')
-    .replace(/<style>[\s\S]*?<\/style>/, '')
-    .replace(/class="grid"/g, 'fill="none" stroke="#167eb1" stroke-width="1" opacity=".17"')
-    .replace(/class="construction"/g, 'fill="none" stroke="#43c8ff" stroke-width="2" opacity=".38"')
-    .replace(/class="ink"/g, 'fill="none" stroke="#b9edff" stroke-width="13" stroke-linecap="square" stroke-linejoin="miter"')
-    .replace(/class="fine"/g, 'fill="none" stroke="#43c8ff" stroke-width="3" opacity=".8"')
-    .replace(/\sfilter="url\(#(?:glow|softGlow)\)"/g, ''),
-);
-const image = await loadImage(rasterSvg);
+const sourcePng = fs.readFileSync(SOURCE);
+const image = await loadImage(sourcePng);
 const frames = [];
 
 for (const size of SIZES) {
@@ -54,8 +45,9 @@ for (const size of SIZES) {
   frames.push({ size, png });
 }
 
-const sourceText = sourceSvg.toString('utf8');
-fs.writeFileSync(path.join(ROOT, 'public', 'brand', 'aeon-icon.svg'), sourceText);
+const svgWrapper = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 1280" role="img" aria-labelledby="aeon-logo-title"><title id="aeon-logo-title">AEON primary logo</title><image href="/brand/aeon-primary-logo.png" width="1280" height="1280" preserveAspectRatio="xMidYMid meet"/></svg>\n`;
+fs.writeFileSync(path.join(OUTPUT_DIR, 'aeon-mark.svg'), svgWrapper);
+fs.writeFileSync(path.join(ROOT, 'public', 'brand', 'aeon-icon.svg'), svgWrapper);
 for (const size of [32, 64, 192, 256, 512, 1024]) {
   const frame = frames.find((item) => item.size === size);
   fs.writeFileSync(path.join(ROOT, 'public', 'brand', `aeon-icon-${size}.png`), frame.png);
@@ -66,4 +58,4 @@ fs.writeFileSync(path.join(ROOT, 'public', 'favicon.ico'), icon);
 fs.writeFileSync(path.join(ROOT, 'AEON.ico'), icon);
 fs.writeFileSync(path.join(ROOT, 'public', 'logo.png'), frames.find(({ size }) => size === 512).png);
 
-console.log(`Generated AEON mark assets at ${SIZES.join(', ')}px plus favicon.ico`);
+console.log(`Generated AEON primary logo assets at ${SIZES.join(', ')}px plus favicon.ico`);

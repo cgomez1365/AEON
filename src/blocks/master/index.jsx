@@ -26,7 +26,7 @@
  */
 import React, { useState, useEffect, useCallback } from 'react';
 import { Card, StatCard } from '../../components/aurora';
-import { Dna, FolderTree, Radio, LayoutGrid, RefreshCw } from 'lucide-react';
+import { Check, Copy, Dna, FolderTree, Radio, LayoutGrid, RefreshCw } from 'lucide-react';
 
 const ANATOMY = [
   ['block.manifest.json', 'Identity + contract. nav, permissions, commands, widget. Manifest is truth.'],
@@ -42,10 +42,35 @@ const RULES = [
   ['Ask for nothing extra', 'Set permissions minimally — the sandbox strips deps you did not declare.'],
 ];
 
+const BUILD_PROMPT = `You are building a new AEON block inside this repo.
+
+Goal:
+- Create a new self-contained block named <block_id> for <what the block does>.
+- Follow AEON's Master block standard exactly.
+
+Required steps:
+1. Copy src/blocks/master/ to src/blocks/<block_id>/.
+2. Rename and update the copied block so the folder name, manifest id, route, labels, widget, API routes, README, and UI all match <block_id>.
+3. Treat block.manifest.json as the source of truth. Declare nav, permissions, commands, settings, widget, storage, memory, AI role/capabilities, required APIs/env/local deps, and target runtimes there.
+4. Keep permissions minimal. Do not request filesystem, shell, secrets, network, AI, or external services unless the block truly uses them.
+5. Use relative fetches only. Never hardcode localhost, ports, absolute machine paths, or deployment URLs.
+6. If the block needs backend logic, add api/<block_id>.cjs as an Express router factory and only call endpoints it actually exposes.
+7. If the dashboard should show a quick card, implement GET /api/<block_id>/widget and declare the widget section in the manifest.
+8. If the block has user settings, declare contract.settings in the manifest and read/write through AEON Settings blockSettings.<block_id>.<key>. Do not invent a separate config file.
+9. Use existing AEON UI patterns and components. Match the current Aurora visual style, accessibility patterns, and manifest-driven icon assets.
+10. Add or update README.md with one clear paragraph: what the block owns, what it reads, what it writes.
+11. Verify by running the repo's available checks/build and by confirming the block appears in the registry/nav without console errors.
+
+Output:
+- Make the code changes directly.
+- Summarize the changed files.
+- Report exactly what was verified and anything that remains unverified.`;
+
 export default function Master() {
   const [registry, setRegistry] = useState([]);
   const [serverUp, setServerUp] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   // Relative fetch — no host/port baked in. Vite proxies this in dev; every
   // deployed target (Vercel, Docker, bare node) serves the API same-origin.
@@ -59,6 +84,16 @@ export default function Master() {
   }, []);
 
   useEffect(() => { loadRegistry(); }, [loadRegistry]);
+
+  const copyBuildPrompt = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(BUILD_PROMPT);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1600);
+    } catch {
+      setCopied(false);
+    }
+  }, []);
 
   // Host the page is actually being served from — never a literal string,
   // since that would be wrong on every target except one developer's laptop.
@@ -124,6 +159,37 @@ export default function Master() {
             </li>
           ))}
         </ul>
+      </Card>
+
+      <Card hover={false} style={{ marginBottom: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 10 }}>
+          <h3 style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.12em', color: 'var(--text-dim)', margin: 0 }}>COPY-PASTE BLOCK BUILDER PROMPT</h3>
+          <button
+            type="button"
+            onClick={copyBuildPrompt}
+            aria-label="Copy AEON block builder prompt"
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+              padding: '7px 10px', borderRadius: 6, cursor: 'pointer',
+              background: copied ? 'rgba(34,211,111,0.14)' : 'transparent',
+              border: `1px solid ${copied ? '#22d36f' : 'var(--accent)'}`,
+              color: copied ? '#22d36f' : 'var(--accent)',
+              fontSize: 11, fontWeight: 700, letterSpacing: '0.06em',
+            }}
+          >
+            {copied ? <Check size={13} aria-hidden="true" /> : <Copy size={13} aria-hidden="true" />}
+            {copied ? 'COPIED' : 'COPY'}
+          </button>
+        </div>
+        <p style={{ margin: '0 0 10px', fontSize: 12, color: 'var(--text-dim)' }}>
+          Paste this into your IDE agent after replacing <code>&lt;block_id&gt;</code> and the goal.
+        </p>
+        <pre style={{
+          margin: 0, maxHeight: 260, overflow: 'auto', whiteSpace: 'pre-wrap',
+          padding: 14, borderRadius: 8, border: '1px solid var(--border-mute)',
+          background: 'rgba(0,0,0,0.24)', color: 'var(--text)', fontSize: 11,
+          lineHeight: 1.55, fontFamily: 'var(--font-mono)',
+        }}>{BUILD_PROMPT}</pre>
       </Card>
 
       <Card hover={false}>

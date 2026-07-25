@@ -5,8 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AEON Brain Visualizer</title>
     <style>
+        html, body { width: 100%; height: 100%; }
         body { margin: 0; overflow: hidden; background: #0b0f19; font-family: 'Inter', 'Segoe UI', sans-serif; }
-        #graph-container { width: 100vw; height: 100vh; }
+        #graph-container { width: 100%; height: 100%; }
         #hud {
             position: absolute; top: 20px; left: 20px;
             color: #00e5ff; text-transform: uppercase; letter-spacing: 2px;
@@ -65,6 +66,7 @@
     // just pinned everything around the vault center. 3D free physics only.
     const MATRIX_DEFAULTS = {
         nodeStyle: 'solid',     // 'solid' = defined orbs, 'fuzzy' = soft glow with no hard edge
+        nodeBrightness: 1,
         focusMode: false,
         linkOpacity: 0.35,
         particles: false,
@@ -88,11 +90,21 @@
         const n = parseInt(hex.replace('#', ''), 16);
         return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
     }
-    function makeSprite(color, radius, style = 'solid') {
+    function brightenHex(hex, brightness = 1) {
+        const n = parseInt(hex.replace('#', ''), 16);
+        const scale = Math.max(0.35, Math.min(2.5, Number(brightness) || 1));
+        const r = Math.min(255, Math.round(((n >> 16) & 255) * scale));
+        const g = Math.min(255, Math.round(((n >> 8) & 255) * scale));
+        const b = Math.min(255, Math.round((n & 255) * scale));
+        return `#${[r, g, b].map(v => v.toString(16).padStart(2, '0')).join('')}`;
+    }
+    function makeSprite(color, radius, style = 'solid', brightness = 1) {
         // Fuzzy nodes have no geometric edge — the falloff eats apparent size,
         // so scale them up and let additive blending give the nebula glow.
         const scale = style === 'fuzzy' ? radius * 1.9 : radius;
-        const key = style + ':' + color + ':' + radius;
+        const brightColor = brightenHex(color, brightness);
+        const alphaBoost = Math.max(0.45, Math.min(1.8, Number(brightness) || 1));
+        const key = style + ':' + brightColor + ':' + radius + ':' + alphaBoost.toFixed(2);
         if (spriteCache.has(key)) {
             const s = new THREE.Sprite(spriteCache.get(key));
             s.scale.set(scale, scale, 1);
@@ -106,18 +118,18 @@
             // Continuous gaussian-like falloff from center to transparent —
             // no filled disc, no arc, no defined boundary at any radius.
             const grd = ctx.createRadialGradient(sz/2, sz/2, 0, sz/2, sz/2, sz/2);
-            grd.addColorStop(0,    hexToRgba(color, 0.95));
-            grd.addColorStop(0.18, hexToRgba(color, 0.55));
-            grd.addColorStop(0.45, hexToRgba(color, 0.18));
-            grd.addColorStop(0.75, hexToRgba(color, 0.05));
-            grd.addColorStop(1,    hexToRgba(color, 0));
+            grd.addColorStop(0,    hexToRgba(brightColor, Math.min(1, 0.95 * alphaBoost)));
+            grd.addColorStop(0.18, hexToRgba(brightColor, Math.min(1, 0.55 * alphaBoost)));
+            grd.addColorStop(0.45, hexToRgba(brightColor, Math.min(1, 0.18 * alphaBoost)));
+            grd.addColorStop(0.75, hexToRgba(brightColor, Math.min(1, 0.05 * alphaBoost)));
+            grd.addColorStop(1,    hexToRgba(brightColor, 0));
             ctx.fillStyle = grd;
             ctx.fillRect(0, 0, sz, sz);
         } else {
             // Solid orb: defined disc with a soft halo rim
             const grd = ctx.createRadialGradient(sz/2, sz/2, sz*0.15, sz/2, sz/2, sz*0.48);
-            grd.addColorStop(0,   color);
-            grd.addColorStop(0.6, color);
+            grd.addColorStop(0,   brightColor);
+            grd.addColorStop(0.6, brightColor);
             grd.addColorStop(1,   'rgba(0,0,0,0)');
             ctx.beginPath();
             ctx.arc(sz/2, sz/2, sz*0.48, 0, 2*Math.PI);
@@ -168,6 +180,16 @@
         // ── Pre-index neighbors and links ─────────────────────────────────────
         const nodeMap = new Map();
         data.nodes.forEach(n => { n.neighbors = []; nodeMap.set(n.id, n); });
+        const vaultRoot = data.nodes.find(n => n.root || n.id === 'vault_root' || n.name === 'AEON VAULT');
+        if (vaultRoot) {
+            vaultRoot.root = true;
+            vaultRoot.fx = 0;
+            vaultRoot.fy = 0;
+            vaultRoot.fz = 0;
+            vaultRoot.x = 0;
+            vaultRoot.y = 0;
+            vaultRoot.z = 0;
+        }
         const linksByNode = new Map();
         data.links.forEach(link => {
             const a = link.source.id || link.source;
@@ -205,6 +227,14 @@
         // 1.25 is the sweet spot for a graph view: 60% fewer pixels than retina,
         // and node orbs/lines don't visibly degrade like text would.
         try { Graph.renderer().setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.25)); } catch {}
+        const sizeGraph = () => {
+            const w = Math.max(320, elem.clientWidth || window.innerWidth);
+            const h = Math.max(320, elem.clientHeight || window.innerHeight);
+            try { Graph.width(w).height(h); } catch {}
+        };
+        sizeGraph();
+        if ('ResizeObserver' in window) new ResizeObserver(sizeGraph).observe(elem);
+        window.addEventListener('resize', sizeGraph);
 
         // Stop rendering entirely when the tab or parent iframe is hidden —
         // the matrix should never burn GPU in the background.
@@ -223,7 +253,7 @@
                 if (!spriteMode) return null; // fallback: let library draw spheres
                 try {
                     const r = (node.type === 'dir' || node.type === 'folder') ? DIR_RADIUS : FILE_RADIUS;
-                    return makeSprite(nodeColor(node), r, settings.nodeStyle);
+                    return makeSprite(nodeColor(node), r, settings.nodeStyle, settings.nodeBrightness);
                 } catch { spriteMode = false; return null; }
             })
             .nodeThreeObjectExtend(false) // sprite IS the object, don't add sphere underneath
@@ -328,14 +358,19 @@
         // and the whole settings panel — the REAL "matrix settings lost" bug).
         // The library ships its own center force by default; the radial pull
         // was cosmetic. Guarded, never fatal.
-        Graph.d3Force('charge').strength(-180);
-        Graph.d3Force('link').distance(160);
+        Graph.d3Force('charge').strength(-260);
+        Graph.d3Force('link').distance(link => {
+            const source = typeof link.source === 'object' ? link.source : nodeMap.get(link.source);
+            const target = typeof link.target === 'object' ? link.target : nodeMap.get(link.target);
+            return source?.root || target?.root ? 230 : 175;
+        });
+        Graph.d3Force('center', null);
         if (typeof d3 !== 'undefined') {
             try {
-                Graph.d3Force('center', d3.forceCenter());
-                Graph.d3Force('radial', d3.forceRadial(0).strength(0.02));
+                Graph.d3Force('radial', d3.forceRadial(node => node.root ? 0 : 260).strength(node => node.root ? 1 : 0.025));
             } catch {}
         }
+        Graph.cameraPosition({ x: 0, y: 0, z: 760 }, { x: 0, y: 0, z: 0 }, 0);
 
         // ── Search ────────────────────────────────────────────────────────────
         const searchInput   = document.getElementById('search-input');
@@ -447,6 +482,7 @@
                   <option value="fuzzy">Fuzzy glow</option>
                 </select>
               </label>
+              <label>Node brightness <input type="range" id="ms-brightness" min="0.5" max="2" step="0.05" aria-label="Node brightness"></label>
               <label>Auto rotate <input type="checkbox" id="ms-rotate"></label>
             </fieldset>
             <fieldset>
@@ -474,13 +510,14 @@
                 if (!spriteMode) return null;
                 try {
                     const r = (node.type === 'dir' || node.type === 'folder') ? DIR_RADIUS : FILE_RADIUS;
-                    return makeSprite(nodeColor(node), r, settings.nodeStyle);
+                    return makeSprite(nodeColor(node), r, settings.nodeStyle, settings.nodeBrightness);
                 } catch { spriteMode = false; return null; }
             });
         }
 
         function syncPanel(s) {
             $('ms-nodestyle').value = s.nodeStyle || 'solid';
+            $('ms-brightness').value = s.nodeBrightness ?? 1;
             $('ms-rotate').checked = s.autoRotate;
             $('ms-opacity').value = s.linkOpacity;
             $('ms-particles').checked = s.particles;
@@ -501,6 +538,7 @@
             applySettings(settings, opts);
         };
         $('ms-nodestyle').onchange= e => { update({ nodeStyle: e.target.value }); rebuildSprites(); };
+        $('ms-brightness').oninput= e => { update({ nodeBrightness: Number(e.target.value) }); rebuildSprites(); };
         $('ms-rotate').onchange   = e => update({ autoRotate: e.target.checked });
         $('ms-opacity').oninput   = e => update({ linkOpacity: Number(e.target.value) });
         $('ms-particles').onchange= e => update({ particles: e.target.checked });

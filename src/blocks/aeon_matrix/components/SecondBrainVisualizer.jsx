@@ -361,15 +361,20 @@ const SecondBrainVisualizer = () => {
     if (!text) return;
     const fileName = selectedFile?.split(/[/\\]/).pop() || 'Unknown';
     try {
-      await fetch('/api/notes', {
+      const response = await fetch('/api/memory/add', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           title: `${titlePrefix}: ${fileName}`,
-          body: text.slice(0, 8000),
-          tags: ['second-brain', titlePrefix.toLowerCase()]
+          text: text.slice(0, 8000),
+          category: titlePrefix === 'Q&A' ? 'decision' : 'fact',
+          type: titlePrefix.toLowerCase(),
+          tags: ['aeon_matrix', titlePrefix.toLowerCase()],
+          source: 'aeon_matrix',
+          refs: selectedFile ? [{ kind: 'matrix-node', id: selectedFile, title: fileName }] : [],
         })
       });
+      if (!response.ok) throw new Error(`Memory Core save failed (${response.status})`);
     } catch {}
   };
 
@@ -528,7 +533,7 @@ const SecondBrainVisualizer = () => {
   const isTextContent = typeof fileContent === 'string';
 
   return (
-    <div style={{ width: '100%', height: 'calc(100vh - 64px)', overflow: 'hidden', position: 'relative', backgroundColor: '#000' }}>
+    <div style={{ width: '100%', flex: 1, minHeight: 520, height: '100%', overflow: 'hidden', position: 'relative', backgroundColor: '#000' }}>
       {!mounted && (
         <div style={{ display: 'flex', width: '100%', height: '100%', justifyContent: 'center', alignItems: 'center', color: '#888' }}>
           <p>Initializing Neural Interface...</p>

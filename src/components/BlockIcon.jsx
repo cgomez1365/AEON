@@ -32,6 +32,7 @@ export function BlockIcon({
   fallback = 'Boxes',
   size = 20,
   className = '',
+  style,
 }) {
   const [source, setSource] = useState(iconAsset || iconAssetPng || null);
 
@@ -40,7 +41,7 @@ export function BlockIcon({
   }, [iconAsset, iconAssetPng]);
 
   const Fallback = FALLBACKS[fallback] || Boxes;
-  if (!source) return <Fallback size={size} className={className} aria-hidden="true" />;
+  if (!source) return <Fallback size={size} className={className} style={style} aria-hidden="true" />;
 
   return (
     <img
@@ -50,6 +51,7 @@ export function BlockIcon({
       className={`block-icon-svg ${className}`.trim()}
       width={size}
       height={size}
+      style={style}
       onError={() => {
         if (source !== iconAssetPng && iconAssetPng) setSource(iconAssetPng);
         else setSource(null);

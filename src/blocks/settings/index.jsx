@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Settings as SettingsIcon, Check, X, RefreshCw, Zap, Shield, ChevronDown, ChevronUp, Search, Wifi, WifiOff, Activity, Cpu, Database, Layers, ToggleLeft, ToggleRight, User, Lock, KeyRound, LogOut, LogIn, Save, Eye, Palette, Wrench } from 'lucide-react';
 import { authFetch, login as apiLogin, logout as apiLogout } from '../../kernel/auth';
 import { BLOCKS as INSTALLED_BLOCKS } from '../../kernel/blockRegistry';
+import { BlockIcon } from '../../components/BlockIcon';
 
 // Derive provider registry from nervous system — no mutable module state.
 function getProviderRegistry(ns) {
@@ -1987,7 +1988,13 @@ function BlockSettingsPanel({ blockSettings, onChange }) {
       {withSettings.map(b => (
         <div key={b.id} className="admin-card">
           <div className="agent-tools-desc" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span>{b.icon}</span>
+            <BlockIcon
+              iconAsset={b.iconAsset || b.manifest?.nav?.iconAsset}
+              iconAssetPng={b.iconAssetPng || b.manifest?.nav?.iconAssetPng}
+              fallback={b.icon}
+              size={18}
+              style={{ flexShrink: 0 }}
+            />
             <b>{b.label}</b>
             <code style={{ fontSize: 10, opacity: 0.5 }}>blockSettings.{b.id}</code>
           </div>
@@ -2124,7 +2131,13 @@ function BlocksNeedsPanel({ onManageModels }) {
           const score = sciFor(b, models, health, supabaseOk);
           return (
             <div key={b.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 8, border: '1px solid var(--border, rgba(255,255,255,0.1))' }}>
-              <span style={{ fontSize: 20, flexShrink: 0 }}>{b.icon || '📦'}</span>
+              <BlockIcon
+                iconAsset={b.iconAsset}
+                iconAssetPng={b.iconAssetPng}
+                fallback={b.icon}
+                size={28}
+                style={{ flexShrink: 0 }}
+              />
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
                   {b.label}
@@ -2532,7 +2545,13 @@ export default function SystemSettings() {
                 return (
                   <div key={b.id} className="block-chip" title={ready ? 'All dependencies met' : `Missing: ${missing.join(', ')}`}>
                     <span className={`block-ready-dot ${ready ? 'block-ready-dot--ok' : 'block-ready-dot--off'}`} />
-                    <span className="block-chip-icon">{b.icon || '📦'}</span>
+                    <BlockIcon
+                      iconAsset={b.iconAsset}
+                      iconAssetPng={b.iconAssetPng}
+                      fallback={b.icon}
+                      size={16}
+                      className="block-chip-icon"
+                    />
                     <span className="block-chip-label">{b.label}</span>
                     {!ready && <span className="block-chip-missing">{missing.length} dep</span>}
                   </div>

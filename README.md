@@ -11,8 +11,8 @@
 1. **Install Node.js** (one time): [nodejs.org](https://nodejs.org) → big green **LTS** button → install with all defaults.
 2. **Download AEON**: green **Code** button above → **Download ZIP** → unzip anywhere (Desktop is fine).
 3. **Launch it**:
-   - **Windows** — double-click `LAUNCH.bat`
-   - **Mac** — double-click `launch.command` (if blocked: open Terminal, type `chmod +x ` , drag the file in, press Enter, try again)
+   - **If on Windows, click here to launch** — double-click `LAUNCH.bat`
+   - **If on Mac, click here to launch** — double-click `launch.command` (if blocked: open Terminal, type `chmod +x ` , drag the file in, press Enter, try again)
    - **Linux** — run `./launch.sh`
 
 The launcher checks your computer, walks you through setup, and opens AEON in your browser. **Every question can be skipped by pressing Enter** — you can finish everything later inside AEON under **Settings**.

@@ -59,19 +59,13 @@ returns `405` for anything else.
 
 | Method | Path | File | Purpose |
 |---|---|---|---|
-| POST | `/api/ats/intake` | `api/intake.js` | Create a candidate from form fields + base64 PDF résumé |
-| GET | `/api/ats/candidates` | `api/candidates.js` | List all candidates |
-| DELETE | `/api/ats/candidates/:id` | `api/candidates.js` | Remove a candidate |
-| POST | `/api/ats/grade` | `api/grade.js` | Grade one candidate via `kernelLLM` |
-| POST | `/api/ats/grade-all` | `api/grade-all.js` | Grade every ungraded candidate |
-| POST | `/api/ats/alert` | `api/alert.js` | Draft a hiring-alert email via Gemini |
+| POST | `/api/ats/grade-resume` | `api/grade-resume.js` | Grade a résumé against a job description via `kernelLLM` — stateless, nothing stored |
 
-The frontend (`index.jsx`) calls these routes first and falls back to a
-direct browser → Supabase REST call (using `VITE_SUPABASE_URL` /
-`VITE_SUPABASE_ANON_KEY`) if the API call fails — this covers static/edge
-deployments where the local API route isn't reachable. `POST /api/ai` is
-used as a last-resort grading fallback in the UI if `/api/ats/grade` fails
-outright.
+The frontend (`index.jsx`) is a single-screen **Resume Grader**: paste a
+résumé + (optional) job description, `POST /api/ats/grade-resume`, render the
+grade. No candidate records, no storage. The legacy candidate-pipeline
+endpoints — `intake` / `candidates` / `grade` / `grade-all` / `alert` — were
+removed in the 2026-07-24 cleanup.
 
 ## Storage
 

@@ -8,9 +8,10 @@
 const AEON_WORKSPACE = import.meta.env.VITE_AEON_WORKSPACE || '';
 
 export const WORKSPACE = AEON_WORKSPACE;
-export const GEMINI_DATA = AEON_WORKSPACE + '\\Data\\.gemini';
-export const SECOND_BRAIN = AEON_WORKSPACE + '\\Data\\.gemini\\Second Brain';
-export const AGENTS_DIR = GEMINI_DATA + '\\.Agents';
+// (Removed legacy GEMINI_DATA / SECOND_BRAIN / AGENTS_DIR exports — they pointed
+// at the old Command Center `Data\.gemini\...` layout that no longer exists. The
+// Second Brain / Matrix now lives under the block's own Vault. Only the dead,
+// unmounted DataNotes.jsx referenced them, and it has been removed.)
 
 export const SB_URL = import.meta.env.VITE_SUPABASE_URL || '';
 export const SB_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || '';

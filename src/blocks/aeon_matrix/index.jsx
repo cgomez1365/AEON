@@ -67,7 +67,16 @@ export default function AeonMatrix() {
   const facetCount = (id) => (results || []).filter(r => FACETS.find(f => f.id === id)?.test(r.file)).length;
 
   return (
-    <div style={{ padding: 24, height: '100%', overflowY: 'auto', maxWidth: view === 'search' ? 900 : 'none', margin: view === 'search' ? '0 auto' : 0 }}>
+    <div style={{
+      padding: view === 'graph' ? '24px 24px 0' : 24,
+      height: '100%',
+      overflowY: view === 'graph' ? 'hidden' : 'auto',
+      maxWidth: view === 'search' ? 900 : 'none',
+      margin: view === 'search' ? '0 auto' : 0,
+      display: view === 'graph' ? 'flex' : 'block',
+      flexDirection: 'column',
+      minHeight: 0,
+    }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 4 }}>
         <Brain size={20} style={{ color: 'var(--accent)' }} />
         <h2 style={{ margin: 0, fontSize: '1.3em' }}>Aeon Matrix</h2>

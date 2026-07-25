@@ -1,7 +1,7 @@
 {
   "manifestVersion": "1.1.0",
   "id": "ats_engine",
-  "label": "ATS Engine",
+  "label": "Resume Grader",
   "icon": "Users",
   "route": "/ats",
   "description": "Resume and job description PDF grading with AI-powered scoring",
@@ -10,7 +10,7 @@
   "nav": {
     "group": "work",
     "order": 0,
-    "label": "ATS Engine",
+    "label": "Resume Grader",
     "icon": "Users",
     "iconAsset": "/brand/block-icons/ats_engine.svg",
     "iconAssetPng": "/brand/block-icons/png/ats_engine.png",

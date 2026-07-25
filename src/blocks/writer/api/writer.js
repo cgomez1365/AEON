@@ -1,18 +1,17 @@
 const fs = require('fs');
 const path = require('path');
-const { vaultSync } = require('../../../kernel/vaultSync.cjs');
 
 module.exports = (app, deps) => {
-  const { supabase, NOTES_FILE, getVaultFile } = deps;
+  const { supabase, NOTES_FILE, getBlockDataFile } = deps;
   const isVercel = !!process.env.VERCEL;
-  // On Vercel /tmp is the only writable dir — but it's ephemeral per-invocation.
-  // Supabase is the source of truth; /tmp is just a within-request cache.
-  // Locally, documents live inside the Vault (Vault/blocks/writer/) so Writer
-  // gets real long-term storage and every doc is a first-class Matrix node —
-  // no separate secrets/ folder, no best-effort mirror to keep in sync.
+  // On Vercel /tmp is the only writable dir — ephemeral per-invocation; Supabase
+  // is the source of truth. Locally, drafts live in the PRIVATE data root
+  // (data/writer/), NOT the Vault: a document editor's autosaved drafts must
+  // never be auto-indexed into the Matrix / Second Brain. Use the explicit
+  // "Push to Memory" action to deliberately promote a finished piece into recall.
   const DOCS_DIR = isVercel
     ? '/tmp/aeon_writer'
-    : (getVaultFile ? getVaultFile('blocks/writer') : path.join(__dirname, '..', '..', '..', '..', 'secrets', 'documents'));
+    : (getBlockDataFile ? getBlockDataFile('writer') : path.join(__dirname, '..', '..', '..', '..', 'data', 'writer'));
   const STYLE_FILE = path.join(DOCS_DIR, '_style-profile.json');
   try { fs.mkdirSync(DOCS_DIR, { recursive: true }); } catch {}
 
@@ -111,7 +110,8 @@ module.exports = (app, deps) => {
     const docs = loadDocs().filter(d => d.id !== docId);
     docs.unshift({ id: docId, title: title || 'Untitled', tags: tags || [], updated: now, size: (content || '').length });
     saveDocs(docs);
-    try { vaultSync('writer', { docs: { value: docs.length, unit: 'count', context: 'total saved documents' }, last_doc: { value: title || 'Untitled', unit: 'text', context: 'last saved document title' }, last_saved: { value: new Date(now).toISOString(), unit: 'timestamp', context: 'last document save time' }, _summary: `Doc saved: "${title || 'Untitled'}" (${docs.length} total)` }); } catch(e) { /* non-critical */ }
+    // NOTE: Writer deliberately does NOT publish doc state to the Vault/Matrix —
+    // drafts stay private in data/writer/. Promotion to memory is explicit only.
     // Supabase mirror — best-effort, never blocks the local save
     if (supabase) {
       supabase.from('writer_docs').upsert({
@@ -129,7 +129,6 @@ module.exports = (app, deps) => {
       try { fs.unlinkSync(path.join(DOCS_DIR, `${req.params.id}.md`)); } catch {}
       const _docsAfterDelete = loadDocs().filter(d => d.id !== req.params.id);
       saveDocs(_docsAfterDelete);
-      try { vaultSync('writer', { docs: { value: _docsAfterDelete.length, unit: 'count', context: 'total saved documents' }, last_saved: { value: new Date().toISOString(), unit: 'timestamp', context: 'last document operation time' }, _summary: `Doc deleted (${_docsAfterDelete.length} remaining)` }); } catch(e) { /* non-critical */ }
     }
     res.json({ ok: true });
   });

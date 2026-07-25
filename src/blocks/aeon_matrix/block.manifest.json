@@ -101,28 +101,6 @@
     ],
     "settings": [
       {
-        "key": "dimensions",
-        "label": "Matrix view",
-        "type": "select",
-        "options": [
-          "3D orbit",
-          "2D map"
-        ],
-        "default": "3D orbit",
-        "scope": "browser"
-      },
-      {
-        "key": "layout",
-        "label": "Organization",
-        "type": "select",
-        "options": [
-          "Auto-organize (vault tree)",
-          "Free physics"
-        ],
-        "default": "Auto-organize (vault tree)",
-        "scope": "browser"
-      },
-      {
         "key": "nodeStyle",
         "label": "Node style",
         "type": "select",
