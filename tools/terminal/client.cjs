@@ -133,6 +133,12 @@ async function requireConnected() {
 
 // ── auth ────────────────────────────────────────────────────────────────────
 function prompt(question, { silent = false } = {}) {
+  // A spinner repaints the current line every 80ms. If one is running when we
+  // ask for input — the auth prompt inside withAuth(), a dangerous-command
+  // confirmation mid-dispatch — it overwrites the question and the user's
+  // keystrokes, leaving them typing a password into what looks like a
+  // progress indicator. Lazily required to keep these two modules acyclic.
+  try { require('./renderers.cjs').stopActiveSpinner(); } catch {}
   return new Promise((resolve) => {
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true });
     if (!silent) return rl.question(question, (a) => { rl.close(); resolve(a); });

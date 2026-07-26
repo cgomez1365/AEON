@@ -213,22 +213,42 @@ function progress(pct, label = '') {
   return `  ${c.neon('█'.repeat(filled))}${c.dim('░'.repeat(len - filled))} ${String(p).padStart(3)}%${label ? `  ${c.dim(label)}` : ''}`;
 }
 
+// The one spinner currently painting the line. A spinner redraws every 80ms,
+// so anything that needs to READ from the same terminal (an auth prompt, a
+// dangerous-command confirmation) must stop it first or the prompt is
+// overwritten mid-keystroke and the user cannot see what they are typing.
+// client.prompt() calls stopActiveSpinner() for exactly this reason.
+let activeSpinner = null;
+
 function spinner(label) {
   const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
   let i = 0, active = true;
-  if (!process.stdout.isTTY) { console.log(`  ${label}…`); return { stop() { active = false; } }; }
-  const timer = setInterval(() => {
+  const tty = process.stdout.isTTY;
+  // Non-TTY (piped, CI, a subprocess) gets one static line instead of an
+  // animation, but is still TRACKED the same way — stop() must behave
+  // identically in both modes or callers have to branch on terminal type.
+  if (!tty) console.log(`  ${label}…`);
+  const timer = tty ? setInterval(() => {
     process.stdout.write(`\r  ${c.neon(frames[i++ % frames.length])} ${c.dim(label)}   `);
-  }, 80);
-  return {
+  }, 80) : null;
+
+  const handle = {
     stop(final) {
       if (!active) return;
       active = false;
-      clearInterval(timer);
-      process.stdout.write('\r\x1b[2K');
+      if (timer) clearInterval(timer);
+      if (tty) process.stdout.write('\r\x1b[2K');
+      if (activeSpinner === handle) activeSpinner = null;
       if (final) console.log(final);
     },
   };
+  activeSpinner = handle;
+  return handle;
+}
+
+/** Stop whatever spinner is painting, so the line is free for input. */
+function stopActiveSpinner() {
+  if (activeSpinner) activeSpinner.stop();
 }
 
 // ── dispatcher ──────────────────────────────────────────────────────────────
@@ -283,5 +303,5 @@ function auto(payload, { renderer = null, query = null, json = false } = {}) {
 
 module.exports = {
   box, bar, gradeCard, searchResults, table, markdown, progress, spinner, auto,
-  wrapText, strip, width, pad,
+  wrapText, strip, width, pad, stopActiveSpinner,
 };

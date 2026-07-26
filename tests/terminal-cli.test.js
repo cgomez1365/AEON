@@ -208,6 +208,35 @@ describe('renderers (BO-TGM)', () => {
   });
 });
 
+describe('a spinner never paints over an input prompt (BO-TGM)', () => {
+  // A spinner repaints the current line every 80ms. When `aeon run <cmd>` hit
+  // a locked vault, dispatchAndRender's spinner was still running while
+  // withAuth() asked for a username — the question and the operator's
+  // keystrokes were overwritten mid-type, so they were effectively entering a
+  // password into a progress indicator. Found live by the CEO, 2026-07-26.
+  it('exposes stopActiveSpinner so any reader can free the line', () => {
+    expect(typeof render.stopActiveSpinner).toBe('function');
+  });
+
+  it('a running spinner is tracked, and stopActiveSpinner clears it', () => {
+    const spin = render.spinner('working');
+    let stopped = false;
+    const original = spin.stop.bind(spin);
+    spin.stop = (...a) => { stopped = true; return original(...a); };
+
+    render.stopActiveSpinner();
+    expect(stopped).toBe(true);
+
+    // Nothing is active now, so a second call is a no-op rather than a throw.
+    expect(() => render.stopActiveSpinner()).not.toThrow();
+  });
+
+  it('stopping twice is harmless', () => {
+    const spin = render.spinner('x');
+    expect(() => { spin.stop(); render.stopActiveSpinner(); spin.stop(); }).not.toThrow();
+  });
+});
+
 describe('withAuth does not block on an interactive prompt without a TTY (BO-TGM)', () => {
   // `aeon commands --json` and `aeon blocks --json` used to hang indefinitely
   // when the guard was on and no session was stored: withAuth() unconditionally
