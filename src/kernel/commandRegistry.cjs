@@ -129,6 +129,16 @@ module.exports = function ({ blockReadiness = {}, isVercel = false, writeOSAudit
     const base = `http://127.0.0.1:${port}`;
     let url = spec.route.startsWith('http') ? spec.route : base + spec.route;
     const init = { method: spec.method, headers: { 'Content-Type': 'application/json' } };
+    // The internal fetch below is a brand-new HTTP request from the server to
+    // itself — it carries none of the caller's session unless forwarded
+    // explicitly. Without this, the guard (authGate.cjs) 401s the internal
+    // call for any non-preauth route, and a fully authenticated terminal
+    // session sees every such command fail with UNAUTHORIZED_SESSION. Found
+    // by the settings/terminal stress test (2026-07-26): 17 of 21 registered
+    // commands route to non-preauth endpoints and were all silently broken
+    // whenever guardEnabled was on.
+    if (req.headers.authorization) init.headers.Authorization = req.headers.authorization;
+    if (req.headers.cookie) init.headers.Cookie = req.headers.cookie;
     if (spec.method === 'GET') {
       if (spec.param && arg) url += `${url.includes('?') ? '&' : '?'}${spec.param}=${encodeURIComponent(arg)}`;
     } else {
