@@ -10,13 +10,18 @@ const express = require('express');
 const mountSecurity = require('../src/blocks/security/api/security.js');
 const { createSessionValidator } = require('../src/kernel/server-utils/sessionValidator.cjs');
 
-// BO2 — every wrong-password login flows through one shared lockout counter.
+// BO2 — every login failure path (wrong password, wrong TOTP, wrong backup code)
+// must flow through one shared lockout counter; a backup code is consumed only
+// when the whole login succeeds; lockout is checked before any second factor.
 describe('Security auth — unified failure accounting and lockout', () => {
   let tempDir;
   let server;
   let sessionValidator;
 
   const PASSWORD = 'CorrectHorse9!';
+  // Valid base32 so verifyTOTP()/base32Decode() never throw. We never submit a
+  // real TOTP code — 'ZZZZZZ' is guaranteed-invalid (generateTOTP emits digits).
+  const TOTP_SECRET = 'JBSWY3DPEHPK3PXP';
 
   beforeEach(async () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aeon-auth-lockout-'));
@@ -92,6 +97,59 @@ describe('Security auth — unified failure accounting and lockout', () => {
     expect(afterLock.response.status).toBe(429);
   });
 
+  it('locks the account after five wrong 2FA codes (the former bypass) with a generic error', async () => {
+    seedUser({ totp: { enabled: true, secret: TOTP_SECRET } });
+    for (let i = 0; i < 5; i++) {
+      const r = await login({ username: 'operator', password: PASSWORD, code: 'ZZZZZZ' });
+      expect(r.response.status).toBe(401);
+      expect(r.body.error).toBe('Invalid credentials'); // never "Invalid 2FA code"
+    }
+    expect(readUser().lockedUntil).toBeGreaterThan(Date.now());
+  });
+
+  it('returns requires2FA for a password-only step without touching the counter', async () => {
+    seedUser({ totp: { enabled: true, secret: TOTP_SECRET }, failedAttempts: 2 });
+    const r = await login({ username: 'operator', password: PASSWORD });
+    expect(r.response.status).toBe(200);
+    expect(r.body.requires2FA).toBe(true);
+    expect(r.body.ok).toBeUndefined();
+    expect(readUser().failedAttempts).toBe(2);
+  });
+
+  it('never consumes a backup code on a rejected or locked login', async () => {
+    // Wrong password + valid backup → rejected before the second factor is read.
+    seedUser({ totp: { enabled: true, secret: TOTP_SECRET }, totpBackupCodes: [{ code: 'aaaa1111', used: false }] });
+    const rejected = await login({ username: 'operator', password: 'wrong', code: 'aaaa1111' });
+    expect(rejected.response.status).toBe(401);
+    expect(readUser().totpBackupCodes[0].used).toBe(false);
+
+    // Locked account + correct password + valid backup → 429, backup untouched.
+    seedUser({
+      lockedUntil: Date.now() + 600_000,
+      totp: { enabled: true, secret: TOTP_SECRET },
+      totpBackupCodes: [{ code: 'aaaa1111', used: false }],
+    });
+    const locked = await login({ username: 'operator', password: PASSWORD, code: 'aaaa1111' });
+    expect(locked.response.status).toBe(429);
+    expect(readUser().totpBackupCodes[0].used).toBe(false);
+  });
+
+  it('consumes a valid backup code only on success and resets the counter', async () => {
+    seedUser({
+      failedAttempts: 3,
+      totp: { enabled: true, secret: TOTP_SECRET },
+      totpBackupCodes: [{ code: 'aaaa1111', used: false }, { code: 'bbbb2222', used: false }],
+    });
+    const r = await login({ username: 'operator', password: PASSWORD, code: 'aaaa1111' });
+    expect(r.response.status).toBe(200);
+    expect(r.body.ok).toBe(true);
+
+    const after = readUser();
+    expect(after.failedAttempts).toBe(0);
+    expect(after.totpBackupCodes.find(b => b.code === 'aaaa1111').used).toBe(true);
+    expect(after.totpBackupCodes.find(b => b.code === 'bbbb2222').used).toBe(false);
+  });
+
   it('clears the failure counter on a successful password login', async () => {
     seedUser({ failedAttempts: 3 });
     const r = await login({ username: 'operator', password: PASSWORD });
@@ -115,5 +173,10 @@ describe('Security auth — unified failure accounting and lockout', () => {
     const after = readUser();
     expect(after.lockedUntil).toBe(0);
     expect(after.recoverySession.emergencyUsed).toBe(true);
+
+    // Bypasses the second factor too (break-glass) even with TOTP enabled.
+    seedUser({ totp: { enabled: true, secret: TOTP_SECRET }, recoverySession: emergencyCredential('EMERGENCY-PASS-5678') });
+    const twofa = await login({ username: 'operator', password: 'EMERGENCY-PASS-5678' });
+    expect(twofa.response.status).toBe(200);
   });
 });

@@ -55,6 +55,10 @@ function passwordStrength(password) {
 export default function Security() {
   const [status, setStatus] = useState(null);      // /api/auth/status
   const [policy, setPolicy] = useState(null);      // /api/security/policy
+  const [twoFA, setTwoFA] = useState({ enabled: false });
+  const [setup2FA, setSetup2FA] = useState(null);  // { qrDataUrl, secret, uri }
+  const [backupCodes, setBackupCodes] = useState(null);
+  const [code, setCode] = useState('');
   const [form, setForm] = useState({
     username: '',
     password: '',
@@ -67,17 +71,18 @@ export default function Security() {
   const [sessions, setSessions] = useState([]);
   const [msg, setMsg] = useState(null);            // { kind: 'ok'|'err', text }
   const [busy, setBusy] = useState(false);
-  const [login, setLogin] = useState({ username: '', password: '' });
+  const [login, setLogin] = useState({ username: '', password: '', code: '', requires2FA: false });
 
   const say = (kind, text) => { setMsg({ kind, text }); setTimeout(() => setMsg(null), 6000); };
 
   const refresh = useCallback(async () => {
     try {
-      const [a, p] = await Promise.all([
+      const [a, p, t] = await Promise.all([
         fetch('/api/auth/status').then(r => r.json()),
         fetch('/api/security/policy').then(r => r.json()).catch(() => null),
+        fetch('/api/auth/2fa/status').then(r => r.json()).catch(() => ({ enabled: false })),
       ]);
-      setStatus(a); setPolicy(p);
+      setStatus(a); setPolicy(p); setTwoFA(t);
       if (a.authenticated) {
         fetch('/api/auth/sessions').then(r => r.json()).then(d => setSessions(d.sessions || [])).catch(() => {});
       }
@@ -114,13 +119,14 @@ export default function Security() {
     try {
       const r = await fetch('/api/auth/login', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: login.username, password: login.password }),
+        body: JSON.stringify({ username: login.username, password: login.password, code: login.code || undefined }),
       });
       const d = await r.json().catch(() => ({}));
+      if (d.requires2FA) { setLogin(l => ({ ...l, requires2FA: true })); say('ok', 'Enter the 6-digit code from your authenticator app.'); return; }
       if (!r.ok) throw new Error(d.error || 'Sign in failed');
       if (d.token) try { localStorage.setItem('aeon_session_token', d.token); } catch {}
       say('ok', `Welcome back, ${d.user?.displayName || login.username}.`);
-      setLogin({ username: '', password: '' });
+      setLogin({ username: '', password: '', code: '', requires2FA: false });
       refresh();
     } catch (e) { say('err', e.message); }
   };
@@ -145,6 +151,20 @@ export default function Security() {
   const flushNow = async () => {
     try { const d = await post('/api/security/flush'); say('ok', d.text || 'Synced.'); refresh(); }
     catch (e) { say('err', e.message); }
+  };
+
+  const start2FA = async () => {
+    try { setSetup2FA(await post('/api/auth/2fa/setup')); }
+    catch (e) { say('err', e.message); }
+  };
+  const confirm2FA = async () => {
+    try {
+      const d = await post('/api/auth/2fa/verify', { code });
+      setBackupCodes(d.backupCodes || []);
+      setSetup2FA(null); setCode('');
+      say('ok', 'Two-factor is ON. Save your backup codes somewhere safe.');
+      refresh();
+    } catch (e) { say('err', e.message); }
   };
 
   const changePassword = async () => {
@@ -218,6 +238,12 @@ export default function Security() {
             <input aria-label="Password" style={S.input} type="password" placeholder="Password" autoComplete="current-password"
               value={login.password} onChange={e => setLogin(l => ({ ...l, password: e.target.value }))}
               onKeyDown={e => e.key === 'Enter' && doLogin()} />
+            {login.requires2FA && (
+              <input aria-label="Two-factor code" style={S.input} inputMode="numeric" maxLength={8}
+                placeholder="6-digit code (or a backup code)"
+                value={login.code} onChange={e => setLogin(l => ({ ...l, code: e.target.value }))}
+                onKeyDown={e => e.key === 'Enter' && doLogin()} />
+            )}
             <button style={S.btn} onClick={doLogin} disabled={busy || !login.username || !login.password}>Sign in</button>
           </div>
         </div>
@@ -368,6 +394,38 @@ export default function Security() {
           {policy.lastFlush && (
             <div style={{ ...S.hint, marginTop: 10 }}>
               Last sync: {new Date(policy.lastFlush.at).toLocaleString()} · {policy.lastFlush.stores} store(s) · {policy.lastFlush.pushed ? 'pushed to your cloud ✓' : 'local only'} ({policy.lastFlush.reason})
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Two-factor ── */}
+      {status.configured && status.authenticated && (
+        <div style={S.card}>
+          <h2 style={S.h2}>Two-step verification</h2>
+          {twoFA.enabled ? (
+            <p style={S.sub}>✅ ON — signing in needs your password <b>and</b> a 6-digit code from your phone's authenticator app.</p>
+          ) : setup2FA ? (
+            <div>
+              <p style={S.sub}>1) Open Google Authenticator (or any authenticator app) → add account → scan this code. 2) Type the 6-digit code it shows.</p>
+              {setup2FA.qrDataUrl
+                ? <img src={setup2FA.qrDataUrl} alt="QR code for authenticator app setup" style={{ background: '#fff', borderRadius: 8, padding: 6 }} />
+                : <div style={{ ...S.hint, wordBreak: 'break-all' }}>Manual key: <b>{setup2FA.secret}</b></div>}
+              <div style={{ display: 'flex', gap: 8, marginTop: 12, maxWidth: 320 }}>
+                <input aria-label="Six digit code" style={S.input} inputMode="numeric" maxLength={6} placeholder="123456" value={code} onChange={e => setCode(e.target.value)} />
+                <button style={S.btn} onClick={confirm2FA} disabled={busy || code.length !== 6}>Turn on</button>
+              </div>
+            </div>
+          ) : (
+            <div>
+              <p style={S.sub}>Even if someone learns your password, they can't get in without your phone. Free, works offline, no account needed.</p>
+              <button style={S.btn} onClick={start2FA} disabled={busy}>Set up two-step verification</button>
+            </div>
+          )}
+          {backupCodes && (
+            <div style={{ marginTop: 12, padding: 12, border: '1px dashed #f59e0b', borderRadius: 8 }}>
+              <div style={{ ...S.label, color: '#f59e0b', marginBottom: 6 }}>Backup codes — print or write these down. Each works once.</div>
+              <div style={{ fontFamily: 'monospace', fontSize: 13, letterSpacing: 1, lineHeight: 1.9 }}>{backupCodes.join('   ')}</div>
             </div>
           )}
         </div>

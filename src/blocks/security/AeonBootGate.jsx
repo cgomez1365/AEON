@@ -17,7 +17,8 @@ export default function AeonBootGate({ onAuthed }) {
   const orbRefs = useRef([]);
   const [ready, setReady] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
-  const [form, setForm] = useState({ username: '', password: '' });
+  const [form, setForm] = useState({ username: '', password: '', code: '' });
+  const [requires2FA, setRequires2FA] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [recoveryOpen, setRecoveryOpen] = useState(false);
@@ -260,7 +261,13 @@ export default function AeonBootGate({ onAuthed }) {
     e.preventDefault();
     setBusy(true); setMessage('');
     try {
-      const result = await apiLogin(form.username.trim(), form.password);
+      const result = await apiLogin(form.username.trim(), form.password, form.code);
+      if (result.requires2FA) {
+        setRequires2FA(true);
+        setMessage('Enter the 6-digit code from your authenticator app.');
+        setBusy(false);
+        return;
+      }
       if (!result.ok) throw new Error(result.error || 'Username or password was not accepted.');
       onAuthed && onAuthed();
     } catch (err) {
@@ -313,6 +320,14 @@ export default function AeonBootGate({ onAuthed }) {
           <label className="aeon-boot-field-label" htmlFor="aeon-boot-password">Password</label>
           <input id="aeon-boot-password" className="aeon-boot-field" type="password" autoComplete="current-password" required
             value={form.password} onChange={e => setForm(f => ({ ...f, password: e.target.value }))} />
+          {requires2FA && (
+            <>
+              <label className="aeon-boot-field-label" htmlFor="aeon-boot-code">Two-factor code</label>
+              <input id="aeon-boot-code" className="aeon-boot-field" inputMode="numeric" maxLength={8}
+                placeholder="6-digit code (or a backup code)" autoFocus
+                value={form.code} onChange={e => setForm(f => ({ ...f, code: e.target.value }))} />
+            </>
+          )}
           <button className="aeon-boot-submit" type="submit" disabled={busy || !form.username || !form.password}>
             {busy ? 'Signing in…' : 'Sign in'}
           </button>

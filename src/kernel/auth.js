@@ -31,8 +31,8 @@ export async function authStatus() {
   } catch { return { configured: false, authenticated: false, loginRequired: false }; }
 }
 
-export async function login(username, password) {
-  const r = await authFetch('/api/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) });
+export async function login(username, password, code) {
+  const r = await authFetch('/api/auth/login', { method: 'POST', body: JSON.stringify({ username, password, code: code || undefined }) });
   const d = await r.json();
   if (r.ok && d.token) setToken(d.token);
   return { ok: r.ok, ...d };
