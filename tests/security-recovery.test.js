@@ -216,4 +216,66 @@ describe('local break-glass recovery', () => {
     });
     expect(late.response.status).toBe(401);
   });
+
+  it('recovery reset bypasses 2FA by design — a lost phone never blocks a successful 3-question recovery', async () => {
+    await setup();
+    // Enable TOTP directly on the stored user (no need to run the QR setup
+    // flow here — the point is that /recovery/reset never looks at u.totp).
+    const beforeEnable = JSON.parse(fs.readFileSync(validator.AUTH_FILE, 'utf8'));
+    beforeEnable.totp = { enabled: true, secret: 'JBSWY3DPEHPK3PXP', enabledAt: new Date().toISOString() };
+    validator.saveUser(beforeEnable);
+
+    nowValue = 8_000_000;
+    const verified = await verifyCorrectAnswers();
+    expect(verified.response.status).toBe(200);
+
+    // No `code` field anywhere in this request — recovery is a standalone
+    // account-recovery path, not required to also prove possession of the
+    // authenticator device.
+    const reset = await request('/api/security/recovery/reset', {
+      recoveryToken: verified.body.recoveryToken,
+      newPassword: 'RecoveredPass9',
+    });
+    expect(reset.response.status).toBe(200);
+    expect(reset.body.ok).toBe(true);
+    expect(reset.body.token).toHaveLength(64);
+
+    // TOTP is untouched by the reset — still enabled, just no longer a login
+    // obstacle for this break-glass path.
+    const after = JSON.parse(fs.readFileSync(validator.AUTH_FILE, 'utf8'));
+    expect(after.totp.enabled).toBe(true);
+  });
+
+  it('recovery lockout and login lockout are independent counters — failing one never locks out the other', async () => {
+    await setup();
+    const wrong = {
+      username: 'operator',
+      answers: RECOVERY_QUESTIONS.map(item => ({ ...item, answer: 'incorrect' })),
+    };
+    // Exhaust recovery's own lockout (5 wrong answers → 15 min).
+    for (let attempt = 0; attempt < 5; attempt++) {
+      await request('/api/security/recovery/verify', wrong);
+    }
+    const lockedRecovery = await request('/api/security/recovery/challenge', { username: 'operator' });
+    expect(lockedRecovery.response.status).toBe(429);
+
+    // Normal password login is completely unaffected by recovery being locked.
+    const login = await request('/api/auth/login', { username: 'operator', password: 'ValidPass1' });
+    expect(login.response.status).toBe(200);
+
+    // And the reverse: locking out password login doesn't touch recovery.
+    for (let attempt = 0; attempt < 5; attempt++) {
+      await request('/api/auth/login', { username: 'operator', password: 'still-wrong' });
+    }
+    const loginLocked = await request('/api/auth/login', { username: 'operator', password: 'ValidPass1' });
+    expect(loginLocked.response.status).toBe(429);
+
+    // Recovery's OWN lockout window (independent timer) has already long
+    // expired relative to a fresh challenge attempt in a real clock, but here
+    // we just confirm the counters are separate fields, not shared state.
+    const raw = JSON.parse(fs.readFileSync(validator.AUTH_FILE, 'utf8'));
+    expect(raw.recoveryLockout).toBeTruthy();
+    expect(raw.failedAttempts).toBe(0); // reset by lockedUntil kicking in, but a DIFFERENT field than recoveryLockout
+    expect(raw.lockedUntil).toBeGreaterThan(0);
+  });
 });

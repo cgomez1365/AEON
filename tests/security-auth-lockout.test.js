@@ -53,6 +53,25 @@ describe('Security auth — unified failure accounting and lockout', () => {
     return { response, body: await response.json() };
   };
 
+  const authedPost = async (url, body, token) => {
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const response = await fetch(`http://127.0.0.1:${server.address().port}${url}`, {
+      method: 'POST', headers, body: JSON.stringify(body || {}),
+    });
+    return { response, body: await response.json() };
+  };
+
+  // Injects a live session directly, bypassing login — lets a test authenticate
+  // as an operator without needing a real password/TOTP round trip first.
+  function issueRawSession(extra = {}) {
+    const user = seedUser(extra);
+    const token = crypto.randomBytes(32).toString('hex');
+    user.sessions[token] = { created: Date.now(), lastSeen: Date.now(), expires: Date.now() + 60_000, ua: 'test', ip: 'local' };
+    sessionValidator.saveUser(user);
+    return token;
+  }
+
   function seedUser(extra = {}) {
     const salt = crypto.randomBytes(16).toString('hex');
     const passHash = crypto.scryptSync(PASSWORD, salt, 64).toString('hex');
@@ -178,5 +197,25 @@ describe('Security auth — unified failure accounting and lockout', () => {
     seedUser({ totp: { enabled: true, secret: TOTP_SECRET }, recoverySession: emergencyCredential('EMERGENCY-PASS-5678') });
     const twofa = await login({ username: 'operator', password: 'EMERGENCY-PASS-5678' });
     expect(twofa.response.status).toBe(200);
+  });
+
+  it('refuses to start 2FA setup with no session — a stranger cannot enable it on someone else\'s account', async () => {
+    seedUser();
+    const r = await authedPost('/api/auth/2fa/setup', {}, null);
+    expect(r.response.status).toBe(401);
+  });
+
+  it('a wrong password on 2fa/disable never touches the login lockout counter — different failure, different counter', async () => {
+    const token = issueRawSession({
+      failedAttempts: 2,
+      totp: { enabled: true, secret: TOTP_SECRET, enabledAt: new Date().toISOString() },
+    });
+    const r = await authedPost('/api/auth/2fa/disable', { password: 'definitely-wrong' }, token);
+    expect(r.response.status).toBe(401);
+
+    const after = readUser();
+    expect(after.totp.enabled).toBe(true);           // 2FA is still on — the wrong password didn't disable it
+    expect(after.failedAttempts).toBe(2);             // untouched — login lockout only counts login failures
+    expect(after.lockedUntil).toBe(0);                // nowhere near locked from this alone
   });
 });
