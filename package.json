@@ -88,8 +88,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/brokengearindustries/aeon3"
+    "url": "git+https://github.com/cgomez1365/AEON.git"
   },
+  "bugs": {
+    "url": "https://github.com/cgomez1365/AEON/issues"
+  },
+  "homepage": "https://github.com/cgomez1365/AEON#readme",
   "keywords": [],
   "type": "commonjs"
 }
