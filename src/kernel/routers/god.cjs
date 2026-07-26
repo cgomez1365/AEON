@@ -13,7 +13,7 @@
  *   POST /god/keys              → add an API key (settings workflow, not a bypass)
  *
  * God mode NEVER bypasses the nervous system: key adds proxy to
- * /api/settings/env and model swaps proxy to /api/settings/nl, so the
+ * /api/settings/secrets and model swaps proxy to /api/settings/nl, so the
  * terminal and the Settings panel stay one source of truth.
  * All routes are localhost-desktop only — never mounted on Vercel.
  */
@@ -222,7 +222,11 @@ module.exports = function ({ storage, kernelLLM, _blockRegistry, _blockReadiness
       const envVar = PROVIDER_ENV[String(provider || '').toLowerCase()];
       if (!envVar) return res.status(400).json({ ok: false, error: `Unknown provider "${provider}". Known: ${Object.keys(PROVIDER_ENV).join(', ')}` });
       if (!key || String(key).length < 8) return res.status(400).json({ ok: false, error: 'Key looks too short.' });
-      const r = await fetch(`${BASE}/api/settings/env`, {
+      // /api/settings/env explicitly REJECTS anything matching KEY|SECRET|TOKEN|
+      // PASSWORD|CREDENTIAL (every PROVIDER_ENV var does) and tells the caller to
+      // use /api/settings/secrets instead — this endpoint was silently 400ing on
+      // every single call before this fix. Same {vars} body shape either way.
+      const r = await fetch(`${BASE}/api/settings/secrets`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', host: `127.0.0.1:${PORT}` },
         body: JSON.stringify({ vars: { [envVar]: String(key).trim() } }),
       });

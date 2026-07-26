@@ -156,16 +156,18 @@ function prompt(question, { silent = false } = {}) {
  * the returned session token is persisted.
  */
 async function login() {
+  const username = await prompt('  username: ');
+  if (!username) { console.error(`  ${c.red('✗')} no username given`); return false; }
   const password = await prompt('  password: ', { silent: true });
   if (!password) { console.error(`  ${c.red('✗')} no password given`); return false; }
 
-  let res = await request('POST', '/api/auth/login', { password });
+  let res = await request('POST', '/api/auth/login', { username, password });
 
-  // The unified login route (BO2) asks for a second factor inline when the
-  // account has one; it is not a separate endpoint.
-  if (res.status === 401 && /totp|2fa|second factor/i.test(JSON.stringify(res.data))) {
-    const totp = await prompt('  2FA code: ');
-    res = await request('POST', '/api/auth/login', { password, token: totp, totp });
+  // The unified login route (BO2) asks for a second factor inline — a 200
+  // with requires2FA, not a 401 — when the account has one enabled.
+  if (res.ok && res.data?.requires2FA) {
+    const code = await prompt('  2FA code: ');
+    res = await request('POST', '/api/auth/login', { username, password, code });
   }
 
   const token = res.data?.token || res.data?.session || res.data?.sessionToken;
