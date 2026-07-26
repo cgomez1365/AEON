@@ -31,6 +31,19 @@ export async function authStatus() {
   } catch { return { configured: false, authenticated: false, loginRequired: false }; }
 }
 
+// Answered by the kernel (authGate.cjs), never by the security block itself —
+// this is what lets AEON tell "no account configured" apart from "the block
+// that would show a login screen is gone" instead of collapsing both into a
+// silent bypass. The fallback below only fires when the server is genuinely
+// unreachable (dev server down); "block missing" is a different, detectable
+// state and never lands here.
+export async function securityAvailability() {
+  try {
+    const r = await authFetch('/api/kernel/security-availability');
+    return await r.json();
+  } catch { return { blockPresent: true, hasAccount: false, guardActive: false, authenticated: false }; }
+}
+
 export async function login(username, password, code) {
   const r = await authFetch('/api/auth/login', { method: 'POST', body: JSON.stringify({ username, password, code: code || undefined }) });
   const d = await r.json();

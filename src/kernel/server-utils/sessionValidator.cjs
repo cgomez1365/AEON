@@ -18,6 +18,7 @@ const PRE_AUTH_ROUTES = Object.freeze([
   /^\/public\//,
   /^\/api\/auth\/login$/,
   /^\/api\/auth\/status$/,
+  /^\/api\/kernel\/security-availability$/,
   /^\/api\/security\/otp\/send$/,
   /^\/api\/security\/cloud\/.*/,
   /^\/api\/security\/oauth\/.*/,
