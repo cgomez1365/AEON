@@ -67,7 +67,7 @@ async function start({ json = false } = {}) {
     historySize: HISTORY_LIMIT,
     prompt: c.neon('aeon> '),
     completer(line) {
-      const builtins = ['help', 'status', 'blocks', 'login', 'logout', 'clear', 'exit', 'quit', 'refresh'];
+      const builtins = ['help', 'status', 'blocks', 'login', 'logout', 'clear', 'exit', 'quit', 'refresh', 'agent '];
       const pool = [...builtins, ...commands.map((s) => s.cmd), ...commands.map((s) => s.id)];
       const hits = pool.filter((c0) => c0.startsWith(line));
       return [hits.length ? hits : pool, line];
@@ -84,6 +84,7 @@ async function start({ json = false } = {}) {
       console.log(`\n  ${c.bold('BUILT-IN')}`);
       for (const [cmd, desc] of [
         ['help', 'this list'], ['status', 'server, vault, and model state'],
+        ['agent <goal>', 'multi-step: plan → act → read → repeat'],
         ['blocks', 'mounted blocks and readiness'], ['login', 'authenticate this terminal'],
         ['logout', 'discard the stored session'], ['refresh', 'rescan the command registry'],
         ['clear', 'clear the screen'], ['exit', 'leave the shell'],
@@ -150,6 +151,29 @@ async function start({ json = false } = {}) {
     if (['exit', 'quit', ':q'].includes(input.toLowerCase())) { rl.close(); return; }
     const bi = builtin[input.toLowerCase()];
     if (bi) return bi();
+
+    // `agent <goal>` — multi-step. Single-command routing (below) handles one
+    // action; this handles goals that need several, reading each result before
+    // choosing the next. Confirmation for dangerous steps is asked here, per
+    // step, using the same prompt the one-shot path uses.
+    const agentGoal = input.match(/^agent\s+(.+)$/is);
+    if (agentGoal) {
+      const agent = require('./agent.cjs');
+      try {
+        const out = await agent.run(agentGoal[1].trim(), {
+          confirm: async (prompt) => {
+            const answer = await client.prompt(`\n  ${c.yellow('⚠')} ${prompt} ${c.dim('[y/N] ')}`);
+            return /^y(es)?$/i.test(answer.trim());
+          },
+        });
+        if (!out.ok && out.reason && out.reason !== 'needs-input') {
+          console.log(`\n  ${c.yellow('!')} stopped: ${out.reason}${out.at ? ` at ${out.at}` : ''}\n`);
+        }
+      } catch (e) {
+        console.log(`\n  ${c.red('✗')} ${e.message}\n`);
+      }
+      return;
+    }
 
     // "open 2" / "2" after a search — act on the previous result.
     const pick = input.match(/^(?:open\s+)?(\d{1,2})$/);

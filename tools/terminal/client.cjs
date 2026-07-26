@@ -270,17 +270,19 @@ function normalizeCommand(token) {
   return t;
 }
 
-/** Dispatch through the kernel's own bus, so confirmation gates stay central. */
-async function dispatch(cmdOrId, arg = '', { confirmed = false, timeout = 120000 } = {}) {
+/**
+ * Dispatch through the kernel's own bus, so confirmation gates stay central.
+ * `body` carries the structured form for commands whose route needs more than
+ * one field (files.write → {filePath, content}); `arg` alone is unchanged.
+ */
+async function dispatch(cmdOrId, arg = '', { confirmed = false, timeout = 120000, body = null } = {}) {
   const token = normalizeCommand(cmdOrId);
   // Send both spellings: the registry keys commands by "/gpu" and by
   // "cookbook.gpu", and the dispatcher resolves id first, then cmd.
   const withSlash = token.includes('.') ? token : `/${token.replace(/^\//, '')}`;
-  return withAuth(() => request(
-    'POST', '/api/commands/dispatch',
-    { cmd: withSlash, id: token, arg, confirmed },
-    { timeout },
-  ));
+  const payload = { cmd: withSlash, id: token, arg, confirmed };
+  if (body && typeof body === 'object') payload.body = body;
+  return withAuth(() => request('POST', '/api/commands/dispatch', payload, { timeout }));
 }
 
 module.exports = {

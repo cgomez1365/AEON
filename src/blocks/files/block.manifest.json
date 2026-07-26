@@ -72,7 +72,30 @@
       "docker": true,
       "cloudflare": true
     },
-    "commands": [],
+    "commands": [
+      {
+        "cmd": "/read",
+        "desc": "Read a file from the workspace",
+        "method": "POST",
+        "route": "/api/fs/read",
+        "param": "filePath",
+        "mode": "instant",
+        "category": "content"
+      },
+      {
+        "cmd": "/write",
+        "desc": "Write a file in the workspace",
+        "method": "POST",
+        "route": "/api/fs/write",
+        "params": [
+          "filePath",
+          "content"
+        ],
+        "dangerous": true,
+        "mode": "instant",
+        "category": "content"
+      }
+    ],
     "settings_keys": [],
     "settings": []
   },

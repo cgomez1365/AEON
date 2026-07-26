@@ -69,7 +69,42 @@
       "docker": true,
       "cloudflare": true
     },
-    "commands": [],
+    "commands": [
+      {
+        "cmd": "/set",
+        "desc": "Change a setting in plain English — e.g. \"set chat to ollama qwen3:14b\"",
+        "method": "POST",
+        "route": "/api/settings/nl",
+        "param": "phrase",
+        "mode": "instant",
+        "category": "system"
+      },
+      {
+        "cmd": "/settings",
+        "desc": "Show what is configured and what is still missing",
+        "method": "GET",
+        "route": "/api/settings/setup-status",
+        "mode": "instant",
+        "category": "system"
+      },
+      {
+        "cmd": "/providers",
+        "desc": "List AI providers, their models, and which ones have keys",
+        "method": "GET",
+        "route": "/api/settings/nervous-system",
+        "mode": "instant",
+        "category": "system"
+      },
+      {
+        "cmd": "/restart",
+        "desc": "Restart AEON to apply configuration changes",
+        "method": "POST",
+        "route": "/api/settings/restart",
+        "dangerous": true,
+        "mode": "instant",
+        "category": "system"
+      }
+    ],
     "settings_keys": [],
     "settings": []
   },

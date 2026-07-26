@@ -154,12 +154,15 @@ Reply with ONLY a JSON object, no prose, no code fence:
 
 If nothing in the registry fits, reply {"id":null,"confidence":0,"explanation":"no match"}.`;
 
-  const res = await request('POST', '/api/ai/kernel', {
+  // POST /api/ai — { prompt, role } → { text }. This was /api/ai/kernel, which
+  // has never existed: the route is mounted at /api/ai (server.js), so every
+  // llmRoute() call 404'd and the model tier silently never ran. The fast tier
+  // masked it — anything it resolved worked, anything it didn't fell straight
+  // through to "nothing matched". Found while wiring the agent loop, which
+  // copied this same wrong URL and failed loudly on the first call.
+  const res = await request('POST', '/api/ai', {
     role: 'router',
     prompt,
-    messages: [{ role: 'user', content: prompt }],
-    temperature: 0,
-    max_tokens: 200,
   }, { timeout: 45000 });
 
   if (!res.ok) return null;

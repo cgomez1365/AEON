@@ -237,6 +237,74 @@ const commands = {
     console.log(c1.clearSession() ? `\n  ${c1.c.green('✓')} session discarded\n` : `\n  ${c1.c.dim('no session stored')}\n`);
   },
 
+  /**
+   * aeon agent "<goal>" [--steps N] [-y]
+   *
+   * Multi-step: the model plans, calls one registered command, reads the real
+   * result, and decides the next step — until the goal is met or the cap is
+   * hit. Every dangerous step still hits the kernel's confirmation gate.
+   */
+  async agent() {
+    const agent = require('./terminal/agent.cjs');
+    const client = require('./terminal/client.cjs');
+    const { c } = client;
+    const goal = argv.slice(1).filter((a) => !a.startsWith('-') && a !== flagValue('--steps')).join(' ').trim();
+    if (!goal) {
+      console.error(`usage: aeon agent "<goal>" [--steps N] [-y]\n\n  ${c.dim('aeon agent "save a note about tonight\'s build and show me my memories"')}`);
+      process.exit(1);
+    }
+    await client.requireConnected();
+    const maxSteps = Number(flagValue('--steps')) || agent.DEFAULT_MAX_STEPS;
+    console.log(`\n  ${c.neon('●')} ${c.bold('AEON')} ${c.dim('· agent')}  ${c.dim(goal)}\n`);
+    const out = await agent.run(goal, {
+      maxSteps,
+      yes: flags.yes,
+      json: flags.json,
+      confirm: async (prompt) => {
+        const answer = await client.prompt(`\n  ${c.yellow('⚠')} ${prompt} ${c.dim('[y/N] ')}`);
+        return /^y(es)?$/i.test(answer.trim());
+      },
+    });
+    if (flags.json) console.log(JSON.stringify(out, null, 2));
+    else if (!out.ok && out.reason && out.reason !== 'needs-input') {
+      console.log(`\n  ${c.yellow('!')} stopped: ${out.reason}${out.at ? ` at ${out.at}` : ''}\n`);
+    }
+    process.exitCode = out.ok ? 0 : 1;
+  },
+
+  /**
+   * aeon install <https-url | cartridge-name>
+   *
+   * "Here's a link to a block I bought — install it." Routes through the
+   * SAME command bus as everything else (master.install → /api/store/install),
+   * so the cartridge still goes through the airlock: lint gate → staging →
+   * approval queue → promote → rescan. The CLI adds no install logic of its
+   * own and cannot skip a step; the 428 confirmation is the kernel's.
+   */
+  async install() {
+    const client = require('./terminal/client.cjs');
+    const render = require('./terminal/renderers.cjs');
+    const { c } = client;
+    if (!arg) {
+      console.error(`usage: aeon install <https-url | cartridge-name>
+
+  ${c.dim('aeon install https://store.example.com/my-block-1.0.0.aeon')}
+  ${c.dim('aeon install my-block')}          ${c.dim('# from dist-blocks/')}
+  ${c.dim('aeon run /catalog')}              ${c.dim('# what is already available locally')}`);
+      process.exit(1);
+    }
+    // https:// is enforced server-side too (store.cjs) — this is just a
+    // clearer message than a 422 round trip.
+    if (/^https?:\/\//i.test(arg) && !/^https:\/\//i.test(arg)) {
+      console.error(`\n  ${c.red('✗')} cartridge URLs must be https\n`);
+      process.exit(1);
+    }
+    const source = /^https:\/\//i.test(arg) ? { url: arg } : { name: arg };
+    await dispatchAndRender(client, render, 'master.install', '', {
+      json: flags.json, yes: flags.yes, body: source, label: 'installing',
+    });
+  },
+
   // aeon run <block.cmd|/cmd> [arg…] — explicit, no routing, no model.
   async run() {
     const client = require('./terminal/client.cjs');
@@ -249,11 +317,11 @@ const commands = {
 };
 
 // Shared dispatch + render path for `run` and for NL routing.
-async function dispatchAndRender(client, render, cmdOrId, argText, { json, yes, renderer, label } = {}) {
+async function dispatchAndRender(client, render, cmdOrId, argText, { json, yes, renderer, label, body } = {}) {
   const { c } = client;
   const spin = render.spinner(label || 'working');
   let res;
-  try { res = await client.dispatch(cmdOrId, argText, { timeout: 180000 }); }
+  try { res = await client.dispatch(cmdOrId, argText, { timeout: 180000, body }); }
   finally { spin.stop(); }
 
   // The kernel owns the confirmation gate (428). The CLI only relays it —
@@ -264,7 +332,7 @@ async function dispatchAndRender(client, render, cmdOrId, argText, { json, yes, 
       if (!/^y(es)?$/i.test(answer.trim())) { console.log(`  ${c.dim('cancelled')}\n`); return null; }
     }
     const spin2 = render.spinner(label || 'working');
-    try { res = await client.dispatch(cmdOrId, argText, { confirmed: true, timeout: 180000 }); }
+    try { res = await client.dispatch(cmdOrId, argText, { confirmed: true, timeout: 180000, body }); }
     finally { spin2.stop(); }
   }
 
@@ -327,6 +395,8 @@ ${c.bold('GOD MODE')} ${c.dim('(operate a running AEON, no browser)')}
   aeon commands             every command the manifests declare
   aeon blocks               mounted blocks and readiness
   aeon run ${c.dim('<cmd> [arg…]')}     dispatch one command, no routing
+  aeon agent ${c.dim('"<goal>"')}       multi-step: plan → act → read → repeat
+  aeon install ${c.dim('<url|name>')}   install a block cartridge via the airlock
   aeon login ${c.dim('|')} logout       manage this terminal's session
 
 ${c.bold('BLOCK AUTHORING')} ${c.dim('(deterministic, never calls a model)')}

@@ -53,6 +53,12 @@ function scanCommands(readiness = {}) {
         route: c.route,
         method: (c.method || 'POST').toUpperCase(),
         param: c.param || null,
+        // Multi-field commands (fs/write needs {filePath, content}) can't be
+        // expressed by the single `param`. `params` names the fields a caller
+        // must supply via the dispatch `body`; it is descriptive only — the
+        // block's own handler still validates. Consumed by the agent loop and
+        // by `aeon commands` so a caller knows what to fill in.
+        params: Array.isArray(c.params) ? c.params : null,
         display: c.display || null,
         mode: c.mode || 'instant',
         dangerous: !!c.dangerous,
@@ -106,9 +112,14 @@ module.exports = function ({ blockReadiness = {}, isVercel = false, writeOSAudit
     res.json({ ok: true, count: list.length, commands: list });
   });
 
-  // ── POST /commands/dispatch — { cmd | id, arg, confirmed } ──
+  // ── POST /commands/dispatch — { cmd | id, arg, body?, confirmed } ──
+  // `arg` is the single-string form every command has always used. `body` is
+  // the structured form for commands whose route needs more than one field
+  // (fs/write: {filePath, content}) — declared as `params` in the manifest.
+  // When both are present `body` wins; `arg` alone keeps working unchanged.
   router.post('/commands/dispatch', async (req, res) => {
-    const { cmd, id, arg = '', confirmed = false } = req.body || {};
+    const { cmd, id, arg = '', confirmed = false, body = null } = req.body || {};
+    const structured = body && typeof body === 'object' && !Array.isArray(body) ? body : null;
     const spec = registry.get(id) || registry.get(cmd);
     if (!spec) return res.status(404).json({ ok: false, error: `Unknown command: ${id || cmd}` });
 
@@ -119,9 +130,17 @@ module.exports = function ({ blockReadiness = {}, isVercel = false, writeOSAudit
 
     // Central confirmation gate — the dispatcher asks, never the block.
     if (spec.dangerous && !confirmed) {
+      // Show the actual target. A structured command (/write) carries no
+      // `arg`, so without this the operator would be asked to confirm a
+      // destructive action with a blank subject.
+      const subject = arg
+        ? ` "${arg}"`
+        : structured
+          ? ` ${Object.entries(structured).map(([k, v]) => `${k}=${String(v).slice(0, 60)}`).join(', ')}`
+          : '';
       return res.status(428).json({
         ok: false, id: spec.id, requiresConfirmation: true,
-        prompt: `${spec.blockLabel}: ${spec.title}${arg ? ` "${arg}"` : ''} — confirm to execute.`,
+        prompt: `${spec.blockLabel}: ${spec.title}${subject} — confirm to execute.`,
       });
     }
 
@@ -140,9 +159,14 @@ module.exports = function ({ blockReadiness = {}, isVercel = false, writeOSAudit
     if (req.headers.authorization) init.headers.Authorization = req.headers.authorization;
     if (req.headers.cookie) init.headers.Cookie = req.headers.cookie;
     if (spec.method === 'GET') {
-      if (spec.param && arg) url += `${url.includes('?') ? '&' : '?'}${spec.param}=${encodeURIComponent(arg)}`;
+      const qs = structured
+        ? Object.entries(structured).filter(([, v]) => v !== undefined && v !== null)
+        : (spec.param && arg ? [[spec.param, arg]] : []);
+      for (const [k, v] of qs) url += `${url.includes('?') ? '&' : '?'}${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`;
     } else {
-      init.body = JSON.stringify(spec.param ? { [spec.param]: arg } : (arg ? { arg } : {}));
+      init.body = JSON.stringify(
+        structured || (spec.param ? { [spec.param]: arg } : (arg ? { arg } : {})),
+      );
     }
 
     try {

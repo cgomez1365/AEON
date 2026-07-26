@@ -81,6 +81,35 @@
         "route": "/api/master/registry",
         "mode": "instant",
         "display": "text"
+      },
+      {
+        "cmd": "/install",
+        "desc": "Install a block cartridge from an https URL or a dist-blocks name",
+        "method": "POST",
+        "route": "/api/store/install",
+        "params": [
+          "url",
+          "name"
+        ],
+        "dangerous": true,
+        "mode": "instant",
+        "category": "system"
+      },
+      {
+        "cmd": "/catalog",
+        "desc": "List block cartridges available to install",
+        "method": "GET",
+        "route": "/api/store/catalog",
+        "mode": "instant",
+        "category": "system"
+      },
+      {
+        "cmd": "/queue",
+        "desc": "Show the build and install approval queue",
+        "method": "GET",
+        "route": "/api/build/queue",
+        "mode": "instant",
+        "category": "system"
       }
     ],
     "settings_keys": [],

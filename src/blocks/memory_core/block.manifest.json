@@ -71,7 +71,35 @@
       "docker": true,
       "cloudflare": false
     },
-    "commands": [],
+    "commands": [
+      {
+        "cmd": "/memory",
+        "desc": "List or search saved memories",
+        "method": "GET",
+        "route": "/api/memory",
+        "param": "q",
+        "mode": "instant",
+        "category": "content"
+      },
+      {
+        "cmd": "/remember",
+        "desc": "Save something to memory",
+        "method": "POST",
+        "route": "/api/memory/add",
+        "param": "text",
+        "mode": "instant",
+        "category": "content"
+      },
+      {
+        "cmd": "/context",
+        "desc": "Pull the relevant memory context for a topic",
+        "method": "GET",
+        "route": "/api/memory/context",
+        "param": "q",
+        "mode": "instant",
+        "category": "content"
+      }
+    ],
     "settings_keys": [],
     "settings": [
       {
