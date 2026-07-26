@@ -90,7 +90,7 @@ module.exports = (app, deps) => {
           const response = await fetch(`${credentials.url}/auth/v1/otp`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', apikey: credentials.anonKey },
-            body: JSON.stringify({ email, create_user: true }),
+            body: JSON.stringify({ email, create_user: true, options: { emailRedirectTo: null } }),
             signal: AbortSignal.timeout(10_000),
           });
           if (!response.ok) {
