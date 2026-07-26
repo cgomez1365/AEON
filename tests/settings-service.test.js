@@ -5,6 +5,15 @@ import os from 'os';
 import path from 'path';
 
 const require = createRequire(import.meta.url);
+
+// Point the credential stores at a throwaway directory BEFORE requiring
+// anything that touches the vault — SECRETS_DIR is resolved once at module
+// scope. Without this the suite reads and writes the real secrets/ folder and
+// only passes while that folder is empty; a single server boot writes a
+// keyslot store under the .env key and every case here fails to decrypt.
+const SECRETS_TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'aeon-settings-secrets-'));
+process.env.AEON_SECRETS_DIR = SECRETS_TMP;
+
 const crypto = require('crypto');
 const settings = require('../services/settings.js');
 const express = require('express');

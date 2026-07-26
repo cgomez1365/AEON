@@ -112,8 +112,16 @@ function writeKeyslots(slots) {
   fs.writeFileSync(tmp, JSON.stringify(slots, null, 2), { mode: 0o600 });
   fs.renameSync(tmp, KEYSLOTS_FILE);
 }
+// The .env key and the keyslot file are two halves of the SAME protector: the
+// "file" slot wraps the DEK under the key stored in .env. AEON_SECRETS_DIR
+// already relocates one half, so the other must be relocatable too — otherwise
+// pointing the vault at a temp directory still reissues the key into the real
+// install's .env. That is exactly what made `npm test` rotate the developer's
+// live AEON_VAULT_MASTER_KEY on every run.
+const ENV_FILE = process.env.AEON_ENV_FILE || path.join(APP_ROOT, '.env');
+
 function writeEnvKey(hexKey) {
-  const envFile = path.join(APP_ROOT, '.env');
+  const envFile = ENV_FILE;
   let env = '';
   try { env = fs.existsSync(envFile) ? fs.readFileSync(envFile, 'utf8') : ''; } catch {}
   if (/^AEON_VAULT_MASTER_KEY=.*$/m.test(env)) {

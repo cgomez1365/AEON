@@ -21,7 +21,10 @@ const vault = require('./vault.cjs');
 
 const isVercel = !!process.env.VERCEL;
 const APP_ROOT = path.join(__dirname, '..', '..');
-const SECRETS_DIR = path.join(APP_ROOT, 'secrets');
+// Honors AEON_SECRETS_DIR, same as vault.cjs:22. Without this the endpoint
+// registry stays pinned to the install dir while the vault follows the env —
+// on a portable/USB install that splits secrets across two filesystems.
+const SECRETS_DIR = process.env.AEON_SECRETS_DIR || path.join(APP_ROOT, 'secrets');
 try { if (!isVercel) fs.mkdirSync(SECRETS_DIR, { recursive: true }); } catch {}
 const REG_FILE = path.join(SECRETS_DIR, 'aeon-endpoints.json');
 const REG_ROW_ID = 1;
@@ -33,6 +36,19 @@ function lmStudioHost() {
   return process.env.LMSTUDIO_HOST || 'http://localhost:1234';
 }
 
+// Same seam for Ollama (BO-USB). services/ollamaVendor.js and council already
+// read OLLAMA_HOST; the transport profile below did not, so a portable install
+// pointing at a bundled Ollama on a non-default port was silently ignored here.
+function ollamaHost() {
+  return process.env.OLLAMA_HOST || 'http://localhost:11434';
+}
+
+// True when AEON is running from portable/USB media: no cloud keys expected,
+// every role resolves local, and no outbound provider probing on boot.
+function isPortable() {
+  return process.env.AEON_PORTABLE === 'true';
+}
+
 // ── Provider transport profiles (how to actually call them) ──────────
 const PROVIDER_TRANSPORT = {
   groq:   { style: 'openai', base: 'https://api.groq.com/openai/v1', list: '/models',     reach: ['local', 'cloud'] },
@@ -41,7 +57,7 @@ const PROVIDER_TRANSPORT = {
   claude: { style: 'anthropic', base: 'https://api.anthropic.com/v1', list: '/models',    reach: ['local', 'cloud'] },
   grok:   { style: 'openai', base: 'https://api.x.ai/v1',             list: '/models',    reach: ['local', 'cloud'] },
   openrouter: { style: 'openai', base: 'https://openrouter.ai/api/v1', list: '/models', reach: ['local', 'cloud'] },
-  ollama: { style: 'ollama', base: 'http://localhost:11434',         list: '/api/tags',   reach: ['local'] },
+  ollama: { style: 'ollama', base: ollamaHost(),                     list: '/api/tags',   reach: ['local'] },
   lmstudio: { style: 'openai', base: `${lmStudioHost()}/v1`,          list: '/models',     reach: ['local'] },
 };
 
@@ -175,6 +191,25 @@ async function discoverModels(provider, base_url, apiKey) {
  */
 async function resolveForRole(role, supabase) {
   const runtime = isVercel ? 'cloud' : 'local';
+
+  // Portable/USB mode: every role resolves to the bundled Ollama, before the
+  // registry is even consulted. A USB install has no cloud keys by design, so
+  // the normal path would fail role lookup and surface an error the owner can
+  // do nothing about while offline. No cloud fallback is attempted — reaching
+  // for the network is exactly what portable mode promises not to do.
+  if (isPortable()) {
+    return {
+      ok: true,
+      provider: 'ollama',
+      model: process.env.OLLAMA_DEFAULT_MODEL || 'qwen3:8b',
+      base_url: ollamaHost(),
+      apiKey: null,
+      via: 'direct',
+      endpoint_id: 'portable-ollama',
+      role,
+    };
+  }
+
   const reg = await load(supabase);
   let mapping = reg.roles[role] || reg.roles['chat'];
 
@@ -224,5 +259,5 @@ module.exports = {
   PROVIDER_TRANSPORT, load, save,
   addEndpoint, removeEndpoint, assignRole,
   discoverModels, resolveForRole, isVercel,
-  lmStudioHost,
+  lmStudioHost, ollamaHost, isPortable,
 };

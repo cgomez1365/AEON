@@ -224,6 +224,29 @@ const baseDeps = {
   DEFAULT_LOCAL_MODEL: ai.defaultLocalModel(), // legacy snapshot for old block deps
 };
 
+// ── /api/ping — liveness probe, deliberately mounted BEFORE the auth gate ──
+// The terminal CLI (tools/aeon-cli.cjs) uses this to choose Connected vs
+// Standalone mode. It must answer while the vault is locked, otherwise a
+// locked server is indistinguishable from no server at all and the CLI would
+// wrongly fall back to spinning up its own runtime against the same data dir.
+// Kept deliberately thin: liveness + whether auth is required. No block list,
+// no model names, no paths — nothing here is worth reading unauthenticated.
+app.get('/api/ping', (req, res) => {
+  let authRequired = false;
+  try {
+    const sessions = require('../src/kernel/server-utils/sessionValidator.cjs');
+    authRequired = sessions.guardActive(sessions.loadPolicy());
+  } catch {}
+  res.json({
+    ok: true,
+    name: 'aeon',
+    version: require('../package.json').version,
+    portable: process.env.AEON_PORTABLE === 'true',
+    authRequired,
+    uptime: Math.floor(process.uptime()),
+  });
+});
+
 // ── Operator auth gate — MUST mount before any block/kernel routes ──
 // Security owns /api/auth/*; the kernel enforces its Vault-backed policy.
 const _authGate = require('../src/kernel/authGate.cjs');

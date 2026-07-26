@@ -1,20 +1,45 @@
 #!/usr/bin/env node
 /**
- * DX1 — aeon CLI (Ship Plan v2, Month 1)
+ * aeon CLI — two surfaces behind one binary.
+ *
+ * DX1 (block authoring, Ship Plan v2 Month 1) — deterministic, never an LLM:
  *   aeon lint <id|path>   deterministic gate checks (schema + code) — run BEFORE submitting
  *   aeon pack <id>        lint + bundle a store-ready .aeon cartridge into dist-blocks/
  *   aeon promote <id>     staging/<id> → src/blocks/<id> through the lint airlock
  *   aeon dev <id>         isolated dev server on :3002 (staging/ or src/blocks/), hot-remount on save
  *   aeon new <id>         copy _template into staging/<id> and personalize
  *
- * Deterministic only — the CLI never calls an LLM.
+ * BO-TGM (God Mode terminal) — operate a running AEON without a browser:
+ *   aeon "<natural language>"   intent-routed, falls back to the model
+ *   aeon shell                  interactive REPL
+ *   aeon status | blocks | commands | run | login | logout
+ *
+ * God Mode is a CLIENT of the kernel's existing command bus
+ * (src/kernel/commandRegistry.cjs → /api/commands, /api/commands/dispatch).
+ * It deliberately owns no dispatch logic of its own: confirmation gates,
+ * when-clauses and permissions stay enforced server-side, so the terminal
+ * cannot become a way around them.
  */
 const path = require('path');
 const fs   = require('fs');
 const { lintBlock, promoteBlock, ensureStagingDir, BLOCKS_DIR, STAGING_DIR } = require('../src/kernel/staging.cjs');
 
-const [, , cmd, arg] = process.argv;
+const argv = process.argv.slice(2);
+const [cmd, arg] = argv;
 const ROOT = path.join(__dirname, '..');
+
+const flags = {
+  json:  argv.includes('--json'),
+  noLlm: argv.includes('--no-llm'),
+  yes:   argv.includes('--yes') || argv.includes('-y'),
+};
+function flagValue(...names) {
+  for (const n of names) {
+    const i = argv.indexOf(n);
+    if (i !== -1 && argv[i + 1] && !argv[i + 1].startsWith('--')) return argv[i + 1];
+  }
+  return null;
+}
 
 function resolveBlockDir(idOrPath) {
   if (!idOrPath) return null;
@@ -139,10 +164,206 @@ const commands = {
     app.get('/', (_req, res) => res.json({ dev: true, block: path.basename(dir), apis: mounted, note: 'isolated dev server — sees its own data/ only (DX2)' }));
     app.listen(3002, () => console.log(`[aeon dev] ${path.basename(dir)} on http://localhost:3002 (isolated, staging-safe)`));
   },
+
+  // ── God Mode (BO-TGM) ────────────────────────────────────────────────────
+  shell() {
+    return require('./terminal/repl.cjs').start({ json: flags.json });
+  },
+
+  async status() {
+    const client = require('./terminal/client.cjs');
+    const render = require('./terminal/renderers.cjs');
+    const { c } = client;
+    const s = await client.ping();
+    if (flags.json) return console.log(JSON.stringify(s, null, 2));
+
+    const { commands, source } = await client.getCommands();
+    console.log('');
+    console.log(render.box([
+      `${c.dim('server  ')} ${s.connected ? c.green('● running') : c.red('○ not running')}`,
+      `${c.dim('url     ')} ${client.baseUrl()}`,
+      `${c.dim('version ')} ${s.version || c.dim('—')}`,
+      `${c.dim('uptime  ')} ${s.uptime ? `${Math.floor(s.uptime / 60)}m ${s.uptime % 60}s` : c.dim('—')}`,
+      `${c.dim('portable')} ${s.portable ? c.neon('yes — offline, local model') : c.dim('no')}`,
+      `${c.dim('vault   ')} ${s.authRequired ? c.yellow('locked') : c.green('unlocked')}`,
+      `${c.dim('session ')} ${client.loadSession() ? c.green('stored') : c.dim('none')}`,
+      `${c.dim('commands')} ${commands.length} ${c.dim(`(via ${source})`)}`,
+    ], { title: 'AEON STATUS' }));
+    console.log('');
+    if (!s.connected) console.log(c.dim(`  Start a server with \`npm run server\`, or set AEON_URL.\n`));
+  },
+
+  async commands() {
+    const client = require('./terminal/client.cjs');
+    const render = require('./terminal/renderers.cjs');
+    const { c } = client;
+    const { commands, source } = await client.getCommands();
+    if (flags.json) return console.log(JSON.stringify(commands, null, 2));
+
+    console.log(`\n  ${c.bold(String(commands.length))} commands ${c.dim(`(via ${source})`)}\n`);
+    const byBlock = {};
+    for (const s of commands) (byBlock[s.blockLabel || s.blockId] ||= []).push(s);
+    for (const [label, list] of Object.entries(byBlock).sort()) {
+      console.log(`  ${c.bold(label)}`);
+      for (const s of list) {
+        const flag = s.available === false ? c.dim(' (unavailable)') : s.dangerous ? c.yellow(' ⚠') : '';
+        console.log(`    ${c.neon(s.cmd.padEnd(18))} ${c.dim(s.title || s.desc || '')}${flag}`);
+      }
+      console.log('');
+    }
+  },
+
+  async blocks() {
+    const client = require('./terminal/client.cjs');
+    const render = require('./terminal/renderers.cjs');
+    const res = await client.withAuth(() => client.request('GET', '/api/god/blocks'));
+    if (flags.json) return console.log(JSON.stringify(res.data, null, 2));
+    if (!res.ok) {
+      // Fall back to what the manifests say — works with no server at all.
+      const { commands } = await client.getCommands();
+      const ids = [...new Set(commands.map((s) => s.blockId))];
+      console.log(`\n${render.table(ids.map((id) => ({ block: id, commands: commands.filter((s) => s.blockId === id).length })))}\n`);
+      return;
+    }
+    const list = res.data?.blocks || res.data || [];
+    console.log(`\n${render.table(list.map((b) => ({
+      block: b.id || b.name, label: b.label || '', ready: b.ready !== false,
+    })))}\n`);
+  },
+
+  async login()  { const c1 = require('./terminal/client.cjs'); console.log(''); await c1.login(); console.log(''); },
+  async logout() {
+    const c1 = require('./terminal/client.cjs');
+    console.log(c1.clearSession() ? `\n  ${c1.c.green('✓')} session discarded\n` : `\n  ${c1.c.dim('no session stored')}\n`);
+  },
+
+  // aeon run <block.cmd|/cmd> [arg…] — explicit, no routing, no model.
+  async run() {
+    const client = require('./terminal/client.cjs');
+    const render = require('./terminal/renderers.cjs');
+    const { c } = client;
+    if (!arg) { console.error('usage: aeon run <command> [arg…]   (see: aeon commands)'); process.exit(1); }
+    const rest = argv.slice(argv.indexOf(arg) + 1).filter((a) => !a.startsWith('--')).join(' ');
+    await dispatchAndRender(client, render, arg, rest, { json: flags.json, yes: flags.yes });
+  },
 };
 
-if (!cmd || !commands[cmd]) {
-  console.log('aeon — AEON block DX CLI\n  aeon new <id>      scaffold into staging/\n  aeon lint <id>     deterministic gate checks\n  aeon dev <id>      isolated dev server :3002\n  aeon pack <id>     build .aeon cartridge\n  aeon promote <id>  staging → src/blocks via airlock');
-  process.exit(cmd ? 1 : 0);
+// Shared dispatch + render path for `run` and for NL routing.
+async function dispatchAndRender(client, render, cmdOrId, argText, { json, yes, renderer, label } = {}) {
+  const { c } = client;
+  const spin = render.spinner(label || 'working');
+  let res;
+  try { res = await client.dispatch(cmdOrId, argText, { timeout: 180000 }); }
+  finally { spin.stop(); }
+
+  // The kernel owns the confirmation gate (428). The CLI only relays it —
+  // --yes pre-confirms, it does not bypass the check.
+  if (res.status === 428 && res.data?.requiresConfirmation) {
+    if (!yes) {
+      const answer = await client.prompt(`\n  ${c.yellow('⚠')} ${res.data.prompt} ${c.dim('[y/N] ')}`);
+      if (!/^y(es)?$/i.test(answer.trim())) { console.log(`  ${c.dim('cancelled')}\n`); return null; }
+    }
+    const spin2 = render.spinner(label || 'working');
+    try { res = await client.dispatch(cmdOrId, argText, { confirmed: true, timeout: 180000 }); }
+    finally { spin2.stop(); }
+  }
+
+  if (!res.ok) {
+    if (json) console.log(JSON.stringify(res.data, null, 2));
+    else console.error(`\n  ${c.red('✗')} ${res.data?.error || `failed (${res.status})`}\n`);
+    process.exitCode = 1;
+    return res;
+  }
+  console.log('');
+  console.log(render.auto(res.data, { renderer, query: argText, json }));
+  console.log('');
+  return res;
 }
-commands[cmd]();
+
+// Natural language: `aeon "grade my resume"`. Anything that is not a known
+// subcommand and is not a flag lands here.
+async function naturalLanguage(input) {
+  const client = require('./terminal/client.cjs');
+  const render = require('./terminal/renderers.cjs');
+  const router = require('./terminal/router.cjs');
+  const { c } = client;
+
+  const { commands } = await client.getCommands();
+  const spin = render.spinner('routing');
+  let route;
+  try { route = await router.routeCommand(input, commands, { noLlm: flags.noLlm }); }
+  finally { spin.stop(); }
+
+  if (!route || route.ok === false) {
+    console.error(`\n  ${c.yellow('?')} nothing matched ${c.dim(`"${input}"`)}`);
+    if (route?.suggestions?.length) {
+      console.error(`\n  ${c.dim('did you mean:')}`);
+      for (const s of route.suggestions) console.error(`    ${c.neon(s.cmd.padEnd(18))} ${c.dim(s.title)}`);
+    }
+    console.error(`\n  ${c.dim('`aeon commands` lists everything available.')}\n`);
+    process.exit(1);
+  }
+
+  if (!flags.json) {
+    console.log(`\n  ${c.neon('●')} ${c.bold('AEON')} ${c.dim('· God Mode')}`);
+    console.log(c.dim('  ' + '─'.repeat(45)));
+    console.log(`  ${c.dim('Routing →')} ${c.bold(route.blockLabel)} ${c.dim('/')} ${route.cmd}`
+      + (route.via === 'llm' ? c.dim('   (model-routed)') : ''));
+  }
+  await dispatchAndRender(client, render, route.id || route.cmd, route.arg, {
+    json: flags.json, yes: flags.yes, label: route.title || 'working',
+  });
+}
+
+function usage() {
+  const { c } = require('./terminal/client.cjs');
+  console.log(`
+${c.neon(c.bold('aeon'))} ${c.dim('— AEON terminal')}
+
+${c.bold('GOD MODE')} ${c.dim('(operate a running AEON, no browser)')}
+  aeon ${c.dim('"<natural language>"')}   route by intent, model as fallback
+  aeon shell                interactive REPL — history, tab complete, context
+  aeon status               server, vault, model, portable state
+  aeon commands             every command the manifests declare
+  aeon blocks               mounted blocks and readiness
+  aeon run ${c.dim('<cmd> [arg…]')}     dispatch one command, no routing
+  aeon login ${c.dim('|')} logout       manage this terminal's session
+
+${c.bold('BLOCK AUTHORING')} ${c.dim('(deterministic, never calls a model)')}
+  aeon new <id>             scaffold into staging/
+  aeon lint <id>            deterministic gate checks
+  aeon dev <id>             isolated dev server :3002
+  aeon pack <id>            build .aeon cartridge
+  aeon promote <id>         staging → src/blocks via airlock
+
+${c.bold('FLAGS')}
+  --json                    machine-readable output
+  --no-llm                  intent matching only, never call a model
+  -y, --yes                 pre-confirm dangerous commands
+
+${c.dim('Examples')}
+  ${c.dim('$')} aeon status
+  ${c.dim('$')} aeon ${c.dim('"what did I save about competitor pricing"')}
+  ${c.dim('$')} aeon shell
+`);
+}
+
+(async () => {
+  if (!cmd || cmd === '--help' || cmd === '-h' || cmd === 'help') {
+    usage();
+    process.exit(cmd && cmd !== 'help' && cmd !== '--help' && cmd !== '-h' ? 1 : 0);
+  }
+  // A quoted sentence, or anything that isn't a known subcommand, is intent.
+  // Bare flags are never treated as natural language.
+  if (!commands[cmd]) {
+    if (cmd.startsWith('-')) { usage(); process.exit(1); }
+    const input = argv.filter((a) => !a.startsWith('--') && a !== '-y').join(' ');
+    await naturalLanguage(input);
+    return;
+  }
+  await commands[cmd]();
+})().catch((e) => {
+  const { c } = require('./terminal/client.cjs');
+  console.error(`\n  ${c.red('✗')} ${e.stack || e.message}\n`);
+  process.exit(1);
+});

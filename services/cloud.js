@@ -4,7 +4,12 @@
  * client, and every consumer already fail-softs on a null client. Data
  * sovereignty default is LOCAL; the cloud mirror is opt-in.
  */
-const localOnly = process.env.AEON_LOCAL_ONLY === '1';
+// Portable/USB media implies local-only: a drive that boots on an untrusted
+// host must not reach for a cloud mirror, and a bundle built with no keys has
+// nothing to reach with. Folding it in here means portable mode cannot drift
+// out of sync with AEON_LOCAL_ONLY by someone setting only one of the two.
+const localOnly = process.env.AEON_LOCAL_ONLY === '1'
+  || process.env.AEON_PORTABLE === 'true';
 
 let supabase = null;
 if (!localOnly) {
@@ -20,6 +25,15 @@ if (!localOnly) {
   }
 }
 
-if (!supabase) console.log(`[CLOUD] Local-only mode${localOnly ? ' (AEON_LOCAL_ONLY=1)' : ''} — no cloud mirror attached.`);
+if (!supabase) {
+  // Always say WHY. The bare "local-only" message is ambiguous between a
+  // deliberate opt-out and silently-missing credentials — they look identical
+  // at boot but mean opposite things, and reading it as the wrong one sends
+  // you hunting for a regression that isn't there.
+  const why = process.env.AEON_PORTABLE === 'true' ? ' (AEON_PORTABLE=true)'
+    : localOnly ? ' (AEON_LOCAL_ONLY=1)'
+    : ' (no cloud keys in .env — local by default)';
+  console.log(`[CLOUD] Local-only mode${why} — no cloud mirror attached.`);
+}
 
 module.exports = { supabase, localOnly };

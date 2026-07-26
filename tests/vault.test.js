@@ -7,7 +7,15 @@ import fs from 'fs';
 const require = createRequire(import.meta.url);
 
 // Isolate the vault file to a temp dir so tests never touch the real secrets/.
+//
+// AEON_SECRETS_DIR must be set BEFORE vault.cjs is required: it resolves
+// SECRETS_DIR once at module scope. Previously this temp dir was created and
+// deleted but never actually wired up, so the suite read and wrote the real
+// secrets/ directory and only passed because that directory happened to be
+// empty. Booting the server once — which generates a keyslot store under the
+// .env key — made every test here fail with a decryption error.
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'aeon-vault-test-'));
+process.env.AEON_SECRETS_DIR = TMP;
 
 describe('vault.cjs — AES-256-GCM secret store', () => {
   let vault;

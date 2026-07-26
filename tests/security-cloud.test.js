@@ -5,6 +5,14 @@ import os from 'os';
 import path from 'path';
 
 const require = createRequire(import.meta.url);
+
+// See tests/vault.test.js — AEON_SECRETS_DIR is resolved at module scope, so
+// it has to be set before the vault is required. The per-test tempDir below
+// isolates the security Vault; this isolates the encrypted secret store that
+// sits underneath it.
+const SECRETS_TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'aeon-cloud-secrets-'));
+process.env.AEON_SECRETS_DIR = SECRETS_TMP;
+
 const crypto = require('crypto');
 const express = require('express');
 const mountCloudSecurity = require('../src/blocks/security/api/index.cjs');
