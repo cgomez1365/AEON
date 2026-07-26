@@ -255,7 +255,9 @@ const commands = {
     }
     await client.requireConnected();
     const maxSteps = Number(flagValue('--steps')) || agent.DEFAULT_MAX_STEPS;
-    console.log(`\n  ${c.neon('●')} ${c.bold('AEON')} ${c.dim('· agent')}  ${c.dim(goal)}\n`);
+    // --json must emit ONLY the JSON document; a decorative banner ahead of it
+    // makes the output unparseable for anything piping this into a tool.
+    if (!flags.json) console.log(`\n  ${c.neon('●')} ${c.bold('AEON')} ${c.dim('· agent')}  ${c.dim(goal)}\n`);
     const out = await agent.run(goal, {
       maxSteps,
       yes: flags.yes,

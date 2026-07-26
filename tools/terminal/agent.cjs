@@ -31,7 +31,14 @@ const render = require('./renderers.cjs');
 const { c } = client;
 
 const DEFAULT_MAX_STEPS = 8;
-const OBSERVATION_LIMIT = 1200;   // chars of any single result fed back
+const OBSERVATION_LIMIT = 700;    // chars of the MOST RECENT result fed back
+const OLD_OBSERVATION_LIMIT = 120; // older steps collapse to a one-liner
+// How many commands to show per step. The full registry is 33 commands and
+// ~675 tokens — 72% of a first-step prompt — and re-sending it every step is
+// what makes a free tier or a slow local model unusable for real work. The
+// relevant subset is picked deterministically (no model call), and the model
+// can ask for everything with {"action":"list"} if the subset is wrong.
+const CATALOGUE_LIMIT = Number(process.env.AEON_AGENT_CATALOGUE) || 12;
 const AGENT_ROLE = process.env.AEON_AGENT_ROLE || 'agent_worker';
 // A 14B model on CPU-only inference (this machine's GTX 1050 lost CUDA
 // support in Ollama 0.32.4) answers a catalogue-sized prompt in minutes, not
@@ -39,11 +46,11 @@ const AGENT_ROLE = process.env.AEON_AGENT_ROLE || 'agent_worker';
 const MODEL_TIMEOUT = Number(process.env.AEON_AGENT_TIMEOUT_MS) || 180000;
 
 /** Keep the model's view of a result small but honest. */
-function summarizeObservation(res) {
+function summarizeObservation(res, limit = OBSERVATION_LIMIT) {
   if (!res) return 'no response';
   if (!res.ok) {
     const err = res.data?.error || res.data?.text || `failed (${res.status})`;
-    return `ERROR: ${String(err).slice(0, OBSERVATION_LIMIT)}`;
+    return `ERROR: ${String(err).slice(0, limit)}`;
   }
   const payload = res.data || {};
   const text = payload.text;
@@ -52,10 +59,43 @@ function summarizeObservation(res) {
   if (text) body = String(text);
   else if (data && typeof data === 'object') body = JSON.stringify(data);
   else body = JSON.stringify(payload);
-  if (body.length > OBSERVATION_LIMIT) {
-    body = body.slice(0, OBSERVATION_LIMIT) + ` …[truncated, ${body.length} chars total]`;
+  if (body.length > limit) {
+    body = body.slice(0, limit) + ` …[truncated, ${body.length} chars total]`;
   }
   return body;
+}
+
+/**
+ * Pick the commands worth showing this step. Deterministic and free — no model
+ * call — using the router's own word-overlap scorer.
+ *
+ * Guarantees, so the filter is never a wall:
+ *   • anything already used this run stays visible (continuity)
+ *   • if scoring finds nothing, fall back to the full list rather than
+ *     showing the model an empty menu
+ *   • the model can always request everything with {"action":"list"}
+ */
+function pickRelevant(goal, commands, history = [], limit = CATALOGUE_LIMIT) {
+  if (commands.length <= limit) return commands;
+
+  const usedIds = new Set(history.map((h) => h.id));
+  const used = commands.filter((c) => usedIds.has(c.id));
+
+  let ranked = [];
+  try { ranked = require('./router.cjs').suggest(goal, commands, limit * 2); }
+  catch { ranked = []; }
+
+  const picked = [];
+  const seen = new Set();
+  for (const c of [...used, ...ranked]) {
+    if (seen.has(c.id)) continue;
+    seen.add(c.id);
+    picked.push(c);
+    if (picked.length >= limit) break;
+  }
+  // Nothing scored — the goal shares no vocabulary with any command. Showing
+  // a truncated arbitrary slice would be worse than showing everything.
+  return picked.length ? picked : commands;
 }
 
 function buildCatalogue(commands) {
@@ -68,15 +108,26 @@ function buildCatalogue(commands) {
     .join('\n');
 }
 
-function buildPrompt(goal, commands, history) {
+function buildPrompt(goal, commands, history, { hiddenCount = 0 } = {}) {
+  // Only the most recent result is carried in full — that is the one the next
+  // decision actually depends on. Older steps collapse to a single line. Without
+  // this the transcript grows without bound and dominates the prompt by step 4.
+  const last = history.length - 1;
   const transcript = history.length
-    ? history.map((h, i) => `STEP ${i + 1}: ran ${h.id}${h.argText ? ` (${h.argText})` : ''}\nRESULT: ${h.observation}`).join('\n\n')
+    ? history.map((h, i) => (i === last
+        ? `STEP ${i + 1}: ran ${h.id}${h.argText ? ` (${h.argText})` : ''}\nRESULT: ${h.observation}`
+        : `STEP ${i + 1}: ran ${h.id}${h.argText ? ` (${h.argText})` : ''} → ${h.ok === false ? 'FAILED' : 'ok'}: ${String(h.observation).slice(0, OLD_OBSERVATION_LIMIT)}`
+      )).join('\n')
     : '(nothing yet — this is the first step)';
+
+  const more = hiddenCount
+    ? `\n(${hiddenCount} further commands exist but were filtered as unrelated. If none of the above fit, reply {"action":"list"} to see all of them.)`
+    : '';
 
   return `You operate AEON, a local AI operating system, by calling its registered commands one at a time.
 
 COMMANDS YOU MAY CALL (id | argument shape | description):
-${buildCatalogue(commands)}
+${buildCatalogue(commands)}${more}
 
 THE USER'S GOAL: "${goal}"
 
@@ -85,14 +136,15 @@ ${transcript}
 
 Decide the SINGLE next step. Reply with ONLY a JSON object, no prose, no code fence:
 
-{"action":"run","id":"<exact id from the list>","arg":"<text argument, or empty>","body":{},"why":"<short reason>"}
+{"action":"run","id":"<exact id>","arg":"<text argument, or empty>","body":{},"why":"<short reason>","final":false}
 {"action":"done","summary":"<what was accomplished, in plain English for a non-technical user>"}
 {"action":"ask","question":"<what you need from the user to continue>"}
 
 Rules:
 - "id" MUST be copied exactly from the list above. Never invent one.
 - Use "body" ONLY for commands whose shape shows body:{...}; fill those exact keys. Otherwise use "arg".
-- If the goal is already met by what has happened, reply with "done".
+- Set "final":true when this command is the LAST one needed — then also include "summary". This saves a whole round trip, so use it whenever you can.
+- If the goal is ALREADY met by what has happened, reply with "done".
 - If you cannot proceed without information only the user has, reply with "ask".
 - Prefer the fewest steps. Do not repeat a step that already succeeded.`;
 }
@@ -146,32 +198,50 @@ async function run(goal, {
   ask = askModel,
   dispatch = client.dispatch,
   getCommands = client.getCommands,
+  catalogueLimit = CATALOGUE_LIMIT,
 } = {}) {
   const { commands } = await getCommands();
   if (!commands.length) throw new Error('no commands available — is the server running?');
 
   const history = [];
+  // Rough token accounting so the cost of a run is visible rather than
+  // guessed at. ~4 chars/token is close enough to compare runs and to tell a
+  // user whether a free tier will carry them through a day's work.
+  const usage = { calls: 0, promptChars: 0, get estPromptTokens() { return Math.ceil(this.promptChars / 4); } };
+  let showAll = false;   // flipped by {"action":"list"} — once, on demand
 
   for (let step = 1; step <= maxSteps; step++) {
+    const visible = showAll ? commands : pickRelevant(goal, commands, history, catalogueLimit);
+    const prompt = buildPrompt(goal, visible, history, { hiddenCount: commands.length - visible.length });
+    usage.calls++;
+    usage.promptChars += prompt.length;
+
     const spin = json ? { stop() {} } : render.spinner(`thinking (step ${step}/${maxSteps})`);
     let decision;
-    try { decision = await ask(buildPrompt(goal, commands, history)); }
+    try { decision = await ask(prompt); }
     finally { spin.stop(); }
+
+    // The filtered menu did not contain what it needed — show everything on
+    // the next pass. Costs one call, and only ever happens once per run.
+    if (decision.action === 'list') {
+      if (!showAll) { showAll = true; continue; }
+      return { ok: false, steps: history, reason: 'unparseable-decision', decision, usage };
+    }
 
     if (decision.action === 'done') {
       const summary = decision.summary || 'done';
       if (!json) log(`\n  ${c.green('✓')} ${summary}\n`);
-      return { ok: true, steps: history, summary };
+      return { ok: true, steps: history, summary, usage };
     }
 
     if (decision.action === 'ask') {
       const question = decision.question || 'more information needed';
       if (!json) log(`\n  ${c.yellow('?')} ${question}\n`);
-      return { ok: false, steps: history, reason: 'needs-input', question };
+      return { ok: false, steps: history, reason: 'needs-input', question, usage };
     }
 
     if (decision.action !== 'run' || !decision.id) {
-      return { ok: false, steps: history, reason: 'unparseable-decision', decision };
+      return { ok: false, steps: history, reason: 'unparseable-decision', decision, usage };
     }
 
     // A hallucinated id never reaches the kernel. Feed the refusal back so the
@@ -203,7 +273,7 @@ async function run(goal, {
       let approved = yes;
       if (!approved && confirm) approved = await confirm(res.data.prompt);
       if (!approved) {
-        return { ok: false, steps: history, reason: 'declined', at: spec.id };
+        return { ok: false, steps: history, reason: 'declined', at: spec.id, usage };
       }
       res = await dispatch(spec.id, argText, { body, confirmed: true, timeout: 180000 });
     }
@@ -211,9 +281,22 @@ async function run(goal, {
     const observation = summarizeObservation(res);
     history.push({ id: spec.id, argText: shown, observation, ok: !!res.ok });
     if (!json) log(`     ${res.ok ? c.dim('→ ' + observation.slice(0, 160)) : c.red('→ ' + observation.slice(0, 160))}`);
+
+    // The model flagged this as the last step it needed. Believe it ONLY if
+    // the command actually succeeded — otherwise keep going so it can react to
+    // the failure. Saves a whole round trip, which on a free tier is a third
+    // of the requests for a typical two-action goal.
+    if (decision.final === true && res.ok) {
+      const summary = decision.summary || `Completed: ${goal}`;
+      if (!json) log(`\n  ${c.green('✓')} ${summary}\n`);
+      return { ok: true, steps: history, summary, usage, finalizedEarly: true };
+    }
   }
 
-  return { ok: false, steps: history, reason: 'step-limit', summary: `stopped after ${maxSteps} steps` };
+  return { ok: false, steps: history, reason: 'step-limit', summary: `stopped after ${maxSteps} steps`, usage };
 }
 
-module.exports = { run, summarizeObservation, buildPrompt, buildCatalogue, DEFAULT_MAX_STEPS };
+module.exports = {
+  run, summarizeObservation, buildPrompt, buildCatalogue, pickRelevant,
+  DEFAULT_MAX_STEPS, CATALOGUE_LIMIT,
+};

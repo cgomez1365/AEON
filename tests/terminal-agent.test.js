@@ -174,6 +174,115 @@ describe('agent loop — control flow', () => {
   });
 });
 
+describe('agent loop — token economy', () => {
+  // The full 33-command registry is ~675 tokens, 72% of a first-step prompt,
+  // and it was re-sent on EVERY step. That is what makes a free tier or a slow
+  // local model unusable for a real day's work. Three fixes, tested here.
+  const BIG = Array.from({ length: 33 }, (_, i) => ({
+    id: `b${i}.cmd${i}`, cmd: `/cmd${i}`, blockId: `b${i}`, blockLabel: `Block ${i}`,
+    title: `does thing ${i}`, available: true,
+  }));
+
+  it('shows only a relevant subset instead of the whole registry', () => {
+    // Local copy — mutating the shared fixture would leak into other tests.
+    const pool = BIG.map((c, i) => (i === 7 ? { ...c, title: 'save something to memory' } : c));
+    const picked = agent.pickRelevant('save a memory', pool, [], 12);
+    expect(picked.length).toBeLessThanOrEqual(12);
+    expect(picked.map((c) => c.id)).toContain('b7.cmd7');
+  });
+
+  it('keeps commands already used this run visible, so a multi-step goal stays coherent', () => {
+    const history = [{ id: 'b30.cmd30', argText: '', observation: 'ok', ok: true }];
+    const picked = agent.pickRelevant('save a memory', BIG, history, 12);
+    expect(picked.map((c) => c.id)).toContain('b30.cmd30');
+  });
+
+  it('falls back to the FULL list when nothing scores, rather than showing an arbitrary slice', () => {
+    const picked = agent.pickRelevant('xyzzy plugh nothing matches this', BIG, [], 12);
+    expect(picked).toHaveLength(BIG.length);
+  });
+
+  it('never filters when the registry is already small', () => {
+    const small = BIG.slice(0, 5);
+    expect(agent.pickRelevant('anything', small, [], 12)).toHaveLength(5);
+  });
+
+  it('{"action":"list"} escapes the filter — the subset is never a hard wall', async () => {
+    // A goal that DOES score, so filtering actually engages. (A goal that
+    // scores nothing correctly falls back to the full list, which is a
+    // different behaviour, covered by its own test above.)
+    const pool = Array.from({ length: 33 }, (_, i) => ({
+      id: `p${i}.cmd${i}`, cmd: `/pcmd${i}`, blockId: `p${i}`, blockLabel: `P${i}`,
+      title: `handles widget number ${i}`, available: true,
+    }));
+    const prompts = [];
+    let n = 0;
+    const ask = vi.fn(async (p) => {
+      prompts.push(p);
+      return [{ action: 'list' }, { action: 'done', summary: 'saw everything' }][Math.min(n++, 1)];
+    });
+    const out = await agent.run('widget', {
+      ask, dispatch: vi.fn(), getCommands: async () => ({ commands: pool }),
+      log: silent, catalogueLimit: 3,
+    });
+    expect(out.ok).toBe(true);
+
+    const count = (p) => (p.match(/\| handles widget/g) || []).length;
+    expect(count(prompts[0])).toBe(3);              // filtered
+    expect(count(prompts[1])).toBe(pool.length);    // escaped to everything
+    expect(prompts[0]).toMatch(/further commands exist/);
+  });
+
+  it('"final":true finishes without spending another model call', async () => {
+    const ask = vi.fn(async () => ({
+      action: 'run', id: 'memory_core.remember', arg: 'x',
+      why: 'last step', final: true, summary: 'Saved it.',
+    }));
+    const dispatch = vi.fn(async () => okResult({ saved: true }));
+
+    const out = await agent.run('save a note', { ask, dispatch, getCommands, log: silent });
+
+    expect(out.ok).toBe(true);
+    expect(out.finalizedEarly).toBe(true);
+    expect(out.summary).toBe('Saved it.');
+    // One model call total, not two — that is the whole point.
+    expect(ask).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores "final" when the command actually failed, so the model can react', async () => {
+    let n = 0;
+    const ask = vi.fn(async () => (n++ === 0
+      ? { action: 'run', id: 'memory_core.remember', arg: 'x', final: true, summary: 'done?' }
+      : { action: 'done', summary: 'recovered after the failure' }));
+    const dispatch = vi.fn(async () => ({ ok: false, status: 500, data: { error: 'boom' } }));
+
+    const out = await agent.run('save a note', { ask, dispatch, getCommands, log: silent });
+
+    expect(out.finalizedEarly).toBeUndefined();
+    expect(ask).toHaveBeenCalledTimes(2);
+    expect(out.summary).toMatch(/recovered/);
+  });
+
+  it('older observations collapse to one line; only the latest is carried in full', () => {
+    const long = 'X'.repeat(600);
+    const history = [
+      { id: 'a.one', argText: '', observation: long, ok: true },
+      { id: 'b.two', argText: '', observation: long, ok: true },
+    ];
+    const prompt = agent.buildPrompt('goal', [], history);
+    // The newest survives in full; the older one is clipped hard.
+    expect(prompt).toContain('X'.repeat(600));
+    expect(prompt.match(/X{600}/g)).toHaveLength(1);
+  });
+
+  it('reports token usage so the cost of a run is visible, not guessed', async () => {
+    const ask = scriptedModel([{ action: 'done', summary: 'ok' }]);
+    const out = await agent.run('anything', { ask, dispatch: vi.fn(), getCommands, log: silent });
+    expect(out.usage.calls).toBe(1);
+    expect(out.usage.estPromptTokens).toBeGreaterThan(0);
+  });
+});
+
 describe('agent loop — context safety', () => {
   it('truncates a large observation so an overnight loop cannot exhaust context', () => {
     const huge = { ok: true, status: 200, data: { ok: true, data: { blob: 'x'.repeat(50000) } } };
