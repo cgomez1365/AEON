@@ -109,7 +109,12 @@ async function askModel(prompt) {
     // 409 needsLocalConfirm: the kernel wants the operator to okay spinning up
     // a local model. Say that plainly instead of reporting it as a failure.
     if (res.status === 409 && res.data?.needsLocalConfirm) {
-      throw new Error('the local model needs to be confirmed before first use — run any single command that uses it once, then retry.');
+      // Usually means the cloud provider just rate-limited us mid-run and the
+      // kernel fell back to the local model, which needs an explicit operator
+      // OK. Name the exact unblock rather than describing it vaguely.
+      throw new Error('cloud providers are unavailable (often a rate limit) and the local model needs your OK first.\n'
+        + '    Approve it for this session:  curl -X POST http://127.0.0.1:3001/api/system/allow-local\n'
+        + '    or type /allow-local in the AEON terminal, then retry.');
     }
     const why = res.data?.error || `HTTP ${res.status}`;
     throw new Error(`the ${AGENT_ROLE} model did not answer (${why}). Set one with: aeon run settings.set "set ${AGENT_ROLE} to <provider> <model>"`);
