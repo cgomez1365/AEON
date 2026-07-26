@@ -3,10 +3,13 @@
  * fits all). Supabase cloud mirror manage/test + Cloudflare quick tunnel
  * (free public URL, zero account) for reaching this AEON from anywhere.
  *
- *   GET  /api/settings/connectivity                → full status
- *   POST /api/settings/connectivity/supabase/test  { url, key }? → ping REST
- *   POST /api/settings/connectivity/supabase/save  { url, anonKey } → encrypted Vault
- *   POST /api/settings/connectivity/tunnel/start   → { url: https://*.trycloudflare.com }
+ *   GET  /api/settings/connectivity                 → full status
+ *   POST /api/settings/connectivity/supabase/test   { url, key }? → ping REST
+ *   POST /api/settings/connectivity/supabase/save   { url, anonKey } → encrypted Vault
+ *   POST /api/settings/connectivity/supabase/setup  → applies db/*.sql schema files
+ *   POST /api/settings/connectivity/firebase/test   { apiKey, projectId }? → ping identitytoolkit
+ *   POST /api/settings/connectivity/firebase/save   { apiKey, projectId, ... } → encrypted Vault
+ *   POST /api/settings/connectivity/tunnel/start    → { url: https://*.trycloudflare.com }
  *   POST /api/settings/connectivity/tunnel/stop
  */
 const fs = require('fs');
@@ -29,6 +32,30 @@ async function pingSupabase(url, key) {
   // Reachable project answers 200 (root spec) or 404; auth failures answer 401/403.
   if (r.status === 401 || r.status === 403) throw new Error('Project reached, but the key was rejected.');
   if (!r.ok && r.status !== 404) throw new Error(`Supabase answered HTTP ${r.status}.`);
+  return true;
+}
+
+// Firebase Web Config has no anonymous "ping REST" endpoint the way Supabase
+// does. accounts:lookup with no idToken is the closest thing: a valid,
+// reachable API key always answers 400 MISSING_ID_TOKEN (we deliberately sent
+// none); an invalid/deleted key answers a different error shape instead.
+async function pingFirebase(apiKey) {
+  const r = await fetch(
+    `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${encodeURIComponent(apiKey)}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+      signal: AbortSignal.timeout(8000),
+    },
+  );
+  const body = await r.json().catch(() => ({}));
+  const message = body?.error?.message || '';
+  if (message === 'MISSING_ID_TOKEN') return true;
+  if (/api.?key.?not.?valid|api_key_invalid/i.test(message)) {
+    throw new Error('Firebase API key was rejected.');
+  }
+  if (!r.ok) throw new Error(message ? `Firebase: ${message}` : `Firebase answered HTTP ${r.status}.`);
   return true;
 }
 
@@ -78,6 +105,30 @@ module.exports = (app, deps) => {
       if (!url || !publishableKey) return res.status(400).json({ error: 'url and anonKey required' });
       await pingSupabase(url, publishableKey);
       const metadata = cloudCredentials.save('supabase', { url, anonKey: publishableKey, serviceRoleKey });
+      res.json({ ok: true, message: 'Saved & tested in encrypted Vault.', cloudProviders: metadata });
+    } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); }
+  });
+
+  // ── Firebase: test (pasted values or current vault entry) ───────────
+  app.post('/api/settings/connectivity/firebase/test', async (req, res) => {
+    try {
+      const saved = cloudCredentials.credentials('firebase');
+      const apiKey = (req.body && req.body.apiKey) || saved?.apiKey;
+      const projectId = (req.body && req.body.projectId) || saved?.projectId;
+      if (!apiKey || !projectId) return res.status(400).json({ error: 'Paste your Firebase apiKey and projectId.' });
+      if (!/^[a-z0-9-]+$/i.test(projectId)) return res.status(400).json({ error: 'projectId is not valid.' });
+      await pingFirebase(apiKey);
+      res.json({ ok: true, message: 'Connected — Firebase API key accepted.' });
+    } catch (e) { res.status(400).json({ error: e.message }); }
+  });
+
+  // ── Firebase: save to encrypted Vault (test first) ──────────────────
+  app.post('/api/settings/connectivity/firebase/save', async (req, res) => {
+    try {
+      const config = req.body || {};
+      if (!config.apiKey || !config.projectId) return res.status(400).json({ error: 'apiKey and projectId required' });
+      await pingFirebase(config.apiKey);
+      const metadata = cloudCredentials.save('firebase', config);
       res.json({ ok: true, message: 'Saved & tested in encrypted Vault.', cloudProviders: metadata });
     } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); }
   });
