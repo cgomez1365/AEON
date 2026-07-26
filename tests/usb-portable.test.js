@@ -267,3 +267,24 @@ describe('launcher line endings (BO-USB)', () => {
     expect(cmd).not.toContain('runtime/node/linux');
   });
 });
+
+describe('portable mode binds to loopback (BO-USB)', () => {
+  // A USB install runs on a machine, and often a network, its owner does not
+  // control. Binding 0.0.0.0 there exposes the API to that LAN — and on a
+  // fresh drive no operator account exists yet, so the auth gate is not armed.
+  // It also triggers a Windows Firewall prompt that writes a rule outliving
+  // the drive. Loopback is the only defensible default for portable media.
+  it('selects 127.0.0.1 when portable and 0.0.0.0 otherwise', () => {
+    const src = fs.readFileSync(path.join(process.cwd(), 'server/server.js'), 'utf8');
+    const bind = src.slice(src.indexOf('const BIND'), src.indexOf('const startServer'));
+    expect(bind).toMatch(/AEON_PORTABLE.*===.*'true'.*\?.*'127\.0\.0\.1'/s);
+    expect(bind).toMatch(/'0\.0\.0\.0'/);
+    expect(bind).toMatch(/process\.env\.AEON_BIND/);
+  });
+
+  it('no longer hardcodes 0.0.0.0 at the listen call', () => {
+    const src = fs.readFileSync(path.join(process.cwd(), 'server/server.js'), 'utf8');
+    expect(src).not.toMatch(/app\.listen\(PORT,\s*'0\.0\.0\.0'/);
+    expect(src).toMatch(/app\.listen\(PORT,\s*BIND/);
+  });
+});

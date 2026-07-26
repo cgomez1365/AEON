@@ -435,8 +435,18 @@ app.use((err, req, res, next) => {
 // Respect PORT env (test boots, alternate deploys); default stays 3001.
 const PORT = Number(process.env.PORT) || 3001;
 
+// Portable media binds to loopback only. A USB install runs on a machine its
+// owner does not control, often on a network they do not control either —
+// listening on 0.0.0.0 there would expose the API to that whole LAN, and on a
+// fresh drive no operator account exists yet, so the auth gate is not armed.
+// It also stops Windows Firewall prompting for a public-network exception
+// (which needs admin, and writes a rule that outlives the drive being removed).
+// Override with AEON_BIND if you deliberately want portable to serve a LAN.
+const BIND = process.env.AEON_BIND
+  || (process.env.AEON_PORTABLE === 'true' ? '127.0.0.1' : '0.0.0.0');
+
 const startServer = () => {
-  const httpServer = app.listen(PORT, '0.0.0.0', () => {
+  const httpServer = app.listen(PORT, BIND, () => {
     console.log(`\n====================================`);
     console.log(`  AEON Jarvis OS — Kernel v5`);
     console.log(`  Kernel Routes: /core, /core/telemetry, /api/ai`);
@@ -445,7 +455,7 @@ const startServer = () => {
     console.log(`  WebSocket:     /ws`);
     console.log(`  OS Exec: ONLINE (Allowlist Secured)`);
     console.log(`  Audit Trail: ONLINE`);
-    console.log(`  Port: ${PORT}`);
+    console.log(`  Port: ${PORT}${BIND === '127.0.0.1' ? ' (loopback only)' : ` (bound ${BIND})`}`);
     console.log(`====================================\n`);
 
     try {
