@@ -12,6 +12,58 @@ import { login as apiLogin, setToken } from '../../kernel/auth';
 import RecoveryModal from './components/RecoveryModal.jsx';
 import './AeonBootGate.css';
 
+function SupabaseOtpLogin({ config, onToken, busy, setBusy, setMessage }) {
+  const [email, setEmail] = useState('');
+  const [code, setCode] = useState('');
+  const [sent, setSent] = useState(false);
+
+  const sendCode = async () => {
+    setBusy(true); setMessage('');
+    try {
+      const { createClient } = await import('@supabase/supabase-js');
+      const client = createClient(config.url, config.anonKey, { auth: { persistSession: false } });
+      const { error } = await client.auth.signInWithOtp({ email, options: { shouldCreateUser: false, emailRedirectTo: null } });
+      if (error) throw error;
+      setSent(true); setMessage('');
+    } catch (e) { setMessage(e.message || 'Failed to send code.'); }
+    finally { setBusy(false); }
+  };
+
+  const verifyCode = async () => {
+    setBusy(true); setMessage('');
+    try {
+      const { createClient } = await import('@supabase/supabase-js');
+      const client = createClient(config.url, config.anonKey, { auth: { persistSession: false } });
+      const { data, error } = await client.auth.verifyOtp({ email, token: code, type: 'email' });
+      if (error || !data?.session?.access_token) throw error || new Error('Verification failed.');
+      await onToken(data.session.access_token);
+    } catch (e) { setMessage(e.message || 'Code was not accepted.'); }
+    finally { setBusy(false); }
+  };
+
+  return sent ? (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <p style={{ color: 'var(--text-muted)', fontSize: 12, margin: 0 }}>Enter the 8-digit code sent to {email}</p>
+      <input className="aeon-boot-field" inputMode="numeric" maxLength={8} placeholder="code"
+        value={code} onChange={e => setCode(e.target.value.replace(/\D/g, '').slice(0, 8))} />
+      <button className="aeon-boot-google" onClick={verifyCode} disabled={busy || code.length < 6}>
+        {busy ? 'Verifying…' : 'Verify code'}
+      </button>
+      <button className="aeon-boot-link" style={{ background: 'none', border: 'none', cursor: 'pointer' }}
+        onClick={() => setSent(false)} disabled={busy}>← Back</button>
+    </div>
+  ) : (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <p style={{ color: 'var(--text-muted)', fontSize: 12, margin: 0 }}>Enter your admin email to receive a sign-in code</p>
+      <input className="aeon-boot-field" type="email" placeholder="admin@example.com"
+        value={email} onChange={e => setEmail(e.target.value)} />
+      <button className="aeon-boot-google" onClick={sendCode} disabled={busy || !email}>
+        {busy ? 'Sending…' : 'Send sign-in code'}
+      </button>
+    </div>
+  );
+}
+
 export default function AeonBootGate({ onAuthed }) {
   const canvasRef = useRef(null);
   const orbRefs = useRef([]);
@@ -46,19 +98,17 @@ export default function AeonBootGate({ onAuthed }) {
         if (cancelled) return;
         setCloudConfig(config);
 
-        const code = new URLSearchParams(window.location.search).get('code');
-        if (config.provider === 'supabase' && code) {
+        // Implicit flow: token arrives in URL hash after Google redirect
+        const hash = new URLSearchParams(window.location.hash.replace('#', ''));
+        const accessToken = hash.get('access_token');
+        if (config.provider === 'supabase' && accessToken) {
           setBusy(true);
-          const { createClient } = await import('@supabase/supabase-js');
-          const client = createClient(config.config.url, config.config.anonKey, {
-            auth: { flowType: 'pkce', persistSession: true, detectSessionInUrl: true },
-          });
-          const { data, error } = await client.auth.exchangeCodeForSession(code);
-          if (error || !data.session?.access_token) throw error || new Error('Supabase session was not returned.');
           window.history.replaceState({}, '', window.location.pathname);
-          await exchangeProviderToken(data.session.access_token);
+          await exchangeProviderToken(accessToken);
         }
       } catch (error) {
+        // Drop stale OAuth params so user sees clean login instead of error loop
+        window.history.replaceState({}, '', window.location.pathname);
         if (!cancelled) setMessage(error?.message || 'Cloud sign-in could not be initialized.');
       } finally {
         if (!cancelled) setBusy(false);
@@ -322,7 +372,7 @@ export default function AeonBootGate({ onAuthed }) {
       if (cloudConfig.provider === 'supabase') {
         const { createClient } = await import('@supabase/supabase-js');
         const client = createClient(cloudConfig.config.url, cloudConfig.config.anonKey, {
-          auth: { flowType: 'pkce', persistSession: true, detectSessionInUrl: true },
+          auth: { flowType: 'implicit', persistSession: true, detectSessionInUrl: true },
         });
         const { error } = await client.auth.signInWithOAuth({
           provider: 'google',
@@ -385,7 +435,9 @@ export default function AeonBootGate({ onAuthed }) {
           <button type="button" className="aeon-boot-close" aria-label="Close" onClick={closeAuth}>&times;</button>
           <h1>Connect to AEON</h1>
           <p className="aeon-boot-sub">Your second brain is ready.</p>
-          {cloudConfig ? (
+          {cloudConfig?.provider === 'supabase' ? (
+            <SupabaseOtpLogin config={cloudConfig.config} onToken={exchangeProviderToken} busy={busy} setBusy={setBusy} setMessage={setMessage} />
+          ) : cloudConfig ? (
             <button type="button" className="aeon-boot-google" onClick={handleGoogle} disabled={busy}>
               {busy ? 'Connecting…' : 'Sign in with Google'}
             </button>

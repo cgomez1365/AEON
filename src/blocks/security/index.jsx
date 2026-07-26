@@ -211,7 +211,7 @@ export default function Security() {
         },
       }));
       setClock(Date.now());
-      say('ok', 'Email sent. The 6-digit code is valid for exactly 120 seconds.');
+      say('ok', 'Email sent. The 8-digit code is valid for 10 minutes.');
     } catch (e) { say('err', e.message); }
   };
 
@@ -363,15 +363,15 @@ export default function Security() {
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8 }}>
                     <input
-                      aria-label="6-digit email code"
+                      aria-label="8-digit email code"
                       inputMode="numeric"
                       autoComplete="one-time-code"
-                      maxLength={6}
+                      maxLength={8}
                       style={S.input}
                       value={otpCode}
-                      onChange={event => setOtpCode(event.target.value.replace(/\D/g, '').slice(0, 6))}
+                      onChange={event => setOtpCode(event.target.value.replace(/\D/g, '').slice(0, 8))}
                     />
-                    <button style={S.btn} onClick={verifyCloudOtp} disabled={busy || otpCode.length !== 6 || otpSeconds === 0}>Verify</button>
+                    <button style={S.btn} onClick={verifyCloudOtp} disabled={busy || otpCode.length < 6 || otpSeconds === 0}>Verify</button>
                   </div>
                   <button style={S.btnAmber} onClick={sendCloudOtp} disabled={busy || resendSeconds > 0}>
                     {resendSeconds > 0 ? `Resend in ${resendSeconds}s` : 'Resend code'}
