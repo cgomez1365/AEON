@@ -12,19 +12,6 @@ function mountAuth() {
 }
 
 function guard(req, res, next) {
-  if (global.__AEON_SECURITY_RESTART_REQUIRED) {
-    const allowed = req.path === '/api/health'
-      || req.path === '/api/auth/status'
-      || req.path === '/api/security/cloud/status'
-      || req.path === '/api/security/restart';
-    if (!allowed && sessions.isGuardedPath(req.path)) {
-      return res.status(423).json({
-        success: false,
-        error: 'SYSTEM_RESTART_REQUIRED',
-        restart_required: true,
-      });
-    }
-  }
   const policy = sessions.loadPolicy();
   if (!sessions.guardActive(policy)) return next();
   if (!sessions.isGuardedPath(req.path)) return next();

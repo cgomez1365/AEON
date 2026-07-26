@@ -207,9 +207,8 @@ module.exports = (app, deps) => {
     };
     saveUser(u);
     savePolicy({ ...loadPolicy(), guardEnabled: true, bootSequence: true });
-    global.__AEON_SECURITY_RESTART_REQUIRED = true;
     if (deps && deps.writeOSAudit) deps.writeOSAudit('AUTH_SETUP', `Account created: ${u.username}`, 200, 0);
-    res.json({ ok: true, user: publicProfile(u), restartRequired: true });
+    res.json({ ok: true, user: publicProfile(u) });
   });
 
   // Shared failure accounting — the SINGLE owner of every login failure path
@@ -235,11 +234,8 @@ module.exports = (app, deps) => {
   app.post('/api/auth/login', (req, res) => {
     const u = loadUser();
     if (!u) return res.status(404).json({ error: 'No account configured' });
-    if (u.authMode === 'cloud') {
-      return res.status(400).json({ error: 'This AEON uses Google sign-in' });
-    }
 
-    const { username, password, code } = req.body || {};
+    const { username, password } = req.body || {};
     const userMatch = String(username || '').toLowerCase().trim() === u.username;
     const primaryMatch = userMatch && verifyPassword(password || '', u.salt, u.passHash);
     // The break-glass emergency passphrase is the owner's guaranteed way back
@@ -260,30 +256,10 @@ module.exports = (app, deps) => {
     // Wrong primary credential → shared accounting. Generic error.
     if (!primaryMatch && !emergencyMatch) return registerAuthFailure(u, res);
 
-    // Second factor — required when TOTP is enabled, except for the emergency
-    // passphrase (break-glass intentionally bypasses 2FA).
-    let backupToConsume = null;
-    if (u.totp && u.totp.enabled && !emergencyMatch) {
-      const trimmed = String(code || '').trim();
-      if (!trimmed) {
-        // Password verified; prompt for the code. Not a failure — the shared
-        // counter is untouched and no session is issued yet.
-        return res.status(200).json({ requires2FA: true, message: 'Enter your 2FA code' });
-      }
-      const validTotp = verifyTOTP(u.totp.secret, trimmed);
-      backupToConsume = validTotp
-        ? null
-        : (u.totpBackupCodes || []).find(b => !b.used && b.code === trimmed) || null;
-      // Wrong second factor → same shared accounting as a wrong password.
-      if (!validTotp && !backupToConsume) return registerAuthFailure(u, res);
-    }
-
-    // Full success — reset the counter, consume a backup code only now that the
-    // whole login has succeeded, and issue the session.
+    // Full success — reset the counter and issue the session.
     u.failedAttempts = 0;
     u.lockedUntil = 0;
     u.lastLogin = new Date().toISOString();
-    if (backupToConsume) backupToConsume.used = true;
     if (emergencyMatch) {
       u.recoverySession.emergencyUsed = true;
       appendRecoveryAudit('RECOVERY_EMERGENCY_LOGIN', 'TEMPORARY_PASSPHRASE');
@@ -301,7 +277,7 @@ module.exports = (app, deps) => {
   app.post('/api/security/recovery/challenge', (req, res) => {
     const u = loadUser();
     const username = String(req.body?.username || '').trim().toLowerCase();
-    if (!u || u.authMode === 'cloud' || username !== u.username || u.recoveryQuestions?.length !== 3) {
+    if (!u || username !== u.username || u.recoveryQuestions?.length !== 3) {
       return res.status(404).json({ error: 'Local recovery account was not found' });
     }
     if (Number(u.recoveryLockout?.lockedUntil || 0) > now()) {
@@ -323,7 +299,7 @@ module.exports = (app, deps) => {
     const u = loadUser();
     const username = String(req.body?.username || '').trim().toLowerCase();
     const answers = req.body?.answers;
-    if (!u || u.authMode === 'cloud' || username !== u.username || u.recoveryQuestions?.length !== 3) {
+    if (!u || username !== u.username || u.recoveryQuestions?.length !== 3) {
       return res.status(404).json({ error: 'Local recovery account was not found' });
     }
     const timestamp = now();
@@ -400,7 +376,7 @@ module.exports = (app, deps) => {
     const recovery = u?.recoverySession;
     const recoveryToken = String(req.body?.recoveryToken || '');
     const newPassword = req.body?.newPassword;
-    if (!u || u.authMode === 'cloud' || !recovery || recovery.used || now() >= Number(recovery.expiresAt || 0)
+    if (!u || !recovery || recovery.used || now() >= Number(recovery.expiresAt || 0)
       || !verifyPassword(recoveryToken, recovery.tokenSalt, recovery.tokenHash)) {
       return res.status(401).json({ error: 'Recovery authorization is invalid or expired' });
     }
@@ -463,7 +439,6 @@ module.exports = (app, deps) => {
   app.post('/api/auth/change-password', requireAuth, (req, res) => {
     const u = loadUser();
     if (!u) return res.status(404).json({ error: 'No account' });
-    if (u.authMode === 'cloud') return res.status(400).json({ error: 'Cloud accounts do not use a local password' });
     const { currentPassword, newPassword } = req.body || {};
     if (!verifyPassword(currentPassword || '', u.salt, u.passHash))
       return res.status(401).json({ error: 'Current password is incorrect' });
@@ -517,120 +492,6 @@ module.exports = (app, deps) => {
     saveUser(u);
     res.json({ ok: true, remaining: Object.keys(u.sessions || {}).length });
   });
-
-  // ══════════════════════════════════════════════════════════════════
-  //  TWO-FACTOR AUTHENTICATION (TOTP) — zero dependencies
-  //  RFC 6238 TOTP built on Node's builtin crypto.createHmac.
-  //  Compatible with Google Authenticator, Aegis, Authy, etc.
-  // ══════════════════════════════════════════════════════════════════
-
-  function generateTOTPSecret() {
-    const raw = crypto.randomBytes(20); // 160 bits per RFC 4226 §4
-    const base32Chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-    let bits = '';
-    for (const b of raw) bits += b.toString(2).padStart(8, '0');
-    let secret = '';
-    for (let i = 0; i + 5 <= bits.length; i += 5) {
-      secret += base32Chars[parseInt(bits.slice(i, i + 5), 2)];
-    }
-    return secret; // 32 base32 chars
-  }
-
-  function base32Decode(str) {
-    const base32Chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-    let bits = '';
-    for (const c of str.toUpperCase()) {
-      const val = base32Chars.indexOf(c);
-      if (val === -1) continue;
-      bits += val.toString(2).padStart(5, '0');
-    }
-    const bytes = [];
-    for (let i = 0; i + 8 <= bits.length; i += 8) bytes.push(parseInt(bits.slice(i, i + 8), 2));
-    return Buffer.from(bytes);
-  }
-
-  function generateTOTP(secret, timeStep = 30, digits = 6, offset = 0) {
-    const time = Math.floor(Date.now() / 1000 / timeStep) + offset;
-    const timeBuffer = Buffer.alloc(8);
-    timeBuffer.writeUInt32BE(0, 0);
-    timeBuffer.writeUInt32BE(time, 4);
-    const hmac = crypto.createHmac('sha1', base32Decode(secret)).update(timeBuffer).digest();
-    const off = hmac[hmac.length - 1] & 0xf;
-    const code = ((hmac[off] & 0x7f) << 24 | hmac[off + 1] << 16 | hmac[off + 2] << 8 | hmac[off + 3]) % (10 ** digits);
-    return code.toString().padStart(digits, '0');
-  }
-
-  function verifyTOTP(secret, token, window = 1) {
-    for (let i = -window; i <= window; i++) {
-      if (generateTOTP(secret, 30, 6, i) === token) return true;
-    }
-    return false;
-  }
-
-  function totpURI(secret, username) {
-    return `otpauth://totp/AEON:${encodeURIComponent(username)}?secret=${secret}&issuer=AEON&algorithm=SHA1&digits=6&period=30`;
-  }
-
-  // ── POST /api/auth/2fa/setup — generate secret + provisioning URI ──
-  app.post('/api/auth/2fa/setup', requireAuth, async (req, res) => {
-    const u = loadUser();
-    if (!u) return res.status(404).json({ error: 'No account' });
-    if (u.authMode === 'cloud') return res.status(400).json({ error: 'Cloud accounts use provider-managed multi-factor authentication' });
-    if (u.totp && u.totp.enabled) return res.status(400).json({ error: '2FA is already enabled' });
-    const secret = generateTOTPSecret();
-    u.totpPending = secret;
-    saveUser(u);
-    const uri = totpURI(secret, u.username);
-    let qrDataUrl = null;
-    try {
-      const QRCode = require('qrcode');
-      qrDataUrl = await QRCode.toDataURL(uri, { width: 200, margin: 2 });
-    } catch {}
-    res.json({ ok: true, secret, uri, qrDataUrl, issuer: 'AEON', username: u.username });
-  });
-
-  // ── POST /api/auth/2fa/verify — confirm setup with a code from the app ─
-  app.post('/api/auth/2fa/verify', requireAuth, (req, res) => {
-    const u = loadUser();
-    if (!u) return res.status(404).json({ error: 'No account' });
-    if (!u.totpPending) return res.status(400).json({ error: 'No pending 2FA setup — call /2fa/setup first' });
-    const { code } = req.body || {};
-    if (!code || !verifyTOTP(u.totpPending, String(code).trim())) {
-      return res.status(401).json({ error: 'Invalid code — check your authenticator app and try again' });
-    }
-    // Generate backup codes
-    const backupCodes = Array.from({ length: 8 }, () => crypto.randomBytes(4).toString('hex'));
-    u.totp = { enabled: true, secret: u.totpPending, enabledAt: new Date().toISOString() };
-    u.totpBackupCodes = backupCodes.map(c => ({ code: c, used: false }));
-    delete u.totpPending;
-    saveUser(u);
-    if (deps && deps.writeOSAudit) deps.writeOSAudit('AUTH_2FA_ENABLED', `2FA enabled for ${u.username}`, 200, 0);
-    res.json({ ok: true, backupCodes });
-  });
-
-  // ── POST /api/auth/2fa/disable — turn off 2FA ─────────────────────
-  app.post('/api/auth/2fa/disable', requireAuth, (req, res) => {
-    const u = loadUser();
-    if (!u) return res.status(404).json({ error: 'No account' });
-    const { password } = req.body || {};
-    if (!verifyPassword(password || '', u.salt, u.passHash))
-      return res.status(401).json({ error: 'Password required to disable 2FA' });
-    delete u.totp; delete u.totpPending; delete u.totpBackupCodes;
-    saveUser(u);
-    if (deps && deps.writeOSAudit) deps.writeOSAudit('AUTH_2FA_DISABLED', `2FA disabled for ${u.username}`, 200, 0);
-    res.json({ ok: true });
-  });
-
-  // ── GET /api/auth/2fa/status — check if 2FA is enabled ────────────
-  app.get('/api/auth/2fa/status', (req, res) => {
-    const u = loadUser();
-    res.json({ enabled: !!(u && u.totp && u.totp.enabled) });
-  });
-
-  // 2FA is handled inline in POST /api/auth/login above (unified failure
-  // accounting — BO2). The former login-route stack monkey-patch was removed:
-  // it bypassed the shared lockout counter on wrong-password and wrong-code
-  // paths and consumed backup codes before the password was re-verified.
 
   // Expose middleware for other blocks / kernel global gate.
   if (deps) deps.requireAuth = requireAuth;

@@ -72,7 +72,6 @@ describe('local break-glass recovery', () => {
   });
 
   afterEach(async () => {
-    global.__AEON_SECURITY_RESTART_REQUIRED = false;
     await new Promise(resolve => server.close(resolve));
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
@@ -80,7 +79,6 @@ describe('local break-glass recovery', () => {
   it('stores three independent answer hashes and returns only question text', async () => {
     const created = await setup();
     expect(created.response.status).toBe(200);
-    expect(created.body.restartRequired).toBe(true);
 
     const raw = fs.readFileSync(validator.AUTH_FILE, 'utf8');
     expect(raw).not.toContain('Pine Street School');
