@@ -180,10 +180,23 @@ async function login() {
   return false;
 }
 
-/** Runs `fn`, and if it comes back 401, offers a login and retries once. */
+/**
+ * Runs `fn`, and if it comes back 401, offers a login and retries once.
+ *
+ * Only when stdin is a real TTY — with no terminal attached (a script, a
+ * subprocess, `--json` piped into another tool, CI) there is no one to
+ * answer the prompt, and `login()`'s readline.question() never resolves.
+ * That hung `aeon commands --json` and `aeon blocks --json` indefinitely
+ * whenever the guard was on and no session was stored: found by the
+ * settings/terminal stress test (2026-07-26), which invoked the real CLI
+ * as a subprocess and it simply never returned. Callers already have a
+ * fallback for a non-ok response (getCommands() → scanManifests(),
+ * blocks() → derive from getCommands()), so returning the 401 as-is here
+ * is enough — it degrades exactly like "server unreachable" already does.
+ */
 async function withAuth(fn) {
   let res = await fn();
-  if (res && res.status === 401) {
+  if (res && res.status === 401 && process.stdin.isTTY) {
     console.log(`\n  ${c.yellow('!')} vault locked — authenticate to continue\n`);
     if (await login()) res = await fn();
   }

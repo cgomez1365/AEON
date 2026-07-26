@@ -208,6 +208,26 @@ describe('renderers (BO-TGM)', () => {
   });
 });
 
+describe('withAuth does not block on an interactive prompt without a TTY (BO-TGM)', () => {
+  // `aeon commands --json` and `aeon blocks --json` used to hang indefinitely
+  // when the guard was on and no session was stored: withAuth() unconditionally
+  // tried an interactive login prompt on a 401, and a subprocess/script/CI
+  // context has no TTY to answer it. Found by the settings/terminal stress
+  // test (2026-07-26) spawning the real CLI binary -- it simply never
+  // returned. Confirmed here with a hard race against a timeout: if the fix
+  // regresses, this test hangs and fails on timeout rather than passing
+  // silently.
+  it('returns the 401 as-is instead of prompting when stdin is not a TTY', async () => {
+    expect(process.stdin.isTTY).toBeFalsy(); // the test runner itself has no TTY -- exactly the failure condition
+    const fakeUnauthorized = () => Promise.resolve({ ok: false, status: 401, data: { error: 'UNAUTHORIZED_SESSION' } });
+    const result = await Promise.race([
+      client.withAuth(fakeUnauthorized),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('withAuth hung waiting for a prompt with no TTY attached')), 2000)),
+    ]);
+    expect(result.status).toBe(401);
+  });
+});
+
 describe('manifest scanning in standalone mode (BO-TGM)', () => {
   // With no server, the CLI reads manifests off disk so `status`, `commands`
   // and `blocks` still answer. Same shape as the server registry, so callers
