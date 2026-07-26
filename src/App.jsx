@@ -5,6 +5,7 @@ import { AeonProvider } from "./kernel/contexts/AeonContext";
 import DesktopLayout from "./components/DesktopLayout";
 import MobileLayout from "./components/MobileLayout";
 import AuthGate from "./components/AuthGate";
+import CloudSetupGate from "./components/CloudSetupGate";
 import { TelemetryProvider } from "./kernel/contexts/TelemetryContext";
 
 // ── Load persisted appearance on boot (theme, accent, font) ──────────
@@ -234,13 +235,15 @@ export default function App() {
                 {toastMessage}
               </div>
             )}
-            <AuthGate>
-              {isMobile ? (
-                <MobileLayout chatHistory={chatHistory} auditLogs={auditLogs} />
-              ) : (
-                <DesktopLayout chatHistory={chatHistory} auditLogs={auditLogs} />
-              )}
-            </AuthGate>
+            <CloudSetupGate>
+              <AuthGate>
+                {isMobile ? (
+                  <MobileLayout chatHistory={chatHistory} auditLogs={auditLogs} />
+                ) : (
+                  <DesktopLayout chatHistory={chatHistory} auditLogs={auditLogs} />
+                )}
+              </AuthGate>
+            </CloudSetupGate>
           </TelemetryProvider>
         </AeonProvider>
       </AuthProvider>
