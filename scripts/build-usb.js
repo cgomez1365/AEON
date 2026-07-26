@@ -498,23 +498,41 @@ if exist "%NODE_DIR%\\node.exe" (
 if exist "%OLLAMA_DIR%\\ollama.exe" set "PATH=%OLLAMA_DIR%;%PATH%"
 
 set "OLLAMA_MODELS=%USB_ROOT%\\models"
+set "OLLAMA_HOME=%USB_ROOT%\\runtime\\ollama\\home"
 set "AEON_PORTABLE=true"
+if not exist "%OLLAMA_HOME%" mkdir "%OLLAMA_HOME%" >nul 2>&1
 
 REM .env.usb is the template; .env is the materialised copy with the real
 REM drive letter substituted for __USB_ROOT__.
 echo   Configuring for %USB_ROOT%...
 powershell -NoProfile -Command "(Get-Content -Raw '%USB_ROOT%\\AEON\\.env.usb') -replace '__USB_ROOT__', ('%USB_ROOT%' -replace '\\\\','/') | Set-Content -NoNewline '%USB_ROOT%\\AEON\\.env'"
 
-where ollama >nul 2>&1 && (
-  echo   Starting Ollama...
-  start "" /b ollama serve
-  for /l %%i in (1,1,30) do (
-    powershell -NoProfile -Command "try{(Invoke-WebRequest -Uri http://localhost:11434 -TimeoutSec 1 -UseBasicParsing).StatusCode}catch{exit 1}" >nul 2>&1 && goto :ollama_up
-    timeout /t 1 /nobreak >nul
-  )
-  echo   [!] Ollama did not come up in 30s - continuing without it.
-  :ollama_up
+REM Labels may not live inside a parenthesised block — cmd parses the whole
+REM block up front and rejects them. Keep this control flow flat.
+REM OLLAMA_OURS records whether WE started it, so shutdown never kills an
+REM Ollama that already belonged to the host machine.
+set "OLLAMA_OURS="
+where ollama >nul 2>&1 || goto :ollama_done
+tasklist /fi "imagename eq ollama.exe" 2>nul | find /i "ollama.exe" >nul && goto :ollama_already
+echo   Starting Ollama...
+REM Ollama derives its identity key and cache from the user's home directory,
+REM NOT from OLLAMA_MODELS. Without this it writes an SSH keypair into the host
+REM profile (%%USERPROFILE%%\\.ollama) and leaves it behind. Override USERPROFILE
+REM for the child process only, so nothing lands on the host machine.
+start "" /b cmd /c "set "USERPROFILE=%OLLAMA_HOME%" && set "HOME=%OLLAMA_HOME%" && ollama serve"
+set "OLLAMA_OURS=1"
+REM 'timeout' reads the console and dies with 'Input redirection is not
+REM supported' whenever stdin is redirected, which silently burns every retry
+REM in milliseconds. 'ping' is the portable sleep that survives redirection.
+for /l %%i in (1,1,30) do (
+  powershell -NoProfile -Command "try{(Invoke-WebRequest -Uri http://127.0.0.1:11434 -TimeoutSec 1 -UseBasicParsing).StatusCode}catch{exit 1}" >nul 2>&1 && goto :ollama_done
+  ping -n 2 127.0.0.1 >nul 2>&1
 )
+echo   [!] Ollama did not come up in 30s - continuing without it.
+goto :ollama_done
+:ollama_already
+echo   Ollama is already running on this PC - using it, and leaving it running.
+:ollama_done
 
 cd /d "%USB_ROOT%\\AEON"
 echo   Starting AEON...
@@ -522,8 +540,12 @@ start "" http://localhost:3000
 node server.cjs
 
 echo.
-echo   AEON stopped. Shutting down Ollama...
-taskkill /f /im ollama.exe >nul 2>&1
+if defined OLLAMA_OURS (
+  echo   AEON stopped. Shutting down the Ollama this drive started...
+  taskkill /f /im ollama.exe >nul 2>&1
+) else (
+  echo   AEON stopped. Leaving this PC's Ollama alone.
+)
 endlocal
 `.replace(/\n/g, '\r\n');
 
