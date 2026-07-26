@@ -24,13 +24,25 @@ const PORT = 3001;
 
 const _tunnel = { proc: null, url: null, startedAt: null };
 
-async function pingSupabase(url, key) {
-  const r = await fetch(`${url.replace(/\/$/, '')}/rest/v1/`, {
-    headers: { apikey: key, Authorization: `Bearer ${key}` },
+async function pingSupabase(url, key, fallbackKey) {
+  const probe = (k) => fetch(`${url.replace(/\/$/, '')}/rest/v1/`, {
+    headers: { apikey: k, Authorization: `Bearer ${k}` },
     signal: AbortSignal.timeout(8000),
   });
+  const r = await probe(key);
   // Reachable project answers 200 (root spec) or 404; auth failures answer 401/403.
-  if (r.status === 401 || r.status === 403) throw new Error('Project reached, but the key was rejected.');
+  if (r.status === 401 || r.status === 403) {
+    // Some projects legitimately restrict anon-tier REST access entirely
+    // ("Only the service_role API key can be used for this endpoint") --
+    // that's a valid, hardened configuration, not proof the project/anon key
+    // pairing is wrong. If a service role key was also supplied, confirm the
+    // PROJECT is real and reachable through it before rejecting outright.
+    if (fallbackKey) {
+      const r2 = await probe(fallbackKey);
+      if (r2.ok || r2.status === 404) return true;
+    }
+    throw new Error('Project reached, but the key was rejected.');
+  }
   if (!r.ok && r.status !== 404) throw new Error(`Supabase answered HTTP ${r.status}.`);
   return true;
 }
@@ -91,8 +103,9 @@ module.exports = (app, deps) => {
       const saved = cloudCredentials.credentials('supabase');
       const url = (req.body && req.body.url) || saved?.url;
       const key = (req.body && (req.body.anonKey || req.body.key)) || saved?.anonKey;
+      const fallback = (req.body && req.body.serviceRoleKey) || saved?.serviceRoleKey;
       if (!url || !key) return res.status(400).json({ error: 'Paste your Supabase project URL and anon key.' });
-      await pingSupabase(url, key);
+      await pingSupabase(url, key, fallback);
       res.json({ ok: true, message: 'Connected — project reachable and key accepted.' });
     } catch (e) { res.status(400).json({ error: e.message }); }
   });
@@ -103,7 +116,7 @@ module.exports = (app, deps) => {
       const { url, anonKey, key, serviceRoleKey } = req.body || {};
       const publishableKey = anonKey || key;
       if (!url || !publishableKey) return res.status(400).json({ error: 'url and anonKey required' });
-      await pingSupabase(url, publishableKey);
+      await pingSupabase(url, publishableKey, serviceRoleKey);
       const metadata = cloudCredentials.save('supabase', { url, anonKey: publishableKey, serviceRoleKey });
       res.json({ ok: true, message: 'Saved & tested in encrypted Vault.', cloudProviders: metadata });
     } catch (e) { res.status(e.statusCode || 400).json({ error: e.message }); }

@@ -65,7 +65,10 @@ export default function SetupWizard({ onComplete, onSkip }) {
   const testSupabase = async () => {
     setBusy(true); setMsg(null);
     try {
-      await post('/api/settings/connectivity/supabase/test', { url: supabase.url, anonKey: supabase.anonKey });
+      // serviceRoleKey is a fallback the backend only needs if the project
+      // restricts anon-tier REST access entirely (a valid, hardened setup,
+      // not a broken one) -- send it whenever the operator already typed it.
+      await post('/api/settings/connectivity/supabase/test', { url: supabase.url, anonKey: supabase.anonKey, serviceRoleKey: supabase.serviceRoleKey });
       setSupabaseTested(true);
       say('ok', 'Connected — project reachable and key accepted.');
     } catch (e) { setSupabaseTested(false); say('err', e.message); }
