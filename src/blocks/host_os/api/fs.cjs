@@ -129,20 +129,6 @@ module.exports = function createFsRouter(deps) {
       }));
       console.log('Sending success response:', uploaded.map(u => u.name));
       res.json({ success: true, uploaded });
-      const SECOND_BRAIN = path.join(WORKSPACE, 'Data', 'Second_Brain');
-      const touchedBrain = uploaded.some(f => f.path && f.path.startsWith(SECOND_BRAIN));
-      if (touchedBrain) {
-        // __dirname is src/blocks/host_os/api — repo root's tools/ is 4 levels up.
-        const repoRoot = path.join(__dirname, '..', '..', '..', '..');
-        const indexScript = path.join(repoRoot, 'tools', 'incremental-index.mjs');
-        if (fs.existsSync(indexScript)) {
-          const { exec } = require('child_process');
-          exec(`node "${indexScript}"`, { timeout: 30000, cwd: repoRoot }, (err) => {
-            if (err) console.error('[FS] Re-index after upload failed:', err.message);
-            else console.log('[FS] Second Brain re-indexed after upload');
-          });
-        }
-      }
     } catch (error) {
       console.error('Upload Error:', error.message);
       res.status(500).json({ correlation_id: req.correlationId || 'AEON-SYS', error: error.message });

@@ -150,6 +150,9 @@ if (!fs.existsSync(storage.LOG_FILE)) {
 // ── Web search ──
 app.use('/api', search.router);
 
+// ── Block customization (icons, label/icon overrides) ──
+app.use(require('./routes/customize.cjs')());
+
 // ── Host telemetry + startup hygiene ──
 system.startTelemetry();
 storage.cleanupOrphans();

@@ -11,10 +11,11 @@ import GoogleSignIn from "./GoogleSignIn";
 // block: drop its folder in src/blocks/ — it wires itself into nav + routes.
 import { getNavGroups, getRoutes } from "../kernel/blockRegistry";
 
-import { Terminal } from 'lucide-react';
+import { Terminal, Pencil } from 'lucide-react';
 import BlockShell from './BlockShell';
 import AuroraField from './AuroraField';
 import { BlockIcon, SectionIcon } from './BlockIcon';
+import BlockCustomizeModal from './BlockCustomizeModal';
 
 // Everything is a block now — nav + routes come purely from the registry.
 // Add non-block component routes here only if something can't be a cartridge.
@@ -27,7 +28,7 @@ const EXTRA_ROUTES = [];
 // can't be static module-level constants anymore.
 const BLOCK_ROUTES = [...getRoutes(), ...EXTRA_ROUTES];
 
-export function RolodexNav({ groups, currentPath, onNavigate }) {
+export function RolodexNav({ groups, currentPath, onNavigate, customizations = {}, onCustomize }) {
   const [activeGroup, setActiveGroup] = useState(() => {
     const saved = localStorage.getItem('aeon_rolodex_group');
     if (saved && groups.some(g => g.id === saved)) return saved;
@@ -77,31 +78,56 @@ export function RolodexNav({ groups, currentPath, onNavigate }) {
       <div style={{ flex: 1, overflowY: 'auto', padding: '2px 8px 8px' }}>
         {groups.find(g => g.id === activeGroup)?.items.map(item => {
           const active = currentPath === item.path;
+          const cx = customizations[item.id] || {};
+          const displayLabel    = cx.label     || item.label;
+          const displayIconAsset = cx.iconAsset || item.iconAsset;
           return (
-            <button key={item.path} onClick={() => onNavigate(item.path)}
-              style={{
-                display: 'flex', alignItems: 'center', gap: '10px',
-                width: '100%', padding: '8px 10px', marginBottom: '2px',
-                background: active ? 'rgba(0,242,255,0.1)' : 'transparent',
-                border: active ? '1px solid rgba(0,242,255,0.2)' : '1px solid transparent',
-                borderRadius: '6px', cursor: 'pointer', textAlign: 'left',
-                color: active ? '#00f2ff' : 'rgba(229,226,225,0.6)',
-                fontSize: '12px', fontWeight: active ? 700 : 500,
-                transition: 'all 0.15s',
-              }}
-              onMouseOver={e => { if (!active) { e.currentTarget.style.background = 'rgba(255,255,255,0.03)'; e.currentTarget.style.color = '#fff'; } }}
-              onMouseOut={e => { if (!active) { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'rgba(229,226,225,0.6)'; } }}>
-              <span style={{ width: '20px', display: 'grid', placeItems: 'center' }}>
-                <BlockIcon
-                  iconAsset={item.iconAsset}
-                  iconAssetPng={item.iconAssetPng}
-                  fallback={item.icon}
-                  size={16}
-                />
-              </span>
-              {item.label}
-              {active && <div style={{ marginLeft: 'auto', width: 5, height: 5, borderRadius: '50%', background: '#00f2ff', boxShadow: '0 0 6px #00f2ff' }} />}
-            </button>
+            <div key={item.path} style={{ position: 'relative' }}
+              onMouseEnter={e => { const btn = e.currentTarget.querySelector('.pencil-btn'); if (btn) btn.style.opacity = '1'; }}
+              onMouseLeave={e => { const btn = e.currentTarget.querySelector('.pencil-btn'); if (btn) btn.style.opacity = '0'; }}>
+              <button onClick={() => onNavigate(item.path)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: '10px',
+                  width: '100%', padding: '8px 10px', paddingRight: '30px', marginBottom: '2px',
+                  background: active ? 'rgba(0,242,255,0.1)' : 'transparent',
+                  border: active ? '1px solid rgba(0,242,255,0.2)' : '1px solid transparent',
+                  borderRadius: '6px', cursor: 'pointer', textAlign: 'left',
+                  color: active ? '#00f2ff' : 'rgba(229,226,225,0.6)',
+                  fontSize: '12px', fontWeight: active ? 700 : 500,
+                  transition: 'all 0.15s',
+                }}
+                onMouseOver={e => { if (!active) { e.currentTarget.style.background = 'rgba(255,255,255,0.03)'; e.currentTarget.style.color = '#fff'; } }}
+                onMouseOut={e => { if (!active) { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'rgba(229,226,225,0.6)'; } }}>
+                <span style={{ width: '20px', display: 'grid', placeItems: 'center', flexShrink: 0 }}>
+                  <BlockIcon
+                    iconAsset={displayIconAsset}
+                    iconAssetPng={item.iconAssetPng}
+                    fallback={item.icon}
+                    size={16}
+                  />
+                </span>
+                {displayLabel}
+                {active && <div style={{ marginLeft: 'auto', width: 5, height: 5, borderRadius: '50%', background: '#00f2ff', boxShadow: '0 0 6px #00f2ff', flexShrink: 0 }} />}
+              </button>
+              {onCustomize && (
+                <button
+                  className="pencil-btn"
+                  onClick={e => { e.stopPropagation(); onCustomize(item, cx); }}
+                  title="Customize block"
+                  aria-label={`Customize ${displayLabel}`}
+                  style={{
+                    position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)',
+                    opacity: 0, transition: 'opacity 0.15s',
+                    background: 'rgba(0,242,255,0.08)', border: '1px solid rgba(0,242,255,0.2)',
+                    borderRadius: 4, padding: '3px', cursor: 'pointer', color: '#00f2ff',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    lineHeight: 1,
+                  }}
+                >
+                  <Pencil size={10} />
+                </button>
+              )}
+            </div>
           );
         })}
       </div>
@@ -109,7 +135,7 @@ export function RolodexNav({ groups, currentPath, onNavigate }) {
   );
 }
 
-function DesktopNav({ user, groups }) {
+function DesktopNav({ user, groups, customizations, onCustomize }) {
   const nav = useNavigate();
   const loc = useLocation();
   const { logout } = useAuth();
@@ -197,7 +223,7 @@ function DesktopNav({ user, groups }) {
       </div>
 
       {/* Rolodex Navigation */}
-      <RolodexNav groups={groups} currentPath={loc.pathname} onNavigate={nav} />
+      <RolodexNav groups={groups} currentPath={loc.pathname} onNavigate={nav} customizations={customizations} onCustomize={onCustomize} />
 
       <div style={{ padding: "10px", borderTop: "1px solid rgba(255,255,255,0.05)", fontSize: "9px", color: "rgba(255,255,255,0.2)", textAlign: "center", fontFamily: "monospace", letterSpacing: "1px" }}>
         SYSTEM ONLINE · ALL SYNAPSES FIRE
@@ -229,6 +255,29 @@ export default function DesktopLayout({ chatHistory, auditLogs }) {
       setBlockLayout(d?.settings?.blockLayout || { overrides: {}, customGroups: {}, groupOverrides: {} });
     }).catch(() => setBlockLayout({ overrides: {}, customGroups: {}, groupOverrides: {} }));
   }, []);
+
+  const [customizations, setCustomizations] = useState({});
+  const [customizeTarget, setCustomizeTarget] = useState(null); // { item, cx }
+  useEffect(() => {
+    fetch('/api/blocks/customizations')
+      .then(r => r.json())
+      .then(d => setCustomizations(d.customizations || {}))
+      .catch(() => {});
+  }, []);
+
+  const handleCustomizeSave = useCallback((saved) => {
+    if (saved === null) {
+      // reset — remove entry
+      setCustomizations(prev => {
+        const next = { ...prev };
+        delete next[customizeTarget.item.id];
+        return next;
+      });
+    } else {
+      setCustomizations(prev => ({ ...prev, [customizeTarget.item.id]: saved }));
+    }
+    setCustomizeTarget(null);
+  }, [customizeTarget]);
 
   const saveBlockLayout = useCallback((next) => {
     setBlockLayout(next);
@@ -328,7 +377,7 @@ export default function DesktopLayout({ chatHistory, auditLogs }) {
       </div>
 
       {/* 2. LEFT PANEL (Navigation) */}
-      {menuOpen && <DesktopNav user={user} groups={NAV_GROUPS} />}
+      {menuOpen && <DesktopNav user={user} groups={NAV_GROUPS} customizations={customizations} onCustomize={(item, cx) => setCustomizeTarget({ item, cx })} />}
 
       {/* 3. MIDDLE PANEL (Main Viewport) */}
       <div className="main-viewport">
@@ -400,7 +449,7 @@ export default function DesktopLayout({ chatHistory, auditLogs }) {
               <button onClick={() => setIsChatOpen(false)} style={{ background: "transparent", border: "none", color: "#64748b", cursor: "pointer", fontSize: "18px" }}>✕</button>
             </div>
             <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
-              <NeuralTerminal 
+              <NeuralTerminal
                 brainData={brainData}
                 allData={brainData}
                 selectedModel={selectedModel}
@@ -408,6 +457,16 @@ export default function DesktopLayout({ chatHistory, auditLogs }) {
             </div>
           </div>
         </div>
+      )}
+
+      {customizeTarget && (
+        <BlockCustomizeModal
+          blockId={customizeTarget.item.id}
+          currentLabel={customizeTarget.cx?.label || customizeTarget.item.label}
+          currentIconAsset={customizeTarget.cx?.iconAsset || customizeTarget.item.iconAsset}
+          onSave={handleCustomizeSave}
+          onClose={() => setCustomizeTarget(null)}
+        />
       )}
 
     </div>

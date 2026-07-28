@@ -13,6 +13,7 @@ const fs = require('fs');
 const path = require('path');
 
 const BLOCKS_DIR = path.join(__dirname, '..', 'blocks');
+const blockCustomizations = require('../../services/block-customizations.js');
 
 // ── Provider → env var(s) that prove the connection exists ───────────
 const API_ENV = {
@@ -151,7 +152,9 @@ function normalizeManifest(folder) {
   const m = readManifest(folder) || {};
   const nav = NAV[folder];
   const icon = (nav && nav.icon) || ICON_FALLBACKS[folder] || m.nav?.icon || m.icon || 'Boxes';
-  const iconAsset = `/brand/block-icons/${folder}.svg`;
+  const custom = blockCustomizations.get(folder);
+  const customLabel = custom?.label || null;
+  const iconAsset = custom?.iconAsset || `/brand/block-icons/${folder}.svg`;
   const iconAssetPng = `/brand/block-icons/png/${folder}.png`;
   const apis = (m.requires && m.requires.apis) || [];
   const hasApi = fs.existsSync(path.join(BLOCKS_DIR, folder, 'api'));
@@ -164,15 +167,15 @@ function normalizeManifest(folder) {
     // See src/kernel/schema.json + MIGRATION_POLICY.md before touching this shape.
     manifestVersion: '1.1.0',
     id: folder,
-    label: LABEL_OVERRIDES[folder] || labelFromFolder(folder),
+    label: customLabel || LABEL_OVERRIDES[folder] || labelFromFolder(folder),
     icon,
     route: (nav && nav.route) || m.route || `/${folder}`,
     description: m.description || '',
     category: m.category || (nav && nav.group) || 'system',
     tier: m.tier || (['dashboard','fleet_control','settings','activity','master'].includes(folder) ? 'core' : 'plugin'),
     nav: nav
-      ? { group: nav.group, order: nav.order, label: LABEL_OVERRIDES[folder] || labelFromFolder(folder), icon, iconAsset, iconAssetPng, hidden: false }
-      : { group: 'system', order: 99, label: LABEL_OVERRIDES[folder] || labelFromFolder(folder), icon, iconAsset, iconAssetPng, hidden: m.nav?.hidden === true },
+      ? { group: nav.group, order: nav.order, label: customLabel || LABEL_OVERRIDES[folder] || labelFromFolder(folder), icon, iconAsset, iconAssetPng, hidden: false }
+      : { group: 'system', order: 99, label: customLabel || LABEL_OVERRIDES[folder] || labelFromFolder(folder), icon, iconAsset, iconAssetPng, hidden: m.nav?.hidden === true },
     // Widget contract — quick-view the dashboard can render (weather-widget model)
     widget: m.widget || null,
     requires: {
