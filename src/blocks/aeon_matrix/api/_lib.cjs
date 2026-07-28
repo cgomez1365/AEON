@@ -32,7 +32,7 @@ async function extractText(fullPath) {
 // file, not per chunk — this is what keeps it cheap and avoids the original
 // chunk-embedding heat/duplicate problems) and the query at search time.
 const OLLAMA_HOST = process.env.OLLAMA_HOST || 'http://localhost:11434';
-const EMBED_MODEL = 'nomic-embed-text';
+const EMBED_MODEL = process.env.AEON_EMBED_MODEL || 'mxbai-embed-large';
 
 async function embedOllama(text) {
   const res = await fetch(`${OLLAMA_HOST}/api/embed`, {

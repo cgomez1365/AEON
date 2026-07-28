@@ -30,6 +30,13 @@ const API_ENV = {
 // Providers requiring ALL listed vars (vs any-one).
 const API_ENV_ALL = new Set(['supabase']);
 
+// ── Label overrides — kernel-authoritative display names that differ from the
+//    folder-derived default. Add here when a block's folder name doesn't read
+//    well as a product name. Sync writes this; the manifest is always truth.
+const LABEL_OVERRIDES = {
+  ats_engine: 'Resume Grader',
+};
+
 // ── Kernel nav defaults — synced INTO each block's manifest on boot ──
 // The kernel owns sidebar layout. Blocks not listed here still load (system
 // group, order 99). A block's manifest.nav is always overwritten from this
@@ -157,15 +164,15 @@ function normalizeManifest(folder) {
     // See src/kernel/schema.json + MIGRATION_POLICY.md before touching this shape.
     manifestVersion: '1.1.0',
     id: folder,
-    label: labelFromFolder(folder),
+    label: LABEL_OVERRIDES[folder] || labelFromFolder(folder),
     icon,
     route: (nav && nav.route) || m.route || `/${folder}`,
     description: m.description || '',
     category: m.category || (nav && nav.group) || 'system',
     tier: m.tier || (['dashboard','fleet_control','settings','activity','master'].includes(folder) ? 'core' : 'plugin'),
     nav: nav
-      ? { group: nav.group, order: nav.order, label: labelFromFolder(folder), icon, iconAsset, iconAssetPng, hidden: false }
-      : { group: 'system', order: 99, label: labelFromFolder(folder), icon, iconAsset, iconAssetPng, hidden: m.nav?.hidden === true },
+      ? { group: nav.group, order: nav.order, label: LABEL_OVERRIDES[folder] || labelFromFolder(folder), icon, iconAsset, iconAssetPng, hidden: false }
+      : { group: 'system', order: 99, label: LABEL_OVERRIDES[folder] || labelFromFolder(folder), icon, iconAsset, iconAssetPng, hidden: m.nav?.hidden === true },
     // Widget contract — quick-view the dashboard can render (weather-widget model)
     widget: m.widget || null,
     requires: {
@@ -364,7 +371,7 @@ function syncAllBlocks(ctx = {}) {
 }
 
 module.exports = {
-  BLOCKS_DIR, NAV, GROUP_META, API_ENV, MEMORY_POLICY,
+  BLOCKS_DIR, NAV, LABEL_OVERRIDES, GROUP_META, API_ENV, MEMORY_POLICY,
   listBlockFolders, readManifest, normalizeManifest, deriveEnv,
   checkReadiness, writeRuntimeConfig, syncAllBlocks, mergeBlockEnv,
 };

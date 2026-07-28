@@ -31,7 +31,9 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   const defaultLocalModel = () => {
     if (process.env.OLLAMA_MODEL) return process.env.OLLAMA_MODEL;
     const rt = readLocalRuntime();
-    const m = rt?.models?.find(x => x.backend === 'ollama' && x.ready !== false);
+    // Embed-only models (name contains 'embed') do not support /api/chat.
+    // Skip them so the fallback never lands on a model that cannot generate text.
+    const m = rt?.models?.find(x => x.backend === 'ollama' && x.ready !== false && !/embed/i.test(x.id));
     return m ? m.id : null;
   };
   // Ollama counts as present only when the Cookbook registry (the thing that
