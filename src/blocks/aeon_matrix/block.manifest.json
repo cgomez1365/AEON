@@ -100,7 +100,13 @@
         "desc": "Semantic search the Second Brain — finds documents matching your query",
         "method": "POST",
         "route": "/api/crn/second-brain/retrieve",
-        "params": [{ "name": "query", "type": "string", "required": true }],
+        "params": [
+          {
+            "name": "query",
+            "type": "string",
+            "required": true
+          }
+        ],
         "mode": "instant"
       },
       {
@@ -108,7 +114,13 @@
         "desc": "List the vault folder structure (Vault, Reading_Library, Saved_Artifacts)",
         "method": "GET",
         "route": "/api/crn/second-brain/tree",
-        "params": [{ "name": "section", "type": "string", "required": false }],
+        "params": [
+          {
+            "name": "section",
+            "type": "string",
+            "required": false
+          }
+        ],
         "mode": "instant"
       },
       {
@@ -116,7 +128,13 @@
         "desc": "Read a document from the vault by relative path",
         "method": "GET",
         "route": "/api/crn/second-brain/document",
-        "params": [{ "name": "path", "type": "string", "required": true }],
+        "params": [
+          {
+            "name": "path",
+            "type": "string",
+            "required": true
+          }
+        ],
         "mode": "instant"
       }
     ],

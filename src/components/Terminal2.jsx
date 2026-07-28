@@ -21,18 +21,13 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Send, Loader, Cpu, Clock, Zap, ChevronRight, ChevronDown, ShieldAlert, Paperclip, X as XIcon } from 'lucide-react';
 
-// UI-only commands — these act on the terminal itself, never the server.
+// UI-only commands — act on the terminal or app itself, never the server.
+// Block commands come from GET /api/commands (manifest-discovered); add nothing here.
 const UI_COMMANDS = [
   { cmd: '/clear', desc: 'Clear the terminal history' },
-  { cmd: '/help', desc: 'List every available command' },
-];
-
-// God-mode commands — kernel-level, resolved via /api/god/* (desktop only).
-const GOD_COMMANDS = [
-  { cmd: '/open', desc: 'Open any block by name — /open matrix', category: 'god' },
-  { cmd: '/data', desc: "Read a block's saved data — /data cookbook", category: 'god' },
-  { cmd: '/addkey', desc: 'Add an API key — /addkey groq gsk_...', category: 'god' },
-  { cmd: '/model', desc: 'Open the model hotswap picker', category: 'god' },
+  { cmd: '/help',  desc: 'List every available command' },
+  { cmd: '/open',  desc: 'Open any block by name — /open matrix' },
+  { cmd: '/model', desc: 'Open the model hotswap picker' },
 ];
 
 let PID = 0;
@@ -101,18 +96,16 @@ const Terminal2 = ({ onUsageUpdate }) => {
   // ── Boot: pull the command registry from the kernel ──
   useEffect(() => {
     fetch('/api/commands').then(r => r.json())
-      .then(d => setCommands([...UI_COMMANDS, ...GOD_COMMANDS, ...(d.commands || []).filter(c => c.available !== false)]))
-      .catch(() => setCommands([...UI_COMMANDS, ...GOD_COMMANDS]));
+      .then(d => setCommands([...UI_COMMANDS, ...(d.commands || []).filter(c => c.available !== false)]))
+      .catch(() => setCommands([...UI_COMMANDS]));
   }, []);
 
   // ── Model hotswap: providers grouped by key availability ──
   const [modelGroups, setModelGroups] = useState([]);
   const [showModelPicker, setShowModelPicker] = useState(false);
-  useEffect(() => {
-    fetch('/api/god/models').then(r => r.json())
-      .then(d => setModelGroups(d.groups || []))
-      .catch(() => {});
-  }, []);
+  const refreshModelGroups = () => fetch('/api/god/models').then(r => r.json()).then(d => setModelGroups(d.groups || [])).catch(() => {});
+  // Lazy-load: fetch fresh data each time the picker opens so /addkey changes appear immediately.
+  useEffect(() => { if (showModelPicker) refreshModelGroups(); }, [showModelPicker]);
 
   const hotswapModel = async (provider, model) => {
     setShowModelPicker(false);
@@ -280,7 +273,7 @@ const Terminal2 = ({ onUsageUpdate }) => {
       return;
     }
 
-    // God-mode commands — kernel superpowers, still gated server-side.
+    // UI-only commands — handled client-side, no server round-trip.
     if (cmdToken === '/model') { setShowModelPicker(v => !v); return; }
     if (cmdToken === '/open') {
       try {
@@ -298,32 +291,8 @@ const Terminal2 = ({ onUsageUpdate }) => {
       } catch (e) { push({ type: 'msg', role: 'error', content: `[OPEN] ${e.message}` }); }
       return;
     }
-    if (cmdToken === '/data') {
-      const pid2 = nextPid(); const t02 = Date.now();
-      const chip = push({ type: 'chip', pid: pid2, kind: 'DATA', label: text, status: 'running', expanded: true });
-      try {
-        const url = arg ? `/api/god/data/${encodeURIComponent(arg.trim())}` : '/api/god/data';
-        const d = await fetch(url).then(r => r.json());
-        const out = d.ok ? (d.text || (d.namespaces ? 'Blocks with saved data:\n' + d.namespaces.join('\n') : '(empty)')) : d.error;
-        patch(chip, { status: d.ok ? 'ok' : 'fail', output: out, latencyMs: Date.now() - t02 });
-      } catch (e) { patch(chip, { status: 'fail', output: e.message }); }
-      return;
-    }
-    if (cmdToken === '/addkey') {
-      const [provider, ...keyParts] = arg.split(/\s+/);
-      const key = keyParts.join('');
-      if (!provider || !key) { push({ type: 'msg', role: 'system', content: 'Usage: /addkey <provider> <key>   e.g. /addkey groq gsk_abc123' }); return; }
-      try {
-        const d = await fetch('/api/god/keys', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ provider, key }),
-        }).then(r => r.json());
-        push({ type: 'msg', role: d.error ? 'error' : 'system', content: d.text || d.error || 'Key saved.' });
-        if (!d.error) fetch('/api/god/models').then(r => r.json()).then(x => setModelGroups(x.groups || [])).catch(() => {});
-      } catch (e) { push({ type: 'msg', role: 'error', content: `[ADDKEY] ${e.message}` }); }
-      return;
-    }
 
+    // Everything else → command bus (manifest-discovered, block-owned).
     const pid = nextPid();
     const t0 = Date.now();
     const chipId = push({ type: 'chip', pid, kind: 'CMD', label: text, status: 'running', expanded: false });

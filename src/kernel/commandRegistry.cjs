@@ -75,7 +75,7 @@ function scanCommands(readiness = {}) {
 
 // Minimal when-clause evaluator: "ready", "!ready", "runtime==local" etc.
 function evalWhen(expr, ctx) {
-  if (!expr) return true;
+  if (!expr) return !!ctx.ready;
   return expr.split('&&').every(clause => {
     const c = clause.trim();
     if (c.includes('==')) {

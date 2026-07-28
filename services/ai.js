@@ -98,27 +98,10 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   // type /allow-local to open a time-boxed window. Autonomous background
   // missions are exempt (autonomous.cjs has its own always-on local rung —
   // that's the whole point of a mission you can walk away from).
-  let localConfirmedUntil = 0;
-  const LOCAL_CONFIRM_WINDOW_MS = 15 * 60 * 1000;
-  // Persistent opt-in: Settings → "Always allow local models" writes
-  // prefs.allow_local_llm. With it on, Ollama is a first-class provider and
-  // the 15-minute /allow-local window is never needed (workhorse mode).
-  const localAlwaysAllowed = () => {
-    try { return loadSettings?.().prefs?.allow_local_llm === true; } catch { return false; }
-  };
-  const isLocalConfirmed = () => localAlwaysAllowed() || Date.now() < localConfirmedUntil;
-  const confirmLocal = () => {
-    localConfirmedUntil = Date.now() + LOCAL_CONFIRM_WINDOW_MS;
-    notify(`✅ Local model fallback allowed for 15 minutes.`, {});
-    return { until: localConfirmedUntil };
-  };
-  let lastLocalPrompt = 0;
-  const requestLocalConfirm = (reason) => {
-    if (Date.now() - lastLocalPrompt > 30000) { // don't spam on every message
-      notify(`⚠ All cloud AI providers are rate-limited or out of credits (${reason}). Type /allow-local in the terminal to run this on your local model for the next 15 minutes.`, { needsConfirm: true });
-      lastLocalPrompt = Date.now();
-    }
-  };
+  // Local model always allowed — no gate, no /allow-local ceremony.
+  // User controls fallback order via Settings → prefs.provider_priority.
+  const isLocalConfirmed = () => true;
+  const confirmLocal = () => ({ until: Infinity });
 
   // ── Token governor ──
   const KILL_SWITCH_THRESHOLD = 15.00;
@@ -211,14 +194,8 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
         try { return await groqRequest(prompt, 'llama-3.3-70b-versatile', 0, opts); }
         catch (groqErr) { console.warn('[GEMINI FAILOVER] Groq fallback failed:', groqErr.message); }
       }
-      if (opts.background || isLocalConfirmed()) {
-        console.warn('[GEMINI FAILOVER] Falling back to Local Ollama...');
-        return await ollamaRequest(prompt, defaultLocalModel(), opts);
-      }
-      requestLocalConfirm('Gemini + Groq exhausted');
-      const e = new Error('Cloud providers exhausted. Type /allow-local in the terminal to use your local model.');
-      e.needsLocalConfirm = true;
-      throw e;
+      console.warn('[GEMINI FAILOVER] Falling back to Local Ollama...');
+      return await ollamaRequest(prompt, defaultLocalModel(), opts);
     }
     const apiKey = getActiveKey();
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
@@ -776,10 +753,14 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       }
     }
 
-    const chainBase = opts._vercelStrict
-      ? [provider, 'groq', 'gemini', 'openrouter']
-      : [provider, 'groq', 'gemini', 'openrouter', 'ollama'];
-    const chain = chainBase.filter((p, i, a) => a.indexOf(p) === i);
+    const availableProviders = opts._vercelStrict
+      ? ['groq', 'gemini', 'openrouter']
+      : ['groq', 'gemini', 'openrouter', 'ollama'];
+    const priority = settings.prefs?.provider_priority;
+    const fallbacks = Array.isArray(priority) && priority.length
+      ? priority.filter(p => availableProviders.includes(p))
+      : availableProviders;
+    const chain = [provider, ...fallbacks].filter((p, i, a) => a.indexOf(p) === i);
     let lastErr = null;
     for (const p of chain) {
       if (p !== 'ollama' && !isHealthy(p)) continue;
@@ -796,20 +777,8 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
           usedModel = p === provider ? model : 'openai/gpt-4o-mini';
           text = await openRouterRequest(prompt, usedModel, opts);
         } else if (p === 'ollama') {
-          // Standing consent: prefs.allow_local_llm=true means the operator has
-          // already said yes to local — don't gate every fallback on the
-          // transient 15-min /allow-local confirm. Also: an EXPLICIT request
-          // (opts.provider === 'ollama') is itself consent — otherwise a block
-          // that deliberately picks local models (e.g. the Council roster) gets
-          // gated and silently falls through to a cloud default, collapsing
-          // every distinct local model into one.
-          if (opts.background || isLocalConfirmed() || settings.prefs?.allow_local_llm === true || opts.provider === 'ollama') {
-            usedModel = p === provider ? model : undefined;
-            text = await ollamaRequest(prompt, usedModel, opts);
-          } else {
-            requestLocalConfirm(lastErr?.message?.slice(0, 100) || 'cloud providers unavailable');
-            continue;
-          }
+          usedModel = p === provider ? model : undefined;
+          text = await ollamaRequest(prompt, usedModel, opts);
         } else continue;
         if (text !== undefined) {
           if (p !== provider) notify(`↪ Fallback: ${role} routed to ${p}/${usedModel} (configured: ${provider})`, { provider: p });
@@ -821,11 +790,6 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
         if (status && p !== 'ollama') markUnhealthy(p, Number(status), e.message);
         console.warn(`[KERNEL] ${p} failed (${e.message.slice(0, 120)}), trying next provider`);
       }
-    }
-    if (!opts._vercelStrict && !isLocalConfirmed() && !opts.background) {
-      const e = new Error('All cloud AI providers are rate-limited or unavailable. Type /allow-local in the terminal to use your local model.');
-      e.needsLocalConfirm = true;
-      throw e;
     }
     throw lastErr || new Error('No LLM provider available (check API keys in Settings)');
   };

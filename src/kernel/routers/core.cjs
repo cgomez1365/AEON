@@ -25,11 +25,11 @@ module.exports = function createCoreRouter(deps) {
     });
   });
 
-  // POST /api/system/allow-local — operator's "yes" to run this session's AI
-  // calls on the local Ollama model for 15 minutes while cloud is down.
-  // Triggered by the /allow-local terminal command.
+  // POST /api/system/allow-local — kept for compatibility; local is always
+  // allowed (gate removed in BO-2). Returns ok:true so existing callers and
+  // stress tests pass without changes.
   router.post('/allow-local', (_req, res) => {
-    const r = confirmLocal ? confirmLocal() : { until: 0 };
+    const r = confirmLocal ? confirmLocal() : { until: Infinity };
     res.json({ ok: true, ...r });
   });
 

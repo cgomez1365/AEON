@@ -72,19 +72,7 @@ module.exports = function ({ storage, kernelLLM, _blockRegistry, _blockReadiness
   });
 
   // ── /god/data — terminal reads any block's saved state ─────────────────────
-  router.get('/data', (_req, res) => {
-    const namespaces = new Set();
-    try { for (const d of fs.readdirSync(DATA_ROOT)) if (fs.statSync(path.join(DATA_ROOT, d)).isDirectory()) namespaces.add(d); } catch {}
-    try {
-      for (const b of fs.readdirSync(BLOCKS_DIR)) {
-        if (!b.startsWith('_') && fs.existsSync(path.join(BLOCKS_DIR, b, 'data'))) namespaces.add(b);
-      }
-    } catch {}
-    res.json({ ok: true, namespaces: [...namespaces].sort() });
-  });
-
-  router.get('/data/:blockId', (req, res) => {
-    const id = String(req.params.blockId).replace(/[^A-Za-z0-9_-]/g, '');
+  function respondBlockData(id, res) {
     const candidates = [safeJoin(DATA_ROOT, id), path.join(BLOCKS_DIR, id, 'data')];
     const files = [];
     const walk = (dir, base, depth) => {
@@ -110,6 +98,27 @@ module.exports = function ({ storage, kernelLLM, _blockRegistry, _blockReadiness
     for (const c of candidates) walk(c, '', 0);
     if (!files.length) return res.status(404).json({ ok: false, error: `No saved data found for "${id}".` });
     res.json({ ok: true, blockId: id, files, text: files.map(f => `${f.file}  ${(f.size / 1024).toFixed(1)}kb  ${f.shape || ''}`).join('\n') });
+  }
+
+  // ?block= lets the command bus dispatch /data with a query param instead of
+  // a path segment — blocks declare route /api/god/data in their manifest and
+  // the bus appends ?block=<arg> for GET commands.
+  router.get('/data', (req, res) => {
+    const blockId = req.query.block;
+    if (blockId) return respondBlockData(String(blockId).replace(/[^A-Za-z0-9_-]/g, ''), res);
+    const namespaces = new Set();
+    try { for (const d of fs.readdirSync(DATA_ROOT)) if (fs.statSync(path.join(DATA_ROOT, d)).isDirectory()) namespaces.add(d); } catch {}
+    try {
+      for (const b of fs.readdirSync(BLOCKS_DIR)) {
+        if (!b.startsWith('_') && fs.existsSync(path.join(BLOCKS_DIR, b, 'data'))) namespaces.add(b);
+      }
+    } catch {}
+    const list = [...namespaces].sort();
+    res.json({ ok: true, namespaces: list, text: list.join('\n') });
+  });
+
+  router.get('/data/:blockId', (req, res) => {
+    respondBlockData(String(req.params.blockId).replace(/[^A-Za-z0-9_-]/g, ''), res);
   });
 
   // ── /god/vault/tree — folder map for placement decisions ───────────────────
@@ -218,7 +227,9 @@ module.exports = function ({ storage, kernelLLM, _blockRegistry, _blockReadiness
   // ── /god/keys — add an API key from the terminal (settings workflow) ───────
   router.post('/keys', async (req, res) => {
     try {
-      const { provider, key } = req.body || {};
+      let { provider, key, arg } = req.body || {};
+      // Command bus sends arg="groq gsk_abc123" when dispatched as a single-param command.
+      if (arg && (!provider || !key)) { [provider, key] = String(arg).split(/\s+/); }
       const envVar = PROVIDER_ENV[String(provider || '').toLowerCase()];
       if (!envVar) return res.status(400).json({ ok: false, error: `Unknown provider "${provider}". Known: ${Object.keys(PROVIDER_ENV).join(', ')}` });
       if (!key || String(key).length < 8) return res.status(400).json({ ok: false, error: 'Key looks too short.' });
