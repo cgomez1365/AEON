@@ -59,9 +59,12 @@ async function req(method, url, body, timeout = 60000) {
 async function main() {
   console.log(`\nCloud-provider stress test ROUND 4 against ${BASE}\n`);
 
-  const login = await req('POST', '/api/auth/login', { username: 'round2test', password: 'CorrectHorse9!' });
-  TOKEN = login.data.token;
-  if (!TOKEN) throw new Error('login failed');
+  const ping = await req('GET', '/api/ping');
+  if (ping.data.authRequired) {
+    const login = await req('POST', '/api/auth/login', { username: 'round2test', password: 'CorrectHorse9!' });
+    TOKEN = login.data.token;
+    if (!TOKEN) throw new Error('login failed');
+  }
   client.saveSession(TOKEN);
   const commands = (await req('GET', '/api/commands')).data.commands || [];
 

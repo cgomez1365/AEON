@@ -116,7 +116,13 @@
         "desc": "Read a block's saved data — /data cookbook  (omit block to list all)",
         "method": "GET",
         "route": "/api/god/data",
-        "params": [{ "name": "block", "type": "string", "required": false }],
+        "params": [
+          {
+            "name": "block",
+            "type": "string",
+            "required": false
+          }
+        ],
         "mode": "instant",
         "display": "text",
         "category": "system"
