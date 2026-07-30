@@ -1121,5 +1121,99 @@ module.exports = function createCookbookRouter(deps) {
     return findExecutable('bash');
   }
 
+  // ── Phase 4: native GGUF model catalog + installer ────────────────────────
+  // These routes are the Phase 4 public API. They do NOT touch Ollama.
+  // The model installer uses the registry from Phase 2 and the catalog from
+  // services/local-runtime/model-catalog.json.
+  const modelInstaller = (() => {
+    try { return require(path.join(__dirname, '..', '..', '..', '..', 'services', 'local-runtime', 'model-installer.cjs')); }
+    catch { return null; }
+  })();
+
+  if (modelInstaller) {
+    // GET /cookbook/local/catalog — list catalog with install state
+    router.get('/cookbook/local/catalog', (req, res) => {
+      try {
+        const { getLocalRuntimeRegistry } = deps;
+        const reg = getLocalRuntimeRegistry ? getLocalRuntimeRegistry() : null;
+        const dataRoot = reg ? path.dirname(path.dirname(reg.file || '')) : null;
+        res.json({ ok: true, models: modelInstaller.listCatalog(dataRoot || '') });
+      } catch (e) {
+        res.status(500).json({ ok: false, error: e.message });
+      }
+    });
+
+    // POST /cookbook/local/install — start model download
+    // Body: { modelId: string }
+    router.post('/cookbook/local/install', async (req, res) => {
+      const modelId = req.body?.modelId;
+      if (!modelId || typeof modelId !== 'string') {
+        return res.status(400).json({ ok: false, error: 'modelId required' });
+      }
+
+      const { getLocalRuntimeRegistry } = deps;
+      const reg = getLocalRuntimeRegistry ? getLocalRuntimeRegistry() : null;
+      if (!reg || !reg.file) {
+        return res.status(503).json({ ok: false, error: 'Local runtime registry not available' });
+      }
+      const dataRoot = path.resolve(reg.file, '..', '..', '..');
+
+      const sessionId = `local-install-${crypto.randomBytes(4).toString('hex')}`;
+      const logFile = path.join(LOGS_DIR, `${sessionId}.log`);
+      const logStream = fs.createWriteStream(logFile, { flags: 'a' });
+
+      res.json({ ok: true, session_id: sessionId });
+
+      modelInstaller.installModel({
+        dataRoot,
+        modelId,
+        onStatus: (msg) => {
+          logStream.write(`[STATUS] ${msg}\n`);
+          if (typeof global.broadcastTerminalEvent === 'function') {
+            global.broadcastTerminalEvent('LOCAL_MODEL_INSTALL', `[${modelId}] ${msg}`);
+          }
+        },
+        onProgress: (pct) => logStream.write(`[PROGRESS] ${pct}%\n`),
+      }).then(() => {
+        logStream.write('LOCAL_MODEL_INSTALL_OK\n');
+        logStream.end();
+      }).catch(e => {
+        logStream.write(`ERROR: ${e.message}\nLOCAL_MODEL_INSTALL_FAILED\n`);
+        logStream.end();
+      });
+    });
+
+    // DELETE /cookbook/local/model/:modelId — remove an installed model
+    router.delete('/cookbook/local/model/:modelId', async (req, res) => {
+      const { modelId } = req.params;
+      const { getLocalRuntimeRegistry } = deps;
+      const reg = getLocalRuntimeRegistry ? getLocalRuntimeRegistry() : null;
+      if (!reg || !reg.file) {
+        return res.status(503).json({ ok: false, error: 'Local runtime registry not available' });
+      }
+      const dataRoot = path.resolve(reg.file, '..', '..', '..');
+      try {
+        await modelInstaller.removeModel(dataRoot, modelId);
+        res.json({ ok: true });
+      } catch (e) {
+        res.status(400).json({ ok: false, error: e.message });
+      }
+    });
+
+    // GET /cookbook/local/status — active runtime + ready model count
+    router.get('/cookbook/local/status', (req, res) => {
+      const { getLocalRuntimeRegistry } = deps;
+      const reg = getLocalRuntimeRegistry ? getLocalRuntimeRegistry() : null;
+      if (!reg) return res.json({ ok: true, runtimeReady: false, readyModels: 0 });
+      try {
+        const active = reg.activeRuntime();
+        const ready = reg.readyModels();
+        res.json({ ok: true, runtimeReady: !!active, activeRuntime: active ? active.id : null, readyModels: ready.length, models: ready.map(m => ({ id: m.id, displayName: m.displayName, capabilities: m.capabilities })) });
+      } catch (e) {
+        res.status(500).json({ ok: false, error: e.message });
+      }
+    });
+  }
+
   return router;
 };
