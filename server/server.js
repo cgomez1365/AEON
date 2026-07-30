@@ -531,8 +531,13 @@ process.on('uncaughtException', (err) => {
 });
 
 // Graceful shutdown hooks
-const shutdown = (sig) => {
+const shutdown = async (sig) => {
   console.log(`${sig} signal received: closing server.`);
+  // Phase 6: shut down native local runtime (llama.cpp worker thread) before exit.
+  try {
+    const lr = require('../services/local-runtime/index.cjs');
+    await lr.shutdown();
+  } catch {}
   process.exit(0);
 };
 process.on('SIGTERM', () => shutdown('SIGTERM'));

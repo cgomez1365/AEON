@@ -8,6 +8,16 @@ const fs = require('fs');
 const path = require('path');
 const { readLocalRuntime } = require('./storage.js');
 
+// Phase 6: native local runtime (llama.cpp, no Ollama daemon).
+// Loaded lazily so ai.js still boots on machines without the runtime installed.
+let _localRT = null;
+function _getLocalRT() {
+  if (!_localRT) {
+    try { _localRT = require('./local-runtime/index.cjs'); } catch { _localRT = false; }
+  }
+  return _localRT || null;
+}
+
 module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeonTerminalStream }) => {
 
   // Every provider fetch below now sets an explicit AbortSignal instead of
@@ -79,6 +89,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     if (p === 'gemini') return GEMINI_KEY_POOL.length > 0;
     if (p === 'openrouter') return KEY_POOLS.openrouter.length > 0;
     if (p === 'ollama') return localRuntimePresent(); // no key concept — presence comes from the Cookbook registry/env
+    if (p === 'local') { const lr = _getLocalRT(); return !!(lr && lr.isAvailable()); }
     return false;
   };
 
@@ -300,6 +311,23 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     const tokens = (data.eval_count || 0) + (data.prompt_eval_count || 0) || Math.ceil(text.length / 4);
     _trackLLM('ollama', model, tokens, Date.now() - _t0, true);
     return text;
+  };
+
+  // ── Phase 6: native local runtime (llama.cpp, provider id: "local") ──────
+  // Calls services/local-runtime/index.cjs — no Ollama daemon, no TCP port.
+  // Only called when isAvailable() returns true (runtime + model in registry).
+  const localNativeRequest = async (prompt, modelId, opts = {}) => {
+    const lr = _getLocalRT();
+    if (!lr || !lr.isAvailable()) {
+      throw new Error('Native local runtime not ready. Install the runtime and a model in Cookbook.');
+    }
+    const _t0 = Date.now();
+    const flatPrompt = typeof prompt === 'string' ? prompt : (Array.isArray(prompt) ? prompt.map(m => m.content || '').join('\n') : String(prompt));
+    const result = await lr.infer(flatPrompt, { model: modelId || undefined, maxTokens: opts.max_tokens || 512, temperature: opts.temperature ?? 0.7 });
+    _trackLLM('local', result.model, result.tokens, Date.now() - _t0, true);
+    return opts.returnMeta
+      ? { text: result.text, provider: 'local', model: result.model }
+      : result.text;
   };
 
   // ── Claude/Anthropic — the deliberate-choice tier ─────────────────────
@@ -755,7 +783,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
 
     const availableProviders = opts._vercelStrict
       ? ['groq', 'gemini', 'openrouter']
-      : ['groq', 'gemini', 'openrouter', 'ollama'];
+      : ['groq', 'gemini', 'openrouter', 'local', 'ollama'];
     const priority = settings.prefs?.provider_priority;
     const fallbacks = Array.isArray(priority) && priority.length
       ? priority.filter(p => availableProviders.includes(p))
@@ -776,6 +804,9 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
         } else if (p === 'openrouter' && process.env.OPENROUTER_API_KEY) {
           usedModel = p === provider ? model : 'openai/gpt-4o-mini';
           text = await openRouterRequest(prompt, usedModel, opts);
+        } else if (p === 'local') {
+          usedModel = p === provider ? model : undefined;
+          text = await localNativeRequest(prompt, usedModel, opts);
         } else if (p === 'ollama') {
           usedModel = p === provider ? model : undefined;
           text = await ollamaRequest(prompt, usedModel, opts);
@@ -795,7 +826,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   };
 
   return {
-    kernelLLM, kernelVision, geminiRequest, groqRequest, ollamaRequest, openRouterRequest, claudeRequest,
+    kernelLLM, kernelVision, geminiRequest, groqRequest, ollamaRequest, localNativeRequest, openRouterRequest, claudeRequest,
     GEMINI_KEY_POOL, _trackLLM, _llmTelemetry, setActivityRecorder,
     getDailyCost, addRunCost,
     KILL_SWITCH_THRESHOLD, GEMINI_PRICE_PER_TOKEN, GROQ_PRICE_PER_TOKEN,
