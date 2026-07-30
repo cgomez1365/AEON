@@ -36,9 +36,9 @@ module.exports = (app, deps) => {
     const { apiKey, base_url } = req.body || {};
     if (!apiKey && !base_url) return res.status(400).json({ error: 'apiKey or base_url required' });
 
-    // Local endpoint probe (no key): ollama / lmstudio / openai-compatible
+    // Local endpoint probe (no key): lmstudio / openai-compatible
     if (!apiKey && base_url) {
-      for (const p of ['ollama', 'lmstudio', 'openai']) {
+      for (const p of ['lmstudio', 'openai']) {
         const models = await endpoints.discoverModels(p, base_url, null);
         if (Array.isArray(models) && models.length) return res.json({ ok: true, provider: p, base_url, models });
       }

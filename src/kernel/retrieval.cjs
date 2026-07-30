@@ -7,10 +7,9 @@
  * The scope name "global" (and "all"/"*") is rejected at registration.
  *
  * Search is deterministic-first: BM25 over per-chunk term maps always works
- * (zero tokens, zero external deps). Ollama embeddings (nomic-embed-text) are
+ * (zero tokens, zero external deps). Local embeddings (nomic-embed-text) are
  * layered on top when available — cosine scores replace BM25 for chunks that
- * have embeddings. Ollama being down degrades quality, never availability
- * (known ops issue: endpoint drift / CUDA crashes).
+ * have embeddings. The embed model being absent degrades quality, never availability.
  *
  * R3 retrieval-layer gate: search(scope, query, { caller }) — the caller block
  * must own the scope, or declare the owner in manifest crossBlockRead (Tier 1.5).

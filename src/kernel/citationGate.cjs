@@ -125,7 +125,7 @@ function readReceipts(n = 50) {
 /**
  * answerQuery({ query, scope, domain, caller, llm, embed, scrape, k })
  *   llm(prompt)   — async → string (kernelLLM bound to a role by the caller)
- *   embed(text)   — optional async → vector (Ollama); absent = BM25 floor
+ *   embed(text)   — optional async → vector (local embed model); absent = BM25 floor
  *   scrape(query) — optional async → [{ title, url, snippet }] for Class 4
  *
  * Returns { class, answer, citations, receiptId } — Class 3/4 answers ALWAYS

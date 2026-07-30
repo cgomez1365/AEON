@@ -29,7 +29,21 @@ const EXT = new Set(['.js', '.cjs', '.mjs', '.jsx', '.json']);
  * legacy config in order to explain it — never read or mutate it.
  */
 const MIGRATION_ALLOWED = new Set([
+  // Phase 9: may DETECT legacy Ollama config to explain it — never calls it.
   'services/local-runtime/migrate.cjs',
+  // Phase 3–6: these files mention "Ollama" only in negative/explanatory comments
+  // ("no Ollama daemon", "never touches ~/.ollama", etc.) — they are NOT callers.
+  'services/local-runtime/runtime-assets.json',
+  'services/local-runtime/runtime-installer.cjs',
+  'services/local-runtime/runtime-probe.cjs',
+  'services/local-runtime/model-installer.cjs',
+  'services/local-runtime/worker.mjs',
+  'services/local-runtime/supervisor.cjs',
+  'services/local-runtime/index.cjs',
+  'services/local-runtime/paths.cjs',
+  'services/local-runtime/queue.cjs',
+  'services/local-runtime/registry.cjs',
+  'services/storage.js',
 ]);
 
 const RULES = [

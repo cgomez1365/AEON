@@ -20,14 +20,14 @@
   "requires": {
     "apis": [
       "gemini",
-      "ollama",
+      "local",
       "supabase"
     ],
     "env": [
       "GEMINI_PAID_KEY",
       "GEMINI_API_KEY",
       "GEMINI_FREE_KEY_1",
-      "OLLAMA_HOST",
+      "AEON_LLM_BACKEND",
       "SUPABASE_URL",
       "SUPABASE_SERVICE_ROLE_KEY"
     ],
@@ -183,7 +183,7 @@
     "GEMINI_PAID_KEY",
     "GEMINI_API_KEY",
     "GEMINI_FREE_KEY_1",
-    "OLLAMA_HOST",
+    "AEON_LLM_BACKEND",
     "SUPABASE_URL",
     "SUPABASE_SERVICE_ROLE_KEY"
   ],

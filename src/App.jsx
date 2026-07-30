@@ -149,7 +149,7 @@ export default function App() {
         const response = await originalFetch.apply(this, args);
         // /api/kernel/llm is excluded — components handle their own 409 (needsLocalConfirm) gracefully
         // /api/auth/status 404s by design when no auth block is installed — settings handles it.
-        const ignoredEndpoints = ['/api/chat', '/api/audit', '/api/search', '/api/health', '/api/canva/status', '/api/telemetry', '/api/llm-telemetry', '/api/ollama/status', '/api/ollama-status', '/api/gas/status', '/api/transcribe', '/api/shell/exec', '/api/kernel/llm', '/api/auth/status'];
+        const ignoredEndpoints = ['/api/chat', '/api/audit', '/api/search', '/api/health', '/api/canva/status', '/api/telemetry', '/api/llm-telemetry', '/api/local-status', '/api/gas/status', '/api/transcribe', '/api/shell/exec', '/api/kernel/llm', '/api/auth/status'];
         // 401 on auth/security routes is EXPECTED when locked or signed out —
         // the AuthGate handles it, so it must never raise the forensics banner.
         const isExpectedAuth401 = response.status === 401 && (url.startsWith('/api/auth/') || url.startsWith('/api/security/'));

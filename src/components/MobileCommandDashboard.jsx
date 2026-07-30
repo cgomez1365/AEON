@@ -557,7 +557,7 @@ export default function MobileCommandDashboard({ chatHistory = [], auditLogs = [
   const { user } = useAuth();
   const nav = useNavigate();
   const [panel, setPanel] = useState(null); // "notes" | "email" | "calendar" | "gas" | null
-  const [ollamaOnline, setOllamaOnline] = useState(false);
+  const [localOnline, setLocalOnline] = useState(false);
   const [geminiOnline, setGeminiOnline] = useState(true);
   const [gasOnline, setGasOnline] = useState(null); // null=unknown, true, false
   const [clientCount, setClientCount] = useState(null);
@@ -567,9 +567,9 @@ export default function MobileCommandDashboard({ chatHistory = [], auditLogs = [
   const agentActivity = auditLogs.filter(l => l.agent && l.agent !== "SYSTEM").length;
   const isNominal = agentActivity > 0;
 
-  // Check Ollama status on load
+  // Check local runtime status on load
   useEffect(() => {
-    fetch("/api/ollama-status").then(r => r.json()).then(d => setOllamaOnline(d.online)).catch(() => {});
+    fetch("/api/local-status").then(r => r.json()).then(d => setLocalOnline(d.online)).catch(() => {});
     fetch("/api/gas/status").then(r => r.json()).then(d => setGasOnline(d.configured)).catch(() => setGasOnline(false));
   }, []);
 
@@ -667,7 +667,7 @@ export default function MobileCommandDashboard({ chatHistory = [], auditLogs = [
           <div style={{ display: "flex", flexDirection: "column", gap: 5, alignItems: "flex-end" }}>
             <StatusPill label={isNominal ? "Nominal" : "Standby"} ok={isNominal} />
             <StatusPill label={geminiOnline ? "Gemini ✓" : "Gemini ✗"} ok={geminiOnline} />
-            <StatusPill label={ollamaOnline ? "Ollama ✓" : "Ollama ✗"} ok={ollamaOnline} />
+            <StatusPill label={localOnline ? "Local ✓" : "Local ✗"} ok={localOnline} />
             {gasOnline !== null && <StatusPill label={gasOnline ? "GAS ✓" : "GAS ✗"} ok={gasOnline} />}
           </div>
         </div>
@@ -688,7 +688,7 @@ export default function MobileCommandDashboard({ chatHistory = [], auditLogs = [
             <option value="gemini-2.5-pro">🔥 Gemini Pro</option>
             <option value="llama-3.3-70b-versatile">🦙 Groq Llama 70B</option>
             <option value="mixtral-8x7b-32768">🌀 Atlas — Mixtral</option>
-            <option value="ollama">🐏 Ollama (Llama 3)</option>
+            <option value="local">🖥️ Local Runtime</option>
           </select>
         </div>
       </div>

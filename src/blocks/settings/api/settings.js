@@ -18,11 +18,10 @@ module.exports = (app, deps) => {
   let readLocalRuntime;
   try { ({ readLocalRuntime } = require(path.join(APP_ROOT, 'services', 'storage.js'))); }
   catch { readLocalRuntime = () => null; }
-  // First installed local (Ollama) model per the registry — null if none.
+  // First ready local model per the registry — null if none.
   const firstLocalModel = () => {
-    if (process.env.OLLAMA_MODEL) return process.env.OLLAMA_MODEL;
     const rt = readLocalRuntime();
-    const m = rt?.models?.find(x => x.backend === 'ollama' && x.ready !== false);
+    const m = rt?.models?.find(x => x.ready !== false);
     return m ? m.id : null;
   };
   // Coinbase CDP key lives inside the install (secrets/), not on the user's
@@ -41,16 +40,13 @@ module.exports = (app, deps) => {
   // Role defaults resolve to whichever provider is actually alive right now —
   // hardcoded groq/gemini defaults resurrected dead providers every time the
   // settings file went missing. Local-first: env key order mirrors the
-  // nervous-system fallback chain, Ollama is the always-there floor.
+  // nervous-system fallback chain, local runtime is the always-there floor.
   function _liveDefault() {
     if (process.env.OPENROUTER_API_KEY) return { provider: 'openrouter', model: 'meta-llama/llama-3.3-70b-instruct:free' };
     if (process.env.GROQ_API_KEY) return { provider: 'groq', model: 'llama-3.3-70b-versatile' };
     if (process.env.GEMINI_FREE_KEY_1 || process.env.GEMINI_PAID_KEY) return { provider: 'gemini', model: 'gemini-2.0-flash' };
-    // Local floor comes from the Cookbook registry — whatever the operator
-    // actually installed, never an assumed tag. Nothing local + nothing cloud
-    // → unconfigured, and the UI/resolver says so instead of pretending.
     const local = firstLocalModel();
-    if (local) return { provider: 'ollama', model: local };
+    if (local) return { provider: 'local', model: local };
     return { provider: 'none', model: '' };
   }
 
@@ -105,7 +101,7 @@ module.exports = (app, deps) => {
           const val = match[2].trim();
           if (key.includes('KEY') || key.includes('SECRET') || key.includes('TOKEN')) {
             envKeys[key] = val ? 'configured' : 'missing';
-          } else if (key === 'AEON_WORKSPACE' || key === 'OLLAMA_HOST' || key === 'OLLAMA_MODEL') {
+          } else if (key === 'AEON_WORKSPACE' || key === 'AEON_LLM_BACKEND') {
             envKeys[key] = val || 'not set';
           }
         }
@@ -196,7 +192,7 @@ module.exports = (app, deps) => {
   });
 
   // ── POST /api/settings/nl — natural-language settings from the terminal ──
-  // "set grading to ollama qwen3.5:4b" / "set chat to tencent/hy3:free".
+  // "set grading to local qwen3.5:4b" / "set chat to tencent/hy3:free".
   // Writes the SAME store the UI writes (settings.models + endpoint-registry
   // role) — this is what makes the terminal and the panel one source of truth.
   // Deterministic parse, zero LLM tokens.
@@ -210,17 +206,13 @@ module.exports = (app, deps) => {
     const role = m[1].toLowerCase();
     if (!roles.includes(role)) return res.status(400).json({ error: `Unknown role "${role}".`, roles });
     let rest = m[2].trim().split(/\s+/);
-    const PROVIDERS = ['ollama', 'openrouter', 'groq', 'gemini', 'openai', 'claude'];
+    const PROVIDERS = ['local', 'openrouter', 'groq', 'gemini', 'openai', 'claude'];
     let provider = PROVIDERS.includes(rest[0].toLowerCase()) ? rest.shift().toLowerCase() : null;
     let model = rest.join(' ').trim();
     if (!model) return res.status(400).json({ error: 'No model given.', roles });
-    // Infer provider from the model string if not stated.
     if (!provider) {
-      // '/' wins over ':' — openrouter names like "tencent/hy3:free" have both;
-      // only a bare "name:size" (no slash) is Ollama.
-      if (model.includes('/')) provider = 'openrouter';            // tencent/hy3:free
-      else if (model.includes(':')) provider = 'ollama';           // qwen3.5:4b
-      else provider = settings.models[role]?.provider || 'ollama';
+      if (model.includes('/')) provider = 'openrouter';
+      else provider = settings.models[role]?.provider || 'local';
     }
     // 1) settings.models (the fallback source)
     settings.models[role] = { provider, model };
@@ -268,8 +260,8 @@ module.exports = (app, deps) => {
       exported_at: new Date().toISOString(),
       models: settings.models || {},           // baked role → provider + model
       services_required: [...servicesNeeded],
-      keys_required: [...providersNeeded].filter(p => p !== 'ollama').map(p => `${p.toUpperCase()}_API_KEY`),
-      local_models_ok: [...providersNeeded].includes('ollama'),
+      keys_required: [...providersNeeded].filter(p => p !== 'local').map(p => `${p.toUpperCase()}_API_KEY`),
+      local_models_ok: [...providersNeeded].includes('local'),
       blocks,
     };
     res.setHeader('Content-Type', 'application/json');
@@ -412,11 +404,7 @@ module.exports = (app, deps) => {
       gemini:     { keys: ['GEMINI_FREE_KEY_1', 'GEMINI_PAID_KEY', 'GEMINI_FREE_KEY_2', 'GEMINI_FREE_KEY_3'], kind: 'cloud', icon: '💎', base: 'https://generativelanguage.googleapis.com/v1beta' },
       openai:     { keys: ['OPENAI_API_KEY'], kind: 'cloud', icon: '🧠', base: 'https://api.openai.com/v1' },
       claude:     { keys: ['ANTHROPIC_API_KEY'], kind: 'cloud', icon: '🎭', base: 'https://api.anthropic.com/v1' },
-      // OLLAMA_HOST names a target, it's not proof anything answers there —
-      // detect comes from the Cookbook registry (the thing that actually
-      // tracks install/pull/delete), same fix applied to council + ai.js
-      // after a leftover .env value reported "ollama" alive with nothing running.
-      ollama:     { keys: [], kind: 'local', icon: '🦙', base: env.OLLAMA_HOST || 'http://localhost:11434', detect: !!readLocalRuntime()?.runtimes?.ollama?.installed },
+      local:      { keys: [], kind: 'local', icon: '🖥️', base: null, detect: (() => { try { return require(path.join(APP_ROOT, 'services', 'storage.js')).getLocalRuntimeRegistry().activeRuntime() !== null; } catch { return false; } })() },
       grok:       { keys: ['GROK_API_KEY'], kind: 'cloud', icon: '🤖', base: 'https://api.x.ai/v1' },
       lmstudio:   { keys: [], kind: 'local', icon: '🖥️', base: `${kernelEndpoints.lmStudioHost()}/v1` },
       supabase:   { keys: ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY'], kind: 'infra', icon: '🟢', allRequired: true },
@@ -468,9 +456,8 @@ module.exports = (app, deps) => {
         details.projectId = cloudProviderMetadata.firebase.projectId || env.VITE_FIREBASE_PROJECT_ID || null;
         details.authDomain = cloudProviderMetadata.firebase.authDomain || env.VITE_FIREBASE_AUTH_DOMAIN || null;
       }
-      if (id === 'ollama') {
-        if (env.OLLAMA_HOST) details.host = env.OLLAMA_HOST;
-        if (env.OLLAMA_MODEL) details.model = env.OLLAMA_MODEL;
+      if (id === 'local') {
+        if (env.AEON_LLM_BACKEND) details.backend = env.AEON_LLM_BACKEND;
       }
       if (id === 'youtube') {
         if (env.YOUTUBE_CHANNEL_HANDLE) details.channelHandle = env.YOUTUBE_CHANNEL_HANDLE;
@@ -581,9 +568,8 @@ module.exports = (app, deps) => {
         projectId: cloud.firebase.projectId,
         authDomain: cloud.firebase.authDomain,
       },
-      ollama: {
-        configured: !!readLocalRuntime()?.runtimes?.ollama?.installed,
-        host: env.OLLAMA_HOST || readLocalRuntime()?.runtimes?.ollama?.host || null,
+      local: {
+        configured: (() => { try { return require(path.join(APP_ROOT, 'services', 'storage.js')).getLocalRuntimeRegistry().activeRuntime() !== null; } catch { return false; } })(),
         model: firstLocalModel(),
       },
       youtube: {
@@ -693,11 +679,15 @@ module.exports = (app, deps) => {
         return res.json({ ok: r.ok, models: (data.models || []).map(m => m.name.replace('models/', '')).slice(0, 20) });
       }
 
-      if (id === 'ollama') {
-        const host = env.OLLAMA_HOST || 'http://localhost:11434';
-        const r = await Promise.race([fetch(`${host}/api/tags`), timeout(5000)]);
-        const data = await r.json();
-        return res.json({ ok: true, models: (data.models || []).map(m => m.name) });
+      if (id === 'local') {
+        try {
+          const lr = require(path.join(__dirname, '..', '..', '..', '..', 'services', 'local-runtime', 'index.cjs'));
+          const st = lr.status();
+          const models = (st.models || []).filter(m => m.ready !== false).map(m => m.id || m.name);
+          return res.json({ ok: lr.isAvailable(), models });
+        } catch (e) {
+          return res.json({ ok: false, models: [], error: e.message });
+        }
       }
 
       if (id === 'supabase') {
@@ -802,7 +792,7 @@ module.exports = (app, deps) => {
         try {
           const m = JSON.parse(fs.readFileSync(mp, 'utf8'));
           const apis = (m.requires && m.requires.apis) || [];
-          const aiCapable = apis.some(a => ['groq', 'gemini', 'openai', 'claude', 'ollama', 'openrouter', 'grok', 'lmstudio'].includes(a));
+          const aiCapable = apis.some(a => ['groq', 'gemini', 'openai', 'claude', 'local', 'openrouter', 'grok', 'lmstudio'].includes(a));
           const hasAnyDep = apis.length > 0;
           const override = blockOverrides[m.id] || null;
 
@@ -864,26 +854,12 @@ module.exports = (app, deps) => {
     if (env.ANTHROPIC_API_KEY) available.push('claude');
     if (env.GROK_API_KEY) available.push('grok');
     if (env.OPENROUTER_API_KEY) available.push('openrouter');
-    // Ollama availability comes from the Cookbook's world-view, not raw env
-    // presence — OLLAMA_HOST merely names a target, it's not proof anything
-    // is listening there (a leftover .env value shipped that exact bug once
-    // already this session). Registry first, launcher's first-boot hint
-    // second, a real reachability probe last.
+    // Local runtime availability — check native LR registry
     {
-      const rt = readLocalRuntime();
-      if (rt?.runtimes?.ollama?.installed || rt?.models?.some(m => m.backend === 'ollama')) available.push('ollama');
-      if (!available.includes('ollama')) {
-        try {
-          const hint = JSON.parse(fs.readFileSync(path.join(APP_ROOT, 'db', 'host-runtime.json'), 'utf8'));
-          if (hint.ollama === 'running' || hint.ollama === 'installed') available.push('ollama');
-        } catch {}
-      }
-      if (!available.includes('ollama')) {
-        try {
-          const r = await fetch(`${env.OLLAMA_HOST || 'http://localhost:11434'}/api/tags`, { signal: AbortSignal.timeout(1500) });
-          if (r.ok) available.push('ollama');
-        } catch {}
-      }
+      try {
+        const lr = require(path.join(__dirname, '..', '..', '..', '..', 'services', 'local-runtime', 'index.cjs'));
+        if (lr.isAvailable()) available.push('local');
+      } catch {}
     }
 
     // Also check endpoint registry (vault-stored keys)
@@ -897,7 +873,7 @@ module.exports = (app, deps) => {
     } catch {}
 
     // Prefer cloud providers over local — assign best available
-    const priority = ['gemini', 'groq', 'openai', 'claude', 'grok', 'openrouter', 'ollama', 'lmstudio'];
+    const priority = ['gemini', 'groq', 'openai', 'claude', 'grok', 'openrouter', 'local', 'lmstudio'];
     const defaultModels = {
       groq: 'llama-3.3-70b-versatile',
       gemini: 'gemini-2.5-flash',
@@ -905,7 +881,7 @@ module.exports = (app, deps) => {
       claude: 'claude-sonnet-4-6',
       grok: 'grok-3',
       openrouter: 'openai/gpt-4o-mini',
-      ollama: firstLocalModel() || '',
+      local: firstLocalModel() || '',
     };
 
     const settings = loadSettings();
@@ -920,7 +896,7 @@ module.exports = (app, deps) => {
         try {
           const m = JSON.parse(fs.readFileSync(mp, 'utf8'));
           const apis = (m.requires && m.requires.apis) || [];
-          const llmProviders = apis.filter(a => ['groq', 'gemini', 'openai', 'claude', 'ollama', 'grok', 'openrouter', 'lmstudio'].includes(a));
+          const llmProviders = apis.filter(a => ['groq', 'gemini', 'openai', 'claude', 'local', 'grok', 'openrouter', 'lmstudio'].includes(a));
           if (llmProviders.length === 0) continue;
           if (!force && settings.blockConfig[m.id]) continue;
 
@@ -929,7 +905,7 @@ module.exports = (app, deps) => {
                      || llmProviders.find(p => available.includes(p))
                      || available.find(p => priority.includes(p))
                      || available[0];
-          if (match === 'ollama' && !defaultModels.ollama) continue; // runtime present but zero models installed
+          if (match === 'local' && !defaultModels.local) continue; // runtime present but zero models installed
           if (match) {
             settings.blockConfig[m.id] = { provider: match, model: defaultModels[match] || match };
             assigned++;

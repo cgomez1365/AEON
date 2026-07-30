@@ -8,10 +8,10 @@ module.exports = function createChatRouter(deps) {
     isVercel, supabase, LOG_FILE, AUDIT_FILE,
     getLocalFile, getDailyCost, addRunCost,
     KILL_SWITCH_THRESHOLD, GEMINI_PRICE_PER_TOKEN, GROQ_PRICE_PER_TOKEN,
-    geminiRequest, ollamaRequest, groqRequest, writeOSAudit, fetchDuckDuckGo,
+    geminiRequest, groqRequest, writeOSAudit, fetchDuckDuckGo,
     aeonTerminalStream, TERMINAL_HISTORY_FILE, DEFAULT_LOCAL_MODEL, defaultLocalModel
   } = deps;
-  const localModel = (defaultLocalModel ? defaultLocalModel() : null) || DEFAULT_LOCAL_MODEL || process.env.OLLAMA_MODEL || null;
+  const localModel = (defaultLocalModel ? defaultLocalModel() : null) || DEFAULT_LOCAL_MODEL || null;
 
   // GET /api/chat — retrieve chat history
   router.get('/chat', async (req, res) => {
@@ -172,20 +172,15 @@ module.exports = function createChatRouter(deps) {
           } catch (e) { /* best-effort — never block chat on Second Brain being unavailable */ }
         }
 
-        if (currentCost >= KILL_SWITCH_THRESHOLD && !activeModel.includes('ollama') && activeModel !== localModel) {
+        if (currentCost >= KILL_SWITCH_THRESHOLD && activeModel !== localModel) {
           console.warn(`[KILL SWITCH ACTIVATED] Local server burned $${currentCost.toFixed(4)}. Forcing Local Enclave.`);
           activeModel = localModel;
           throttle_active = true;
         }
 
         try {
-          if (activeModel.startsWith('llama') || activeModel.startsWith('qwen') || activeModel.startsWith('second-brain') || activeModel.startsWith('phi3') || activeModel.startsWith('tinyllama')) {
-            provider = 'Ollama (Local)';
-            aiResponse = await ollamaRequest(modifiedPrompt, activeModel);
-          } else {
-            provider = 'Gemini Key Pool';
-            aiResponse = await geminiRequest(modifiedPrompt, activeModel);
-          }
+          provider = 'Gemini Key Pool';
+          aiResponse = await geminiRequest(modifiedPrompt, activeModel);
         } catch (err) {
           console.error('[AEON] Chat AI generation failed, falling back to Gemini:', err);
           try {

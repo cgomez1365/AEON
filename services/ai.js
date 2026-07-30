@@ -1,6 +1,6 @@
 /**
  * AEON Jarvis — AI Service (kernelLLM)
- * Multi-provider LLM layer: Gemini key-pool failover, Groq, Ollama,
+ * Multi-provider LLM layer: Gemini key-pool failover, Groq, local (llama.cpp),
  * OpenAI-compatible registry endpoints, vault→env hydration, token
  * governor, and live telemetry. All blocks call kernelLLM(prompt, {role}).
  */
@@ -8,7 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const { readLocalRuntime } = require('./storage.js');
 
-// Phase 6: native local runtime (llama.cpp, no Ollama daemon).
+// Phase 6: native local runtime (llama.cpp). Lazy require.
 // Loaded lazily so ai.js still boots on machines without the runtime installed.
 let _localRT = null;
 function _getLocalRT() {
@@ -28,33 +28,18 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   const DEFAULT_FETCH_TIMEOUT_MS = 240000; // 4 minutes
   const fetchTimeout = (opts = {}) => AbortSignal.timeout(opts.timeout_ms || DEFAULT_FETCH_TIMEOUT_MS);
 
-  // Single source of truth for "which local Ollama model do we fall back to."
-  // Previously six+ files each hardcoded their own guess ('llama3',
-  // 'qwen2.5-coder:7b') — the same class of bug as the Vault-path seam fixed
-  // earlier tonight, just for model names instead of file paths. AEON is
-  // meant to run on whatever the operator has actually pulled, not assume a
-  // specific tag exists — hardcoding one broke the instant that tag got
-  // deleted. Resolution order: OLLAMA_MODEL in .env → first Ollama model the
-  // Cookbook registry (data/local-runtime.json) says is actually installed →
-  // null (no local floor on this machine; callers surface a clear error
-  // instead of dialing a model that doesn't exist).
+  // defaultLocalModel: returns the first ready native chat model from the Phase 2
+  // registry, or null. Used by Settings health display and provider-health APIs.
   const defaultLocalModel = () => {
-    if (process.env.OLLAMA_MODEL) return process.env.OLLAMA_MODEL;
-    const rt = readLocalRuntime();
-    // Embed-only models (name contains 'embed') do not support /api/chat.
-    // Skip them so the fallback never lands on a model that cannot generate text.
-    const m = rt?.models?.find(x => x.backend === 'ollama' && x.ready !== false && !/embed/i.test(x.id));
-    return m ? m.id : null;
+    const lr = _getLocalRT();
+    return lr ? lr.defaultModel() : null;
   };
-  // Ollama counts as present only when the Cookbook registry (the thing that
-  // actually tracks install/pull/delete) says so. OLLAMA_HOST merely NAMES a
-  // target URL — it's not evidence anything is listening there, and treating
-  // its presence as "alive" is exactly the bug this shipped with once
-  // already (a leftover .env value kept "ollama" reporting healthy on a
-  // machine with no runtime at all).
+
+  // localRuntimePresent: true when Phase 2 registry has a ready runtime + model.
+  // No daemon, no port, no env var assumed.
   const localRuntimePresent = () => {
-    const rt = readLocalRuntime();
-    return !!(rt?.runtimes?.ollama?.installed || rt?.models?.some(x => x.backend === 'ollama'));
+    const lr = _getLocalRT();
+    return !!(lr && lr.isAvailable());
   };
 
   const notify = (message, meta = {}) => {
@@ -77,25 +62,17 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     notify(`⏸ ${p} in cooldown ${Math.round(ms / 1000)}s: ${message.slice(0, 120)}`, { provider: p });
   };
 
-  // "healthy" used to mean only "not in a 429/402 cooldown" — a provider
-  // with zero keys has never been called, so it's never failed, so it
-  // reported healthy=true with nothing configured at all (Fleet Control
-  // showed 4/4 healthy on a blank .env). Fold in whether the provider is
-  // actually configured; ollama has no key concept so it stays reachability-
-  // agnostic here (unchanged from before — the dispatch chain always tries
-  // it regardless of isHealthy, same as line ~747).
   const isConfigured = (p) => {
     if (p === 'groq') return !!process.env.GROQ_API_KEY;
     if (p === 'gemini') return GEMINI_KEY_POOL.length > 0;
     if (p === 'openrouter') return KEY_POOLS.openrouter.length > 0;
-    if (p === 'ollama') return localRuntimePresent(); // no key concept — presence comes from the Cookbook registry/env
     if (p === 'local') { const lr = _getLocalRT(); return !!(lr && lr.isAvailable()); }
     return false;
   };
 
   const getProviderHealth = () => {
     const out = {};
-    for (const p of ['groq', 'gemini', 'ollama', 'openrouter']) {
+    for (const p of ['groq', 'gemini', 'local', 'openrouter']) {
       const configured = isConfigured(p);
       out[p] = { healthy: configured && isHealthy(p), configured, ...(providerHealth[p] || {}) };
     }
@@ -205,8 +182,8 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
         try { return await groqRequest(prompt, 'llama-3.3-70b-versatile', 0, opts); }
         catch (groqErr) { console.warn('[GEMINI FAILOVER] Groq fallback failed:', groqErr.message); }
       }
-      console.warn('[GEMINI FAILOVER] Falling back to Local Ollama...');
-      return await ollamaRequest(prompt, defaultLocalModel(), opts);
+      console.warn('[GEMINI FAILOVER] Falling back to native local runtime...');
+      return await localNativeRequest(prompt, undefined, opts);
     }
     const apiKey = getActiveKey();
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
@@ -277,44 +254,10 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     return text;
   };
 
-  const OLLAMA_HOST = process.env.OLLAMA_HOST || 'http://localhost:11434';
-
-  const OLLAMA_NUM_CTX = Number(process.env.OLLAMA_NUM_CTX || process.env.OLLAMA_CTX) || 8192;
-  // Heavy roles (research, grading, agent) get 16K context — qwen2.5-coder
-  // and qwen3.5 both support 32K, so 16K is safe and prevents silent truncation.
   const HEAVY_ROLES = new Set(['research', 'grading', 'agent_heavy', 'agent_final', 'agent_worker']);
-  const ctxForRole = (role) => HEAVY_ROLES.has(role) ? Math.max(OLLAMA_NUM_CTX, 16384) : OLLAMA_NUM_CTX;
-
-  const ollamaRequest = async (prompt, model, opts = {}) => {
-    model = model || defaultLocalModel();
-    if (!model) throw new Error('No local model installed — open the Cookbook block to install one, or add a cloud API key in Settings.');
-    const _t0 = Date.now();
-    const num_ctx = ctxForRole(opts.role || 'chat');
-    const messages = _toMessages(prompt, opts);
-    if (opts.system) messages.unshift({ role: 'system', content: opts.system });
-    // Use /api/chat (multi-turn) instead of /api/generate (single-prompt)
-    const response = await fetch(`${OLLAMA_HOST}/api/chat`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-AEON-SSH-Identity': process.env.OLLAMA_SSH_KEY || ''
-      },
-      body: JSON.stringify({ model, messages, stream: false, options: { num_ctx } }),
-      signal: AbortSignal.timeout(180000)
-    });
-    if (!response.ok) {
-      _trackLLM('ollama', model, 0, Date.now() - _t0, false);
-      throw new Error(`Ollama error ${response.status}`);
-    }
-    const data = await response.json();
-    const text = data.message?.content || data.response || '';
-    const tokens = (data.eval_count || 0) + (data.prompt_eval_count || 0) || Math.ceil(text.length / 4);
-    _trackLLM('ollama', model, tokens, Date.now() - _t0, true);
-    return text;
-  };
 
   // ── Phase 6: native local runtime (llama.cpp, provider id: "local") ──────
-  // Calls services/local-runtime/index.cjs — no Ollama daemon, no TCP port.
+  // Calls services/local-runtime/index.cjs — native runtime, no TCP port.
   // Only called when isAvailable() returns true (runtime + model in registry).
   const localNativeRequest = async (prompt, modelId, opts = {}) => {
     const lr = _getLocalRT();
@@ -586,24 +529,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     const { provider, model, base_url, apiKey } = r;
     if (provider === 'gemini') return genericGeminiRequest(prompt, model, base_url, apiKey, opts);
     if (provider === 'claude') return claudeRequest(prompt, model, apiKey, undefined, opts);
-    if (provider === 'ollama') {
-      if (base_url && !base_url.includes('localhost:11434')) {
-        const _t0 = Date.now();
-        const messages = _toMessages(prompt, opts);
-        if (opts.system) messages.unshift({ role: 'system', content: opts.system });
-        const num_ctx = ctxForRole(opts.role || 'chat');
-        const resp = await fetch(`${base_url.replace(/\/$/, '')}/api/chat`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model, messages, stream: false, options: { num_ctx } }),
-          signal: AbortSignal.timeout(180000),
-        });
-        const data = await resp.json();
-        const text = data.message?.content || data.response || '';
-        _trackLLM('ollama', model, (data.eval_count || 0) + (data.prompt_eval_count || 0), Date.now() - _t0, resp.ok);
-        return text;
-      }
-      return ollamaRequest(prompt, model, opts);
-    }
+    if (provider === 'local') return localNativeRequest(prompt, model, opts);
     return genericOpenAIRequest(prompt, model, base_url, apiKey, opts);
   };
 
@@ -616,11 +542,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     if (settings.prefs?.vision_enabled === false) {
       throw new Error('Vision is disabled in Settings (toggle it on under Vision).');
     }
-    // Local-first fallback: the old hardcoded groq default silently broke all
-    // vision the day the groq keys died. Ollama + qwen3-vl is the floor.
-    const _visionFallback = process.env.GROQ_API_KEY
-      ? { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct' }
-      : { provider: 'ollama', model: 'qwen3-vl:2b' };
+    const _visionFallback = { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct' };
     const roleConfig = opts.provider ? opts : (settings.models?.vision || _visionFallback);
     const provider = roleConfig.provider;
     const model = roleConfig.model;
@@ -696,28 +618,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       return text;
     }
 
-    if (provider === 'ollama') {
-      const host = process.env.OLLAMA_HOST || 'http://127.0.0.1:11434';
-      const visionModel = model || 'qwen3-vl:2b';
-      const response = await fetch(`${host}/api/chat`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: visionModel, stream: false,
-          messages: [{ role: 'user', content: prompt, images: [b64] }],
-        }),
-      });
-      if (!response.ok) {
-        const errBody = await response.text();
-        _trackLLM('ollama', visionModel, 0, Date.now() - _t0, false);
-        throw new Error(`Ollama vision error ${response.status}: ${errBody} (is a vision model like qwen3-vl pulled?)`);
-      }
-      const data = await response.json();
-      const text = data?.message?.content || '';
-      _trackLLM('ollama', visionModel, (data?.prompt_eval_count || 0) + (data?.eval_count || 0), Date.now() - _t0, true);
-      return text;
-    }
-
-    throw new Error(`Provider "${provider}" is not wired for vision in AEON yet. Set the "vision" role in Settings to groq, gemini, openrouter, claude, or ollama.`);
+    throw new Error(`Provider "${provider}" is not wired for vision in AEON yet. Set the "vision" role in Settings to groq, gemini, openrouter, or claude.`);
   };
 
   // ── Default system identity — injected on every kernelLLM call unless
@@ -783,7 +684,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
 
     const availableProviders = opts._vercelStrict
       ? ['groq', 'gemini', 'openrouter']
-      : ['groq', 'gemini', 'openrouter', 'local', 'ollama'];
+      : ['groq', 'gemini', 'openrouter', 'local'];
     const priority = settings.prefs?.provider_priority;
     const fallbacks = Array.isArray(priority) && priority.length
       ? priority.filter(p => availableProviders.includes(p))
@@ -791,7 +692,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     const chain = [provider, ...fallbacks].filter((p, i, a) => a.indexOf(p) === i);
     let lastErr = null;
     for (const p of chain) {
-      if (p !== 'ollama' && !isHealthy(p)) continue;
+      if (!isHealthy(p)) continue;
       try {
         let text;
         let usedModel = model;
@@ -807,9 +708,6 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
         } else if (p === 'local') {
           usedModel = p === provider ? model : undefined;
           text = await localNativeRequest(prompt, usedModel, opts);
-        } else if (p === 'ollama') {
-          usedModel = p === provider ? model : undefined;
-          text = await ollamaRequest(prompt, usedModel, opts);
         } else continue;
         if (text !== undefined) {
           if (p !== provider) notify(`↪ Fallback: ${role} routed to ${p}/${usedModel} (configured: ${provider})`, { provider: p });
@@ -818,7 +716,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       } catch (e) {
         lastErr = e;
         const status = /error (\d{3})/i.exec(e.message)?.[1] || (/429/.test(e.message) ? '429' : /402/.test(e.message) ? '402' : null);
-        if (status && p !== 'ollama') markUnhealthy(p, Number(status), e.message);
+        if (status) markUnhealthy(p, Number(status), e.message);
         console.warn(`[KERNEL] ${p} failed (${e.message.slice(0, 120)}), trying next provider`);
       }
     }
@@ -826,7 +724,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   };
 
   return {
-    kernelLLM, kernelVision, geminiRequest, groqRequest, ollamaRequest, localNativeRequest, openRouterRequest, claudeRequest,
+    kernelLLM, kernelVision, geminiRequest, groqRequest, localNativeRequest, openRouterRequest, claudeRequest,
     GEMINI_KEY_POOL, _trackLLM, _llmTelemetry, setActivityRecorder,
     getDailyCost, addRunCost,
     KILL_SWITCH_THRESHOLD, GEMINI_PRICE_PER_TOKEN, GROQ_PRICE_PER_TOKEN,

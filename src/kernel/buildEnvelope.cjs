@@ -53,7 +53,7 @@ const adapters = {
     return baseEnvelope('userKey', 'user', { ...p, meta });
   },
 
-  // Local model (Ollama) — only source permitted to have read retrieval history.
+  // Local model — only source permitted to have read retrieval history.
   local: (p) => baseEnvelope('local', 'local', p),
 
   // Pasted from an external session. Zero trust bonus — least verified, most scrutiny.

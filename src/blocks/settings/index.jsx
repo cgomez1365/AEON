@@ -1041,7 +1041,7 @@ function VisionModelSelect() {
         <option value="grok-2-vision">Grok 2 Vision</option>
       </optgroup>
       <optgroup label="Local">
-        <option value="llava">LLaVA (Ollama)</option>
+        <option value="llava">LLaVA (local)</option>
       </optgroup>
     </select>
   );
@@ -1566,11 +1566,11 @@ function KeyScanner({ onConnected }) {
       <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}><Search size={13} /> Key scanner</div>
       <div style={{ fontSize: 12, opacity: 0.65, marginBottom: 8 }}>
         Paste any API key — AEON detects the provider, lists its live models, and stores the key in the vault.
-        Or paste a local server address (Ollama, LM Studio) with no key.
+        Or paste a local server address (LM Studio, OpenAI-compatible) with no key.
       </div>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         <input type="password" value={key} onChange={e => setKey(e.target.value)} placeholder="API key (sk-…, gsk_…, AIza…, xai-…)" aria-label="API key" style={{ ...inputStyle, flex: 2, minWidth: 220 }} />
-        <input value={baseUrl} onChange={e => setBaseUrl(e.target.value)} placeholder="or local URL (http://localhost:11434)" aria-label="Local server URL" style={inputStyle} />
+        <input value={baseUrl} onChange={e => setBaseUrl(e.target.value)} placeholder="or local URL (http://localhost:8080)" aria-label="Local server URL" style={inputStyle} />
         <button type="button" disabled={busy || (!key.trim() && !baseUrl.trim())} onClick={detect}
           style={{ padding: '8px 16px', borderRadius: 6, border: 'none', background: 'var(--accent)', color: '#fff', cursor: 'pointer' }}>
           {busy ? 'Scanning…' : 'Detect'}
@@ -2098,7 +2098,7 @@ function sciFor(b, models, health, supabaseOk) {
   if (cfg && cfg.model) score += 40;
   if (cfg) {
     const p = cfg.provider;
-    const alive = p === 'ollama' ? (health?.localConfirmed !== false)
+    const alive = p === 'local' ? (health?.localConfirmed !== false)
       : !!(health?.providers?.[p]?.healthy);
     if (alive) score += 40;
   }
@@ -2145,7 +2145,7 @@ function BlocksNeedsPanel({ onManageModels }) {
           const cfg = models[role];
           const needsSupabase = (b.requires?.apis || []).includes('supabase');
           const supabaseMissing = needsSupabase && !supabaseOk;
-          const providerAlive = cfg && (cfg.provider === 'ollama'
+          const providerAlive = cfg && (cfg.provider === 'local'
             ? (health?.localConfirmed !== false)
             : !!(health?.providers?.[cfg.provider]?.healthy));
           const providerMissing = !!cfg && !providerAlive;
@@ -2463,7 +2463,7 @@ export default function SystemSettings() {
         <div className="models-section">
           <div className="agent-tools-desc" style={{ marginBottom: 10 }}>
             Pick a model for each job. Every block uses these — set once, done.
-            {' '}Don't have cloud keys? Choose a local (Ollama) model and run free.
+            {' '}Don't have cloud keys? Choose a local runtime model and run free.
           </div>
           {deriveRoles(settings.models).map(role => (
             <RoleCard
@@ -2508,7 +2508,7 @@ export default function SystemSettings() {
             <div className="admin-card prefs-card">
               <PrefToggle
                 label="Always allow local models"
-                desc="Treat Ollama as a first-class provider — no /allow-local confirmation needed. Recommended when cloud keys are dead or you want zero-cost operation."
+                desc="Treat local runtime as a first-class provider — no /allow-local confirmation needed. Recommended when cloud keys are dead or you want zero-cost operation."
                 prefKey="allow_local_llm"
                 defaultVal={false}
                 onMsg="Local models always allowed — workhorse mode"

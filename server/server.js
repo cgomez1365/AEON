@@ -175,7 +175,7 @@ if (fs.existsSync(modulesPath)) {
 // ── Block loader — deps every cartridge can request ──
 const baseDeps = {
   supabase,
-  geminiRequest: ai.geminiRequest, groqRequest: ai.groqRequest, ollamaRequest: ai.ollamaRequest,
+  geminiRequest: ai.geminiRequest, groqRequest: ai.groqRequest,
   validateSDI: security.validateSDI, writeOSAudit: security.writeOSAudit,
   path, fs, getLocalFile: storage.getLocalFile,
   fetchDuckDuckGo: search.fetchDuckDuckGo,
@@ -224,7 +224,7 @@ const baseDeps = {
   },
   defaultLocalModel: ai.defaultLocalModel,
   localRuntimePresent: ai.localRuntimePresent,
-  DEFAULT_LOCAL_MODEL: ai.defaultLocalModel(), // legacy snapshot for old block deps
+  getLocalRuntimeRegistry: storage.getLocalRuntimeRegistry,
 };
 
 // ── /api/ping — liveness probe, deliberately mounted BEFORE the auth gate ──
@@ -467,31 +467,7 @@ const startServer = () => {
       console.error('[KERNEL] WebSocket attach failed:', e.message);
     }
 
-    // If a vendored (contained-in-AEON) Ollama is installed, start its daemon
-    // once at boot — a system install auto-starts as a background service,
-    // but the vendored copy has no such service, so without this any block
-    // that dials OLLAMA_HOST (chat, council, ...) before Cookbook happens to
-    // spin it up first would just get connection-refused. Non-blocking,
-    // best-effort: cloud AI still works immediately regardless.
-    (async () => {
-      try {
-        if (process.env.OLLAMA_HOST) return; // operator pointed at their own instance — don't touch it
-        const ollamaVendor = require('../services/ollamaVendor.js');
-        const vendorDir = path.join(storage.DATA_ROOT, 'cookbook', 'runtime', 'ollama');
-        const bin = ollamaVendor.vendoredBin(vendorDir);
-        if (!bin) return;
-        const host = 'http://localhost:11434';
-        try {
-          const r = await fetch(`${host}/api/tags`, { signal: AbortSignal.timeout(1200) });
-          if (r.ok) return; // already running
-        } catch {}
-        const modelsDir = path.join(storage.DATA_ROOT, 'cookbook', 'models', 'ollama');
-        fs.mkdirSync(modelsDir, { recursive: true });
-        const proc = require('child_process').spawn(bin, ['serve'], { env: { ...process.env, OLLAMA_MODELS: modelsDir }, detached: true, stdio: 'ignore', windowsHide: true });
-        proc.unref();
-        console.log('[KERNEL] Started vendored Ollama daemon (contained inside AEON).');
-      } catch {}
-    })();
+    // Phase 7: daemon auto-start removed. Native runtime starts on first infer().
   }).on('error', (err) => {
     if (err.code === 'EADDRINUSE') {
       console.log(`Port ${PORT} in use. Killing zombie and retrying...`);

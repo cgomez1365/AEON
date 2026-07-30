@@ -15,7 +15,7 @@ import { getCommands } from '../kernel/blockRegistry';
 const KERNEL_COMMANDS = [
   { cmd: '/clear', desc: 'Clear the terminal history' },
   { cmd: '/go', desc: 'Navigate to a view (e.g. /go settings)' },
-  { cmd: '/set', desc: 'Set a model from here — /set grading to ollama qwen3.5:4b (same store as Settings)' },
+  { cmd: '/set', desc: 'Set a model from here — /set grading to local qwen3.5:4b (same store as Settings)' },
   { cmd: '/agent', desc: 'Toggle agent mode (multi-step tool use)' },
   { cmd: '/vp', desc: 'VP mission agent — /vp <goal> launches, /vp status, /vp stop, /vp answer <text>, /vp daemon (is laptop bridge alive?), /vp feed (progress from anywhere)' },
   { cmd: '/vault-push', desc: 'Mirror Second Brain docs to Supabase so the Vercel Command Center sees them on the go' },
@@ -26,7 +26,7 @@ const KERNEL_COMMANDS = [
   { cmd: '/pull', desc: 'Pull all blocks from Supabase cloud' },
   { cmd: '/web', desc: 'Force a live internet search' },
   { cmd: '/treasury', desc: 'Show live deficit & bleed rate' },
-  { cmd: '/allow-local', desc: 'Allow AI to fall back to your local Ollama model for 15 min when cloud providers are rate-limited' },
+  { cmd: '/allow-local', desc: 'Allow AI to fall back to your local runtime model for 15 min when cloud providers are rate-limited' },
   { cmd: '>', desc: 'Execute a raw OS command' },
 ];
 
@@ -376,7 +376,7 @@ const NeuralTerminal = ({ brainData, allData, onQuerySent, onTypingChange, onHis
     const displayQuery = rawQuery;
 
     // ── ALLOW-LOCAL: operator's "yes" to run cloud-exhausted AI calls on ──
-    // the local Ollama model for the next 15 minutes.
+    // the local runtime model for the next 15 minutes.
     if (query === '/allow-local') {
       try {
         const r = await (await fetch('/api/system/allow-local', { method: 'POST' })).json();
@@ -488,7 +488,7 @@ const NeuralTerminal = ({ brainData, allData, onQuerySent, onTypingChange, onHis
     if (query === '/set' || query.startsWith('/set ')) {
       const phrase = query.slice(4).trim();
       if (!phrase) {
-        setHistory(prev => [...prev, { role: 'user', content: query }, { role: 'error', content: '[SET] Usage: /set <role> to <provider> <model>  ·  e.g. /set grading to ollama qwen3.5:4b' }]);
+        setHistory(prev => [...prev, { role: 'user', content: query }, { role: 'error', content: '[SET] Usage: /set <role> to <provider> <model>  ·  e.g. /set grading to local qwen3.5:4b' }]);
         setInput(''); setIsLoading(false); return;
       }
       setHistory(prev => [...prev, { role: 'user', content: query }]);

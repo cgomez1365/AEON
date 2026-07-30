@@ -22,7 +22,7 @@ global.mountStaticBlocks = function(app, deps) {
     '../src/blocks/files/api/notes.js',
     '../src/blocks/fleet_control/api/hwfit.cjs',
     '../src/blocks/fleet_control/api/missions.cjs',
-    '../src/blocks/fleet_control/api/ollama-status.js',
+    '../src/blocks/fleet_control/api/local-status.js',
     '../src/blocks/fleet_control/api/telemetry.js',
     '../src/blocks/master/api/master.cjs',
     '../src/blocks/orion_search/api/orion.cjs',

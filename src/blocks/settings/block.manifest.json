@@ -75,7 +75,7 @@
     "commands": [
       {
         "cmd": "/set",
-        "desc": "Change a setting in plain English — e.g. \"set chat to ollama qwen3:14b\"",
+        "desc": "Change a setting in plain English — e.g. \"set chat to local qwen3-4b-q4\"",
         "method": "POST",
         "route": "/api/settings/nl",
         "param": "phrase",

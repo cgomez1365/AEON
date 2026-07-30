@@ -208,7 +208,6 @@ export default function CookbookHardware() {
   const [dlRepo, setDlRepo] = useState('');
   const [dlStatus, setDlStatus] = useState('');
   const [hfModels, setHfModels] = useState([]);
-  const [ollamaModels, setOllamaModels] = useState([]);
   const [searchFilter, setSearchFilter] = useState('');
   const [copied, setCopied] = useState(null);
   const [scanning, setScanning] = useState(false);
@@ -234,25 +233,6 @@ export default function CookbookHardware() {
   // Serve profiles
   const [profiles, setProfiles] = useState([]);
   const [profileModel, setProfileModel] = useState('');
-
-  // ── Ollama vendor status (contained runtime) ──
-  const [ollamaVendor, setOllamaVendor] = useState(null);
-  const [ollamaInstalling, setOllamaInstalling] = useState(false);
-  const fetchOllamaVendor = useCallback(async () => {
-    try {
-      const res = await fetch('/api/cookbook/ollama/vendor-status');
-      setOllamaVendor(await res.json());
-    } catch {}
-  }, []);
-  const installOllama = useCallback(async () => {
-    setOllamaInstalling(true);
-    try {
-      const res = await fetch('/api/cookbook/ollama/install', { method: 'POST' });
-      const data = await res.json();
-      if (!data.ok) { setOllamaInstalling(false); return; }
-      pollTasks();
-    } catch { setOllamaInstalling(false); }
-  }, []);
 
   // ── GPU Probe ──
   const probeGpus = useCallback(async () => {
@@ -298,15 +278,6 @@ export default function CookbookHardware() {
     } catch {}
   }, [gpus]);
 
-  // ── Ollama Library ──
-  const loadOllama = useCallback(async () => {
-    try {
-      const res = await fetch('/api/cookbook/ollama/library');
-      const data = await res.json();
-      setOllamaModels(data.models || []);
-    } catch {}
-  }, []);
-
   // ── What Fits: fetch model ranking ──
   const fetchHwfit = useCallback(async (fresh = false) => {
     setHwLoading(true);
@@ -349,23 +320,13 @@ export default function CookbookHardware() {
     } catch { setProfiles([]); }
   }, []);
 
-  useEffect(() => { probeGpus(); scanCached(); pollTasks(); fetchOllamaVendor(); }, []);
-  useEffect(() => { if (tab === 'download') { loadHfLatest(); loadOllama(); } }, [tab, loadHfLatest, loadOllama]);
+  useEffect(() => { probeGpus(); scanCached(); pollTasks(); }, []);
+  useEffect(() => { if (tab === 'download') { loadHfLatest(); } }, [tab, loadHfLatest]);
   useEffect(() => { if (tab === 'whatfits') fetchHwfit(); }, [tab]);
   useEffect(() => {
     const interval = setInterval(pollTasks, 5000);
     return () => clearInterval(interval);
   }, [pollTasks]);
-  // Once the vendored-install task finishes, refresh vendor status so the
-  // "Download Ollama" panel disappears and Hardware/Download reflect reality.
-  useEffect(() => {
-    const t = tasks.find(x => x.type === 'ollama-install');
-    if (t && t.status !== 'running') {
-      setOllamaInstalling(false);
-      fetchOllamaVendor();
-    }
-  }, [tasks, fetchOllamaVendor]);
-
   // Debounced hwfit search
   const hwSearchTimer = useRef(null);
   function onHwSearchChange(val) {
@@ -379,17 +340,13 @@ export default function CookbookHardware() {
     const repo = repoOverride || dlRepo;
     if (!repo.trim()) return;
     setDlStatus('Starting...');
-    const isOllama = !repo.includes('/') && repo.includes(':');
     const hfMatch = repo.match(/^https?:\/\/huggingface\.co\/([^/]+\/[^/?#]+)/);
     const repoId = hfMatch ? hfMatch[1] : repo.trim();
     try {
       const res = await fetch('/api/model/download', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          repo_id: repoId,
-          backend: isOllama ? 'ollama' : undefined,
-        }),
+        body: JSON.stringify({ repo_id: repoId }),
       });
       const data = await res.json();
       if (data.ok) {
@@ -408,11 +365,8 @@ export default function CookbookHardware() {
   // ── Serve (Quick launch) ──
   async function quickServe(model) {
     const repo = model.repo_id || model.name;
-    const isOllama = model.is_ollama || model.backend === 'ollama';
     let cmd;
-    if (isOllama) {
-      cmd = `ollama run ${repo}`;
-    } else if (model.is_gguf) {
+    if (model.is_gguf) {
       cmd = `llama-server --model "${repo}" --host 0.0.0.0 --port 8080 -ngl 99 -c 8192`;
     } else {
       cmd = `vllm serve ${repo} --host 0.0.0.0 --port 8000 --dtype auto --trust-remote-code`;
@@ -509,7 +463,7 @@ export default function CookbookHardware() {
         </span>
       </div>
       <p style={{ fontSize: '12px', color: 'var(--text-dim, #888)', margin: '0 0 16px 0' }}>
-        Probe hardware, rank models by fit, download from HuggingFace/Ollama, serve locally
+        Probe hardware, rank models by fit, download from HuggingFace, serve locally
       </p>
 
       {/* Tab Bar */}
@@ -553,31 +507,6 @@ export default function CookbookHardware() {
           </div>
 
           {gpuError && <div style={errorBox}>{gpuError}</div>}
-
-          {/* Vendored Ollama — self-contained local AI runtime */}
-          {ollamaVendor && !ollamaVendor.installed && ollamaVendor.supported && (
-            <div style={{ ...cardStyle, marginBottom: '16px', border: '1px solid rgba(0,242,255,0.25)' }}>
-              <div style={{ fontSize: '13px', fontWeight: 600, marginBottom: '4px' }}>Local AI runtime (recommended)</div>
-              <div style={{ fontSize: '11.5px', color: 'var(--text-dim)', lineHeight: 1.6, marginBottom: '10px' }}>
-                Ollama lets AEON run free, private AI models on this computer — no API key needed.
-                Downloading it here keeps it fully contained inside AEON{ollamaVendor.size ? ` (${ollamaVendor.size} download)` : ''},
-                not installed system-wide. Entirely optional — AEON works fine on cloud AI without it.
-              </div>
-              <button onClick={installOllama} disabled={ollamaInstalling} style={{
-                ...btnStyle,
-                background: ollamaInstalling ? 'rgba(255,255,255,0.05)' : 'var(--color-primary, #00f2ff)',
-                color: ollamaInstalling ? 'var(--text-dim)' : '#000',
-              }}>
-                <Download size={13} />
-                {ollamaInstalling ? 'Downloading...' : `Download Ollama${ollamaVendor.size ? ` (${ollamaVendor.size})` : ''}`}
-              </button>
-            </div>
-          )}
-          {ollamaVendor?.installed && (
-            <div style={{ fontSize: '11px', color: 'var(--text-dim)', marginBottom: '16px' }}>
-              ✓ Ollama is installed inside AEON — contained, no system-wide install.
-            </div>
-          )}
 
           {/* System Info Card */}
           <SystemInfoCard />
@@ -629,7 +558,7 @@ export default function CookbookHardware() {
             </div>
           ) : gpus && !gpuError ? (
             <div style={{ textAlign: 'center', padding: '32px', opacity: 0.5, fontSize: '12px', marginTop: '12px' }}>
-              {gpus.note || 'No NVIDIA GPU detected. Ollama and llama.cpp can still run on CPU.'}
+              {gpus.note || 'No NVIDIA GPU detected. llama.cpp can still run on CPU.'}
             </div>
           ) : null}
 
@@ -708,7 +637,6 @@ export default function CookbookHardware() {
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontWeight: 600, fontSize: '13px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {m.repo_id}
-                        {m.is_ollama && <span style={tagChip('#8b5cf6')}>Ollama</span>}
                         {m.is_gguf && <span style={tagChip('#f59e0b')}>GGUF</span>}
                         {m.is_diffusion && <span style={tagChip('#ec4899')}>Diffusion</span>}
                       </div>
@@ -803,30 +731,6 @@ export default function CookbookHardware() {
             </div>
           )}
 
-          {ollamaModels.length > 0 && (
-            <div>
-              <div style={{ fontSize: '12px', fontWeight: 600, marginBottom: '8px' }}>Ollama Library</div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '6px' }}>
-                {ollamaModels.map(m => (
-                  <div key={m.name} style={cardStyle}>
-                    <div style={{ fontSize: '12px', fontWeight: 600, marginBottom: '4px' }}>{m.name}</div>
-                    <div style={{ fontSize: '10px', color: 'var(--text-dim)', marginBottom: '6px' }}>{m.description}</div>
-                    <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
-                      {(m.sizes || ['latest']).map(s => (
-                        <button key={s} onClick={() => setDlRepo(`${m.name}:${s}`)}
-                          style={{
-                            padding: '2px 8px', borderRadius: '4px', fontSize: '10px',
-                            border: '1px solid var(--border, #2a2a2a)', background: 'transparent',
-                            color: 'var(--text-dim)', cursor: 'pointer',
-                          }}>
-                          {s}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
           )}
         </div>
       )}

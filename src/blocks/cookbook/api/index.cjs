@@ -11,7 +11,6 @@ const os = require('os');
 
 const SESSION_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const REPO_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*$/;
-const OLLAMA_MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,200}$/;
 
 module.exports = function createCookbookRouter(deps) {
   const router = express.Router();
@@ -43,127 +42,11 @@ module.exports = function createCookbookRouter(deps) {
     return path.join(process.env.USERPROFILE || process.env.HOME || os.homedir() || '', '.cache', 'huggingface', 'hub');
   }
 
-  // ── Vendored Ollama — contained inside AEON, no system install ──
-  // The official portable release (GitHub) is a plain zip/tarball of the
-  // binary + GPU runners, no installer/admin rights needed. Extracted into
-  // <AEON>/data/cookbook/runtime/ollama/ so "serve" never depends on
-  // whatever (or whether) the operator has on their system PATH. Its models
-  // live under modelsRoot()/ollama, same "delete the folder = it's gone"
-  // portability contract as the HF model store. Asset resolution + download +
-  // extraction live in services/ollamaVendor.js — launch.js's first-boot
-  // offer uses the exact same code, so there's one place that knows how.
-  const ollamaVendor = require(path.join(__dirname, '..', '..', '..', '..', 'services', 'ollamaVendor.js'));
-  const OLLAMA_VENDOR_DIR = path.join(COOKBOOK_DIR, 'runtime', 'ollama');
-  function vendoredOllamaBin() { return ollamaVendor.vendoredBin(OLLAMA_VENDOR_DIR); }
-  // The one thing every ollama-spawning call site should ask instead of
-  // hardcoding 'ollama' — vendored copy wins if present, else whatever the
-  // system has (never assumed either way).
-  function ollamaBinary() {
-    return vendoredOllamaBin() || (findExecutable('ollama') ? 'ollama' : null);
-  }
-  function ollamaModelsDir() {
-    return path.join(modelsRoot(), 'ollama');
-  }
-
-  // GET /cookbook/ollama/vendor-status — what's installed + what a fresh
-  // install would need to download, so the UI/launcher can show real numbers
-  // before asking anyone to commit to a multi-hundred-MB-to-1.5GB download.
-  router.get('/cookbook/ollama/vendor-status', async (req, res) => {
-    res.json(await ollamaVendor.checkStatus(OLLAMA_VENDOR_DIR));
-  });
-
-  // POST /cookbook/ollama/install — download the platform release into the
-  // vendor dir and extract it with the OS's own tools (PowerShell
-  // Expand-Archive on Windows, tar everywhere else) — no new npm dependency,
-  // no admin rights, nothing outside AEON's own folder.
-  router.post('/cookbook/ollama/install', (req, res) => {
-    if (vendoredOllamaBin()) return res.json({ ok: false, error: 'Already installed' });
-
-    const sessionId = `ollama-install-${crypto.randomBytes(4).toString('hex')}`;
-    const logFile = path.join(LOGS_DIR, `${sessionId}.log`);
-    const logStream = fs.createWriteStream(logFile, { flags: 'a' });
-    logStream.on('error', () => {});
-    const emitter = new EventEmitter();
-    activeTasks[sessionId] = { type: 'ollama-install', status: 'running', query: 'Ollama runtime', started_at: Date.now(), logFile, _emitter: emitter };
-
-    ollamaVendor.install(OLLAMA_VENDOR_DIR, (line) => logStream.write(line + '\n'))
-      .then(() => {
-        logStream.write('OLLAMA_INSTALL_OK\n');
-        activeTasks[sessionId].status = 'done';
-        writeLocalRuntime();
-      })
-      .catch((e) => {
-        logStream.write(`\nERROR: ${e.message}\nOLLAMA_INSTALL_FAILED\n`);
-        activeTasks[sessionId].status = 'error';
-      })
-      .finally(() => {
-        logStream.end();
-        activeTasks[sessionId]._emitter.emit('done');
-      });
-
-    res.json({ ok: true, session_id: sessionId });
-  });
-
-  // Start the daemon if nothing is answering OLLAMA_HOST yet. Only the
-  // vendored copy has no auto-start service to rely on (a system install's
-  // installer/tray-app/systemd-unit already keeps one running) — `pull`
-  // otherwise fails outright with "could not connect". Idempotent: a quick
-  // /api/tags probe first means calling this when something's already up is
-  // a harmless no-op.
-  async function ensureOllamaServing() {
-    const host = process.env.OLLAMA_HOST || 'http://localhost:11434';
-    try {
-      const r = await fetch(`${host}/api/tags`, { signal: AbortSignal.timeout(1200) });
-      if (r.ok) return true;
-    } catch {}
-    const bin = vendoredOllamaBin();
-    if (!bin) return false; // system binary, no daemon up — nothing we can start
-    try {
-      fs.mkdirSync(ollamaModelsDir(), { recursive: true });
-      const env = { ...process.env, OLLAMA_MODELS: ollamaModelsDir() };
-      const proc = spawn(bin, ['serve'], { env, detached: true, stdio: 'ignore', windowsHide: true });
-      proc.unref();
-      for (let i = 0; i < 20; i++) { // up to ~10s for the daemon to bind
-        await new Promise(r => setTimeout(r, 500));
-        try {
-          const r2 = await fetch(`${host}/api/tags`, { signal: AbortSignal.timeout(1000) });
-          if (r2.ok) return true;
-        } catch {}
-      }
-    } catch {}
-    return false;
-  }
-
-  // POST /cookbook/ollama/serve — start the vendored (or system) daemon,
-  // contained: OLLAMA_MODELS points inside AEON so pulled models never
-  // touch the user's home directory.
-  router.post('/cookbook/ollama/serve', async (req, res) => {
-    const bin = ollamaBinary();
-    if (!bin) return res.status(400).json({ ok: false, error: 'No Ollama runtime installed — install it from Cookbook first.' });
-    const up = await ensureOllamaServing();
-    res.json({ ok: up, models_dir: ollamaModelsDir() });
-  });
 
   // ── Local runtime registry — THE file Settings/kernel read ──────
-  // Cookbook owns local models, so Cookbook publishes the truth to
-  // data/local-runtime.json: where models live, which runtimes exist,
-  // and every installed model. No other block probes or guesses.
   const RUNTIME_FILE = getDataFile ? getDataFile('local-runtime.json') : path.join(COOKBOOK_DIR, '..', 'local-runtime.json');
   async function writeLocalRuntime() {
     try {
-      const vendored = vendoredOllamaBin();
-      const ollamaBin = !!(vendored || findExecutable('ollama'));
-      const ollamaHost = process.env.OLLAMA_HOST || 'http://localhost:11434';
-      // Ask the DAEMON what it serves (that's what AEON dials) — the CLI can
-      // point at a different model store than the running server.
-      let ollamaModels = [];
-      try {
-        const r = await fetch(`${ollamaHost}/api/tags`, { signal: AbortSignal.timeout(2500) });
-        const d = await r.json();
-        ollamaModels = (d.models || []).map(m => ({ repo_id: m.name, size: formatSize(m.size || 0), status: 'ready' }));
-      } catch {
-        if (ollamaBin) ollamaModels = scanOllamaModels();
-      }
       let hfModels = scanHfCache(defaultHfCache());
       const legacy = legacyHfCache();
       if (fs.existsSync(legacy) && path.resolve(legacy) !== path.resolve(defaultHfCache())) {
@@ -174,20 +57,13 @@ module.exports = function createCookbookRouter(deps) {
       const registry = {
         updated: new Date().toISOString(),
         models_dir: modelsRoot(),
-        runtimes: {
-          ollama: { installed: ollamaBin, vendored: !!vendored, path: vendored || null, models_dir: ollamaModelsDir(), host: process.env.OLLAMA_HOST || 'http://localhost:11434' },
-          huggingface: { cache: defaultHfCache() },
-        },
-        models: [
-          ...ollamaModels.map(m => ({ id: m.repo_id, backend: 'ollama', size: m.size, ready: m.status === 'ready' })),
-          ...hfModels.map(m => ({ id: m.repo_id, backend: 'hf', size: m.size, path: m.path, gguf: !!m.is_gguf, ready: m.status === 'ready' })),
-        ],
+        runtimes: { huggingface: { cache: defaultHfCache() } },
+        models: hfModels.map(m => ({ id: m.repo_id, backend: 'hf', size: m.size, path: m.path, gguf: !!m.is_gguf, ready: m.status === 'ready' })),
       };
       fs.writeFileSync(RUNTIME_FILE, JSON.stringify(registry, null, 2), 'utf8');
       return registry;
     } catch (e) { return { error: e.message, models: [] }; }
   }
-  // Publish on boot (deferred so the scan never slows the mount)
   setTimeout(writeLocalRuntime, 3000);
 
   // GET /cookbook/runtime — the registry, refreshed on demand
@@ -273,16 +149,6 @@ module.exports = function createCookbookRouter(deps) {
       const result = await probeNvidiaGpus();
       if (result.gpus.length) {
         return res.json({ ok: true, ...result });
-      }
-      // No NVIDIA — check for Ollama (implies some runtime is available)
-      const ollamaBin = ollamaBinary();
-      const ollamaCheck = ollamaBin ? await runCmd(`"${ollamaBin}" --version`, 3000) : { ok: false };
-      if (ollamaCheck.ok) {
-        return res.json({
-          ok: true, gpus: [],
-          backend: 'ollama', source: 'ollama-detected',
-          note: 'No nvidia-smi but Ollama is available for CPU/Metal inference',
-        });
       }
       return res.json({ ok: false, gpus: [], error: result.error || 'No GPU probe available' });
     } catch (e) {
@@ -406,30 +272,6 @@ module.exports = function createCookbookRouter(deps) {
     return models;
   }
 
-  function scanOllamaModels() {
-    const models = [];
-    const bin = ollamaBinary();
-    if (!bin) return models;
-    try {
-      const out = execSync(`"${bin}" list`, { timeout: 8000, windowsHide: true, encoding: 'utf8' });
-      const lines = out.split('\n').slice(1);
-      for (const line of lines) {
-        const parts = line.trim().split(/\s+/);
-        if (parts.length < 4) continue;
-        const name = parts[0];
-        if (!name) continue;
-        const sizeStr = parts[2] + ' ' + parts[3];
-        const sizeBytes = parseSizeStr(sizeStr);
-        models.push({
-          repo_id: name, size: sizeStr, size_bytes: sizeBytes,
-          nb_files: 1, has_incomplete: false, status: 'ready',
-          path: 'ollama', backend: 'ollama', is_ollama: true,
-        });
-      }
-    } catch {}
-    return models;
-  }
-
   function extractQuant(filename) {
     const m = filename.match(/(?:UD-)?(IQ[0-9]_[A-Z0-9_]+|Q[0-9](?:_[A-Z0-9]+)+|BF16|F16|FP16|F32|Q8_0)/i);
     return m ? m[0].toUpperCase() : '';
@@ -526,9 +368,6 @@ module.exports = function createCookbookRouter(deps) {
       }
     }
 
-    // Scan Ollama
-    models = models.concat(scanOllamaModels());
-
     res.json({ models, host: 'local' });
   });
 
@@ -538,13 +377,8 @@ module.exports = function createCookbookRouter(deps) {
     const { repo_id, backend, include, hf_token, local_dir } = req.body;
     if (!repo_id) return res.status(400).json({ ok: false, error: 'repo_id is required' });
 
-    const isOllama = backend === 'ollama' || (!repo_id.includes('/') && repo_id.includes(':'));
-
-    if (!isOllama && !REPO_ID_RE.test(repo_id)) {
+    if (!REPO_ID_RE.test(repo_id)) {
       return res.status(400).json({ ok: false, error: 'Invalid repo_id' });
-    }
-    if (isOllama && !OLLAMA_MODEL_RE.test(repo_id)) {
-      return res.status(400).json({ ok: false, error: 'Invalid Ollama model name' });
     }
 
     const sessionId = `cookbook-${crypto.randomBytes(4).toString('hex')}`;
@@ -552,39 +386,21 @@ module.exports = function createCookbookRouter(deps) {
     const pidFile = path.join(LOGS_DIR, `${sessionId}.pid`);
 
     let cmd, args;
-    if (isOllama) {
-      cmd = ollamaBinary();
-      if (!cmd) return res.status(400).json({ ok: false, error: 'No Ollama runtime installed — install it from the Hardware tab first.' });
-      // `ollama pull` is just a client — it needs a daemon already answering
-      // OLLAMA_HOST. A system install auto-starts one; the vendored copy
-      // doesn't, so start it here if nothing's listening yet.
-      const serving = await ensureOllamaServing();
-      if (!serving) return res.status(400).json({ ok: false, error: 'Ollama runtime is installed but not running, and AEON could not start it. Try again from the Hardware tab.' });
-      args = ['pull', repo_id];
+    // Use `hf` CLI if available, else Python huggingface_hub
+    const hfCli = findExecutable('hf');
+    if (hfCli) {
+      cmd = hfCli;
+      args = ['download', repo_id];
+      if (include) { args.push('--include', include); }
     } else {
-      // Use `hf` CLI if available, else Python huggingface_hub
-      const hfCli = findExecutable('hf');
-      if (hfCli) {
-        cmd = hfCli;
-        args = ['download', repo_id];
-        if (include) { args.push('--include', include); }
-      } else {
-        cmd = findExecutable('python') || findExecutable('python3') || 'python';
-        const pyScript = `from huggingface_hub import snapshot_download; snapshot_download('${repo_id}'${include ? `, allow_patterns=['${include}']` : ''})`;
-        args = ['-c', pyScript];
-      }
+      cmd = findExecutable('python') || findExecutable('python3') || 'python';
+      const pyScript = `from huggingface_hub import snapshot_download; snapshot_download('${repo_id}'${include ? `, allow_patterns=['${include}']` : ''})`;
+      args = ['-c', pyScript];
     }
 
     const env = { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' };
-    // Note: `ollama pull` is a thin client — where the model actually lands
-    // is decided by the DAEMON's own OLLAMA_MODELS (set when the vendored
-    // daemon was started in ensureOllamaServing() above), not by anything
-    // set on this pull subprocess's env.
-    if (hf_token && !isOllama) env.HF_TOKEN = hf_token;
-    if (!isOllama) {
-      // Default the download target to AEON's own model store so models land
-      // INSIDE the install, not the user's hidden global cache. An explicit
-      // local_dir still wins for power users who want them elsewhere.
+    if (hf_token) env.HF_TOKEN = hf_token;
+    {
       const raw = local_dir || modelsRoot();
       const expanded = raw.startsWith('~') ? raw.replace('~', os.homedir()) : raw;
       env.HF_HOME = expanded;
@@ -653,7 +469,7 @@ module.exports = function createCookbookRouter(deps) {
     if (!serveCmd) return res.status(400).json({ ok: false, error: 'cmd is required' });
 
     // Validate cmd starts with an allowed binary
-    const ALLOWED = new Set(['vllm', 'llama-server', 'llama_server', 'ollama', 'python', 'python3', 'sglang', 'node', 'npx']);
+    const ALLOWED = new Set(['vllm', 'llama-server', 'llama_server', 'python', 'python3', 'sglang', 'node', 'npx']);
     const cleaned = serveCmd.replace(/\\\n/g, ' ').trim();
     if (/[`\n\r]/.test(cleaned)) {
       return res.status(400).json({ ok: false, error: 'Invalid characters in cmd' });
@@ -739,17 +555,11 @@ module.exports = function createCookbookRouter(deps) {
         }
       } catch {}
 
-      // Check if process is still alive. Tasks with no OS pid (ollama-install
-      // downloads over fetch() in-process rather than spawning a child) fully
-      // manage their own status via .then()/.catch()/.finally() — they were
-      // never "alive" by this check to begin with, so the no-pid branch below
-      // must not treat "no pid" as "died" for them, or a genuinely still-
-      // downloading task flips to "stopped" on the very next poll.
       let isAlive = false;
       if (task.pid) {
         try { process.kill(task.pid, 0); isAlive = true; } catch { isAlive = false; }
       }
-      const selfManaged = !task.pid && task.type === 'ollama-install';
+      const selfManaged = false;
 
       let status = task.status;
       if (status === 'running' && !isAlive && !selfManaged) {
@@ -942,25 +752,6 @@ module.exports = function createCookbookRouter(deps) {
     }
   });
 
-  // ── Ollama Library ─────────────────────────────────────────────
-
-  const OLLAMA_FALLBACK = [
-    { name: 'qwen2.5', description: 'Qwen2.5 — strong general/coding model.', sizes: ['0.5b', '1.5b', '3b', '7b', '14b', '32b', '72b'] },
-    { name: 'qwen3', description: 'Qwen3 — hybrid reasoning.', sizes: ['0.6b', '1.7b', '4b', '8b', '14b', '32b'] },
-    { name: 'llama3.2', description: 'Meta Llama 3.2 instruct.', sizes: ['1b', '3b', '11b', '90b'] },
-    { name: 'gemma3', description: 'Google Gemma 3 multimodal.', sizes: ['1b', '4b', '12b', '27b'] },
-    { name: 'mistral', description: 'Mistral 7B instruct.', sizes: ['7b'] },
-    { name: 'deepseek-r1', description: 'DeepSeek R1 reasoning.', sizes: ['1.5b', '7b', '8b', '14b', '32b', '70b'] },
-    { name: 'phi4', description: 'Microsoft Phi-4 14B.', sizes: ['14b'] },
-    { name: 'codellama', description: 'Meta Code Llama.', sizes: ['7b', '13b', '34b', '70b'] },
-    { name: 'nomic-embed-text', description: 'Text embedding model.', sizes: ['latest'] },
-    { name: 'llava', description: 'LLaVA vision-language model.', sizes: ['7b', '13b', '34b'] },
-  ];
-
-  router.get('/cookbook/ollama/library', (req, res) => {
-    res.json({ models: OLLAMA_FALLBACK, fetched_at: Date.now(), error: null });
-  });
-
   // ── Error Diagnosis ────────────────────────────────────────────
 
   function diagnoseOutput(text) {
@@ -1028,10 +819,7 @@ module.exports = function createCookbookRouter(deps) {
       [
         /Failed to infer device type|NVML Shared Library Not Found|No module named 'amdsmi'|platform is not available/i,
         'vLLM could not find a supported GPU (CUDA or ROCm). This machine may have integrated or unsupported graphics only.',
-        [
-          { label: 'Switch to llama.cpp (CPU/Metal)', op: 'manual' },
-          { label: 'Switch to Ollama (CPU/Metal)', op: 'manual' },
-        ],
+        [{ label: 'Switch to llama.cpp (CPU/Metal)', op: 'manual' }],
       ],
       [
         /vllm.*command not found|No module named vllm|ERROR: vLLM is not installed/i,
@@ -1045,16 +833,8 @@ module.exports = function createCookbookRouter(deps) {
       ],
       [
         /llama-server.*command not found|llama\.cpp.*not found|No module named.*llama_cpp|No module named 'starlette_context'|git: command not found|cmake: command not found/i,
-        // On Windows/macOS without a C/C++ toolchain, pip has to compile
-        // llama-cpp-python from source — that silently means "go install
-        // Visual Studio Build Tools" (multi-GB) with no warning up front.
-        // Ollama already ships prebuilt binaries and is usually already
-        // installed, so it's the low-friction fix for the same model.
-        'llama.cpp / llama-cpp-python is not installed — and installing it usually requires a C/C++ compiler (Visual Studio Build Tools on Windows, Xcode Command Line Tools on Mac), which pip cannot set up for you.',
-        [
-          { label: 'Serve this model with Ollama instead (recommended — no compiler needed)', op: 'manual' },
-          { label: 'pip install llama-cpp-python[server] (requires a C/C++ compiler already installed)', op: 'dependency', package: 'llama-cpp-python[server]' },
-        ],
+        'llama.cpp / llama-cpp-python is not installed — installing it requires a C/C++ compiler (Visual Studio Build Tools on Windows, Xcode Command Line Tools on Mac).',
+        [{ label: 'pip install llama-cpp-python[server] (requires a C/C++ compiler already installed)', op: 'dependency', package: 'llama-cpp-python[server]' }],
       ],
       [
         /No GGUF found on this host|no \.gguf file|No GGUF file found/i,
@@ -1070,11 +850,6 @@ module.exports = function createCookbookRouter(deps) {
         /403 Forbidden|401 Unauthorized|Access to model.*is restricted|gated repo|not in the authorized list|awaiting a review/i,
         'Model access is gated or unauthorized.',
         [{ label: 'Set HF token and request model access on HuggingFace', op: 'manual' }],
-      ],
-      [
-        /ollama.*command not found/i,
-        'Ollama is not installed.',
-        [{ label: 'Install from ollama.com', op: 'manual' }],
       ],
       [
         /No space left on device/i,
@@ -1122,7 +897,7 @@ module.exports = function createCookbookRouter(deps) {
   }
 
   // ── Phase 4: native GGUF model catalog + installer ────────────────────────
-  // These routes are the Phase 4 public API. They do NOT touch Ollama.
+  // These routes are the Phase 4 public API. They do NOT use any legacy daemon.
   // The model installer uses the registry from Phase 2 and the catalog from
   // services/local-runtime/model-catalog.json.
   const modelInstaller = (() => {

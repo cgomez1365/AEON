@@ -16,14 +16,9 @@ const express = require('express');
 const citationGate = require('../citationGate.cjs');
 const retrieval = require('../retrieval.cjs');
 
-const OLLAMA_HOST = process.env.OLLAMA_HOST || 'http://localhost:11434';
-async function embedOllama(text) {
-  const res = await fetch(`${OLLAMA_HOST}/api/embed`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: 'nomic-embed-text', input: text }),
-  });
-  if (!res.ok) throw new Error(`Ollama embed ${res.status}`);
-  return (await res.json()).embeddings[0];
+async function embedLocal(text) {
+  const lr = require('../../services/local-runtime/index.cjs');
+  return lr.embed(text);
 }
 
 module.exports = function createRetrievalRouter(deps) {
@@ -43,9 +38,9 @@ module.exports = function createRetrievalRouter(deps) {
   router.post('/:scope/ingest', async (req, res) => {
     const { docs } = req.body || {};
     if (!Array.isArray(docs) || !docs.length) return res.status(400).json({ error: 'docs[] required' });
-    // Embeddings are best-effort (Ollama may be down); BM25 floor always lands.
-    let embed = embedOllama;
-    try { await embedOllama('ping'); } catch { embed = null; }
+    // Embeddings are best-effort (local embed model may be absent); BM25 floor always lands.
+    let embed = embedLocal;
+    try { await embedLocal('ping'); } catch { embed = null; }
     const r = await retrieval.ingest(req.params.scope, docs, { caller: caller(req), embed });
     res.status(r.ok ? 200 : r.error?.includes('crossBlockRead') ? 403 : 400).json(r);
   });
@@ -54,7 +49,7 @@ module.exports = function createRetrievalRouter(deps) {
     const { query, k } = req.body || {};
     if (!query) return res.status(400).json({ error: 'query required' });
     let queryEmbedding = null;
-    try { queryEmbedding = await embedOllama(query); } catch {}
+    try { queryEmbedding = await embedLocal(query); } catch {}
     const r = retrieval.search(req.params.scope, query, { k: k || 5, caller: caller(req), queryEmbedding });
     res.status(r.ok ? 200 : r.denied ? 403 : 400).json(r);
   });
@@ -67,7 +62,7 @@ module.exports = function createRetrievalRouter(deps) {
       query, scope, domain, k: k || 5,
       caller: caller(req),
       llm: kernelLLM ? (p) => kernelLLM(p, { role: 'research' }) : null,
-      embed: embedOllama,
+      embed: embedLocal,
       scrape: fetchDuckDuckGo ? async (q) => {
         const hits = await fetchDuckDuckGo(q, 'citation-gate');
         return (Array.isArray(hits) ? hits : []).map(h => ({ title: h.title || h.url, url: h.url, snippet: h.snippet || h.title || '' }));

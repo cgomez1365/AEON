@@ -27,31 +27,12 @@ async function extractText(fullPath) {
   return fs.readFileSync(fullPath, 'utf8');
 }
 
-// ── Lightweight local embeddings (Ollama) ────────────────────────────────
-// Used to embed a document's short summary at index time (one small call per
-// file, not per chunk — this is what keeps it cheap and avoids the original
-// chunk-embedding heat/duplicate problems) and the query at search time.
-const OLLAMA_HOST = process.env.OLLAMA_HOST || 'http://localhost:11434';
-const EMBED_MODEL = process.env.AEON_EMBED_MODEL || 'mxbai-embed-large';
+// ── Lightweight local embeddings (native runtime) ─────────────────────────
+const EMBED_MODEL = process.env.AEON_EMBED_MODEL || 'nomic-embed-text-q8';
 
-async function embedOllama(text) {
-  const res = await fetch(`${OLLAMA_HOST}/api/embed`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: EMBED_MODEL, input: text }),
-  });
-  if (res.ok) {
-    const data = await res.json();
-    return data.embeddings[0];
-  }
-  const res2 = await fetch(`${OLLAMA_HOST}/api/embeddings`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: EMBED_MODEL, prompt: text }),
-  });
-  if (!res2.ok) throw new Error(`Ollama embed failed: ${res2.status}`);
-  const data2 = await res2.json();
-  return data2.embedding;
+async function embedLocal(text) {
+  const lr = require('../../../../services/local-runtime/index.cjs');
+  return lr.embed(text);
 }
 
 // ── API-key embedding fallback (Gemini text-embedding-004) ───────────────
@@ -91,12 +72,11 @@ async function embedGemini(text) {
   throw new Error('all Gemini keys exhausted for embedding');
 }
 
-// Work-with-what-you-have embedder: local Ollama first (free, private),
-// Gemini API fallback when Ollama is off. Returns { vector, model } so the
-// index can tag which space each embedding lives in.
+// Work-with-what-you-have embedder: native local runtime first (free, private),
+// Gemini API fallback when native runtime has no embed model.
 async function embed(text) {
   try {
-    const vector = await embedOllama(text);
+    const vector = await embedLocal(text);
     return { vector, model: EMBED_MODEL };
   } catch (e) {
     const vector = await embedGemini(text);
@@ -116,4 +96,4 @@ function cosineSimilarity(a, b) {
   return dot / (Math.sqrt(magA) * Math.sqrt(magB));
 }
 
-module.exports = { loadExtractors, extractText, embedOllama, embedGemini, embed, cosineSimilarity, EMBED_MODEL };
+module.exports = { loadExtractors, extractText, embedLocal, embedGemini, embed, cosineSimilarity, EMBED_MODEL };

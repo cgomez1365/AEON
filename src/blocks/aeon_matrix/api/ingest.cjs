@@ -2,7 +2,7 @@
  * Second Brain — Ingestion API
  * Walks the Vault and maintains vault_index.json (the Table of Contents):
  * one entry per file — title, a short summary, folder-derived tags, and one
- * lightweight embedding of that summary (via local Ollama). One small embed
+ * lightweight embedding of that summary (via native local runtime). One small embed
  * call per file, not per chunk — this is what keeps it cheap; retrieval
  * (see retrieve.cjs) is then plain cosine similarity against these cached
  * vectors, no LLM reasoning calls needed at search time.
@@ -101,7 +101,7 @@ module.exports = function ingestFactory(deps) {
     fs.writeFileSync(INDEX_FILE, JSON.stringify(idx, null, 2), 'utf8');
   }
 
-  let ollamaWarned = false;
+  let embedWarnedOnce = false;
   async function buildEntry(fullPath, relPosix, text, stat) {
     const summary = deriveSummary(text);
     const entry = {
@@ -118,9 +118,9 @@ module.exports = function ingestFactory(deps) {
       entry.embedding = vector;
       entry.embeddingModel = model;
     } catch (e) {
-      if (!ollamaWarned) {
-        ollamaWarned = true;
-        console.warn('[SECOND BRAIN] Embedding unavailable (Ollama off AND no Gemini keys?) — entries will index without vectors:', e.message);
+      if (!embedWarnedOnce) {
+        embedWarnedOnce = true;
+        console.warn('[SECOND BRAIN] Embedding unavailable (native runtime not ready AND no Gemini keys?) — entries will index without vectors:', e.message);
       }
     }
     return entry;
@@ -178,7 +178,7 @@ module.exports = function ingestFactory(deps) {
         const hash = fileHash(stat);
         if (manifest[rel] && manifest[rel].hash === hash) {
           // Backfill: docs ingested while no embedder was available have no
-          // vector — give them one now (Ollama or Gemini fallback) without
+          // vector — give them one now (native runtime or Gemini fallback) without
           // re-extracting the file.
           const existing = index.documents[relPosix];
           if (existing && !Array.isArray(existing.embedding) && existing.summary) {

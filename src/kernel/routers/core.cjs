@@ -51,7 +51,7 @@ module.exports = function createCoreRouter(deps) {
     providers.claude = !!env.ANTHROPIC_API_KEY;
     providers.grok = !!env.GROK_API_KEY;
     providers.openrouter = !!env.OPENROUTER_API_KEY;
-    providers.ollama = !!env.OLLAMA_HOST;
+    try { const storage = require('../../../services/storage.js'); providers.local = storage.getLocalRuntimeRegistry().activeRuntime() !== null; } catch { providers.local = false; }
     providers.supabase = !!(env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY);
     providers.firebase = !!env.VITE_FIREBASE_PROJECT_ID;
     providers.youtube = !!env.YOUTUBE_REFRESH_TOKEN;

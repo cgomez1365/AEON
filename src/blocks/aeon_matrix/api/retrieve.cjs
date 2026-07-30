@@ -1,6 +1,6 @@
 /**
  * Second Brain — Retrieval API
- * Embeds the query (local Ollama) → cosine similarity against each document's
+ * Embeds the query (native local runtime) → cosine similarity against each document's
  * cached summary embedding in vault_index.json → reads the full text of the
  * top matches → returns them with citations. No LLM reasoning calls at
  * search time — just one embed call plus in-process vector math, so it's
@@ -17,8 +17,8 @@
  * Citation doctrine: model ONLY sees returned documents. If nothing clears
  * the similarity threshold, returns empty — terminal shows "not in index".
  *
- * Requires local Ollama (same as ingest.cjs's embedding step) — documents
- * indexed without Ollama running have no embedding and are never matched.
+ * Requires native local runtime (same as ingest.cjs's embedding step) — documents
+ * indexed without an embedder running have no embedding and are never matched.
  * Vault data lives under services/storage.js's VAULT_ROOT (physically
  * src/blocks/aeon_matrix/data/Vault today), gitignored and not deployed to
  * Vercel, so this doesn't function there either way.
@@ -75,13 +75,13 @@ module.exports = function retrieveFactory(deps) {
     try {
       ({ vector: queryEmbedding, model: queryModel } = await embed(query));
     } catch (e) {
-      console.warn('[RETRIEVE] query embed failed (Ollama off and no Gemini keys):', e.message);
+      console.warn('[RETRIEVE] query embed failed (native runtime not ready and no Gemini keys):', e.message);
       return [];
     }
 
     // Vectors from different embedding models aren't comparable — only score
     // docs embedded in the same space. Legacy untagged entries predate the
-    // Gemini fallback and were all embedded by Ollama.
+    // Gemini fallback and were embedded by the native local runtime.
     const comparable = docs.filter(d => (d.embeddingModel || EMBED_MODEL) === queryModel);
     const ranked = comparable
       .map(d => ({ d, score: cosineSimilarity(queryEmbedding, d.embedding) }))

@@ -46,7 +46,7 @@ module.exports = function createCompareRouter(deps) {
   const COLORS = ['#00f2ff', '#f59e0b', '#3ecf8e', '#b565d6', '#ff6b9d', '#7c3aed', '#ffb454'];
 
   // First-run seed is built from models AEON can ACTUALLY reach (Settings
-  // roles + live keys + what Ollama reports pulled) — never a hardcoded
+  // roles + live keys + what the native runtime registry reports) — never a hardcoded
   // roster. No reachable models → empty roster, and the UI says so.
   const PERSONAS = [
     'A pragmatic generalist who takes clear stances.',
@@ -169,29 +169,26 @@ module.exports = function createCompareRouter(deps) {
     ],
   };
 
-  // Live-provider truth: env keys for cloud, /api/tags for ollama, plus
-  // whatever models the operator's settings roles + endpoint registry name.
+  // Live-provider truth: env keys for cloud, native LR registry for local,
+  // plus whatever models the operator's settings roles + endpoint registry name.
   async function liveModels() {
     const models = [];
     const seen = new Set();
-    // Daemon truth for ollama: a settings role or registry entry can name a
-    // model that was never pulled (or was deleted) — only offer what the
-    // daemon actually reports.
-    // Unreachable daemon means zero available models, not "unfiltered" — an
-    // env var merely NAMING a host (OLLAMA_HOST in .env) is not proof
-    // anything is actually listening there.
-    let ollamaTags = [];
+    // Native LR truth: a settings role or registry entry can name a model
+    // that was never installed — only offer what the registry reports as ready.
+    let localModels = [];
     try {
-      const host = process.env.OLLAMA_HOST || 'http://127.0.0.1:11434';
-      const r = await fetch(`${host}/api/tags`, { signal: AbortSignal.timeout(1500) });
-      const d = await r.json();
-      ollamaTags = (d.models || []).map(m => m.name);
+      const lr = require(path.join(__dirname, '..', '..', '..', '..', 'services', 'local-runtime', 'index.cjs'));
+      if (lr.isAvailable()) {
+        const st = lr.status();
+        localModels = (st.models || []).filter(m => m.ready !== false).map(m => m.id || m.name);
+      }
     } catch {}
     const add = (id, name, engine) => {
       // A model is only offered if its provider is actually alive right now —
       // settings roles and registry entries can name dead/keyless providers.
       if (!engineAlive(engine)) return;
-      if (engine === 'ollama' && !ollamaTags.includes(id)) return;
+      if (engine === 'local' && !localModels.includes(id)) return;
       const k = engine + '|' + id;
       if (!id || seen.has(k)) return;
       seen.add(k);
@@ -224,28 +221,21 @@ module.exports = function createCompareRouter(deps) {
     if (process.env.GROQ_API_KEY)
       PROVIDER_MENUS.groq.forEach(m => add(m.id, m.name, 'groq'));
 
-    // Ollama — whatever the daemon reported pulled (fetched once above)
-    ollamaTags.forEach(t => add(t, `Ollama ${t}`, 'ollama'));
+    // Local runtime — whatever the registry reports as installed/ready
+    localModels.forEach(id => add(id, `Local ${id}`, 'local'));
     return models;
   }
 
-  // Filter dead engines: a model only survives if its provider has a live key
-  // (ollama always counts as live — it's the local floor).
+  // Filter dead engines: a model only survives if its provider has a live key.
   let readLocalRuntime;
   try { ({ readLocalRuntime } = require(path.join(__dirname, '..', '..', '..', '..', 'services', 'storage.js'))); }
   catch { readLocalRuntime = () => null; }
   const engineAlive = (engine) => {
-    if (engine === 'ollama') {
-      // OLLAMA_HOST merely NAMES a target — it's not proof anything is
-      // listening there (this exact mistake shipped once already this
-      // session). OLLAMA_MODEL similarly just names a tag someone wants,
-      // not evidence it's installed. Actual liveness is decided by the real
-      // /api/tags fetch in liveModels() (ollamaTags), which is what actually
-      // gates which models get added — this flag only needs to answer
-      // "is local a viable floor at all," which the Cookbook registry
-      // (updated on every install/pull/delete) answers honestly.
-      const rt = readLocalRuntime();
-      return !!(rt?.runtimes?.ollama?.installed || rt?.models?.some(m => m.backend === 'ollama'));
+    if (engine === 'local') {
+      try {
+        const lr = require(path.join(__dirname, '..', '..', '..', '..', 'services', 'local-runtime', 'index.cjs'));
+        return lr.isAvailable();
+      } catch { return false; }
     }
     if (engine === 'gemini') return !!(process.env.GEMINI_FREE_KEY_1 || process.env.GEMINI_PAID_KEY);
     if (engine === 'groq') return !!process.env.GROQ_API_KEY;
@@ -304,8 +294,7 @@ module.exports = function createCompareRouter(deps) {
     const shuffledModels = order.map(i => models[i]);
 
     const promises = shuffledModels.map(m => {
-      // No hardcoded fallback engine: ollama is the only always-live floor.
-      const engine = m.engine && engineAlive(m.engine) ? m.engine : 'ollama';
+      const engine = m.engine && engineAlive(m.engine) ? m.engine : (m.engine || 'gemini');
       const modelId = m.id || m.model;
       if (!modelId) return Promise.resolve({ text: '', error: 'model id required', elapsed_ms: 0, model: '?', engine });
       return callModel(engine, modelId, prompt);

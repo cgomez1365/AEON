@@ -5,7 +5,7 @@
  *   • Reads role→provider→model from aeon-settings.json (same as kernelLLM)
  *   • Streams via SSE (text/event-stream) so the Neural Terminal renders
  *     tokens as they arrive instead of waiting for the full response
- *   • Supports Groq, Gemini, Ollama, OpenAI (all OpenAI-compatible)
+ *   • Supports Groq, Gemini, local runtime, OpenAI (all OpenAI-compatible)
  *   • Falls back to non-streaming kernelLLM if the provider doesn't stream
  *   • Tracks telemetry (tokens, latency) per call
  */
@@ -16,10 +16,10 @@ const path = require('path');
 
 module.exports = function ({ getLocalFile, GEMINI_KEY_POOL, _trackLLM, writeOSAudit, VAULT_ROOT, DEFAULT_LOCAL_MODEL, defaultLocalModel }) {
   const SETTINGS_FILE = path.join(__dirname, '..', '..', '..', 'aeon-settings.json');
-  const localModel = (defaultLocalModel ? defaultLocalModel() : null) || DEFAULT_LOCAL_MODEL || process.env.OLLAMA_MODEL || null;
+  const localModel = (defaultLocalModel ? defaultLocalModel() : null) || DEFAULT_LOCAL_MODEL || null;
   const loadSettings = () => {
     try { return JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')); }
-    catch { return { models: { chat: { provider: 'ollama', model: localModel } } }; }
+    catch { return { models: { chat: { provider: 'local', model: localModel } } }; }
   };
 
   // ── Memory injection ───────────────────────────────────────────────
@@ -136,31 +136,21 @@ module.exports = function ({ getLocalFile, GEMINI_KEY_POOL, _trackLLM, writeOSAu
     }
   }
 
-  async function* streamOllama(prompt, model, options) {
-    const host = process.env.OLLAMA_HOST || 'http://localhost:11434';
-    const r = await fetch(`${host}/api/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model, prompt, stream: true, ...(options ? { options } : {}) }),
-    });
-    if (!r.ok) throw new Error(`Ollama ${r.status}`);
-    const reader = r.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
+  async function* streamLocal(prompt, model) {
+    const lr = (() => { try { return require('../../../../services/local-runtime/index.cjs'); } catch { return null; } })();
+    if (!lr || !lr.isAvailable()) throw new Error('Native local runtime not ready');
+    let resolve, reject;
+    const done = new Promise((res, rej) => { resolve = res; reject = rej; });
+    const tokens = [];
+    let ended = false;
+    lr.inferStream(prompt, { model: model || undefined }, (token) => {
+      tokens.push(token);
+      if (resolve) { const r = resolve; resolve = null; r(); }
+    }).then(() => { ended = true; if (resolve) resolve(); }).catch(e => { ended = true; if (reject) reject(e); });
     while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop();
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const chunk = JSON.parse(line);
-          if (chunk.response) yield chunk.response;
-          if (chunk.done) return;
-        } catch {}
-      }
+      while (tokens.length) { yield tokens.shift(); }
+      if (ended) break;
+      await new Promise(r => { resolve = r; });
     }
   }
 
@@ -225,8 +215,6 @@ module.exports = function ({ getLocalFile, GEMINI_KEY_POOL, _trackLLM, writeOSAu
         { role: 'user', content: message },
       ];
       const promptFlat = messages.map(m => m.content).join('\n');
-      // Wake reads need a bigger Ollama context window (default is 4096)
-      const ollamaOpts = { num_ctx: mem.wake ? 16384 : 8192 };
       if (mem.count) sseWrite(res, 'meta', { memory: mem.count, wake: mem.wake });
 
       const buildGenerator = async (provider, model) => {
@@ -235,7 +223,7 @@ module.exports = function ({ getLocalFile, GEMINI_KEY_POOL, _trackLLM, writeOSAu
           if (!apiKey) throw new Error('No Groq key (set GROQ_API_KEY or add a connection)');
           return streamGroq(messages, model, apiKey);
         }
-        if (provider === 'ollama') return streamOllama(promptFlat, model, ollamaOpts);
+        if (provider === 'local') return streamLocal(promptFlat, model);
         if (provider === 'gemini') {
           const apiKey = await resolveKey('gemini', 'GEMINI_PAID_KEY', 'GEMINI_FREE_KEY_1');
           if (!apiKey) throw new Error('No Gemini key');
@@ -272,11 +260,11 @@ module.exports = function ({ getLocalFile, GEMINI_KEY_POOL, _trackLLM, writeOSAu
         try { return { gen: await buildGenerator(p, m), provider: p }; } catch (e) { return { error: e.message }; }
       };
 
-      // Build the fallback chain: configured → groq → ollama
+      // Build the fallback chain: configured → groq → local
       const chain = [
         { p: provider, m: model },
         ...(provider !== 'groq' && process.env.GROQ_API_KEY ? [{ p: 'groq', m: fallbackGroqModel }] : []),
-        { p: 'ollama', m: settings.models?.chat?.provider === 'ollama' ? settings.models.chat.model : localModel },
+        { p: 'local', m: localModel },
       ];
 
       let lastErr = null;
@@ -304,12 +292,11 @@ module.exports = function ({ getLocalFile, GEMINI_KEY_POOL, _trackLLM, writeOSAu
           sseWrite(res, 'token', { t: token });
         }
       } catch (e) {
-        // Stream died mid-flight — retry with ollama if untouched and not already on ollama
-        if (!fullText && activeProvider !== 'ollama') {
-          sseWrite(res, 'warning', { message: `⚠ ${activeProvider} stream failed — falling back to Ollama` });
-          const ollamaModel = localModel;
-          sseWrite(res, 'meta', { provider: 'ollama', model: ollamaModel, role, fallbackFrom: `${activeProvider}: ${e.message.slice(0, 140)}` });
-          const retry = await buildGenerator('ollama', ollamaModel);
+        // Stream died mid-flight — retry with local runtime if untouched
+        if (!fullText && activeProvider !== 'local') {
+          sseWrite(res, 'warning', { message: `⚠ ${activeProvider} stream failed — falling back to local runtime` });
+          sseWrite(res, 'meta', { provider: 'local', model: localModel, role, fallbackFrom: `${activeProvider}: ${e.message.slice(0, 140)}` });
+          const retry = await buildGenerator('local', localModel);
           for await (const token of retry) {
             fullText += token;
             tokenCount++;

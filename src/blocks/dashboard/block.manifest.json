@@ -22,12 +22,12 @@
       "supabase",
       "groq",
       "gemini",
-      "ollama"
+      "local"
     ],
     "env": [
       "SUPABASE_URL",
       "SUPABASE_SERVICE_ROLE_KEY",
-      "OLLAMA_HOST"
+      "AEON_LLM_BACKEND"
     ],
     "local": [],
     "blocks": []
@@ -175,7 +175,7 @@
   "env": [
     "SUPABASE_URL",
     "SUPABASE_SERVICE_ROLE_KEY",
-    "OLLAMA_HOST"
+    "AEON_LLM_BACKEND"
   ],
   "ai": {
     "capabilities": [],

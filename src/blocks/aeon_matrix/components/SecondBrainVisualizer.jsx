@@ -273,7 +273,7 @@ const SecondBrainVisualizer = () => {
       const d = await r.json();
       if (!r.ok) {
         setQaAnswer(d.needsLocalConfirm
-          ? 'Cloud AI unavailable. Start Ollama or type /allow-local in the terminal.'
+          ? 'Cloud AI unavailable. Enable local runtime or type /allow-local in the terminal.'
           : 'Error: ' + (d.error || `LLM error ${r.status}`));
       } else {
         setQaAnswer(d.text || 'No answer generated.');
@@ -294,7 +294,7 @@ const SecondBrainVisualizer = () => {
     });
     const d = await r.json();
     if (!r.ok) {
-      if (d.needsLocalConfirm) throw new Error('Cloud AI unavailable. Start Ollama or type /allow-local in the terminal.');
+      if (d.needsLocalConfirm) throw new Error('Cloud AI unavailable. Enable local runtime or type /allow-local in the terminal.');
       throw new Error(d.error || `LLM error ${r.status}`);
     }
     return d.text || '';

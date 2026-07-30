@@ -32,7 +32,7 @@ export function TelemetryProvider({ children }) {
   // Fetch telemetry — try live endpoint first, fall back to legacy, then Supabase
   useEffect(() => {
     const fetchTelemetry = async () => {
-      // Try live LLM telemetry (tracks every gemini/groq/ollama call in real-time)
+      // Try live LLM telemetry (tracks every gemini/groq/local call in real-time)
       try {
         const res = await fetch('/api/llm-telemetry');
         if (res.ok) {
@@ -40,7 +40,7 @@ export function TelemetryProvider({ children }) {
           if (live.totalCalls > 0) {
             const staffUsage = {};
             (live.models || []).forEach(m => {
-              const key = m.engine === 'groq' ? 'groq' : m.engine === 'ollama' ? 'zenith' : 'gemini';
+              const key = m.engine === 'groq' ? 'groq' : m.engine === 'local' ? 'zenith' : 'gemini';
               if (!staffUsage[key]) staffUsage[key] = { requests: 0, tokens: 0 };
               staffUsage[key].requests += m.requests;
               staffUsage[key].tokens += m.tokens;

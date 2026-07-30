@@ -82,9 +82,7 @@
     }
   ],
   "env": [
-    "OLLAMA_HOST",
-    "OLLAMA_MODEL",
-    "OLLAMA_SSH_KEY",
+    "AEON_LLM_BACKEND",
     "VITE_GAS_URL"
   ],
   "ai": {
