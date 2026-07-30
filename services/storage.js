@@ -106,9 +106,29 @@ const getBlockDataFile = (blockId, relPath = '') => getScopedFile(process.env.VE
 // data/local-runtime.json — written by the Cookbook block (the owner of local
 // models): models_dir, available runtimes, and every installed local model.
 // Settings/kernel/blocks read THIS instead of probing or hardcoding Ollama.
+// LEGACY reader — the pre-Phase-2 flat shape ({ runtimes: {...}, models: [...] })
+// that ai.js, council and settings still bind against. Kept working verbatim
+// until those callers migrate in Phase 7/8; the compatibility floor recorded in
+// docs/architecture/native-local-runtime.md forbids changing it here.
 const readLocalRuntime = () => {
   try { return JSON.parse(fs.readFileSync(getDataFile('local-runtime.json'), 'utf8')); }
   catch { return null; }
+};
+
+// ── Phase 2: the native local-runtime registry ────────────────────────────
+// Generic storage does NOT guess runtime paths or carry backend-specific
+// fallbacks any more. It hands back the one transactional service that owns
+// the registry, and that service owns its own path resolution (paths.cjs).
+let _localRuntimeRegistry = null;
+const getLocalRuntimeRegistry = () => {
+  if (!_localRuntimeRegistry) {
+    const { createRegistry } = require('./local-runtime/registry.cjs');
+    const { resolveDataRoot } = require('./local-runtime/paths.cjs');
+    _localRuntimeRegistry = createRegistry(
+      resolveDataRoot({ appRoot: ROOT, dataRootSetting: process.env.DATA_PATH || null })
+    );
+  }
+  return _localRuntimeRegistry;
 };
 
 const LOG_FILE = getLocalFile('chat_log.json');
@@ -193,4 +213,5 @@ module.exports = {
   ROOT, getLocalFile, WORKSPACE, upload, videoUpload, safeUploadName, UPLOAD_LIMITS, cleanupOrphans, logTrivial,
   LOG_FILE, AUDIT_FILE, SDI_VIOLATION_LOG, TOKEN_LEDGER_FILE, TERMINAL_HISTORY_FILE, NOTES_FILE,
   VAULT_ROOT, DATA_ROOT, getVaultFile, getDataFile, getBlockVaultFile, getBlockDataFile, readLocalRuntime,
+  getLocalRuntimeRegistry,
 };

@@ -1,0 +1,92 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "aeon://local-runtime/registry.schema.json",
+  "title": "AEON local runtime registry",
+  "description": "Generated state. One transactional truth for Cookbook, Settings, kernel, launcher and diagnostics. Never hand-edited, never committed, never shipped.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "runtimes", "models", "updatedAt"],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Bumped only on a breaking shape change. A registry with a HIGHER version than this build understands is read-only, never rewritten."
+    },
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "activeRuntimeId": {
+      "type": ["string", "null"],
+      "description": "Which runtime the supervisor spawns. Rollback swaps THIS field, not folders."
+    },
+    "runtimes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "state", "version", "backend", "relPath", "installedAt"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$" },
+          "state": { "enum": ["staged", "ready", "quarantined", "superseded"] },
+          "version": { "type": "string", "minLength": 1 },
+          "backend": { "enum": ["cpu", "cuda", "metal", "vulkan", "rocm"] },
+          "platform": { "type": "string" },
+          "arch": { "type": "string" },
+          "relPath": {
+            "type": "string",
+            "pattern": "^[^/\\\\][^\\\\]*$",
+            "description": "POSIX path relative to dataRoot. Absolute paths are a schema violation — they break portable relocation."
+          },
+          "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "entrypoint": { "type": "string", "description": "Filename within relPath. Never an absolute path." },
+          "probe": {
+            "type": "object",
+            "description": "Recorded from a real probe run, never assumed.",
+            "properties": {
+              "reportedVersion": { "type": "string" },
+              "cpuFeatures": { "type": "array", "items": { "type": "string" } },
+              "gpuBackend": { "type": ["string", "null"] },
+              "probedAt": { "type": "string", "format": "date-time" }
+            }
+          },
+          "quarantineReason": { "type": ["string", "null"] },
+          "installedAt": { "type": "string", "format": "date-time" }
+        }
+      }
+    },
+    "models": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "state", "relPath", "bytes", "installedAt"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$" },
+          "state": { "enum": ["staged", "ready", "quarantined", "removing"] },
+          "displayName": { "type": "string" },
+          "relPath": { "type": "string", "pattern": "^[^/\\\\][^\\\\]*$" },
+          "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "bytes": { "type": "integer", "minimum": 0 },
+          "quantization": { "type": "string" },
+          "contextCeiling": { "type": "integer", "minimum": 0 },
+          "capabilities": {
+            "type": "array",
+            "items": { "enum": ["chat", "embed", "vision", "tools"] },
+            "description": "Drives Settings role filtering. An embed-only model must never be offered for chat."
+          },
+          "license": { "type": "string" },
+          "licenseUrl": { "type": "string" },
+          "gguf": {
+            "type": "object",
+            "description": "Recorded from a real GGUF header probe.",
+            "properties": {
+              "architecture": { "type": "string" },
+              "embeddingLength": { "type": "integer" },
+              "probedAt": { "type": "string", "format": "date-time" }
+            }
+          },
+          "quarantineReason": { "type": ["string", "null"] },
+          "installedAt": { "type": "string", "format": "date-time" }
+        }
+      }
+    }
+  }
+}
