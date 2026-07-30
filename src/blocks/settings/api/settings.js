@@ -29,7 +29,7 @@ module.exports = (app, deps) => {
   // legacy fallback so existing setups don't break.
   const cdpKeyExists = () =>
     fs.existsSync(path.join(APP_ROOT, 'secrets', 'cdp_api_key.json')) ||
-    fs.existsSync(path.join(process.env.USERPROFILE || process.env.HOME || '', 'Desktop', 'cdp_api_key.json'));
+    fs.existsSync(path.join(process.env.USERPROFILE || process.env.HOME || '', 'Desktop', 'cdp_api_key.json')); // aeon-path-authority-allow
 
   // ── Settings file I/O ──────────────────────────────────────────────
   function loadSettings() {

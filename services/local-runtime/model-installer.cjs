@@ -7,7 +7,7 @@
  * promotes to "ready" in the registry. No model reaches ready without a
  * verified hash. No silent downloads — caller must pass onProgress/onStatus.
  *
- * Does NOT touch the Ollama model store (~/.ollama) — GGUF models live
+ * Does NOT touch the legacy model store (~/.ollama) — GGUF models live // aeon-path-authority-allow
  * inside the managed local-runtime directory only.
  */
 

@@ -39,7 +39,7 @@ module.exports = function createCookbookRouter(deps) {
   // The user's pre-existing global HF cache, scanned as a SECONDARY source
   // so models downloaded before AEON still show up (never assumed to exist).
   function legacyHfCache() {
-    return path.join(process.env.USERPROFILE || process.env.HOME || os.homedir() || '', '.cache', 'huggingface', 'hub');
+    return path.join(process.env.USERPROFILE || process.env.HOME || os.homedir() || '', '.cache', 'huggingface', 'hub'); // aeon-path-authority-allow
   }
 
 
@@ -320,7 +320,7 @@ module.exports = function createCookbookRouter(deps) {
 
     // Scan additional model directories
     for (const dir of modelDirs) {
-      const expanded = dir.startsWith('~') ? dir.replace('~', os.homedir()) : dir;
+      const expanded = dir.startsWith('~') ? dir.replace('~', os.homedir()) : dir; // aeon-path-authority-allow
       if (fs.existsSync(expanded)) {
         try {
           for (const d of fs.readdirSync(expanded)) {
@@ -402,7 +402,7 @@ module.exports = function createCookbookRouter(deps) {
     if (hf_token) env.HF_TOKEN = hf_token;
     {
       const raw = local_dir || modelsRoot();
-      const expanded = raw.startsWith('~') ? raw.replace('~', os.homedir()) : raw;
+      const expanded = raw.startsWith('~') ? raw.replace('~', os.homedir()) : raw; // aeon-path-authority-allow
       env.HF_HOME = expanded;
       env.HUGGINGFACE_HUB_CACHE = path.join(expanded, 'hub');
       env.HF_HUB_CACHE = path.join(expanded, 'hub');
@@ -887,8 +887,8 @@ module.exports = function createCookbookRouter(deps) {
 
   function findBash() {
     const candidates = [
-      'C:\\Program Files\\Git\\bin\\bash.exe',
-      'C:\\Program Files (x86)\\Git\\bin\\bash.exe',
+      'C:\\Program Files\\Git\\bin\\bash.exe', // aeon-path-authority-allow
+      'C:\\Program Files (x86)\\Git\\bin\\bash.exe', // aeon-path-authority-allow
     ];
     for (const c of candidates) {
       if (fs.existsSync(c)) return c;

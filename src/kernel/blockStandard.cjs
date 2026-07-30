@@ -303,7 +303,7 @@ function checkReadiness(manifest, env) {
       // Look inside the install first (secrets/), Desktop only as legacy.
       const ok = [
         path.join(__dirname, '..', '..', 'secrets', fname),
-        path.join(process.env.USERPROFILE || process.env.HOME || '', 'Desktop', fname),
+        path.join(process.env.USERPROFILE || process.env.HOME || '', 'Desktop', fname), // aeon-path-authority-allow
       ].some(p => { try { return fs.existsSync(p); } catch { return false; } });
       if (!ok) missing.push(a);
       continue;

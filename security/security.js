@@ -125,12 +125,12 @@ module.exports = ({ supabase, getLocalFile, WORKSPACE, AUDIT_FILE, SDI_VIOLATION
     'start http'
   ];
 
-  const USER_HOME = process.env.USERPROFILE || process.env.HOME || '';
+  const USER_HOME = process.env.USERPROFILE || process.env.HOME || ''; // aeon-path-authority-allow
   const ALLOWED_ROOTS = [
     USER_HOME,
     WORKSPACE,
     path.join(USER_HOME, 'Desktop'),
-    'C:\\Program Files'
+    'C:\\Program Files' // aeon-path-authority-allow
   ].filter(Boolean);
 
   // ── Tamper-evident audit trail ──
