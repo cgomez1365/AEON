@@ -1,0 +1,83 @@
+{
+  "_comment": "Version-pinned llama.cpp release manifest. SHA-256 values are verified at install time — PENDING_VERIFICATION means the real hash must be fetched before shipping. URLs point to official llama.cpp GitHub releases. Do NOT edit relPath fields — they must match runtime-installer.cjs expectations.",
+  "runtimeVersion": "b5060",
+  "releaseTag": "b5060",
+  "releaseBaseUrl": "https://github.com/ggml-org/llama.cpp/releases/download/b5060",
+  "license": "MIT",
+  "licenseUrl": "https://github.com/ggml-org/llama.cpp/blob/master/LICENSE",
+  "minFreeDiskMB": 300,
+  "requiredFiles": {
+    "win32-x64-cpu": ["llama-cli.exe", "llama-server.exe", "llama-embedding.exe", "ggml.dll", "llama.dll"],
+    "win32-x64-cuda": ["llama-cli.exe", "llama-server.exe", "llama-embedding.exe", "ggml.dll", "llama.dll", "ggml-cuda.dll"],
+    "darwin-arm64-metal": ["llama-cli", "llama-server", "llama-embedding", "libggml.dylib", "libllama.dylib", "libggml-metal.dylib"],
+    "darwin-x64-cpu": ["llama-cli", "llama-server", "llama-embedding", "libggml.dylib", "libllama.dylib"],
+    "linux-x64-cpu": ["llama-cli", "llama-server", "llama-embedding", "libggml.so", "libllama.so"]
+  },
+  "platforms": [
+    {
+      "id": "llamacpp-b5060-win32-x64-cpu",
+      "platform": "win32",
+      "arch": "x64",
+      "backend": "cpu",
+      "filename": "llama-b5060-bin-win-avx2-x64.zip",
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b5060/llama-b5060-bin-win-avx2-x64.zip",
+      "bytes": 45000000,
+      "sha256": "PENDING_VERIFICATION",
+      "entrypoint": "llama-cli.exe",
+      "probeArgs": ["--version"],
+      "extractSubdir": ""
+    },
+    {
+      "id": "llamacpp-b5060-win32-x64-cuda",
+      "platform": "win32",
+      "arch": "x64",
+      "backend": "cuda",
+      "filename": "llama-b5060-bin-win-cuda-cu12.2.0-x64.zip",
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b5060/llama-b5060-bin-win-cuda-cu12.2.0-x64.zip",
+      "bytes": 120000000,
+      "sha256": "PENDING_VERIFICATION",
+      "entrypoint": "llama-cli.exe",
+      "probeArgs": ["--version"],
+      "extractSubdir": ""
+    },
+    {
+      "id": "llamacpp-b5060-darwin-arm64-metal",
+      "platform": "darwin",
+      "arch": "arm64",
+      "backend": "metal",
+      "filename": "llama-b5060-bin-macos-arm64.zip",
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b5060/llama-b5060-bin-macos-arm64.zip",
+      "bytes": 30000000,
+      "sha256": "PENDING_VERIFICATION",
+      "entrypoint": "llama-cli",
+      "probeArgs": ["--version"],
+      "extractSubdir": ""
+    },
+    {
+      "id": "llamacpp-b5060-darwin-x64-cpu",
+      "platform": "darwin",
+      "arch": "x64",
+      "backend": "cpu",
+      "filename": "llama-b5060-bin-macos-x64.zip",
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b5060/llama-b5060-bin-macos-x64.zip",
+      "bytes": 28000000,
+      "sha256": "PENDING_VERIFICATION",
+      "entrypoint": "llama-cli",
+      "probeArgs": ["--version"],
+      "extractSubdir": ""
+    },
+    {
+      "id": "llamacpp-b5060-linux-x64-cpu",
+      "platform": "linux",
+      "arch": "x64",
+      "backend": "cpu",
+      "filename": "llama-b5060-bin-ubuntu-x64.zip",
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b5060/llama-b5060-bin-ubuntu-x64.zip",
+      "bytes": 35000000,
+      "sha256": "PENDING_VERIFICATION",
+      "entrypoint": "llama-cli",
+      "probeArgs": ["--version"],
+      "extractSubdir": ""
+    }
+  ]
+}
