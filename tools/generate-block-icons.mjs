@@ -12,9 +12,9 @@ const PNG_DIR = path.join(OUTPUT_DIR, 'png');
 const SECTION_DIR = path.join(OUTPUT_DIR, 'sections');
 
 const BLOCK_ICONS = [
-  '_blank', '_template', 'activity', 'aeon_matrix', 'ats_engine', 'cookbook',
+  '_blank', '_template', 'activity', 'aeon_matrix', 'cookbook',
   'council', 'dashboard', 'deep_research', 'files', 'fleet_control', 'host_os',
-  'master', 'memory_core', 'orion_search', 'quick_links', 'security', 'settings',
+  'master', 'memory_core', 'orion_search', 'quick_links', 'resume_grader', 'security', 'settings',
   'writer', 'payroll', 'system', 'finance',
 ];
 const SOURCE_NAMES = Object.fromEntries(BLOCK_ICONS.map((id) => [id, id.replaceAll('_', '-')]));

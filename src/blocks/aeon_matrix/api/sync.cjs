@@ -209,7 +209,7 @@ module.exports = function createSyncRouter(deps) {
 
   // ── /ats/* routes removed 2026-07-17: they duplicated the ats_engine block
   //    with a hardcoded geminiRequest and won the route by mount order, so ATS
-  //    grading hard-failed to Gemini. The real handlers live in ats_engine/api/
+  //    grading hard-failed to Gemini. The real handlers live in resume_grader/api/
   //    (kernel-routed). Do NOT re-add ATS routes here.
 
   // ═══════════════════════════════════════════════════════════════════

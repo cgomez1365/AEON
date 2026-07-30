@@ -75,7 +75,7 @@ Blocks without manifests are still loaded but flagged as `tier: 'unknown'`.
 | routes/analytics.js | /api/search, /api/telemetry, /api/pipeline-* | Search + analytics |
 | routes/system.js | /api/health, /api/system/*, /api/sync-* | System health + scanning |
 | routes/sandbox.js | /api/sandbox/*, /api/orion-scrape | Sandbox + Orion scraper |
-| routes/sync.js | /api/sync/*, /api/ats/*, /api/logistics/* | Block data sync + ATS + logistics |
+| routes/sync.js | /api/sync/*, /api/logistics/* | Block data sync + logistics (ATS routes removed 2026-07-17) |
 | routes/research.js | /api/research/* | Deep research pipeline |
 | routes/cookbook.js | /api/cookbook/*, /api/model/* | Local AI model management |
 | routes/hwfit.js | /api/hwfit/* | Hardware fitness scoring |

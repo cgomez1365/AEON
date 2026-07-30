@@ -1,9 +1,9 @@
 {
   "manifestVersion": "1.1.0",
-  "id": "ats_engine",
+  "id": "resume_grader",
   "label": "Resume Grader",
   "icon": "Users",
-  "route": "/ats",
+  "route": "/resume-grader",
   "description": "Resume and job description PDF grading with AI-powered scoring",
   "category": "business",
   "tier": "plugin",
@@ -12,8 +12,8 @@
     "order": 0,
     "label": "Resume Grader",
     "icon": "Users",
-    "iconAsset": "/brand/block-icons/ats_engine.svg",
-    "iconAssetPng": "/brand/block-icons/png/ats_engine.png",
+    "iconAsset": "/brand/block-icons/resume_grader.svg",
+    "iconAssetPng": "/brand/block-icons/png/resume_grader.png",
     "hidden": false
   },
   "widget": null,
@@ -87,7 +87,7 @@
   "routes": [
     {
       "method": "ALL",
-      "path": "/ats_engine/*",
+      "path": "/resume_grader/*",
       "auth": true
     }
   ],

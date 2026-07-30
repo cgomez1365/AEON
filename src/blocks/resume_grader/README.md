@@ -1,7 +1,7 @@
-# ATS Engine
+# Resume Grader
 
-**ID:** `ats_engine`
-**Nav route:** `/ats`
+**ID:** `resume_grader`
+**Nav route:** `/resume-grader`
 **Tier:** `plugin`
 **Status:** ACTIVE
 
@@ -50,7 +50,7 @@ one critical gap) · `PASS` (otherwise).
 
 ## API routes
 
-All routes live under `/api/ats/*` and are registered by the "plugin
+All routes live under `/api/resume-grader/*` and are registered by the "plugin
 pattern" (each `api/*.js` file calls `app[method](...)` directly against
 the block's scoped sub-router — see `src/kernel/blockHost.cjs`). Every
 route also technically accepts all of GET/POST/PUT/DELETE/OPTIONS (CORS
@@ -59,10 +59,10 @@ returns `405` for anything else.
 
 | Method | Path | File | Purpose |
 |---|---|---|---|
-| POST | `/api/ats/grade-resume` | `api/grade-resume.js` | Grade a résumé against a job description via `kernelLLM` — stateless, nothing stored |
+| POST | `/api/resume-grader/grade` | `api/grade-resume.js` | Grade a résumé against a job description via `kernelLLM` — stateless, nothing stored |
 
 The frontend (`index.jsx`) is a single-screen **Resume Grader**: paste a
-résumé + (optional) job description, `POST /api/ats/grade-resume`, render the
+résumé + (optional) job description, `POST /api/resume-grader/grade`, render the
 grade. No candidate records, no storage. The legacy candidate-pipeline
 endpoints — `intake` / `candidates` / `grade` / `grade-all` / `alert` — were
 removed in the 2026-07-24 cleanup.
@@ -113,8 +113,8 @@ code reads it or calls Groq directly.
 
 ## Known routing note
 
-`/api/ats/*` is served exclusively by this block. A prior cross-block bug
+`/api/resume-grader/*` is served exclusively by this block. A prior cross-block bug
 had `aeon_matrix`'s `api/sync.cjs` shadowing these routes; that router now
 only registers `/sync/*` and `/logistics/*` paths, so no collision exists
-today. If you add new `/api/ats/*` routes, grep the repo for the path
+today. If you add new `/api/resume-grader/*` routes, grep the repo for the path
 first — this block previously had a route-collision incident.

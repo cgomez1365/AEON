@@ -37,12 +37,10 @@ const API_ENV = {
 // Providers requiring ALL listed vars (vs any-one).
 const API_ENV_ALL = new Set(['supabase']);
 
-// ── Label overrides — kernel-authoritative display names that differ from the
-//    folder-derived default. Add here when a block's folder name doesn't read
-//    well as a product name. Sync writes this; the manifest is always truth.
-const LABEL_OVERRIDES = {
-  ats_engine: 'Resume Grader',
-};
+// Label overrides used to live here. Deleted 2026-07-29: the frontend registry
+// never read them, so the kernel said "Resume Grader" while the UI said "ATS
+// Engine" and every boot logged a [REGISTRY] mismatch warning. Folder is the
+// only source of a display name — to rename a block, rename its folder.
 
 // ── Kernel nav defaults — synced INTO each block's manifest on boot ──
 // The kernel owns sidebar layout. Blocks not listed here still load (system
@@ -59,7 +57,7 @@ const NAV = {
   // AGENT — VP and everything that watches or staffs it
   fleet_control: { route: '/fleet',      group: 'finance', order: 1, icon: 'Radio' },
   // WORK — client-facing operations
-  ats_engine:    { route: '/ats',        group: 'work',    order: 0, icon: 'Users' },
+  resume_grader: { route: '/resume-grader', group: 'work', order: 0, icon: 'Users' },
   // CONTENT — knowledge and creation
   cookbook:      { route: '/cookbook',   group: 'content', order: 1, icon: 'BookOpen' },
   deep_research: { route: '/research',   group: 'content', order: 2, icon: 'FlaskConical' },
@@ -80,7 +78,6 @@ const NAV = {
 const ICON_FALLBACKS = {
   activity: 'Activity',
   aeon_matrix: 'Workflow',
-  ats_engine: 'Users',
   cookbook: 'BookOpen',
   council: 'Landmark',
   dashboard: 'CircleGauge',
@@ -92,6 +89,7 @@ const ICON_FALLBACKS = {
   memory_core: 'Workflow',
   orion_search: 'Telescope',
   quick_links: 'Link',
+  resume_grader: 'Users',
   security: 'Shield',
   settings: 'Settings',
   writer: 'PenLine',
@@ -101,11 +99,11 @@ const ICON_FALLBACKS = {
 // "compatibility" keeps the existing APIs alive while those blocks are migrated
 // one at a time; staged and newly created blocks must use "scoped".
 const MEMORY_POLICY = {
-  activity: 'none', aeon_matrix: 'document', ats_engine: 'none', cookbook: 'none',
+  activity: 'none', aeon_matrix: 'document', cookbook: 'none',
   council: 'document', dashboard: 'none', deep_research: 'summary', files: 'summary',
   fleet_control: 'none', host_os: 'summary', master: 'none', memory_core: 'document',
-  orion_search: 'none', quick_links: 'none', security: 'none', settings: 'none',
-  writer: 'document', _blank: 'none', _template: 'none',
+  orion_search: 'none', quick_links: 'none', resume_grader: 'none', security: 'none',
+  settings: 'none', writer: 'document', _blank: 'none', _template: 'none',
 };
 
 // ── Folder-is-truth naming — mirror of blockRegistry.js labelFromFolder ──
@@ -184,15 +182,15 @@ function normalizeManifest(folder) {
     // See src/kernel/schema.json + MIGRATION_POLICY.md before touching this shape.
     manifestVersion: '1.1.0',
     id: folder,
-    label: LABEL_OVERRIDES[folder] || labelFromFolder(folder),
+    label: labelFromFolder(folder),
     icon,
     route: (nav && nav.route) || m.route || `/${folder}`,
     description: m.description || '',
     category: m.category || (nav && nav.group) || 'system',
     tier: m.tier || (['dashboard','fleet_control','settings','activity','master'].includes(folder) ? 'core' : 'plugin'),
     nav: nav
-      ? { group: nav.group, order: nav.order, label: LABEL_OVERRIDES[folder] || labelFromFolder(folder), icon, iconAsset, iconAssetPng, hidden: false }
-      : { group: 'system', order: 99, label: LABEL_OVERRIDES[folder] || labelFromFolder(folder), icon, iconAsset, iconAssetPng, hidden: m.nav?.hidden === true },
+      ? { group: nav.group, order: nav.order, label: labelFromFolder(folder), icon, iconAsset, iconAssetPng, hidden: false }
+      : { group: 'system', order: 99, label: labelFromFolder(folder), icon, iconAsset, iconAssetPng, hidden: m.nav?.hidden === true },
     // Widget contract — quick-view the dashboard can render (weather-widget model)
     widget: m.widget || null,
     requires: {
@@ -396,7 +394,7 @@ function syncAllBlocks(ctx = {}) {
 }
 
 module.exports = {
-  BLOCKS_DIR, NAV, LABEL_OVERRIDES, GROUP_META, API_ENV, MEMORY_POLICY,
+  BLOCKS_DIR, NAV, GROUP_META, API_ENV, MEMORY_POLICY,
   ICON_BASE, ICON_PNG_BASE, ICON_DIR,
   listBlockFolders, readManifest, normalizeManifest, deriveEnv,
   checkReadiness, writeRuntimeConfig, syncAllBlocks, mergeBlockEnv,

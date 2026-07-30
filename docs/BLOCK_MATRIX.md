@@ -93,10 +93,10 @@ Every block's ownership boundaries. If a block isn't listed under "Reads", it ha
 
 ## Plugin Blocks
 
-### ATS Engine
-- **Owns:** Candidates, grades, intake pipeline
-- **Reads:** /api/ats/candidates
-- **Writes:** /api/ats/intake, /api/ats/grade, /api/ats/grade-all, /api/ats/alert
+### Resume Grader
+- **Owns:** Stateless resume-vs-JD grading (candidate pipeline removed 2026-07-24)
+- **Reads:** nothing persistent
+- **Writes:** /api/resume-grader/grade
 - **Requires:** groq, gemini, supabase
 - **Can be deleted:** YES
 

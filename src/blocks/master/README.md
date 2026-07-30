@@ -160,7 +160,7 @@ exist.
 
   **`role` (singular) and `blurb` are a separate, *live* convention** — not
   part of the base shape above, but added as siblings by six real blocks
-  (`aeon_matrix`, `ats_engine`, `council`, `dashboard`, `deep_research`,
+  (`aeon_matrix`, `council`, `dashboard`, `deep_research`, `resume_grader`,
   `memory_core`) and genuinely read by Settings:
 
   ```json
@@ -351,7 +351,7 @@ block's UI should pass:
   focus style, replace it with an equally visible one; never just delete it.
 - Text inputs need an associated `<label>` or `aria-label` and images need
   `alt` text — this block has neither (no inputs, no `<img>`), but see
-  `src/blocks/ats_engine/index.jsx` or `src/blocks/deep_research/index.jsx`
+  `src/blocks/resume_grader/index.jsx` or `src/blocks/deep_research/index.jsx`
   for live examples of both if your block adds a form.
 
 ## Using kernelLLM in your block API

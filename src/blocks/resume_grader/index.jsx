@@ -30,7 +30,7 @@ export default function ResumeGrader() {
     if (!resume.trim()) { setError('Paste your resume first.'); return; }
     setLoading(true); setError(''); setResult(null);
     try {
-      const res = await fetch('/api/ats/grade-resume', {
+      const res = await fetch('/api/resume-grader/grade', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ resume, jobDescription: jd }),
       });

@@ -70,5 +70,5 @@ Respond in strict JSON only, using the following schema exactly:
 
 module.exports = (app, deps) => {
   if (deps && deps.kernelLLM) _kernelLLM = deps.kernelLLM;
-  ['get', 'post', 'options'].forEach(m => app[m]('/api/ats/grade-resume', (req, res) => handler(req, res)));
+  ['get', 'post', 'options'].forEach(m => app[m]('/api/resume-grader/grade', (req, res) => handler(req, res)));
 };

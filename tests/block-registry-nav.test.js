@@ -64,6 +64,36 @@ describe('icon paths are derived, never per-block literals', () => {
   });
 });
 
+describe('folder is the only source of a display name', () => {
+  // LABEL_OVERRIDES let the kernel disagree with the UI: it said "Resume
+  // Grader" while the frontend derived "ATS Engine" from the folder, and every
+  // boot logged a [REGISTRY] mismatch. The map is gone; renaming a block means
+  // renaming its folder. Kernel and frontend must now agree by construction.
+  const ACRONYMS = { ats: 'ATS', ai: 'AI', os: 'OS', vp: 'VP', llm: 'LLM', api: 'API' };
+  const labelFromFolder = folder => folder.split(/[_-]+/).filter(Boolean)
+    .map(w => ACRONYMS[w.toLowerCase()] || w[0].toUpperCase() + w.slice(1))
+    .join(' ');
+
+  it('every block label is exactly its folder name, humanised', () => {
+    for (const b of BLOCKS) expect(b.label).toBe(labelFromFolder(b.id));
+  });
+
+  it('no manifest declares a label that differs from the folder', () => {
+    // A disagreement here is what produced the boot warning.
+    for (const b of BLOCKS) {
+      const declared = b.manifest?.nav?.label || b.manifest?.label;
+      if (declared) expect(declared).toBe(labelFromFolder(b.id));
+    }
+  });
+
+  it('the resume grader is named from its folder, not an override map', () => {
+    const rg = BLOCKS.find(b => b.id === 'resume_grader');
+    expect(rg).toBeDefined();
+    expect(rg.label).toBe('Resume Grader');
+    expect(BLOCKS.some(b => b.id === 'ats_engine')).toBe(false);
+  });
+});
+
 describe('shipped section defaults survive a fresh clone', () => {
   // These live in GROUP_META (git-tracked), not aeon-settings.json (ignored),
   // so a reclone renders them the same way this install does.

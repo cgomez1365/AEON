@@ -72,9 +72,9 @@
 - **Status:** `EXTRACTED`
 - **External Port:** `3002`
 
-## 🎯 ATS Engine
-- **ID:** `ats_engine`
-- **Route:** `/ats`
+## 🎯 Resume Grader
+- **ID:** `resume_grader`
+- **Route:** `/resume-grader`
 - **Status:** `ACTIVE`
 - **API Files:** intake.js, grade.js, grade-all.js, candidates.js, alert.js
 

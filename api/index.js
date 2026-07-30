@@ -10,11 +10,6 @@ global.mountStaticBlocks = function(app, deps) {
     '../src/blocks/aeon_matrix/api/ingest.cjs',
     '../src/blocks/aeon_matrix/api/retrieve.cjs',
     '../src/blocks/aeon_matrix/api/sync.cjs',
-    '../src/blocks/ats_engine/api/alert.js',
-    '../src/blocks/ats_engine/api/candidates.js',
-    '../src/blocks/ats_engine/api/grade-all.js',
-    '../src/blocks/ats_engine/api/grade.js',
-    '../src/blocks/ats_engine/api/intake.js',
     '../src/blocks/council/api/index.cjs',
     '../src/blocks/dashboard/api/audit.js',
     '../src/blocks/dashboard/api/chat-stream.cjs',
@@ -31,10 +26,15 @@ global.mountStaticBlocks = function(app, deps) {
     '../src/blocks/fleet_control/api/telemetry.js',
     '../src/blocks/master/api/master.cjs',
     '../src/blocks/orion_search/api/orion.cjs',
+    '../src/blocks/resume_grader/api/grade-resume.js',
+    '../src/blocks/security/api/guardian.cjs',
+    '../src/blocks/security/api/security.js',
     '../src/blocks/settings/api/connections.js',
     '../src/blocks/settings/api/connectivity.js',
     '../src/blocks/settings/api/model-scan.js',
     '../src/blocks/settings/api/settings.js',
+    '../src/blocks/writer/api/writer.js',
+    '../src/blocks/writer/api/writer2.cjs',
   ];
   // Mirror blockHost.cjs signature detection: factory (deps)=>router files
   // must have their RETURNED router mounted — calling them as (app, deps)

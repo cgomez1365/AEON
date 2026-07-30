@@ -21,7 +21,7 @@ const { request, ping } = require('./client.cjs');
 // Intent keywords → the block that owns them. Scored, not first-match, so
 // "search my files" resolves on the strongest signal rather than word order.
 const INTENTS = [
-  { block: 'ats_engine',   terms: ['grade', 'resume', 'cv', 'candidate', 'score resume', 'job description'], weight: 3 },
+  { block: 'resume_grader', terms: ['grade', 'resume', 'cv', 'candidate', 'score resume', 'job description'], weight: 3 },
   { block: 'aeon_matrix',  terms: ['recall', 'remember', 'what did i', 'vault', 'second brain', 'index', 'brain'], weight: 3 },
   { block: 'deep_research',terms: ['research', 'deep research', 'investigate', 'scrape', 'sources'], weight: 3 },
   { block: 'writer',       terms: ['write', 'draft', 'compose', 'note', 'document', 'docs'], weight: 2 },
