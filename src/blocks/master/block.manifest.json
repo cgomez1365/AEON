@@ -35,6 +35,9 @@
   "api_routes": true,
   "version": "1.0.0",
   "contract": {
+    "customizable": {
+      "icon": true
+    },
     "inputs": [],
     "outputs": [],
     "events": [],

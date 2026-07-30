@@ -17,9 +17,16 @@ import React from 'react';
 const componentModules = import.meta.glob('../blocks/*/index.jsx');
 const manifestModules  = import.meta.glob('../blocks/*/block.manifest.json', { eager: true });
 
+// ── Icon asset base paths — one declaration, every consumer derives ────
+// Mirror of ICON_BASE in blockStandard.cjs. The ESM/CJS boundary prevents a
+// shared import; these two declarations are the ONLY place the literal lives.
+export const ICON_BASE         = '/brand/block-icons';
+export const ICON_PNG_BASE     = `${ICON_BASE}/png`;
+export const SECTION_ICON_BASE = `${ICON_BASE}/sections`;
+
 const GROUP_META = {
-  finance:  { label: 'FINANCE',  icon: '⚡', order: 0 },
-  agent:    { label: 'AGENT',    icon: '🤖', order: 1 },
+  finance:  { label: 'Home',     icon: '⚡', order: 0 },
+  agent:    { label: 'Agents',   icon: '🤖', order: 1 },
   work:     { label: 'WORK',     icon: '💼', order: 2 },
   content:  { label: 'CONTENT',  icon: '🔍', order: 3 },
   tools:    { label: 'TOOLS',    icon: '🔧', order: 4 },
@@ -71,8 +78,12 @@ for (const [p, loader] of Object.entries(componentModules)) {
     route: manifest.route || `/${folder}`,
     label,
     icon: (manifest.nav && manifest.nav.icon) || manifest.icon || 'Boxes',
-    iconAsset: (manifest.nav && manifest.nav.iconAsset) || `/brand/block-icons/${folder}.svg`,
-    iconAssetPng: (manifest.nav && manifest.nav.iconAssetPng) || `/brand/block-icons/png/${folder}.png`,
+    iconAsset: (manifest.nav && manifest.nav.iconAsset) || `${ICON_BASE}/${folder}.svg`,
+    iconAssetPng: (manifest.nav && manifest.nav.iconAssetPng) || `${ICON_PNG_BASE}/${folder}.png`,
+    // Block-declared: a block may opt OUT of icon customization by setting
+    // contract.customizable.icon = false in its own manifest. Nothing in the
+    // shell decides this per-block — the cartridge does.
+    iconEditable: manifest.contract?.customizable?.icon !== false,
     group: (manifest.nav && manifest.nav.group) || manifest.category || 'system',
     order: (manifest.nav && manifest.nav.order != null) ? manifest.nav.order : 99,
     uiMode: manifest.ui ?? 'full',
@@ -144,12 +155,17 @@ export function getNavGroups(extraItems = [], blockLayout = null) {
     label: g.meta.label,
     icon: g.meta.icon,
     order: g.meta.order,
+    // `id` is REQUIRED here. Without it every consumer that keys per-block
+    // state off item.id reads customizations[undefined] — one shared bucket
+    // for all rows. That was the "every block shows the same name/icon" bug.
     items: g.items.map(b => ({
+      id: b.id,
       path: b.route,
       label: b.label,
       icon: b.icon,
       iconAsset: b.iconAsset,
       iconAssetPng: b.iconAssetPng,
+      iconEditable: b.iconEditable,
     })),
   }));
   // Inject non-block extras (e.g. Second Brain, a component not a block).
@@ -157,11 +173,13 @@ export function getNavGroups(extraItems = [], blockLayout = null) {
     const target = out.find(g => g.id === ex.group);
     if (target) {
       target.items.push({
+        id: ex.id || null,          // non-block extras are not customizable
         path: ex.path,
         label: ex.label,
         icon: ex.icon,
         iconAsset: ex.iconAsset,
         iconAssetPng: ex.iconAssetPng,
+        iconEditable: false,
       });
       continue;
     }
@@ -171,11 +189,13 @@ export function getNavGroups(extraItems = [], blockLayout = null) {
       icon: GROUP_META[ex.group]?.icon || '📦',
       order: GROUP_META[ex.group]?.order ?? 99,
       items: [{
+        id: ex.id || null,          // non-block extras are not customizable
         path: ex.path,
         label: ex.label,
         icon: ex.icon,
         iconAsset: ex.iconAsset,
         iconAssetPng: ex.iconAssetPng,
+        iconEditable: false,
       }],
     });
   }

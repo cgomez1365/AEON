@@ -6,6 +6,7 @@ import { AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, Tool
 import { useTelemetry } from '../../kernel/contexts/TelemetryContext';
 import { getEffectiveBlockGroups } from '../../kernel/blockRegistry.js';
 import { BlockIcon, SectionIcon } from '../../components/BlockIcon.jsx';
+import BlockCustomizeModal from '../../components/BlockCustomizeModal.jsx';
 
 import { SB_URL, SB_KEY } from '../../config.js';
 const CHART_COLORS = ['#00f2ff', '#f59e0b', '#4caf50', '#8b5cf6', '#ec4899', '#ff6b6b', '#00ff40', '#ff9800'];
@@ -41,7 +42,11 @@ function timeAgo(iso) {
   return `${Math.floor(h / 24)}d ago`;
 }
 
-export default function Dashboard({ chatHistory = [], auditLogs = [], blockLayout, onBlockLayoutChange }) {
+export default function Dashboard({ chatHistory = [], auditLogs = [], blockLayout, onBlockLayoutChange, iconOverrides = {}, onIconChanged }) {
+  // Icon customization lives HERE and only here — the Home dashboard is the
+  // one place a block's icon can be changed. Saving refreshes the shell's
+  // icon map, so the sidebar and every other consumer update at once.
+  const [iconTarget, setIconTarget] = useState(null); // the block being edited
   const { apiUsage } = useTelemetry();
   const [autopilot, setAutopilot] = useState(null);
   const [serverUp, setServerUp] = useState(false);
@@ -268,35 +273,59 @@ export default function Dashboard({ chatHistory = [], auditLogs = [], blockLayou
                 {g.items.map(b => {
                   const live = blockStates[b.id];
                   const summary = live?.state?._summary;
+                  // Live icon wins over the build-time manifest snapshot.
+                  const iconAsset = iconOverrides[b.id] || b.iconAsset;
                   return (
-                    <Link
-                      key={b.id} to={b.route} style={{ textDecoration: 'none', color: 'inherit' }}
-                      draggable
-                      onDragStart={(e) => { setDragBlockId(b.id); e.dataTransfer.setData('text/plain', b.id); e.dataTransfer.effectAllowed = 'move'; }}
-                      onDragEnd={() => { setDragBlockId(null); setDragOverGroup(null); }}
-                      onClick={(e) => { if (dragBlockId) e.preventDefault(); }}
+                    <div key={b.id} style={{ position: 'relative' }}
+                      onMouseEnter={e => { const btn = e.currentTarget.querySelector('.block-pencil'); if (btn) btn.style.opacity = '1'; }}
+                      onMouseLeave={e => { const btn = e.currentTarget.querySelector('.block-pencil'); if (btn) btn.style.opacity = '0'; }}
                     >
-                      <div style={{
-                        padding: '8px 10px', borderRadius: '8px', background: 'rgba(255,255,255,0.02)',
-                        border: '1px solid rgba(255,255,255,0.05)', display: 'flex', flexDirection: 'column', gap: '4px',
-                        height: '100%', cursor: 'grab', opacity: dragBlockId === b.id ? 0.4 : 1,
-                      }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                          <BlockIcon
-                            iconAsset={b.iconAsset}
-                            iconAssetPng={b.iconAssetPng}
-                            fallback={b.icon}
-                            size={20}
-                          />
-                          <span style={{ fontSize: '11px', fontWeight: 700 }}>{b.label}</span>
-                          <span aria-hidden="true" style={{ width: '5px', height: '5px', borderRadius: '50%', background: live ? '#00ff40' : 'rgba(255,255,255,0.15)', marginLeft: 'auto' }} />
+                      <Link
+                        to={b.route} style={{ textDecoration: 'none', color: 'inherit' }}
+                        draggable
+                        onDragStart={(e) => { setDragBlockId(b.id); e.dataTransfer.setData('text/plain', b.id); e.dataTransfer.effectAllowed = 'move'; }}
+                        onDragEnd={() => { setDragBlockId(null); setDragOverGroup(null); }}
+                        onClick={(e) => { if (dragBlockId) e.preventDefault(); }}
+                      >
+                        <div style={{
+                          padding: '8px 10px', borderRadius: '8px', background: 'rgba(255,255,255,0.02)',
+                          border: '1px solid rgba(255,255,255,0.05)', display: 'flex', flexDirection: 'column', gap: '4px',
+                          height: '100%', cursor: 'grab', opacity: dragBlockId === b.id ? 0.4 : 1,
+                        }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <BlockIcon
+                              iconAsset={iconAsset}
+                              iconAssetPng={b.iconAssetPng}
+                              fallback={b.icon}
+                              size={20}
+                            />
+                            <span style={{ fontSize: '11px', fontWeight: 700 }}>{b.label}</span>
+                            <span aria-hidden="true" style={{ width: '5px', height: '5px', borderRadius: '50%', background: live ? '#00ff40' : 'rgba(255,255,255,0.15)', marginLeft: 'auto' }} />
+                          </div>
+                          <div style={{ fontSize: '9px', color: 'var(--text-dim)', lineHeight: 1.4 }}>
+                            {summary || (live ? 'Active — no summary reported' : 'Not reporting activity yet')}
+                          </div>
+                          {live?.lastSync && <div style={{ fontSize: '8px', color: 'var(--text-dim)', opacity: 0.6 }}>{timeAgo(live.lastSync)}</div>}
                         </div>
-                        <div style={{ fontSize: '9px', color: 'var(--text-dim)', lineHeight: 1.4 }}>
-                          {summary || (live ? 'Active — no summary reported' : 'Not reporting activity yet')}
-                        </div>
-                        {live?.lastSync && <div style={{ fontSize: '8px', color: 'var(--text-dim)', opacity: 0.6 }}>{timeAgo(live.lastSync)}</div>}
-                      </div>
-                    </Link>
+                      </Link>
+                      {/* Block-declared: only cartridges that allow it get a pencil. */}
+                      {b.iconEditable && (
+                        <button
+                          className="block-pencil"
+                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); setIconTarget({ ...b, iconAsset }); }}
+                          title={`Change ${b.label} icon`}
+                          aria-label={`Change ${b.label} icon`}
+                          style={{
+                            position: 'absolute', top: 6, right: 6, opacity: 0, transition: 'opacity 0.15s',
+                            background: 'rgba(0,242,255,0.08)', border: '1px solid rgba(0,242,255,0.2)',
+                            borderRadius: 4, padding: '3px', cursor: 'pointer', color: 'var(--color-primary, #00f2ff)',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1, zIndex: 2,
+                          }}
+                        >
+                          <Pencil size={10} aria-hidden="true" />
+                        </button>
+                      )}
+                    </div>
                   );
                 })}
               </div>
@@ -546,6 +575,16 @@ export default function Dashboard({ chatHistory = [], auditLogs = [], blockLayou
           {auditLogs.length === 0 && <div style={{ color: 'var(--text-dim)', fontSize: '11px', textAlign: 'center', padding: '16px' }}>No activity yet</div>}
         </div>
       </Card>
+
+      {iconTarget && (
+        <BlockCustomizeModal
+          blockId={iconTarget.id}
+          blockLabel={iconTarget.label}
+          currentIconAsset={iconTarget.iconAsset}
+          onSave={() => { setIconTarget(null); onIconChanged?.(); }}
+          onClose={() => setIconTarget(null)}
+        />
+      )}
     </div>
   );
 }

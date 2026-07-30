@@ -11,11 +11,10 @@ import GoogleSignIn from "./GoogleSignIn";
 // block: drop its folder in src/blocks/ — it wires itself into nav + routes.
 import { getNavGroups, getRoutes } from "../kernel/blockRegistry";
 
-import { Terminal, Pencil } from 'lucide-react';
+import { Terminal } from 'lucide-react';
 import BlockShell from './BlockShell';
 import AuroraField from './AuroraField';
 import { BlockIcon, SectionIcon } from './BlockIcon';
-import BlockCustomizeModal from './BlockCustomizeModal';
 
 // Everything is a block now — nav + routes come purely from the registry.
 // Add non-block component routes here only if something can't be a cartridge.
@@ -28,7 +27,10 @@ const EXTRA_ROUTES = [];
 // can't be static module-level constants anymore.
 const BLOCK_ROUTES = [...getRoutes(), ...EXTRA_ROUTES];
 
-export function RolodexNav({ groups, currentPath, onNavigate, customizations = {}, onCustomize }) {
+// The sidebar REFLECTS icon changes but never offers the edit affordance —
+// customization lives on the Home dashboard only. `iconOverrides` is the live
+// per-block icon map fetched from /api/blocks/nav, keyed by block id.
+export function RolodexNav({ groups, currentPath, onNavigate, iconOverrides = {} }) {
   const [activeGroup, setActiveGroup] = useState(() => {
     const saved = localStorage.getItem('aeon_rolodex_group');
     if (saved && groups.some(g => g.id === saved)) return saved;
@@ -78,17 +80,13 @@ export function RolodexNav({ groups, currentPath, onNavigate, customizations = {
       <div style={{ flex: 1, overflowY: 'auto', padding: '2px 8px 8px' }}>
         {groups.find(g => g.id === activeGroup)?.items.map(item => {
           const active = currentPath === item.path;
-          const cx = customizations[item.id] || {};
-          const displayLabel    = cx.label     || item.label;
-          const displayIconAsset = cx.iconAsset || item.iconAsset;
+          const displayIconAsset = iconOverrides[item.id] || item.iconAsset;
           return (
-            <div key={item.path} style={{ position: 'relative' }}
-              onMouseEnter={e => { const btn = e.currentTarget.querySelector('.pencil-btn'); if (btn) btn.style.opacity = '1'; }}
-              onMouseLeave={e => { const btn = e.currentTarget.querySelector('.pencil-btn'); if (btn) btn.style.opacity = '0'; }}>
+            <div key={item.path} style={{ position: 'relative' }}>
               <button onClick={() => onNavigate(item.path)}
                 style={{
                   display: 'flex', alignItems: 'center', gap: '10px',
-                  width: '100%', padding: '8px 10px', paddingRight: '30px', marginBottom: '2px',
+                  width: '100%', padding: '8px 10px', marginBottom: '2px',
                   background: active ? 'rgba(0,242,255,0.1)' : 'transparent',
                   border: active ? '1px solid rgba(0,242,255,0.2)' : '1px solid transparent',
                   borderRadius: '6px', cursor: 'pointer', textAlign: 'left',
@@ -106,27 +104,9 @@ export function RolodexNav({ groups, currentPath, onNavigate, customizations = {
                     size={16}
                   />
                 </span>
-                {displayLabel}
+                {item.label}
                 {active && <div style={{ marginLeft: 'auto', width: 5, height: 5, borderRadius: '50%', background: '#00f2ff', boxShadow: '0 0 6px #00f2ff', flexShrink: 0 }} />}
               </button>
-              {onCustomize && (
-                <button
-                  className="pencil-btn"
-                  onClick={e => { e.stopPropagation(); onCustomize(item, cx); }}
-                  title="Customize block"
-                  aria-label={`Customize ${displayLabel}`}
-                  style={{
-                    position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)',
-                    opacity: 0, transition: 'opacity 0.15s',
-                    background: 'rgba(0,242,255,0.08)', border: '1px solid rgba(0,242,255,0.2)',
-                    borderRadius: 4, padding: '3px', cursor: 'pointer', color: '#00f2ff',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    lineHeight: 1,
-                  }}
-                >
-                  <Pencil size={10} />
-                </button>
-              )}
             </div>
           );
         })}
@@ -135,7 +115,7 @@ export function RolodexNav({ groups, currentPath, onNavigate, customizations = {
   );
 }
 
-function DesktopNav({ user, groups, customizations, onCustomize }) {
+function DesktopNav({ user, groups, iconOverrides }) {
   const nav = useNavigate();
   const loc = useLocation();
   const { logout } = useAuth();
@@ -223,7 +203,7 @@ function DesktopNav({ user, groups, customizations, onCustomize }) {
       </div>
 
       {/* Rolodex Navigation */}
-      <RolodexNav groups={groups} currentPath={loc.pathname} onNavigate={nav} customizations={customizations} onCustomize={onCustomize} />
+      <RolodexNav groups={groups} currentPath={loc.pathname} onNavigate={nav} iconOverrides={iconOverrides} />
 
       <div style={{ padding: "10px", borderTop: "1px solid rgba(255,255,255,0.05)", fontSize: "9px", color: "rgba(255,255,255,0.2)", textAlign: "center", fontFamily: "monospace", letterSpacing: "1px" }}>
         SYSTEM ONLINE · ALL SYNAPSES FIRE
@@ -256,28 +236,25 @@ export default function DesktopLayout({ chatHistory, auditLogs }) {
     }).catch(() => setBlockLayout({ overrides: {}, customGroups: {}, groupOverrides: {} }));
   }, []);
 
-  const [customizations, setCustomizations] = useState({});
-  const [customizeTarget, setCustomizeTarget] = useState(null); // { item, cx }
-  useEffect(() => {
-    fetch('/api/blocks/customizations')
+  // ── Live block icons (/api/blocks/nav) ────────────────────────────────
+  // The registry reads manifests through Vite's build-time glob, so a manifest
+  // write is invisible to a running prod build until rebuild. This runtime map
+  // is the bridge: ONE fetch here, shared by the sidebar AND every block via
+  // props, so changing an icon on the Home dashboard updates the sidebar
+  // immediately instead of only after a rebuild. Icon is global by construction
+  // — there is no second store to drift.
+  const [iconOverrides, setIconOverrides] = useState({});
+  const refreshIcons = useCallback(() => {
+    fetch('/api/blocks/nav')
       .then(r => r.json())
-      .then(d => setCustomizations(d.customizations || {}))
+      .then(d => {
+        const map = {};
+        for (const [id, v] of Object.entries(d.blocks || {})) map[id] = v.iconAsset;
+        setIconOverrides(map);
+      })
       .catch(() => {});
   }, []);
-
-  const handleCustomizeSave = useCallback((saved) => {
-    if (saved === null) {
-      // reset — remove entry
-      setCustomizations(prev => {
-        const next = { ...prev };
-        delete next[customizeTarget.item.id];
-        return next;
-      });
-    } else {
-      setCustomizations(prev => ({ ...prev, [customizeTarget.item.id]: saved }));
-    }
-    setCustomizeTarget(null);
-  }, [customizeTarget]);
+  useEffect(() => { refreshIcons(); }, [refreshIcons]);
 
   const saveBlockLayout = useCallback((next) => {
     setBlockLayout(next);
@@ -377,7 +354,7 @@ export default function DesktopLayout({ chatHistory, auditLogs }) {
       </div>
 
       {/* 2. LEFT PANEL (Navigation) */}
-      {menuOpen && <DesktopNav user={user} groups={NAV_GROUPS} customizations={customizations} onCustomize={(item, cx) => setCustomizeTarget({ item, cx })} />}
+      {menuOpen && <DesktopNav user={user} groups={NAV_GROUPS} iconOverrides={iconOverrides} />}
 
       {/* 3. MIDDLE PANEL (Main Viewport) */}
       <div className="main-viewport">
@@ -408,6 +385,7 @@ export default function DesktopLayout({ chatHistory, auditLogs }) {
                     <Component
                       chatHistory={chatHistory} auditLogs={auditLogs} onViewChange={handleViewChange}
                       blockLayout={blockLayout} onBlockLayoutChange={saveBlockLayout}
+                      iconOverrides={iconOverrides} onIconChanged={refreshIcons}
                     />
                   </BlockShell>
                 }
@@ -457,16 +435,6 @@ export default function DesktopLayout({ chatHistory, auditLogs }) {
             </div>
           </div>
         </div>
-      )}
-
-      {customizeTarget && (
-        <BlockCustomizeModal
-          blockId={customizeTarget.item.id}
-          currentLabel={customizeTarget.cx?.label || customizeTarget.item.label}
-          currentIconAsset={customizeTarget.cx?.iconAsset || customizeTarget.item.iconAsset}
-          onSave={handleCustomizeSave}
-          onClose={() => setCustomizeTarget(null)}
-        />
       )}
 
     </div>

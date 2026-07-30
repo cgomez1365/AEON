@@ -13,7 +13,13 @@ const fs = require('fs');
 const path = require('path');
 
 const BLOCKS_DIR = path.join(__dirname, '..', 'blocks');
-const blockCustomizations = require('../../services/block-customizations.js');
+
+// ── Icon asset base paths — one declaration, every consumer derives ────
+// Mirror of ICON_BASE in blockRegistry.js (ESM/CJS boundary prevents a shared
+// import). ICON_DIR is the on-disk location the icon library is scanned from.
+const ICON_BASE     = '/brand/block-icons';
+const ICON_PNG_BASE = `${ICON_BASE}/png`;
+const ICON_DIR      = path.join(__dirname, '..', '..', 'public', 'brand', 'block-icons');
 
 // ── Provider → env var(s) that prove the connection exists ───────────
 const API_ENV = {
@@ -51,7 +57,7 @@ const NAV = {
   // FINANCE — everything that makes or tracks money
   dashboard:     { route: '/',           group: 'finance', order: 0, icon: 'CircleGauge' },
   // AGENT — VP and everything that watches or staffs it
-  fleet_control: { route: '/fleet',      group: 'agent',   order: 0, icon: 'Radio' },
+  fleet_control: { route: '/fleet',      group: 'finance', order: 1, icon: 'Radio' },
   // WORK — client-facing operations
   ats_engine:    { route: '/ats',        group: 'work',    order: 0, icon: 'Users' },
   // CONTENT — knowledge and creation
@@ -152,10 +158,21 @@ function normalizeManifest(folder) {
   const m = readManifest(folder) || {};
   const nav = NAV[folder];
   const icon = (nav && nav.icon) || ICON_FALLBACKS[folder] || m.nav?.icon || m.icon || 'Boxes';
-  const custom = blockCustomizations.get(folder);
-  const customLabel = custom?.label || null;
-  const iconAsset = custom?.iconAsset || `/brand/block-icons/${folder}.svg`;
-  const iconAssetPng = `/brand/block-icons/png/${folder}.png`;
+  // ── Icon: the manifest IS the store ────────────────────────────────
+  // The customize route writes the user's pick into nav.iconAsset, and boot
+  // sync must PRESERVE it — that's what makes an icon change outlive a fresh
+  // clone (block.manifest.json is git-tracked; data/ is not). A pick whose
+  // file no longer exists degrades to the folder default instead of rendering
+  // a broken image forever.
+  const declaredIcon = m.nav?.iconAsset;
+  const iconExists = declaredIcon
+    ? fs.existsSync(path.join(ICON_DIR, path.basename(declaredIcon)))
+    : false;
+  const iconAsset    = iconExists ? declaredIcon : `${ICON_BASE}/${folder}.svg`;
+  const iconAssetPng = `${ICON_PNG_BASE}/${folder}.png`;
+  // Block-declared opt-out — the cartridge decides whether its icon is
+  // user-editable, not the shell. Absent = editable.
+  const iconEditable = m.contract?.customizable?.icon !== false;
   const apis = (m.requires && m.requires.apis) || [];
   const hasApi = fs.existsSync(path.join(BLOCKS_DIR, folder, 'api'));
 
@@ -167,15 +184,15 @@ function normalizeManifest(folder) {
     // See src/kernel/schema.json + MIGRATION_POLICY.md before touching this shape.
     manifestVersion: '1.1.0',
     id: folder,
-    label: customLabel || LABEL_OVERRIDES[folder] || labelFromFolder(folder),
+    label: LABEL_OVERRIDES[folder] || labelFromFolder(folder),
     icon,
     route: (nav && nav.route) || m.route || `/${folder}`,
     description: m.description || '',
     category: m.category || (nav && nav.group) || 'system',
     tier: m.tier || (['dashboard','fleet_control','settings','activity','master'].includes(folder) ? 'core' : 'plugin'),
     nav: nav
-      ? { group: nav.group, order: nav.order, label: customLabel || LABEL_OVERRIDES[folder] || labelFromFolder(folder), icon, iconAsset, iconAssetPng, hidden: false }
-      : { group: 'system', order: 99, label: customLabel || LABEL_OVERRIDES[folder] || labelFromFolder(folder), icon, iconAsset, iconAssetPng, hidden: m.nav?.hidden === true },
+      ? { group: nav.group, order: nav.order, label: LABEL_OVERRIDES[folder] || labelFromFolder(folder), icon, iconAsset, iconAssetPng, hidden: false }
+      : { group: 'system', order: 99, label: LABEL_OVERRIDES[folder] || labelFromFolder(folder), icon, iconAsset, iconAssetPng, hidden: m.nav?.hidden === true },
     // Widget contract — quick-view the dashboard can render (weather-widget model)
     widget: m.widget || null,
     requires: {
@@ -195,6 +212,11 @@ function normalizeManifest(folder) {
     // ── Block Contract: Intelligence Layer ───────────────────────────
     // Tells the Neural Terminal and any AI model what this block can do.
     contract: {
+      // What the operator may change about this block's presentation. Declared
+      // by the cartridge — the shell never decides this per-block. Only `icon`
+      // is user-editable; the display NAME always derives from the folder
+      // (folder-is-truth, CEO rule 2026-07-16).
+      customizable: { icon: iconEditable },
       // What the block accepts as input (data types, file formats, etc)
       inputs:  m.contract?.inputs  || [],
       // What the block produces as output
@@ -375,6 +397,7 @@ function syncAllBlocks(ctx = {}) {
 
 module.exports = {
   BLOCKS_DIR, NAV, LABEL_OVERRIDES, GROUP_META, API_ENV, MEMORY_POLICY,
+  ICON_BASE, ICON_PNG_BASE, ICON_DIR,
   listBlockFolders, readManifest, normalizeManifest, deriveEnv,
   checkReadiness, writeRuntimeConfig, syncAllBlocks, mergeBlockEnv,
 };
