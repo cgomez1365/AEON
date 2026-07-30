@@ -138,3 +138,8 @@ src/aeon-settings.json
 src/blocks/*/data/
 src/blocks/*/.aeon.runtime.json
 *.log
+
+# Per-block runtime data stores — a fresh clone must start at zero.
+# activity_heatmap.json shipped one operator's request/token history to every
+# consumer until 2026-07-29. readActivity() returns {} when absent.
+src/blocks/*/db/*.json
