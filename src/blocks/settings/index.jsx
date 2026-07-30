@@ -913,6 +913,27 @@ function ConnectionsPanel({ nervousSystem }) {
         {data.cloudMirror && <button className="settings-btn settings-btn--secondary" onClick={sync}><RefreshCw size={12} /> Sync</button>}
       </div>
 
+      {/* Credential backup warning — only shown when vault has keys */}
+      {data.vault.unlocked && data.vault.refs.length > 0 && (
+        <div className="admin-card" style={{ borderColor: 'rgba(245,166,35,0.4)', background: 'rgba(245,166,35,0.06)', display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+          <span style={{ fontSize: 16, flexShrink: 0 }}>⚠️</span>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: '#f5a623', marginBottom: 3 }}>Back up your credentials</div>
+            <div style={{ fontSize: 11, color: 'var(--text-dim, #4a6a8a)', lineHeight: 1.5 }}>
+              A reinstall or lost <code>.env</code> permanently locks your vault. Back up all three files together — <code>.env</code>, <code>secrets/aeon-keyslots.json</code>, and <code>provider_credentials.json</code>. A partial restore causes a key mismatch and locks you out.
+            </div>
+          </div>
+          <a
+            href="/api/settings/export-credentials"
+            download
+            className="settings-btn settings-btn--secondary"
+            style={{ flexShrink: 0, fontSize: 11, whiteSpace: 'nowrap' }}
+          >
+            ↓ Export backup
+          </a>
+        </div>
+      )}
+
       {/* Endpoint list */}
       {data.endpoints.length === 0 && !adding && (
         <div className="admin-card conn-empty">No connections yet. Add a cloud API or a local model below.</div>

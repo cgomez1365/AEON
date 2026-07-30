@@ -277,6 +277,36 @@ module.exports = (app, deps) => {
     res.send(JSON.stringify(bundle, null, 2));
   });
 
+  // ── GET /api/settings/export-credentials — full credential backup (WITH secrets) ──
+  // Bundles .env + secrets/aeon-keyslots.json + provider_credentials.json into
+  // one JSON file the user saves offline. Restoring into a fresh clone requires
+  // all three — a partial restore causes a vault mismatch and locks the user out.
+  app.get('/api/settings/export-credentials', (req, res) => {
+    const SECRETS_DIR = path.join(APP_ROOT, 'secrets');
+    const VAULT_DIR = require(path.join(APP_ROOT, 'services', 'storage.js')).getVaultFile(path.join('blocks', 'security'));
+    const files = {
+      '.env': path.join(APP_ROOT, '.env'),
+      'secrets/aeon-keyslots.json': path.join(SECRETS_DIR, 'aeon-keyslots.json'),
+      'vault/provider_credentials.json': path.join(VAULT_DIR, 'provider_credentials.json'),
+    };
+    const bundle = {
+      _artifact: 'AEON credential backup',
+      _warning: 'Contains plaintext secrets. Store offline, never commit to git.',
+      _restore: 'On a fresh clone: copy .env to root, secrets/aeon-keyslots.json to secrets/, vault/provider_credentials.json to its vault path. Boot — vault auto-unlocks.',
+      exported_at: new Date().toISOString(),
+      files: {},
+    };
+    for (const [key, filePath] of Object.entries(files)) {
+      try { bundle.files[key] = fs.readFileSync(filePath, 'utf8'); }
+      catch { bundle.files[key] = null; }
+    }
+    const hasAnyContent = Object.values(bundle.files).some(v => v !== null);
+    if (!hasAnyContent) return res.status(404).json({ error: 'No credential files found — nothing to export.' });
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', `attachment; filename="aeon-credentials-${new Date().toISOString().slice(0,10)}.json"`);
+    res.send(JSON.stringify(bundle, null, 2));
+  });
+
   // ── GET /api/settings/block/:id — a block's own settings, resolved ──
   // Manifest-declared defaults merged with saved overrides. This is THE
   // way a block reads its settings: one call, always complete, and the
