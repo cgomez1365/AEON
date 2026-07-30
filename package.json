@@ -20,6 +20,13 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "test:lr": "vitest run tests/local-runtime",
+    "test:lr:unit": "vitest run tests/local-runtime --exclude \"**/*.stress.test.js\" --exclude \"**/*.integration.test.js\"",
+    "test:lr:integration": "vitest run tests/local-runtime/**/*.integration.test.js",
+    "test:lr:stress": "vitest run tests/local-runtime/**/*.stress.test.js",
+    "scan:no-ollama": "node tools/scan/no-ollama.cjs",
+    "scan:paths": "node tools/scan/path-authority.cjs",
+    "scan:release-gate": "npm run scan:no-ollama && npm run scan:paths",
     "migrate": "node tools/migrate.cjs",
     "canary": "node tools/rls-canary.cjs",
     "start": "concurrently \"npm run dev\" \"npm run server\""

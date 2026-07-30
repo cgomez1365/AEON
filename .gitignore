@@ -143,3 +143,7 @@ src/blocks/*/.aeon.runtime.json
 # activity_heatmap.json shipped one operator's request/token history to every
 # consumer until 2026-07-29. readActivity() returns {} when absent.
 src/blocks/*/db/*.json
+
+# Native local runtime — generated state, never shipped (Phase 2)
+data/local-runtime.json
+data/local-runtime/
