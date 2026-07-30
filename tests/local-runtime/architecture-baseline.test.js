@@ -42,7 +42,7 @@ describe('baseline: kernelLLM surface', () => {
     const svc = makeService();
     // Blocks and the kernel bind against these names. Removing or renaming
     // any of them is a breaking change to every consumer.
-    for (const name of ['kernelLLM', 'kernelVision', 'ollamaRequest', 'geminiRequest',
+    for (const name of ['kernelLLM', 'kernelVision', 'localNativeRequest', 'geminiRequest',
                         'groqRequest', 'openRouterRequest', 'claudeRequest',
                         'defaultLocalModel', 'localRuntimePresent', 'getProviderHealth']) {
       expect(typeof svc[name], `export "${name}" must exist`).toBe('function');

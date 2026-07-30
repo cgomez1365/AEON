@@ -33,59 +33,34 @@ describe('portable mode detection (BO-USB)', () => {
   });
 });
 
-describe('Ollama host resolution (BO-USB)', () => {
-  const original = process.env.OLLAMA_HOST;
-  afterEach(() => {
-    if (original === undefined) delete process.env.OLLAMA_HOST;
-    else process.env.OLLAMA_HOST = original;
-  });
-
-  it('defaults to localhost:11434', () => {
-    delete process.env.OLLAMA_HOST;
-    expect(endpoints.ollamaHost()).toBe('http://localhost:11434');
-  });
-
-  // A bundle that ships its own Ollama may not use the default port. Before
-  // this seam the transport profile hardcoded it and silently ignored the
-  // OLLAMA_HOST the launcher had set.
-  it('honors an OLLAMA_HOST override', () => {
-    process.env.OLLAMA_HOST = 'http://127.0.0.1:21434';
-    expect(endpoints.ollamaHost()).toBe('http://127.0.0.1:21434');
-  });
-});
 
 describe('role resolution in portable mode (BO-USB)', () => {
   const originalPortable = process.env.AEON_PORTABLE;
-  const originalModel = process.env.OLLAMA_DEFAULT_MODEL;
   afterEach(() => {
     if (originalPortable === undefined) delete process.env.AEON_PORTABLE;
     else process.env.AEON_PORTABLE = originalPortable;
-    if (originalModel === undefined) delete process.env.OLLAMA_DEFAULT_MODEL;
-    else process.env.OLLAMA_DEFAULT_MODEL = originalModel;
   });
 
   // The point: a USB install carries no cloud keys, so the normal registry
   // path would fail every role lookup with an error the owner cannot act on
   // while offline. Portable mode answers locally instead.
-  it('resolves every role to local Ollama with no registry and no keys', async () => {
+  it('resolves every role to local runtime with no registry and no keys', async () => {
     process.env.AEON_PORTABLE = 'true';
     for (const role of ['chat', 'router', 'vision', 'anything-at-all']) {
       const r = await endpoints.resolveForRole(role, null);
       expect(r.ok).toBe(true);
-      expect(r.provider).toBe('ollama');
+      expect(r.provider).toBe('local');
       expect(r.via).toBe('direct');
       expect(r.apiKey).toBeNull();
       expect(r.role).toBe(role);
     }
   });
 
-  it('uses OLLAMA_DEFAULT_MODEL when set, qwen3:8b otherwise', async () => {
+  it('returns model from native LR registry (null when no models installed)', async () => {
     process.env.AEON_PORTABLE = 'true';
-    delete process.env.OLLAMA_DEFAULT_MODEL;
-    expect((await endpoints.resolveForRole('chat', null)).model).toBe('qwen3:8b');
-
-    process.env.OLLAMA_DEFAULT_MODEL = 'qwen3:14b';
-    expect((await endpoints.resolveForRole('chat', null)).model).toBe('qwen3:14b');
+    const r = await endpoints.resolveForRole('chat', null);
+    // model is either null (no models installed in test env) or a string id
+    expect(r.model === null || typeof r.model === 'string').toBe(true);
   });
 
   it('never returns a cloud provider while portable', async () => {

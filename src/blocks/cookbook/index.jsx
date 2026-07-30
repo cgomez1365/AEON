@@ -234,6 +234,25 @@ export default function CookbookHardware() {
   const [profiles, setProfiles] = useState([]);
   const [profileModel, setProfileModel] = useState('');
 
+  // ── Native Runtime Status ──
+  const [lrStatus, setLrStatus] = useState(null); // null=loading, {runtimeReady, readyModels}
+  const [lrInstalling, setLrInstalling] = useState(false);
+  const fetchLrStatus = useCallback(async () => {
+    try {
+      const res = await fetch('/api/cookbook/local/status');
+      setLrStatus(await res.json());
+    } catch { setLrStatus({ runtimeReady: false, readyModels: 0 }); }
+  }, []);
+  const installRuntime = useCallback(async () => {
+    setLrInstalling(true);
+    try {
+      await fetch('/api/cookbook/local/install-runtime', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      setTab('running');
+      pollTasks();
+    } catch {}
+    // status will update via task completion
+  }, []);
+
   // ── GPU Probe ──
   const probeGpus = useCallback(async () => {
     setScanning(true);
@@ -320,13 +339,21 @@ export default function CookbookHardware() {
     } catch { setProfiles([]); }
   }, []);
 
-  useEffect(() => { probeGpus(); scanCached(); pollTasks(); }, []);
+  useEffect(() => { probeGpus(); scanCached(); pollTasks(); fetchLrStatus(); }, []);
   useEffect(() => { if (tab === 'download') { loadHfLatest(); } }, [tab, loadHfLatest]);
   useEffect(() => { if (tab === 'whatfits') fetchHwfit(); }, [tab]);
   useEffect(() => {
     const interval = setInterval(pollTasks, 5000);
     return () => clearInterval(interval);
   }, [pollTasks]);
+  // Refresh runtime status when a runtime-install task finishes
+  useEffect(() => {
+    const t = tasks.find(x => x.type === 'runtime-install');
+    if (t && (t.status === 'done' || t.status === 'error')) {
+      setLrInstalling(false);
+      fetchLrStatus();
+    }
+  }, [tasks, fetchLrStatus]);
   // Debounced hwfit search
   const hwSearchTimer = useRef(null);
   function onHwSearchChange(val) {
@@ -507,6 +534,30 @@ export default function CookbookHardware() {
           </div>
 
           {gpuError && <div style={errorBox}>{gpuError}</div>}
+
+          {/* Native local runtime status panel */}
+          {lrStatus && !lrStatus.runtimeReady && (
+            <div style={{ ...cardStyle, marginBottom: '16px', border: '1px solid rgba(0,242,255,0.25)' }}>
+              <div style={{ fontSize: '13px', fontWeight: 600, marginBottom: '4px' }}>Local AI runtime (llama.cpp)</div>
+              <div style={{ fontSize: '11.5px', color: 'var(--text-dim)', lineHeight: 1.6, marginBottom: '10px' }}>
+                Not installed. Install llama.cpp to run free, private AI models locally — no API key needed.
+                AEON manages it entirely inside its data directory.
+              </div>
+              <button onClick={installRuntime} disabled={lrInstalling} style={{
+                ...btnStyle,
+                background: lrInstalling ? 'rgba(255,255,255,0.05)' : 'var(--color-primary, #00f2ff)',
+                color: lrInstalling ? 'var(--text-dim)' : '#000',
+              }}>
+                <Download size={13} />
+                {lrInstalling ? 'Installing...' : 'Install llama.cpp'}
+              </button>
+            </div>
+          )}
+          {lrStatus?.runtimeReady && (
+            <div style={{ fontSize: '11px', color: '#22d36f', marginBottom: '12px' }}>
+              ✓ llama.cpp installed — {lrStatus.readyModels} model{lrStatus.readyModels !== 1 ? 's' : ''} ready
+            </div>
+          )}
 
           {/* System Info Card */}
           <SystemInfoCard />

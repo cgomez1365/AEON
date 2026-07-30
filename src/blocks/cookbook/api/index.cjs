@@ -896,6 +896,45 @@ module.exports = function createCookbookRouter(deps) {
     return findExecutable('bash');
   }
 
+  // ── Phase 8: runtime installer (llama.cpp binary) ────────────────────────
+  const runtimeInstaller = (() => {
+    try { return require(path.join(__dirname, '..', '..', '..', '..', 'services', 'local-runtime', 'runtime-installer.cjs')); }
+    catch { return null; }
+  })();
+
+  if (runtimeInstaller) {
+    // POST /cookbook/local/install-runtime — download + verify + register llama.cpp binary
+    router.post('/cookbook/local/install-runtime', async (req, res) => {
+      const preferBackend = req.body?.preferBackend || process.env.AEON_LLM_BACKEND || 'cpu';
+      try {
+        const { getLocalRuntimeRegistry } = deps;
+        const reg = getLocalRuntimeRegistry ? getLocalRuntimeRegistry() : null;
+        const dataRoot = reg ? path.resolve(reg.file, '..', '..', '..') : null;
+        if (!dataRoot) return res.status(500).json({ ok: false, error: 'registry unavailable' });
+
+        const sessionId = `lr-install-${Date.now()}`;
+        res.json({ ok: true, session_id: sessionId, status: 'installing' });
+
+        activeTasks[sessionId] = {
+          type: 'runtime-install', status: 'running', query: `llama.cpp (${preferBackend})`,
+          started_at: Date.now(), pid: null, pct: 0,
+        };
+        runtimeInstaller.installRuntime({
+          dataRoot,
+          preferBackend,
+          onStatus: (msg) => { if (activeTasks[sessionId]) activeTasks[sessionId].log = msg; },
+          onProgress: (pct) => { if (activeTasks[sessionId]) activeTasks[sessionId].pct = pct; },
+        }).then(() => {
+          if (activeTasks[sessionId]) { activeTasks[sessionId].status = 'done'; activeTasks[sessionId].pct = 100; }
+        }).catch((e) => {
+          if (activeTasks[sessionId]) { activeTasks[sessionId].status = 'error'; activeTasks[sessionId].error = e.message; }
+        });
+      } catch (e) {
+        res.status(500).json({ ok: false, error: e.message });
+      }
+    });
+  }
+
   // ── Phase 4: native GGUF model catalog + installer ────────────────────────
   // These routes are the Phase 4 public API. They do NOT use any legacy daemon.
   // The model installer uses the registry from Phase 2 and the catalog from
