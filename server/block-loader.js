@@ -147,7 +147,9 @@ module.exports = ({ app, ROOT, isVercel, loadSettings, baseDeps }) => {
       });
       app.use(_blockHost.router);
       const boot = _blockHost.rescan('boot');
-      console.log(`[BLOCK ROUTER v2] Scanned ${boot.blocks} blocks. Mounted ${boot.mounted} API routes.`);
+      const _skipNote = boot.skipped && boot.skipped.length
+        ? ` ${boot.skipped.length} NOT MOUNTED.` : '';
+      console.log(`[BLOCK ROUTER v2] Scanned ${boot.blocks} blocks. Mounted ${boot.mounted} API routes.${_skipNote}`);
     }
   }
 

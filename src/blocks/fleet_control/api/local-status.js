@@ -25,9 +25,11 @@ const _handler = async (req, res) => {
   }
 };
 
-module.exports = (app) => {
-  if (app.get) {
-    app.get('/api/local-status', _handler);
-  }
+// Declared as (router, deps) — the plugin shape. An arity-1 export receives
+// blockDeps rather than a router, so `app.get` hit the sandbox proxy, was
+// denied, and this route silently never mounted. The second parameter is what
+// tells the block host which shape this is.
+module.exports = (router, _deps) => {
+  router.get('/api/local-status', _handler);
   return _handler;
 };
