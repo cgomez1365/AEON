@@ -34,7 +34,7 @@ secret is unset. Secrets at rest are AES-256-GCM encrypted in the vault, keyed b
 Run this whenever a key may be exposed (and once now — keys have been on disk):
 
 1. **Generate new key** at the provider dashboard (Groq, Gemini, Supabase, etc.).
-2. **Update env** in every deployment target (Vercel dashboard, Docker `--env-file`,
+2. **Update env** in every deployment target (Vercel dashboard,
    self-host `.env`). Never commit.
 3. **Supabase service_role**: Settings → API → roll. Then redeploy with new key in
    server env ONLY. Grep first: `grep -rI service_role src/` must only hit `kernel/`.
