@@ -5,7 +5,7 @@
  * One file, every platform. Detects the environment, walks a non-technical
  * user through first-run setup, and boots the console.
  *
- *   1. Environment scan   — Node, npm, RAM, GPU, Ollama
+ *   1. Environment scan   — Node, npm, RAM, GPU, local runtime
  *   2. .env onboarding    — paste keys now, or skip and finish in Settings
  *   3. Vault bootstrap    — master key auto-generated, never asked for
  *   4. Dependencies       — npm install on first run
@@ -80,20 +80,21 @@ if (smi) { gpuName = smi.split(',')[0].trim(); ok(`GPU: ${gpuName}`); }
 else if (os.platform() === 'darwin' && /Apple/.test(sh('sysctl -n machdep.cpu.brand_string') || '')) { gpuName = 'Apple Silicon'; ok('GPU: Apple Silicon (Metal)'); }
 else info('No dedicated GPU detected — cloud + small local models still work.');
 
-// Ollama detection
-let ollamaState = 'missing';
-if (sh('ollama --version')) {
-  const running = os.platform() === 'win32'
-    ? /ollama/i.test(sh('tasklist') || '')
-    : !!sh('pgrep -x ollama');
-  ollamaState = running ? 'running' : 'installed';
-}
+// Native local runtime (llama.cpp) — read the registry, never probe a daemon.
+let localRuntime = { available: false, runtimeId: null, readyModels: [] };
+try {
+  localRuntime = require(path.join(ROOT, 'services', 'local-runtime', 'index.cjs')).status();
+} catch {}
 
 // local model capability hint, written for Cookbook + Settings to read at boot
 const runtimeHints = {
   scannedAt: new Date().toISOString(),
   platform: os.platform(), arch: os.arch(), ramGb, gpu: gpuName,
-  ollama: ollamaState,
+  localRuntime: {
+    installed: !!localRuntime.runtimeId,
+    backend: localRuntime.runtimeBackend || null,
+    readyModels: (localRuntime.readyModels || []).length,
+  },
 };
 
 // ── interactive helpers ─────────────────────────────────────────────────────
@@ -110,57 +111,24 @@ const ask = (q) => new Promise((res) => {
 
 async function main() {
   // ── 2. Local AI models ────────────────────────────────────────────────────
-  // AEON never installs anything system-wide on your behalf — but a local
-  // model runtime is genuinely useful (free, private, offline), so on a
-  // fresh install with nothing detected, it offers a CONTAINED download:
-  // straight into <AEON>/data/cookbook/runtime/ollama, nothing touches the
-  // system, delete the folder and it's gone. Recommended, never forced —
-  // Enter skips and AEON runs fine on cloud AI either way. Same install code
-  // path as the Cookbook block's own button (services/ollamaVendor.js), so
-  // there's one place that knows how to fetch/extract it.
-  const ollamaVendor = require(path.join(ROOT, 'services', 'ollamaVendor.js'));
-  const vendorDir = path.join(process.env.DATA_PATH || path.join(ROOT, 'data'), 'cookbook', 'runtime', 'ollama');
-  const vendoredBin = ollamaVendor.vendoredBin(vendorDir);
-
+  // AEON runs local models with a bundled llama.cpp worker — no daemon, no
+  // system-wide install, everything inside <AEON>/data. The runtime and the
+  // GGUF models are large, so fetching them is the Cookbook block's job (it
+  // has progress, cancel, and disk-space checks); the launcher only reports
+  // what is already installed. AEON boots fine on cloud AI either way.
   p('');
   p('  LOCAL AI MODELS', PU);
-  if (vendoredBin) {
-    ok('Ollama is installed inside AEON (contained — no system-wide install).');
-    ollamaState = 'installed';
-  } else if (ollamaState === 'running') {
-    ok('Ollama detected and running — AEON will use it as a local option.');
-  } else if (ollamaState === 'installed') {
-    ok('Ollama detected — starting it in the background...');
-    try { spawn('ollama', ['serve'], { detached: true, stdio: 'ignore', windowsHide: true }).unref(); ollamaState = 'running'; } catch {}
+  if (localRuntime.available) {
+    ok(`Local runtime ready — ${localRuntime.runtimeId} (${localRuntime.runtimeBackend}), ${localRuntime.readyModels.length} model(s).`);
+  } else if (localRuntime.runtimeId) {
+    ok(`Local runtime installed — ${localRuntime.runtimeId} (${localRuntime.runtimeBackend}).`);
+    info('No models downloaded yet. Add one from the Cookbook block inside AEON.');
   } else {
-    info('Ollama lets AEON run free, private AI models on this computer —');
-    info('no API key and no internet needed. Downloaded here, it stays fully');
-    info('contained inside AEON (not a system-wide install).');
-    const status = await ollamaVendor.checkStatus(vendorDir);
-    if (!status.supported) {
-      info('No portable build available for this platform — skipping.');
-      info('AEON runs fine on cloud AI. Add local models later from Cookbook.');
-    } else {
-      p('');
-      const sizeNote = status.size ? ` (${status.size} download)` : '';
-      const a = await ask(`  Download Ollama now${sizeNote}? [Y]es (recommended) / [Enter] to skip: `);
-      if (/^y/i.test(a)) {
-        p('');
-        info('Downloading Ollama (this can take a while on a slow connection)...');
-        try {
-          await ollamaVendor.install(vendorDir, (line) => info(line));
-          ok('Ollama installed — contained inside AEON.');
-          ollamaState = 'installed';
-        } catch (e) {
-          warn(`Install did not finish: ${e.message}`);
-          warn('You can retry any time from the Cookbook block — AEON works without it.');
-        }
-      } else {
-        info('Skipped. Add local models any time from the Cookbook block inside AEON.');
-      }
-    }
+    info('Local models let AEON run free and private on this computer — no API');
+    info('key, no internet. Install them from the Cookbook block inside AEON;');
+    info('everything stays contained in the AEON folder.');
+    info('Until then AEON uses cloud AI (Gemini, Groq, OpenRouter).');
   }
-  runtimeHints.ollama = ollamaState;
 
   // ── 3. .env onboarding ────────────────────────────────────────────────────
   p('');
@@ -215,31 +183,9 @@ async function main() {
     fs.writeFileSync(path.join(dataDir, 'host-runtime.json'), JSON.stringify(runtimeHints, null, 2));
   } catch {}
 
-  // Seed data/local-runtime.json so the kernel knows the local-model truth on
-  // the very first boot (the Cookbook block owns and refreshes it afterwards).
-  try {
-    const rtFile = path.join(ROOT, 'data', 'local-runtime.json');
-    if (!fs.existsSync(path.dirname(rtFile))) fs.mkdirSync(path.dirname(rtFile), { recursive: true });
-    if (!fs.existsSync(rtFile)) {
-      const models = [];
-      // Vendored copy has no daemon running yet at this point in boot (it's
-      // started on demand later) — nothing to list until then. A system
-      // install may already be running, so ask it directly.
-      if (ollamaState === 'running') {
-        const out = sh('ollama list') || '';
-        for (const line of out.split('\n').slice(1)) {
-          const name = line.trim().split(/\s+/)[0];
-          if (name) models.push({ id: name, backend: 'ollama', ready: true });
-        }
-      }
-      fs.writeFileSync(rtFile, JSON.stringify({
-        updated: new Date().toISOString(),
-        models_dir: path.join(ROOT, 'data', 'cookbook', 'models'),
-        runtimes: { ollama: { installed: ollamaState !== 'missing', vendored: !!vendoredBin, path: vendoredBin || null, host: process.env.OLLAMA_HOST || 'http://localhost:11434' } },
-        models,
-      }, null, 2));
-    }
-  } catch {}
+  // data/local-runtime.json is the native runtime's own transactional registry
+  // (services/local-runtime/registry.cjs owns it). The launcher must never
+  // write it — a hand-seeded file would be read as a corrupt registry.
 
   rl.close();
 

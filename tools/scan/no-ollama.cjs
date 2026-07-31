@@ -18,6 +18,9 @@ const path = require('path');
 
 const ROOT = path.join(__dirname, '..', '..');
 const SCAN_DIRS = ['services', 'server', 'src', 'security', 'api'];
+// Root-level entrypoints live outside any scanned dir. launch.js shipped a
+// hard require() of a deleted Ollama vendor module because nothing walked here.
+const SCAN_FILES = ['launch.js', 'server.cjs'];
 const SKIP_DIR = new Set(['node_modules', 'dist', '.git', 'tests', 'data', 'coverage']);
 const EXT = new Set(['.js', '.cjs', '.mjs', '.jsx', '.json']);
 
@@ -76,20 +79,25 @@ function main() {
   const json = process.argv.includes('--json');
   const findings = [];
 
-  for (const d of SCAN_DIRS) {
-    for (const file of walk(path.join(ROOT, d))) {
-      const r = rel(file);
-      if (MIGRATION_ALLOWED.has(r)) continue;
-      const src = fs.readFileSync(file, 'utf8');
-      const lines = src.split('\n');
-      for (const rule of RULES) {
-        rule.re.lastIndex = 0;
-        let m;
-        while ((m = rule.re.exec(src)) !== null) {
-          const line = src.slice(0, m.index).split('\n').length;
-          const text = (lines[line - 1] || '').trim();
-          findings.push({ file: r, line, rule: rule.id, msg: rule.msg, text: text.slice(0, 140) });
-        }
+  const targets = [];
+  for (const d of SCAN_DIRS) targets.push(...walk(path.join(ROOT, d)));
+  for (const f of SCAN_FILES) {
+    const full = path.join(ROOT, f);
+    if (fs.existsSync(full)) targets.push(full);
+  }
+
+  for (const file of targets) {
+    const r = rel(file);
+    if (MIGRATION_ALLOWED.has(r)) continue;
+    const src = fs.readFileSync(file, 'utf8');
+    const lines = src.split('\n');
+    for (const rule of RULES) {
+      rule.re.lastIndex = 0;
+      let m;
+      while ((m = rule.re.exec(src)) !== null) {
+        const line = src.slice(0, m.index).split('\n').length;
+        const text = (lines[line - 1] || '').trim();
+        findings.push({ file: r, line, rule: rule.id, msg: rule.msg, text: text.slice(0, 140) });
       }
     }
   }
