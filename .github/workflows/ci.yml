@@ -24,26 +24,48 @@ jobs:
       - name: Syntax-check server
         run: node --check server.cjs
 
+      # Block scalar (|), not a plain multi-line scalar. `run: node -e "` reads
+      # as a PLAIN scalar — the quote is mid-value, so YAML never treats it as
+      # a delimiter — and a plain scalar cannot contain ": ". A single
+      # `console.error('MISSING: ' + b)` made the whole workflow unparseable,
+      # which GitHub reports as "No jobs were run" rather than a syntax error.
       - name: Verify block manifests
-        run: node -e "
-          const fs = require('fs');
-          const path = require('path');
-          const dir = path.join('src', 'blocks');
-          const blocks = fs.readdirSync(dir).filter(f => fs.statSync(path.join(dir, f)).isDirectory());
-          let ok = 0, missing = 0;
-          for (const b of blocks) {
-            const m = path.join(dir, b, 'block.manifest.json');
-            if (fs.existsSync(m)) { ok++; } else { missing++; console.error('MISSING: ' + b); }
-          }
-          console.log(ok + ' manifests OK, ' + missing + ' missing');
-          if (missing > 0) process.exit(1);
-        "
+        run: |
+          node -e '
+            const fs = require("fs");
+            const path = require("path");
+            const dir = path.join("src", "blocks");
+            const blocks = fs.readdirSync(dir).filter(f => fs.statSync(path.join(dir, f)).isDirectory());
+            let ok = 0, missing = 0;
+            for (const b of blocks) {
+              const m = path.join(dir, b, "block.manifest.json");
+              if (fs.existsSync(m)) { ok++; } else { missing++; console.error("MISSING: " + b); }
+            }
+            console.log(ok + " manifests OK, " + missing + " missing");
+            if (missing > 0) process.exit(1);
+          '
 
       - name: Run tests
         run: npm test
 
+      # Hard release gate: zero Ollama assumptions, no unauthorized machine-root
+      # access. Ran only by hand until now, which is how a launch.js require() of
+      # a deleted module reached main and broke boot on every fresh clone.
+      - name: Release gate (no-ollama + path authority)
+        run: npm run scan:release-gate
+
       - name: Build
         run: npm run build
+
+      # The bundle is the only place a leaked secret actually reaches a user.
+      # Manifests legitimately ship env var NAMES; a JWT-shaped value is a leak.
+      - name: Assert no secret values in built bundle
+        run: |
+          if grep -roE "eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}" dist/ 2>/dev/null; then
+            echo "::error::JWT-shaped secret found in dist/ — a key was bundled"
+            exit 1
+          fi
+          echo "No secret values in dist/."
 
   security:
     runs-on: ubuntu-latest
@@ -58,11 +80,17 @@ jobs:
       - name: Dependency audit (high+ severity)
         run: npm audit --audit-level=high
         continue-on-error: true
-      - name: Assert no service_role key in client bundle paths
+      # Checks for a leaked KEY, not for the identifier. The old version grepped
+      # all of src/ for the string "SUPABASE_SERVICE_ROLE_KEY", which matches
+      # every block.manifest.json `env: [...]` declaration, every block README,
+      # and every server-side src/blocks/*/api/ file. Those are var NAMES, not
+      # values, and src/blocks/*/api/ never reaches the browser — so the check
+      # could only ever fail. Scope it to code that is actually bundled.
+      - name: Assert no service_role key reaches the client
         run: |
-          if grep -rIl --exclude-dir=node_modules --exclude-dir=.git \
-               -e "SUPABASE_SERVICE_ROLE_KEY" src/ 2>/dev/null | grep -v "kernel"; then
-            echo "::error::service_role key referenced outside kernel — potential client exposure"
+          if grep -rIl --include=*.jsx --include=*.tsx \
+               -e "SUPABASE_SERVICE_ROLE_KEY" src/ 2>/dev/null; then
+            echo "::error::service_role referenced in a client component — it would be bundled"
             exit 1
           fi
-          echo "No client-side service_role references found."
+          echo "No service_role references in client components."
