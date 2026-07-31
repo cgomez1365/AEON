@@ -11,6 +11,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const EventEmitter = require('events');
+const bind = require('../src/kernel/server-utils/bind.cjs');
 
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
@@ -438,15 +439,10 @@ app.use((err, req, res, next) => {
 // Respect PORT env (test boots, alternate deploys); default stays 3001.
 const PORT = Number(process.env.PORT) || 3001;
 
-// Portable media binds to loopback only. A USB install runs on a machine its
-// owner does not control, often on a network they do not control either —
-// listening on 0.0.0.0 there would expose the API to that whole LAN, and on a
-// fresh drive no operator account exists yet, so the auth gate is not armed.
-// It also stops Windows Firewall prompting for a public-network exception
-// (which needs admin, and writes a rule that outlives the drive being removed).
-// Override with AEON_BIND if you deliberately want portable to serve a LAN.
-const BIND = process.env.AEON_BIND
-  || (process.env.AEON_PORTABLE === 'true' ? '127.0.0.1' : '0.0.0.0');
+// Every mode binds loopback only — see src/kernel/server-utils/bind.cjs for
+// why (the argument written for portable applies verbatim to a desktop
+// install). AEON_BIND is the deliberate opt-out for serving a LAN.
+const BIND = bind.resolveBind();
 
 const startServer = () => {
   const httpServer = app.listen(PORT, BIND, () => {
@@ -458,8 +454,24 @@ const startServer = () => {
     console.log(`  WebSocket:     /ws`);
     console.log(`  OS Exec: ONLINE (Allowlist Secured)`);
     console.log(`  Audit Trail: ONLINE`);
-    console.log(`  Port: ${PORT}${BIND === '127.0.0.1' ? ' (loopback only)' : ` (bound ${BIND})`}`);
+    console.log(`  Port: ${PORT}${bind.isLoopback(BIND) ? ' (loopback only)' : ` (bound ${BIND})`}`);
     console.log(`====================================\n`);
+
+    // An exposed bind is always deliberate (AEON_BIND), but it must never be
+    // quiet — R-05. Before an account exists the session guard cannot arm, so
+    // the gate refuses guarded traffic from off-machine until setup completes.
+    if (!bind.isLoopback(BIND)) {
+      const hasAccount = (() => {
+        try { return require('../src/kernel/server-utils/sessionValidator.cjs').hasAccount(); }
+        catch { return false; }
+      })();
+      console.warn(`[BIND] Listening on ${BIND} — reachable from other machines on this network.`);
+      if (!hasAccount) {
+        console.warn('[BIND] No operator account exists yet. Off-machine requests to');
+        console.warn('[BIND] kernel and block routes are REFUSED until setup completes.');
+        console.warn(`[BIND] Finish setup at http://localhost:${PORT} on this machine.`);
+      }
+    }
 
     try {
       require('../src/kernel/ws.cjs')(httpServer, { aeonTerminalStream });

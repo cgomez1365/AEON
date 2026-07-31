@@ -16,6 +16,14 @@
 const fs = require('fs');
 const path = require('path');
 const sessions = require('./server-utils/sessionValidator.cjs');
+const bind = require('./server-utils/bind.cjs');
+
+/**
+ * Answerable from off-machine even before an account exists. Deliberately tiny:
+ * liveness and "is this thing set up yet", nothing enumerable. A LAN client
+ * gets a truthful answer instead of a hang; it gets nothing else.
+ */
+const PRE_SETUP_SAFE = /^\/api\/(ping|health)$|^\/api\/auth\/status$|^\/api\/kernel\/security-availability$/;
 
 let securityBlockDir = path.join(__dirname, '..', 'blocks', 'security');
 
@@ -40,6 +48,26 @@ function mountAuth(app) {
 
 function guard(req, res, next) {
   const policy = sessions.loadPolicy();
+
+  // First-run lockdown. guardActive() is false until an account exists, so on
+  // an exposed bind every kernel and block route would answer the whole network
+  // for the entire first-run window — God Mode included. Refuse off-machine
+  // traffic outright until setup completes, and refuse /api/auth/setup with it:
+  // otherwise the first stranger to connect claims the operator account.
+  //
+  // Loopback is unaffected, so the local first-run flow behaves exactly as before.
+  if (!sessions.hasAccount() && bind.isExposed()) {
+    if (sessions.isGuardedPath(req.path) && !PRE_SETUP_SAFE.test(req.path)) {
+      return res.status(403).json({
+        success: false,
+        error: 'SETUP_INCOMPLETE',
+        requires_auth: true,
+        reason: 'no-account-non-loopback',
+        hint: 'Finish first-run setup on the machine running AEON.',
+      });
+    }
+  }
+
   if (!sessions.guardActive(policy)) return next();
   if (!sessions.isGuardedPath(req.path)) return next();
   if (sessions.isPreAuthRequest(req)) return next();
