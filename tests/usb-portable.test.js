@@ -175,7 +175,10 @@ describe('generated .env.usb contract (BO-USB)', () => {
   });
 
   it('routes every state path through the drive root token', () => {
-    for (const key of ['DATA_PATH', 'VAULT_PATH', 'AEON_SECRETS_DIR', 'AEON_WORKSPACE', 'OLLAMA_MODELS']) {
+    // OLLAMA_MODELS became AEON_LOCAL_MODELS_DIR when the bundle stopped
+    // shipping a second, system-wide model daemon (N10). The invariant is
+    // unchanged: every state path is drive-relative.
+    for (const key of ['DATA_PATH', 'VAULT_PATH', 'AEON_SECRETS_DIR', 'AEON_WORKSPACE', 'AEON_LOCAL_MODELS_DIR']) {
       const line = envUsb.match(new RegExp(`^${key}=(.*)$`, 'm'));
       expect(line, `${key} missing`).toBeTruthy();
       expect(line[1], `${key} must be drive-relative`).toContain('__USB_ROOT__');
