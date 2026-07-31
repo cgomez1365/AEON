@@ -1,6 +1,7 @@
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+const { loadSettings } = require('../../../../services/settings.js');
 
 module.exports = function createChatRouter(deps) {
   const router = express.Router();
@@ -63,10 +64,14 @@ module.exports = function createChatRouter(deps) {
       if (prompt) {
         const startTime = Date.now();
         let aiResponse = '';
-        // Read role config from settings — no hardcoded fallback
+        // Read role config from settings — no hardcoded fallback.
+        // Via the settings authority (services/settings.js), not a per-request
+        // readFileSync + JSON.parse against a hand-built relative path. This
+        // ran on every chat message and was one of three modules that bypassed
+        // the declared single reader (BO-F1).
         let activeModel;
         try {
-          const _s = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', '..', 'aeon-settings.json'), 'utf8'));
+          const _s = loadSettings();
           const rc = _s.models?.chat || {};
           activeModel = model && model !== 'gemini' ? model : (rc.model || 'gemini-2.0-flash');
         } catch { activeModel = (model === 'gemini' || !model) ? 'gemini-2.0-flash' : model; }

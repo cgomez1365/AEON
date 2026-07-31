@@ -13,13 +13,19 @@ const express = require('express');
 const router = express.Router();
 const fs = require('fs');
 const path = require('path');
+const settingsAuthority = require('../../../../services/settings.js');
 
 module.exports = function ({ getLocalFile, GEMINI_KEY_POOL, _trackLLM, writeOSAudit, VAULT_ROOT, DEFAULT_LOCAL_MODEL, defaultLocalModel }) {
-  const SETTINGS_FILE = path.join(__dirname, '..', '..', '..', 'aeon-settings.json');
   const localModel = (defaultLocalModel ? defaultLocalModel() : null) || DEFAULT_LOCAL_MODEL || null;
+  // Settings come from the authority (services/settings.js), not a hand-built
+  // relative path re-read per request. The local-model fallback is preserved so
+  // a settings file with no chat role still resolves offline (BO-F1).
   const loadSettings = () => {
-    try { return JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')); }
-    catch { return { models: { chat: { provider: 'local', model: localModel } } }; }
+    try {
+      const s = settingsAuthority.loadSettings();
+      if (s && s.models && s.models.chat) return s;
+      return { ...(s || {}), models: { ...((s && s.models) || {}), chat: { provider: 'local', model: localModel } } };
+    } catch { return { models: { chat: { provider: 'local', model: localModel } } }; }
   };
 
   // ── Memory injection ───────────────────────────────────────────────
