@@ -109,12 +109,21 @@ module.exports = function createChatRouter(deps) {
           const scrapeQuery = content.substring(8).trim();
           try {
             const host = process.env.VERCEL && req.headers.host ? `https://${req.headers.host}` : (process.env.AEON_KERNEL_URL || `http://localhost:${process.env.PORT || 3001}`);
-            const resScrape = await fetch(`${host}/api/orion-scrape`, {
+            // Was /api/orion-scrape — a route nothing has ever mounted, so
+            // /scrape has always failed. The orion_search block owns this and
+            // serves /api/orion/search.
+            const resScrape = await fetch(`${host}/api/orion/search`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ query: scrapeQuery })
+              body: JSON.stringify({ query: scrapeQuery, k: 8 }),
+              signal: AbortSignal.timeout(20000),
             });
-            const scrapeData = await resScrape.json();
+            const orionData = await resScrape.json();
+            const results = (orionData && orionData.results) || [];
+            const scrapeData = results.length ? {
+              answer: results.map((r, i) => `[${i + 1}] ${r.title}\n${r.excerpt || ''}`).join('\n\n'),
+              citations: results.map((r, i) => ({ id: i + 1, url: r.url, title: r.title })),
+            } : null;
 
             if (scrapeData && scrapeData.answer) {
               const sysResp = `[ORION GLOBAL INTELLIGENCE]\n\n${scrapeData.answer}\n\n**Citations:**\n${(scrapeData.citations||[]).map(c=>`[${c.id}] ${c.url}`).join('\n')}`;

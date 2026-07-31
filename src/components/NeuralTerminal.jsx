@@ -48,7 +48,7 @@ const NeuralTerminal = ({ brainData, allData, onQuerySent, onTypingChange, onHis
   const [showCommands, setShowCommands] = useState(false);
   const [commandFilter, setCommandFilter] = useState('');
   
-  const [agentMode, setAgentMode] = useState(false);
+  // agentMode removed: the toggle promised tools with no HTTP surface behind them.
 
   // Menu = kernel built-ins + commands declared by installed blocks (manifests).
   // Block commands appear/disappear as blocks are added/removed. Built-ins win
@@ -387,75 +387,32 @@ const NeuralTerminal = ({ brainData, allData, onQuerySent, onTypingChange, onHis
       setIsLoading(false); setInput(''); return;
     }
 
-    // ── AGENT MODE TOGGLE ────────────────────────────────────────
+    // ── AGENT MODE ───────────────────────────────────────────────
+    // The multi-step agent loop is real and works — but it lives in
+    // tools/terminal/agent.cjs and is reachable only from the `aeon agent`
+    // CLI. There is no HTTP surface for it: /api/agent/run, /api/agent/mission
+    // and /api/agent/missions have never been mounted by anything.
+    //
+    // Turning this mode "ON" therefore promised tools it could not use and
+    // 404'd on the next message. A control that announces a capability and
+    // then silently does nothing is the worst failure mode we can ship — it is
+    // exactly what a non-technical operator cannot diagnose. Until an
+    // agent_core BLOCK owns this surface, say so plainly.
     if (query === '/agent') {
-      setAgentMode(prev => !prev);
-      setHistory(prev => [...prev, { role: 'system', content: agentMode ? '[AGENT] Agent mode OFF — back to direct chat.' : '[AGENT] Agent mode ON — I can now use tools (files, search, memory, shell, CRM). Ask me to DO things, not just answer.' }]);
+      setHistory(prev => [...prev, { role: 'system', content:
+        '[AGENT] Agent mode is not available in this window yet.\n\n'
+        + 'The multi-step agent works today from the command line:\n'
+        + '    aeon agent "your goal here"\n\n'
+        + 'It runs through the same command registry this terminal uses, so it\n'
+        + 'can only invoke commands your blocks already declare.' }]);
       setIsLoading(false); setInput(''); return;
     }
 
-    // ── AGENT EXECUTION (when agent mode is on) ──────────────────
-    if (agentMode && !query.startsWith('/') && !query.startsWith('>')) {
-      setHistory(prev => [...prev, { role: 'user', content: displayQuery }]);
-      setInput('');
-      try {
-        const agentRes = await fetch('/api/agent/run', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: rawQuery, history: history.slice(-10) }),
-        });
-        const reader = agentRes.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-        const agentStreamId = Date.now();
-        let agentText = '';
-        setHistory(prev => [...prev, { role: 'assistant', content: '', _streamId: agentStreamId }]);
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop();
-          for (let i = 0; i < lines.length; i++) {
-            const line = lines[i];
-            if (line.startsWith('event: ')) {
-              const eventType = line.slice(7).trim();
-              const dataLine = lines[i + 1];
-              if (!dataLine || !dataLine.startsWith('data: ')) continue;
-              try {
-                const payload = JSON.parse(dataLine.slice(6));
-                if (eventType === 'tool_call') {
-                  agentText += `\n🔧 **${payload.tool}**(${Object.values(payload.args || {}).join(', ')})\n`;
-                  setHistory(prev => prev.map(m => m._streamId === agentStreamId ? { ...m, content: agentText } : m));
-                } else if (eventType === 'tool_result') {
-                  const resultStr = typeof payload.result === 'string' ? payload.result : JSON.stringify(payload.result, null, 2);
-                  agentText += `\`\`\`\n${resultStr.slice(0, 500)}\n\`\`\`\n`;
-                  setHistory(prev => prev.map(m => m._streamId === agentStreamId ? { ...m, content: agentText } : m));
-                  if (payload.result && payload.result.action === 'NAVIGATE' && payload.result.route) {
-                    navigate(payload.result.route);
-                  }
-                } else if (eventType === 'text') {
-                  agentText += payload.content || '';
-                  setHistory(prev => prev.map(m => m._streamId === agentStreamId ? { ...m, content: agentText } : m));
-                } else if (eventType === 'status') {
-                  agentText += `\n_${payload.message}_\n`;
-                  setHistory(prev => prev.map(m => m._streamId === agentStreamId ? { ...m, content: agentText } : m));
-                } else if (eventType === 'error') {
-                  agentText += `\n❌ ${payload.error}\n`;
-                  setHistory(prev => prev.map(m => m._streamId === agentStreamId ? { ...m, content: agentText } : m));
-                }
-              } catch {}
-            }
-          }
-        }
-        // Finalize
-        setHistory(prev => prev.map(m => m._streamId === agentStreamId ? { role: 'assistant', content: agentText, meta: { model: 'agent', provider: 'AEON' } } : m));
-      } catch (e) {
-        setHistory(prev => [...prev, { role: 'error', content: `Agent error: ${e.message}` }]);
-      }
-      setIsLoading(false);
-      return;
-    }
+    // AGENT EXECUTION -- removed with the agent-mode toggle above.
+    // This posted to /api/agent/run, which nothing mounts, and read the
+    // response as an SSE stream -- so a 404 surfaced as an opaque parse
+    // error rather than "that feature isn't here yet". Restore when an
+    // agent_core block owns /api/agent/*.
 
     // ── SCAN INTERCEPTOR ──────────────────────────────────────────
     // ── WEB SEARCH ────────────────────────────────────────────────
@@ -676,7 +633,9 @@ const NeuralTerminal = ({ brainData, allData, onQuerySent, onTypingChange, onHis
         let res;
         if (query === '/tidy') {
           setHistory(prev => [...prev, { role: 'system', content: '[MEMORY] Running LLM dedup & consolidation...' }]);
-          res = await fetch('/api/memory/tidy', { method: 'POST' });
+          // memory_core exposes /memory/distill — there has never been a /tidy
+          // route, so this command 404'd silently for its whole life.
+          res = await fetch('/api/memory/distill', { method: 'POST' });
         } else {
           const memText = query.substring(8).trim();
           res = await fetch('/api/memory/add', {
@@ -994,45 +953,30 @@ Make it CEO-ready. Professional tone. Minimum 1500 words.`, 4000);
       } finally { setIsLoading(false); }
       return;
     }
-    if (!isVercel && (query === '/vp' || query.startsWith('/vp '))) {
+    // /vp -- the mission runner. Its whole API surface (/api/agent/missions,
+    // /api/agent/mission, .../stop, .../answer) has never been mounted, so
+    // every branch of this command 404'd and reported a JSON parse failure.
+    // The agent loop itself is real and lives in tools/terminal/agent.cjs;
+    // it just has no HTTP front door yet. Point the operator at what works
+    // instead of failing in a way only a developer could interpret.
+    if (query === '/vp' || query.startsWith('/vp ')) {
       const arg = query.slice(3).trim();
       setHistory(prev => [...prev, { role: 'user', content: query }]);
       setInput('');
-      try {
-        if (!arg || arg === 'status') {
-          const list = await (await fetch('/api/agent/missions')).json();
-          const lines = (list || []).slice(0, 5).map(m =>
-            `[${m.status}] ${m.goal.slice(0, 80)} (step ${m.step || 0})`).join('\n') || 'No missions yet.';
-          setHistory(prev => [...prev, { role: 'assistant', content: `[VP] Recent missions:\n\n${lines}\n\nLaunch one: /vp <goal>`, meta: { model: 'VP', provider: 'agent_core' } }]);
-        } else if (arg === 'stop') {
-          const list = await (await fetch('/api/agent/missions')).json();
-          const active = (list || []).find(m => ['queued', 'planning', 'running', 'verifying', 'waiting'].includes(m.status));
-          if (!active) {
-            setHistory(prev => [...prev, { role: 'assistant', content: '[VP] Nothing running.', meta: { model: 'VP', provider: 'agent_core' } }]);
-          } else {
-            await fetch(`/api/agent/mission/${active.id}/stop`, { method: 'POST' });
-            setHistory(prev => [...prev, { role: 'assistant', content: `[VP] Stopping: ${active.goal.slice(0, 80)}`, meta: { model: 'VP', provider: 'agent_core' } }]);
-          }
-        } else if (arg.startsWith('answer ')) {
-          const ans = arg.slice(7).trim();
-          const list = await (await fetch('/api/agent/missions')).json();
-          const waiting = (list || []).find(m => m.status === 'waiting');
-          if (!waiting) {
-            setHistory(prev => [...prev, { role: 'assistant', content: '[VP] No mission is waiting for an answer.', meta: { model: 'VP', provider: 'agent_core' } }]);
-          } else {
-            await fetch(`/api/agent/mission/${waiting.id}/answer`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ answer: ans }) });
-            setHistory(prev => [...prev, { role: 'assistant', content: `[VP] Answer delivered — mission resuming.`, meta: { model: 'VP', provider: 'agent_core' } }]);
-          }
-        } else {
-          const r = await fetch('/api/agent/mission', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ goal: arg }) });
-          const d = await r.json();
-          setHistory(prev => [...prev, { role: 'assistant', content: d.id
-            ? `[VP] Mission launched (${d.id}): ${arg.slice(0, 100)}\n\nProgress streams here — or watch it in Agent Core. /vp status · /vp stop · /vp answer <text>`
-            : `[VP] Launch failed: ${d.error || 'unknown error'}`, meta: { model: 'VP', provider: 'agent_core' } }]);
-        }
-      } catch (err) {
-        setHistory(prev => [...prev, { role: 'error', content: `[VP] ${err.message}` }]);
-      } finally { setIsLoading(false); }
+      setHistory(prev => [...prev, { role: 'assistant', content:
+        '[VP] Missions are not available in this window yet.
+
+'
+        + 'The agent runs from the command line today:
+'
+        + `    aeon agent "${arg || 'your goal here'}"
+
+`
+        + 'It uses the same command registry as this terminal, so it can only
+'
+        + 'invoke commands your blocks already declare.',
+        meta: { model: 'VP', provider: 'agent_core' } }]);
+      setIsLoading(false);
       return;
     }
 
@@ -1607,12 +1551,6 @@ If you need more info to complete an action, output regular text to ask the user
           <div className="indicator-dot" />
           LINK: {linkStatus.toUpperCase()}
         </div>
-        {agentMode && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginLeft: '8px', padding: '2px 8px', borderRadius: '4px', background: 'rgba(123,47,255,0.15)', border: '1px solid rgba(123,47,255,0.3)', fontSize: '9px', fontWeight: 700, color: '#b388ff', letterSpacing: '0.5px', cursor: 'pointer' }}
-            onClick={() => { setAgentMode(false); setHistory(prev => [...prev, { role: 'system', content: '[AGENT] Agent mode OFF' }]); }}>
-            ⚡ AGENT
-          </div>
-        )}
         <Filter size={12} className="cluster-icon" style={{ marginLeft: '10px' }} />
         <select value={selectedCluster} onChange={(e) => setSelectedCluster(e.target.value)} className="cluster-dropdown">
           {clusters.map(c => <option key={c} value={c}>{c}</option>)}

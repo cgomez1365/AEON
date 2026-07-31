@@ -377,20 +377,21 @@ export default function DeepResearch() {
         // Try 2: Local API (works on localhost)
         if (links.length === 0) {
           try {
-            const localRes = await fetch('/api/orion-scrape', {
+            // /api/orion-scrape never existed — this fallback silently 404'd
+            // for its whole life. The orion_search block owns this surface and
+            // already serves it as /api/orion/search, which returns the same
+            // information under different field names.
+            const localRes = await fetch('/api/orion/search', {
               method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ query: q, limit: 8 }),
+              body: JSON.stringify({ query: q, k: 8 }),
               signal: AbortSignal.timeout(8000),
             });
             if (localRes.ok) {
               const localData = await localRes.json();
-              if (localData.leads?.length > 0) {
-                links = localData.leads.map(l => ({ url: l.url || '', title: l.name || '' }));
-                snips = localData.leads.map(l => l.description || '');
-              }
-              if (localData.citations?.length > 0) {
-                links.push(...localData.citations.map(c => ({ url: c.url, title: c.title || '' })));
-                snips.push(...localData.citations.map(() => ''));
+              const results = localData.results || [];
+              if (results.length > 0) {
+                links = results.map(r => ({ url: r.url || '', title: r.title || '' }));
+                snips = results.map(r => r.excerpt || '');
               }
             }
           } catch {}
