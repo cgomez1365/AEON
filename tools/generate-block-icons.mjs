@@ -1,12 +1,14 @@
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { createCanvas, loadImage } from '@napi-rs/canvas';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
+// Source artwork lives inside the repo by default. It previously defaulted to
+// <home>/Desktop/AEON-Icons — one operator's machine layout, which meant this
+// script could only ever run on that machine. AEON_ICON_SOURCE still overrides.
 const SOURCE_DIR = process.env.AEON_ICON_SOURCE
   ? path.resolve(process.env.AEON_ICON_SOURCE)
-  : path.join(os.homedir(), 'Desktop', 'AEON-Icons');
+  : path.join(ROOT, 'assets', 'block-icons-src');
 const OUTPUT_DIR = path.join(ROOT, 'public', 'brand', 'block-icons');
 const PNG_DIR = path.join(OUTPUT_DIR, 'png');
 const SECTION_DIR = path.join(OUTPUT_DIR, 'sections');

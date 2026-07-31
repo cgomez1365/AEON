@@ -4,7 +4,10 @@ import fs from 'fs';
 import path from 'path';
 
 const BASE = process.argv[2] || 'http://127.0.0.1:3001';
-const ROOT = process.argv[3] || 'C:\\Users\\cgome\\Desktop\\AEON';
+// The harness lives at <repo>/tools/stress, so the repo root is derivable.
+// It previously defaulted to one operator's absolute Desktop path, which meant
+// it could only ever run on that machine. argv[3] still overrides.
+const ROOT = process.argv[3] || path.resolve(import.meta.dirname, '..', '..');
 // Guard is active once an operator account exists, so the settings reads below
 // need a session. Optional: without one this still runs, it just sees 401s.
 const AUTH_TOKEN = process.argv[4] || process.env.AEON_TOKEN || null;

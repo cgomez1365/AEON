@@ -517,7 +517,7 @@ tasklist /fi "imagename eq ollama.exe" 2>nul | find /i "ollama.exe" >nul && goto
 echo   Starting Ollama...
 REM Ollama derives its identity key and cache from the user's home directory,
 REM NOT from OLLAMA_MODELS. Without this it writes an SSH keypair into the host
-REM profile (%%USERPROFILE%%\\.ollama) and leaves it behind. Override USERPROFILE
+REM profile (%%USERPROFILE%%\\.ollama) and leaves it behind. Override USERPROFILE  &:: aeon-path-authority-allow — OPEN DECISION: the USB builder still bundles and boots Ollama (81 refs in this file) even though the product replaced it with the native llama.cpp runtime. scan:no-ollama does not cover scripts/, which is why this survived the migration. Removing it depends on BO-A landing first and cannot be verified without building a drive. Tracked in AEON3_Build_Order_2026-07-31.md.
 REM for the child process only, so nothing lands on the host machine.
 start "" /b cmd /c "set "USERPROFILE=%OLLAMA_HOME%" && set "HOME=%OLLAMA_HOME%" && ollama serve"
 set "OLLAMA_OURS=1"

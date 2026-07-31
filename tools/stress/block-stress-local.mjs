@@ -1,10 +1,13 @@
 // Block Stress Harness — Local Models Only
-// Tests every block's HTTP surface against a live server using Ollama.
-// Usage: node tools/stress/block-stress-local.mjs [baseUrl]
-//
-// Models: qwen3:14b (primary), deepseek-r1:14b (reasoning)
+// Tests every block's HTTP surface against a live server using local inference.
+// Usage: node tools/stress/block-stress-local.mjs [baseUrl] [aeonRoot]
+
+import path from 'node:path';
 
 const BASE = process.argv[2] || 'http://127.0.0.1:3001';
+// Repo root derived from the harness's own location (was one operator's
+// absolute Desktop path, baked into the file-write check below).
+const AEON_ROOT = process.argv[3] || path.resolve(import.meta.dirname, '..', '..');
 const MODEL = 'qwen3:1.7b';
 
 const results = [];
@@ -115,7 +118,9 @@ async function main() {
 
   const ns = await req('GET', '/api/settings/nervous-system');
   record('2b /providers responds', ns.ok, `status=${ns.status}`);
-  record('2c provider map has ollama', !!(ns.data.providers?.ollama), '');
+  // Ollama was removed in favour of the native llama.cpp runtime; the provider
+  // map should expose `local`, not the retired daemon.
+  record('2c provider map has local', !!(ns.data.providers?.local), '');
 
   // NL set — expect 400 on bad format or 200 on success; 500 = bug
   const nlSet = await req('POST', '/api/settings/nl',
@@ -198,7 +203,7 @@ async function main() {
   // ── 10. FILES ─────────────────────────────────────────────────────────────
   section('10. files — read + write');
   // Use timestamp so each run writes a new file (avoids 423 add-only lock on overwrite)
-  const testFilePath = `C:\\Users\\cgome\\Desktop\\AEON\\data\\stress-test-${Date.now()}.txt`;
+  const testFilePath = path.join(AEON_ROOT, 'data', `stress-test-${Date.now()}.txt`);
   const writeR = await req('POST', '/api/fs/write',
     { filePath: testFilePath, content: 'block-stress-local 2026-07-28' });
   // 423 = file manager locked (correct behavior), not a route bug

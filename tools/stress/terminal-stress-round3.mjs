@@ -18,7 +18,9 @@ const require = createRequire(import.meta.url);
 const execFileP = promisify(execFile);
 
 const BASE = process.argv[2] || 'http://127.0.0.1:3001';
-const AEON_ROOT = process.argv[3] || 'C:\\Users\\cgome\\Desktop\\AEON';
+// Repo root derived from the harness's own location (was one operator's
+// absolute Desktop path). argv[3] still overrides.
+const AEON_ROOT = process.argv[3] || path.resolve(import.meta.dirname, '..', '..');
 const CLI = path.join(AEON_ROOT, 'tools', 'aeon-cli.cjs');
 const agent = require(path.join(AEON_ROOT, 'tools', 'terminal', 'agent.cjs'));
 
