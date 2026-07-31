@@ -12,7 +12,7 @@
  * to do with it.
  */
 
-const { execFileSync, spawnSync } = require('child_process');
+const { spawnSync } = require('child_process');
 const os = require('os');
 const path = require('path');
 
@@ -33,21 +33,38 @@ function probe(entryAbsPath, probeArgs = ['--version']) {
     throw new Error(`probe: binary not found: ${entryAbsPath}`);
   }
 
-  let raw = '';
-  try {
-    raw = execFileSync(entryAbsPath, probeArgs, {
-      timeout: PROBE_TIMEOUT_MS,
-      encoding: 'utf8',
-      // No shell. No PATH lookup. Absolute path only.
-      shell: false,
-      // Suppress inherited stdio so a GUI launcher doesn't pop a console.
-      windowsHide: true,
-    });
-  } catch (err) {
-    // Some llama.cpp builds exit with code 1 on --version (prints and exits).
-    // Treat any output as success if the process produced something useful.
-    raw = (err.stdout || '') + (err.stderr || '');
-    if (!raw.trim()) throw new Error(`probe: binary exited with no output: ${err.message}`);
+  // spawnSync, not execFileSync: llama.cpp writes its version banner, its CPU
+  // feature line and its GPU init messages to STDERR, and execFileSync returns
+  // only stdout on success. The probe therefore parsed an empty string and
+  // recorded reportedVersion "unknown", cpuFeatures [] and gpuBackend null —
+  // for a binary that had just printed all three. Worse, execFileSync inherits
+  // stderr by default, so that banner leaked into the installer's console
+  // output, which is exactly where we saw "version: 5060" while the registry
+  // said "unknown".
+  //
+  // Both streams are captured and concatenated. Exit code is deliberately not
+  // checked: some llama.cpp builds print --version and exit non-zero.
+  const res = spawnSync(entryAbsPath, probeArgs, {
+    timeout: PROBE_TIMEOUT_MS,
+    encoding: 'utf8',
+    // No shell. No PATH lookup. Absolute path only.
+    shell: false,
+    // Capture both streams rather than letting either reach the parent console.
+    stdio: ['ignore', 'pipe', 'pipe'],
+    // Suppress a console window on a GUI launcher.
+    windowsHide: true,
+  });
+
+  if (res.error) {
+    if (res.error.code === 'ETIMEDOUT') {
+      throw new Error(`probe: binary did not respond within ${PROBE_TIMEOUT_MS}ms: ${entryAbsPath}`);
+    }
+    throw new Error(`probe: could not run binary: ${res.error.message}`);
+  }
+
+  const raw = `${res.stdout || ''}\n${res.stderr || ''}`;
+  if (!raw.trim()) {
+    throw new Error(`probe: binary produced no output on ${probeArgs.join(' ')}: ${entryAbsPath}`);
   }
 
   const reportedVersion = parseVersion(raw);
@@ -82,8 +99,12 @@ function parseVersion(raw) {
 }
 
 /**
- * llama.cpp --version logs detected SIMD feature flags on stderr.
- * Example: "AVX = 1 | AVX2 = 1 | AVX512 = 0 | ..."
+ * Detected SIMD feature flags, e.g. "AVX = 1 | AVX2 = 1 | AVX512 = 0 | ...".
+ *
+ * Note: b5060's `--version` prints only the version and the compiler banner —
+ * the feature line appears when a MODEL is loaded, not on --version. An empty
+ * cpuFeatures array from a --version probe is therefore correct, not a parse
+ * failure. Do not "fix" it by loosening these patterns.
  */
 function parseCpuFeatures(raw) {
   const features = [];

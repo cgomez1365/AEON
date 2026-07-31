@@ -20,6 +20,7 @@ const storage = require('../storage.js');
 const P = require('./paths.cjs');
 const R = require('./registry.cjs');
 const { getSupervisor, shutdownSupervisor } = require('./supervisor.cjs');
+const { embedOnce } = require('./embedder.cjs');
 
 // ── Registry accessor ─────────────────────────────────────────────────────────
 function _registry() {
@@ -90,10 +91,21 @@ async function embed(text) {
   const entryAbs = _registry().resolveEntryPath(runtime);
   const modelAbs = _registry().resolveEntryPath(embedModel);
 
-  const sup = await getSupervisor({ entryAbsPath: entryAbs, modelAbsPath: modelAbs });
-  // Use llama.cpp embedding mode — send a special infer with embed flag
-  const result = await sup.infer(text, { embed: true, maxTokens: 0 });
-  return result.embedding || [];
+  // One-shot through llama-embedding, NOT the supervisor. The supervisor's
+  // worker never reaches a ready state (it spawns llama-cli with --server, a
+  // flag that does not exist, and waits on a stdout banner that goes to
+  // stderr), so this call used to hang forever with no output and no log.
+  // See embedder.cjs for the full diagnosis.
+  // Capped at 2048: nomic-embed-text advertises an 8192 ceiling but the GGUF
+  // reports it was trained on 2048, and a larger window costs memory per call
+  // for no gain. embedder.cjs pins n_batch to n_ctx either way.
+  const ceiling = Number(embedModel.contextCeiling) || 512;
+  return embedOnce({
+    entryAbsPath: entryAbs,
+    modelAbsPath: modelAbs,
+    text,
+    contextSize: Math.min(ceiling, 2048),
+  });
 }
 
 /**

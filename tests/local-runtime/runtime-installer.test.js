@@ -165,6 +165,44 @@ describe('PENDING_VERIFICATION guard', () => {
   });
 });
 
+// ── Probe: stream capture ──────────────────────────────────────────────────
+
+describe('probe captures stderr, not just stdout', () => {
+  const { probe } = require(path.join(LR, 'runtime-probe.cjs'));
+
+  it('parses a version that the binary printed to stderr', () => {
+    // llama.cpp b5060 prints NOTHING to stdout on --version; the banner goes to
+    // stderr and it exits 0. The probe used execFileSync, which returns only
+    // stdout on success, so it recorded reportedVersion "unknown" for a binary
+    // that had just printed "version: 5060" — and execFileSync's inherited
+    // stderr leaked that banner into the installer's console at the same time.
+    //
+    // node -e is a real process whose output split we control exactly.
+    const script = "process.stderr.write('version: 5060 (0c74b043)\nbuilt with MSVC 19.43 for x64\n')";
+    const result = probe(process.execPath, ['-e', script]);
+    expect(result.reportedVersion).toBe('b5060');
+  });
+
+  it('still reads a version from stdout when a build writes it there', () => {
+    const script = "process.stdout.write('version: 4242 (deadbee)\n')";
+    expect(probe(process.execPath, ['-e', script]).reportedVersion).toBe('b4242');
+  });
+
+  it('detects a GPU backend announced on stderr', () => {
+    const script = "process.stderr.write('ggml_cuda_init: found 1 CUDA devices:\n')";
+    expect(probe(process.execPath, ['-e', script]).gpuBackend).toBe('cuda');
+  });
+
+  it('throws rather than returning "unknown" when a binary prints nothing at all', () => {
+    expect(() => probe(process.execPath, ['-e', '0'])).toThrow(/no output/i);
+  });
+
+  it('rejects a relative path and a missing binary', () => {
+    expect(() => probe('llama-cli')).toThrow(/must be absolute/);
+    expect(() => probe(path.join(tmp, 'nope.exe'))).toThrow(/not found/);
+  });
+});
+
 // ── Probe: pure parsers ────────────────────────────────────────────────────
 
 describe('probe parsers', () => {
