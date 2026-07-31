@@ -107,48 +107,57 @@ function sha256File(filePath) {
 }
 
 /**
- * Extract a .zip archive into destDir without any shell.
- * Uses the system unzip on POSIX; on Windows uses PowerShell's Expand-Archive
- * (available since PowerShell 5, standard on Win10+).
+ * Extract an archive IN PROCESS. No shell, no external tool, no PATH lookup.
  *
- * If a subdir is specified in the asset, only that subdir is extracted.
+ * This used to shell out: PowerShell's Expand-Archive on Windows, `unzip` on
+ * POSIX. Both were liabilities:
+ *
+ *   - Expand-Archive was invoked through `-Command` with the paths interpolated
+ *     into a single-quoted PowerShell string, and dataRoot derives from
+ *     DATA_PATH, which the user controls. A quote in that path closed the
+ *     literal.
+ *   - `unzip` is absent on minimal Linux images and not guaranteed on macOS.
+ *     When missing, spawnSync set status=null, and a `status !== 0` check threw
+ *     "Extraction failed: " with an empty message.
+ *
+ * adm-zip and tar are already dependencies. Using them removes an entire class
+ * of failure: nothing to inject into, nothing to be missing, and identical
+ * behaviour on every platform. It is also what makes .tar.gz releases usable —
+ * llama.cpp ships macOS and Linux as tarballs.
+ *
+ * @param {string} archivePath
+ * @param {string} destDir
+ * @param {'zip'|'tar.gz'} kind
+ * @param {number} stripComponents  leading path segments to drop (tar only)
  */
-function extractZip(zipPath, destDir) {
-  const { spawnSync } = require('child_process');
-
+async function extractArchive(archivePath, destDir, kind = 'zip', stripComponents = 1) {
   if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
 
-  // Failure reporting shared by both branches. spawnSync sets status=null and
-  // error=ENOENT when the tool is absent — the old code only checked
-  // `status !== 0`, so a missing extractor produced `"Extraction failed: "`
-  // with an empty message and no clue what to install.
-  const check = (result, tool) => {
-    if (result.error && result.error.code === 'ENOENT') {
-      throw new Error(`Extraction failed: "${tool}" is not installed or not on PATH.`);
+  try {
+    if (kind === 'tar.gz') {
+      const tar = require('tar');
+      // llama.cpp's tarballs nest everything under a version directory
+      // (llama-b10216/...) while the Windows zips are flat. Stripping one
+      // component normalises both to the same on-disk layout, so requiredFiles
+      // and the entrypoint path are platform-independent.
+      await tar.x({ file: archivePath, cwd: destDir, strip: stripComponents });
+      return;
     }
-    if (result.error) throw new Error(`Extraction failed: ${result.error.message}`);
-    if (result.status !== 0) {
-      const detail = (result.stderr || result.stdout || '').toString().trim();
-      throw new Error(`Extraction failed (${tool} exit ${result.status})${detail ? ': ' + detail : ''}`);
+    const AdmZip = require('adm-zip');
+    const zip = new AdmZip(archivePath);
+    // Guard against a crafted archive escaping destDir (zip-slip). The hash is
+    // verified before we get here, so this is defence in depth rather than the
+    // primary control — but the check is nearly free.
+    const root = path.resolve(destDir);
+    for (const entry of zip.getEntries()) {
+      const target = path.resolve(root, entry.entryName);
+      if (target !== root && !target.startsWith(root + path.sep)) {
+        throw new Error(`archive entry escapes the extract directory: ${entry.entryName}`);
+      }
     }
-  };
-
-  if (os.platform() === 'win32') {
-    // Paths reach PowerShell as -Command string interpolation, and dataRoot
-    // derives from DATA_PATH (user-controlled). A single quote in that path
-    // would close the literal and inject. Doubling is PowerShell's own escape
-    // for a single-quoted string; it is the whole escape rule for that context.
-    const psLiteral = (s) => `'${String(s).replace(/'/g, "''")}'`;
-    const result = spawnSync('powershell.exe', [
-      '-NoProfile', '-NonInteractive', '-Command',
-      `Expand-Archive -LiteralPath ${psLiteral(zipPath)} -DestinationPath ${psLiteral(destDir)} -Force`,
-    ], { timeout: 120_000, shell: false, windowsHide: true });
-    check(result, 'powershell.exe');
-  } else {
-    const result = spawnSync('unzip', ['-o', zipPath, '-d', destDir], {
-      timeout: 120_000, shell: false,
-    });
-    check(result, 'unzip');
+    zip.extractAllTo(destDir, true);
+  } catch (e) {
+    throw new Error(`Extraction failed (${kind}): ${e.message}`);
   }
 }
 
@@ -263,7 +272,7 @@ async function installRuntime({ dataRoot, preferBackend, onProgress, onStatus } 
 
     // ── 7. Extract ───────────────────────────────────────────────────────────
     emit('Extracting…');
-    extractZip(zipStage, extractTarget);
+    await extractArchive(zipStage, extractTarget, asset.archive || 'zip', asset.stripComponents ?? 1);
 
     // ── 8. Verify layout ─────────────────────────────────────────────────────
     verifyLayout(extractTarget, asset);

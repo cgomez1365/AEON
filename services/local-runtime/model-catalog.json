@@ -18,7 +18,7 @@
       "filename": "Qwen3-1.7B-Q8_0.gguf",
       "url": "https://huggingface.co/Qwen/Qwen3-1.7B-GGUF/resolve/main/Qwen3-1.7B-Q8_0.gguf",
       "sha256": "061b54daade076b5d3362dac252678d17da8c68f07560be70818cace6590cb1a",
-      "relPathTemplate": "local-runtime/models/qwen3-1.7b-q4/Qwen3-1.7B-Q8_0.gguf",
+      "relPathTemplate": "local-runtime/models/qwen3-1.7b-q8/Qwen3-1.7B-Q8_0.gguf",
       "tags": [
         "recommended",
         "fast",

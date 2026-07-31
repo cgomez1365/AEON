@@ -40,8 +40,6 @@ const MIGRATION_ALLOWED = new Set([
   'services/local-runtime/runtime-installer.cjs',
   'services/local-runtime/runtime-probe.cjs',
   'services/local-runtime/model-installer.cjs',
-  'services/local-runtime/worker.mjs',
-  'services/local-runtime/supervisor.cjs',
   'services/local-runtime/index.cjs',
   'services/local-runtime/paths.cjs',
   'services/local-runtime/queue.cjs',
