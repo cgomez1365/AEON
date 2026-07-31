@@ -18,14 +18,12 @@
 
 const fs = require('fs');
 const path = require('path');
-const https = require('https');
-const http = require('http');
 const crypto = require('crypto');
 const os = require('os');
-const { createWriteStream } = require('fs');
 
 const P = require('./paths.cjs');
 const R = require('./registry.cjs');
+const { download: sharedDownload } = require('./download.cjs');
 const { probe, canExec } = require('./runtime-probe.cjs');
 
 const ASSETS = require('./runtime-assets.json');
@@ -54,41 +52,17 @@ function selectAsset(opts = {}) {
 /**
  * Download a URL to destPath, streaming.
  *
+ * The implementation lives in ./download.cjs — one copy, shared with
+ * model-installer.cjs. See that file for why the previous inline version
+ * killed the process on every real download.
+ *
  * @param {string} url
  * @param {string} destPath
  * @param {{ onProgress?: (pct: number, bytes: number, total: number) => void }} opts
- * @returns {Promise<void>}
+ * @returns {Promise<{url:string, bytes:number, redirects:number}>}
  */
 function download(url, destPath, { onProgress } = {}) {
-  return new Promise((resolve, reject) => {
-    const proto = url.startsWith('https') ? https : http;
-    const file = createWriteStream(destPath, { flags: 'wx' });
-
-    const req = proto.get(url, { timeout: 120_000 }, (res) => {
-      if (res.statusCode === 301 || res.statusCode === 302) {
-        file.close(() => fs.unlinkSync(destPath));
-        return download(res.headers.location, destPath, { onProgress }).then(resolve).catch(reject);
-      }
-      if (res.statusCode !== 200) {
-        file.close(() => { try { fs.unlinkSync(destPath); } catch {} });
-        return reject(new Error(`Download failed: HTTP ${res.statusCode} for ${url}`));
-      }
-
-      const total = parseInt(res.headers['content-length'] || '0', 10);
-      let received = 0;
-
-      res.on('data', (chunk) => {
-        received += chunk.length;
-        if (onProgress && total) onProgress(Math.round(received / total * 100), received, total);
-      });
-      res.pipe(file);
-      file.on('finish', () => file.close(resolve));
-      file.on('error', (e) => { try { fs.unlinkSync(destPath); } catch {} reject(e); });
-    });
-
-    req.on('error', (e) => { try { fs.unlinkSync(destPath); } catch {} reject(e); });
-    req.on('timeout', () => { req.destroy(); reject(new Error(`Download timed out: ${url}`)); });
-  });
+  return sharedDownload(url, destPath, { onProgress, timeoutMs: 120_000 });
 }
 
 /**
@@ -116,21 +90,37 @@ function extractZip(zipPath, destDir) {
 
   if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
 
+  // Failure reporting shared by both branches. spawnSync sets status=null and
+  // error=ENOENT when the tool is absent — the old code only checked
+  // `status !== 0`, so a missing extractor produced `"Extraction failed: "`
+  // with an empty message and no clue what to install.
+  const check = (result, tool) => {
+    if (result.error && result.error.code === 'ENOENT') {
+      throw new Error(`Extraction failed: "${tool}" is not installed or not on PATH.`);
+    }
+    if (result.error) throw new Error(`Extraction failed: ${result.error.message}`);
+    if (result.status !== 0) {
+      const detail = (result.stderr || result.stdout || '').toString().trim();
+      throw new Error(`Extraction failed (${tool} exit ${result.status})${detail ? ': ' + detail : ''}`);
+    }
+  };
+
   if (os.platform() === 'win32') {
+    // Paths reach PowerShell as -Command string interpolation, and dataRoot
+    // derives from DATA_PATH (user-controlled). A single quote in that path
+    // would close the literal and inject. Doubling is PowerShell's own escape
+    // for a single-quoted string; it is the whole escape rule for that context.
+    const psLiteral = (s) => `'${String(s).replace(/'/g, "''")}'`;
     const result = spawnSync('powershell.exe', [
       '-NoProfile', '-NonInteractive', '-Command',
-      `Expand-Archive -LiteralPath '${zipPath}' -DestinationPath '${destDir}' -Force`,
+      `Expand-Archive -LiteralPath ${psLiteral(zipPath)} -DestinationPath ${psLiteral(destDir)} -Force`,
     ], { timeout: 120_000, shell: false, windowsHide: true });
-    if (result.status !== 0) {
-      throw new Error(`Extraction failed: ${(result.stderr || result.stdout || '').toString().trim()}`);
-    }
+    check(result, 'powershell.exe');
   } else {
     const result = spawnSync('unzip', ['-o', zipPath, '-d', destDir], {
       timeout: 120_000, shell: false,
     });
-    if (result.status !== 0) {
-      throw new Error(`Extraction failed: ${(result.stderr || result.stdout || '').toString().trim()}`);
-    }
+    check(result, 'unzip');
   }
 }
 
@@ -289,7 +279,6 @@ async function installRuntime({ dataRoot, preferBackend, onProgress, onStatus } 
   } catch (err) {
     // Any failure: quarantine the registry entry, clean staging.
     try {
-      reg.setModelState; // no-op reference — use correct API for runtimes
       const current = reg.load().runtimes.find(r => r.id === asset.id);
       if (current && current.state === 'staged') {
         // No setRuntimeState shorthand; use upsertRuntime to set quarantined.

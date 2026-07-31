@@ -14,12 +14,10 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { createWriteStream } = require('fs');
-const https = require('https');
-const http = require('http');
 
 const P = require('./paths.cjs');
 const R = require('./registry.cjs');
+const { download: sharedDownload } = require('./download.cjs');
 const CATALOG = require('./model-catalog.json');
 
 // ── GGUF header probe ────────────────────────────────────────────────────────
@@ -61,36 +59,12 @@ function probeGgufHeader(filePath) {
   }
 }
 
-// ── Download helper (same as runtime-installer, no shared dep) ──────────────
+// ── Download helper — shared with runtime-installer (BO-A0) ─────────────────
+// Was a byte-identical copy differing only in timeout, so every fix had to land
+// twice. Model files are large, hence the longer per-hop deadline.
 
 function download(url, destPath, { onProgress } = {}) {
-  return new Promise((resolve, reject) => {
-    const proto = url.startsWith('https') ? https : http;
-    const file = createWriteStream(destPath, { flags: 'wx' });
-
-    const req = proto.get(url, { timeout: 600_000 }, (res) => {
-      if (res.statusCode === 301 || res.statusCode === 302) {
-        file.close(() => { try { fs.unlinkSync(destPath); } catch {} });
-        return download(res.headers.location, destPath, { onProgress }).then(resolve).catch(reject);
-      }
-      if (res.statusCode !== 200) {
-        file.close(() => { try { fs.unlinkSync(destPath); } catch {} });
-        return reject(new Error(`HTTP ${res.statusCode}: ${url}`));
-      }
-      const total = parseInt(res.headers['content-length'] || '0', 10);
-      let received = 0;
-      res.on('data', chunk => {
-        received += chunk.length;
-        if (onProgress && total) onProgress(Math.round(received / total * 100), received, total);
-      });
-      res.pipe(file);
-      file.on('finish', () => file.close(resolve));
-      file.on('error', e => { try { fs.unlinkSync(destPath); } catch {} reject(e); });
-    });
-
-    req.on('error', e => { try { fs.unlinkSync(destPath); } catch {} reject(e); });
-    req.on('timeout', () => { req.destroy(); reject(new Error(`Download timed out: ${url}`)); });
-  });
+  return sharedDownload(url, destPath, { onProgress, timeoutMs: 600_000 });
 }
 
 function sha256File(filePath) {
