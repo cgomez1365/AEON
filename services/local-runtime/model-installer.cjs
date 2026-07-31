@@ -27,7 +27,12 @@ const CATALOG = require('./model-catalog.json');
 // key from the metadata KV block (offset 12+). Full parsing is complex; we
 // only need enough to confirm the file is a real GGUF and grab architecture.
 
-const GGUF_MAGIC = 0x46465547; // "GGUF" in little-endian uint32
+// Derived from the string, never written as a hex literal. The literal here
+// used to be 0x46465547, which is "GUFF" — the last two bytes transposed. Every
+// real GGUF file was rejected as "Not a GGUF file", so no model could ever be
+// installed. The unit test wrote the SAME transposed literal into its fixture,
+// so it passed against a file that no model in the catalog resembles.
+const GGUF_MAGIC = Buffer.from('GGUF', 'ascii').readUInt32LE(0); // 0x46554747
 
 function probeGgufHeader(filePath) {
   const fd = fs.openSync(filePath, 'r');
@@ -140,7 +145,12 @@ async function installModel({ dataRoot, modelId, onProgress, onStatus } = {}) {
   const relPath = entry.relPathTemplate;
   const absDir = path.dirname(path.join(dataRoot, ...relPath.split('/')));
   const absFile = path.join(dataRoot, ...relPath.split('/'));
-  const stagingFile = path.join(P.stagingPath(dataRoot), entry.filename);
+  // Caller-supplied staging token (see paths.cjs): concurrent installs of the
+  // same model must not collide on one .part file. Was called with no token,
+  // which threw before any download.
+  const stagingToken = `md-${modelId}-${crypto.randomBytes(6).toString('hex')}`;
+  const stagingFile = P.stagingPath(dataRoot, stagingToken, entry.filename);
+  fs.mkdirSync(path.dirname(stagingFile), { recursive: true });
 
   // Clean stale staging
   try { if (fs.existsSync(stagingFile)) fs.unlinkSync(stagingFile); } catch {}

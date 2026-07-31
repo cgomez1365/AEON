@@ -215,7 +215,13 @@ async function installRuntime({ dataRoot, preferBackend, onProgress, onStatus } 
 
   // ── 3. Prepare staging paths ─────────────────────────────────────────────
   P.ensureManagedDirs(dataRoot);
-  const stagingDir = P.stagingPath(dataRoot);
+  // stagingPath() requires a caller-supplied token so two concurrent installs
+  // never collide on one .part file — see paths.cjs. Both installers were
+  // calling it with no token at all, which threw before a single byte was
+  // fetched. Nothing had ever executed this path.
+  const stagingToken = `rt-${asset.id}-${crypto.randomBytes(6).toString('hex')}`;
+  const stagingDir = P.stagingPath(dataRoot, stagingToken);
+  fs.mkdirSync(stagingDir, { recursive: true });
   const zipName = asset.filename;
   const zipStage = path.join(stagingDir, zipName);
   const extractTarget = path.join(stagingDir, `extract-${asset.id}`);
@@ -232,7 +238,7 @@ async function installRuntime({ dataRoot, preferBackend, onProgress, onStatus } 
     backend: asset.backend,
     platform: asset.platform,
     arch: asset.arch,
-    relPath: P.toRegistryRelative(dataRoot, path.join(P.runtimePath(dataRoot), asset.id)),
+    relPath: P.toRegistryRelative(dataRoot, P.runtimePath(dataRoot, asset.id)),
     entrypoint: asset.entrypoint,
     installedAt: new Date().toISOString(),
   });
@@ -265,7 +271,7 @@ async function installRuntime({ dataRoot, preferBackend, onProgress, onStatus } 
     emit('Layout verified');
 
     // ── 9. Move to managed runtime dir (atomic on same filesystem) ───────────
-    const finalDir = path.join(P.runtimePath(dataRoot), asset.id);
+    const finalDir = P.runtimePath(dataRoot, asset.id);
     if (fs.existsSync(finalDir)) fs.rmSync(finalDir, { recursive: true, force: true });
     fs.renameSync(extractTarget, finalDir);
     emit(`Installed to managed runtime dir`);

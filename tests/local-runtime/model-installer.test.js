@@ -175,9 +175,19 @@ describe('PENDING_VERIFICATION guard', () => {
   });
 
   it('no model reaches ready state after a rejected install', async () => {
-    try { await MI.installModel({ dataRoot, modelId: SAMPLE_ID }); } catch {}
-    const reg = R.createRegistry(dataRoot);
-    expect(reg.readyModels()).toHaveLength(0);
+    // Deterministic failure via a closed port — see the note in
+    // runtime-installer.test.js. Keeps this suite network-free now that the
+    // catalog carries real hashes and the PENDING guard no longer fires.
+    const entry = CATALOG.models.find(m => m.id === SAMPLE_ID);
+    const realUrl = entry.url;
+    entry.url = 'http://127.0.0.1:1/unreachable.gguf';
+    try {
+      await expect(MI.installModel({ dataRoot, modelId: SAMPLE_ID })).rejects.toThrow();
+      const reg = R.createRegistry(dataRoot);
+      expect(reg.readyModels()).toHaveLength(0);
+    } finally {
+      entry.url = realUrl;
+    }
   });
 
   it('throws for an unknown modelId', async () => {
@@ -190,9 +200,14 @@ describe('PENDING_VERIFICATION guard', () => {
 
 describe('probeGgufHeader', () => {
   function makeGguf(version = 3, archStr = null) {
-    // GGUF magic (4 bytes LE) + version (4 bytes LE) + minimal padding
+    // GGUF magic (the four ASCII bytes) + version (4 bytes LE) + padding.
+    //
+    // This wrote the hex literal 0x46465547 — the same transposed constant the
+    // implementation had — so the fixture was a "GUFF" file and the test passed
+    // against something no real model resembles. Writing the actual bytes means
+    // the fixture cannot drift from reality again.
     const buf = Buffer.alloc(256, 0);
-    buf.writeUInt32LE(0x46465547, 0);  // magic "GGUF"
+    buf.write('GGUF', 0, 'ascii');
     buf.writeUInt32LE(version, 4);
     if (archStr) {
       // Write a rough approximation of "general.architecture" + value

@@ -145,13 +145,23 @@ describe('PENDING_VERIFICATION guard', () => {
   });
 
   it('a rejected install leaves no ready runtime in the registry', async () => {
-    const { installRuntime } = require(path.join(LR, 'runtime-installer.cjs'));
-    // No network in tests, so this fails at download; the invariant under test
-    // is that nothing reaches state="ready" on any failure path.
-    try { await installRuntime({ dataRoot }); } catch {}
-    const reg = R.createRegistry(dataRoot);
-    const { registry } = reg.read();
-    expect(registry.runtimes.filter(r => r.state === 'ready')).toHaveLength(0);
+    const { installRuntime, selectAsset } = require(path.join(LR, 'runtime-installer.cjs'));
+    const ASSETS = require(path.join(LR, 'runtime-assets.json'));
+    // Force a deterministic failure by pointing this platform's asset at a
+    // closed port. Once real hashes shipped, the PENDING guard no longer
+    // short-circuits, and asserting on "a failed install" would otherwise have
+    // pulled 18MB over the network from a unit test.
+    const asset = ASSETS.platforms.find(a => a.id === selectAsset().id);
+    const realUrl = asset.url;
+    asset.url = 'http://127.0.0.1:1/unreachable.zip';
+    try {
+      await expect(installRuntime({ dataRoot })).rejects.toThrow();
+      const reg = R.createRegistry(dataRoot);
+      const { registry } = reg.read();
+      expect(registry.runtimes.filter(r => r.state === 'ready')).toHaveLength(0);
+    } finally {
+      asset.url = realUrl;
+    }
   });
 });
 
