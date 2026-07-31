@@ -66,6 +66,34 @@ function download(url, destPath, { onProgress } = {}) {
 }
 
 /**
+ * Refuse to install anything whose hash was never verified.
+ *
+ * Extracted so it can be tested against a SYNTHETIC value. It used to be
+ * inline, and its test asserted that the shipped manifest still contained
+ * PENDING_VERIFICATION — so filling in real hashes broke the test that
+ * protects the invariant. A guard's test must not depend on the guard
+ * currently having something to catch.
+ *
+ * @param {string} kind   'Runtime asset' | 'Model'
+ * @param {string} id
+ * @param {string} sha256
+ * @param {string} manifest  filename to point the operator at
+ */
+function assertHashVerified(kind, id, sha256, manifest) {
+  if (sha256 === 'PENDING_VERIFICATION') {
+    throw new Error(
+      `${kind} ${id} has a PENDING_VERIFICATION SHA-256. ` +
+      `Compute the real hash from the downloaded file — never copy one from a page — ` +
+      `with: node tools/fetch-runtime-hashes.mjs. ` +
+      `See services/local-runtime/${manifest}.`
+    );
+  }
+  if (!/^[0-9a-f]{64}$/.test(String(sha256 || ''))) {
+    throw new Error(`${kind} ${id} has a malformed SHA-256 in ${manifest}: ${JSON.stringify(String(sha256).slice(0, 80))}`);
+  }
+}
+
+/**
  * SHA-256 a file on disk. Returns lowercase hex string.
  */
 function sha256File(filePath) {
@@ -175,13 +203,7 @@ async function installRuntime({ dataRoot, preferBackend, onProgress, onStatus } 
   emit(`Selected runtime: ${asset.id} (${asset.backend})`);
 
   // Guard: pending-verification hash means this manifest was never finalized.
-  if (asset.sha256 === 'PENDING_VERIFICATION') {
-    throw new Error(
-      `Runtime asset ${asset.id} has a PENDING_VERIFICATION SHA-256. ` +
-      `Fetch the real hash from the GitHub release page before shipping. ` +
-      `See services/local-runtime/runtime-assets.json.`
-    );
-  }
+  assertHashVerified('Runtime asset', asset.id, asset.sha256, 'runtime-assets.json');
 
   // ── 2. Check if already installed and ready ─────────────────────────────
   const existing = reg.load().runtimes.find(r => r.id === asset.id && r.state === 'ready');
@@ -312,4 +334,4 @@ async function removeRuntime(dataRoot, runtimeId) {
   // No removeRuntime in registry (runtimes are superseded, not deleted), so just quarantine.
 }
 
-module.exports = { installRuntime, removeRuntime, selectAsset, sha256File, download };
+module.exports = { installRuntime, removeRuntime, selectAsset, sha256File, download, assertHashVerified };

@@ -112,21 +112,46 @@ describe('sha256File', () => {
 // ── PENDING_VERIFICATION guard ─────────────────────────────────────────────
 
 describe('PENDING_VERIFICATION guard', () => {
-  it('installRuntime throws before any download if sha256 is PENDING_VERIFICATION', async () => {
-    const { installRuntime } = require(path.join(LR, 'runtime-installer.cjs'));
-    // All current assets have PENDING_VERIFICATION — this IS the expected state
-    // until we fetch real hashes. The guard must fire.
-    await expect(installRuntime({ dataRoot })).rejects.toThrow(/PENDING_VERIFICATION/);
+  // This used to assert that the SHIPPED manifest still contained
+  // PENDING_VERIFICATION, so filling in real hashes broke the test protecting
+  // the invariant. The guard is now a pure function and is tested against
+  // synthetic values — it must hold whether or not the catalog happens to
+  // have something for it to catch.
+  const { assertHashVerified } = require(path.join(LR, 'runtime-installer.cjs'));
+
+  it('rejects a PENDING_VERIFICATION hash', () => {
+    expect(() => assertHashVerified('Runtime asset', 'x', 'PENDING_VERIFICATION', 'runtime-assets.json'))
+      .toThrow(/PENDING_VERIFICATION/);
   });
 
-  it('registry stays clean (no entry) after a PENDING_VERIFICATION rejection', async () => {
+  it('rejects a malformed hash — wrong length, wrong alphabet, empty, missing', () => {
+    for (const bad of ['abc', 'z'.repeat(64), 'A'.repeat(64), '', null, undefined, 'a'.repeat(63)]) {
+      expect(() => assertHashVerified('Model', 'x', bad, 'model-catalog.json'))
+        .toThrow(/malformed SHA-256/);
+    }
+  });
+
+  it('accepts a well-formed lowercase hex digest', () => {
+    expect(() => assertHashVerified('Model', 'x', 'a'.repeat(64), 'model-catalog.json')).not.toThrow();
+  });
+
+  it('every shipped runtime asset carries a verified hash', () => {
+    // The shipping manifest's own state, asserted directly rather than through
+    // the guard. Fails loudly if an asset is added without hashing it.
+    const ASSETS = require(path.join(LR, 'runtime-assets.json'));
+    for (const p of ASSETS.platforms) {
+      expect(() => assertHashVerified('Runtime asset', p.id, p.sha256, 'runtime-assets.json')).not.toThrow();
+    }
+  });
+
+  it('a rejected install leaves no ready runtime in the registry', async () => {
     const { installRuntime } = require(path.join(LR, 'runtime-installer.cjs'));
+    // No network in tests, so this fails at download; the invariant under test
+    // is that nothing reaches state="ready" on any failure path.
     try { await installRuntime({ dataRoot }); } catch {}
-    // May or may not have written a staged entry — but if it did, state must NOT be "ready"
     const reg = R.createRegistry(dataRoot);
     const { registry } = reg.read();
-    const readyRuntimes = registry.runtimes.filter(r => r.state === 'ready');
-    expect(readyRuntimes).toHaveLength(0);
+    expect(registry.runtimes.filter(r => r.state === 'ready')).toHaveLength(0);
   });
 });
 

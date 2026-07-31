@@ -18,6 +18,7 @@ const crypto = require('crypto');
 const P = require('./paths.cjs');
 const R = require('./registry.cjs');
 const { download: sharedDownload } = require('./download.cjs');
+const { assertHashVerified } = require('./runtime-installer.cjs');
 const CATALOG = require('./model-catalog.json');
 
 // ── GGUF header probe ────────────────────────────────────────────────────────
@@ -121,13 +122,7 @@ async function installModel({ dataRoot, modelId, onProgress, onStatus } = {}) {
   const entry = CATALOG.models.find(m => m.id === modelId);
   if (!entry) throw new Error(`Unknown model id: ${modelId}`);
 
-  if (entry.sha256 === 'PENDING_VERIFICATION') {
-    throw new Error(
-      `Model ${modelId} has a PENDING_VERIFICATION SHA-256. ` +
-      `Fetch the real hash from the HuggingFace repository before installing. ` +
-      `See services/local-runtime/model-catalog.json.`
-    );
-  }
+  assertHashVerified('Model', modelId, entry.sha256, 'model-catalog.json');
 
   const reg = R.createRegistry(dataRoot);
 
