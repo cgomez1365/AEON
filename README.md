@@ -19,7 +19,7 @@ The launcher checks your computer, walks you through setup, and opens AEON in yo
 
 ### Free AI, two ways
 - **Cloud (free keys)** — grab a free key from [aistudio.google.com](https://aistudio.google.com) (Gemini) or [console.groq.com](https://console.groq.com) (Groq). Paste it when the launcher asks, or later via Settings — or just type `/addkey groq YOUR_KEY` in the terminal.
-- **Local (no keys, fully private)** — say **Y** when the launcher offers to install Ollama, or open the **Cookbook** block any time and download a model with one click. No internet needed after download.
+- **Local (no keys, fully private)** — open the **Cookbook** block and install the local runtime, then download a model with one click. Models run inside AEON on a bundled llama.cpp worker — nothing is installed system-wide, and no internet is needed after the download.
 
 ---
 
