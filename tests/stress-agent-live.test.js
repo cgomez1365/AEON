@@ -33,6 +33,7 @@ const STRESS_PASS = 'StressTest#2026!';
 
 let serverInfo  = null;
 let sessionLive = false; // true only if the server accepted the stored token
+let providerLive = false; // true only if some LLM provider can actually answer
 
 beforeAll(async () => {
   serverInfo = await client.ping({ timeout: 2000 });
@@ -84,7 +85,7 @@ beforeAll(async () => {
     }
   }
 
-  // Allow the local model for this session. The kernel gates local Ollama
+  // Allow the local model for this session. The kernel gates the local runtime
   // behind an explicit operator approval per-server-session (in-memory on the
   // server; resets on every server restart even if the auth token is still
   // valid). Must be called every run, after auth, not just on first login.
@@ -93,8 +94,26 @@ beforeAll(async () => {
     if (!allowRes.ok || !allowRes.data?.until) {
       console.warn(`  [stress-agent-live] allow-local failed (${allowRes.status}) — local fallback will not work`);
     }
+
+    // Can anything actually answer? A clean install with no API keys and no
+    // local chat model has no provider at all. The goal suite exercises the
+    // AGENT; with nothing to call it cannot test anything, so it reports and
+    // skips instead of failing on every keyless machine forever.
+    const probe = await client.request('POST', '/api/ai', {
+      role: 'agent_worker', prompt: 'ping',
+    }, { timeout: 20000 });
+    providerLive = probe.status !== 503;
   }
-}, 15000);
+}, 40000);
+
+// The goal suite needs a model that can answer. Missing keys AND no local chat
+// model is a configuration state, not a defect — skip loudly, never fail.
+function skipIfNoProvider() {
+  if (!providerLive) {
+    console.warn('  [stress-agent-live] no LLM provider configured — skipping model-backed goals');
+  }
+  return !providerLive;
+}
 
 function skipIfOffline() {
   if (!serverInfo?.connected) {
@@ -185,27 +204,38 @@ describe('live infrastructure', () => {
       prompt: 'Reply with the single word: online',
     }, { timeout: 60000 });
 
-    // 401 = auth gate is up, model itself is wired. 200 = working.
-    // 404/500 = model not configured — fail.
+    // 200 = working. 401 = auth gate is up, model itself is wired.
+    // 503 = no provider configured at all (no API key, no local chat model).
+    //   That is the honest state of a clean keyless install, not a defect, so
+    //   report it and stop rather than failing the suite forever.
+    // 500/404 = something is actually broken — fail.
+    if (res.status === 503) {
+      console.warn('  [stress-agent-live] no LLM provider configured — skipping model-backed goals');
+      return;
+    }
     expect([200, 401]).toContain(res.status);
   }, 65000);
 
-  it('embed model is installed in Ollama', async () => {
-    // Offline-safe: hits Ollama directly on localhost.
-    const OLLAMA  = process.env.OLLAMA_HOST || 'http://localhost:11434';
-    const EMBED   = process.env.AEON_EMBED_MODEL || 'mxbai-embed-large';
-    let list;
-    try {
-      const r = await fetch(`${OLLAMA}/api/tags`, { signal: AbortSignal.timeout(3000) });
-      list = r.ok ? await r.json() : null;
-    } catch { list = null; }
+  it('embedding capability is reported honestly by the local runtime', () => {
+    // Was: fetch http://localhost:11434/api/tags and look for mxbai-embed-large.
+    // That daemon is gone. The scanners never caught it because tests/ is
+    // outside their scan path — the same blind spot that let launch.js ship a
+    // require() of a deleted module.
+    const lr = require('../services/local-runtime/index.cjs');
+    const st = lr.status();
 
-    if (!list) {
-      console.warn('  [stress-agent-live] Ollama not reachable — skipping embed model check');
+    // No runtime installed is a valid state — this must not require a model.
+    if (!st.runtimeId) {
+      console.warn('  [stress-agent-live] no local runtime installed — skipping embed capability check');
       return;
     }
-    const names = (list.models || []).map((m) => m.name.split(':')[0]);
-    expect(names).toContain(EMBED.split(':')[0]);
+
+    const embedModels = (st.readyModels || []).filter(m => (m.capabilities || []).includes('embed'));
+    // The contract that matters: capability claims match reality. isAvailable()
+    // once answered "any model is ready" and reported a chat provider on an
+    // embed-only install.
+    expect(lr.isAvailable('embed')).toBe(embedModels.length > 0);
+    expect(lr.isAvailable('chat')).toBe(!!lr.defaultModel());
   });
 });
 
@@ -224,6 +254,7 @@ describe('coded goals — live agent', () => {
   it('GOAL-1: list mounted blocks — single step, read-only', async () => {
     if (skipIfOffline()) return;
     if (skipIfNoSession()) return;
+    if (skipIfNoProvider()) return;
 
     const out = await agent.run('list all mounted blocks', {
       log: () => {},
@@ -249,6 +280,7 @@ describe('coded goals — live agent', () => {
   it('GOAL-2: save a note then recall it — two-step memory round-trip', async () => {
     if (skipIfOffline()) return;
     if (skipIfNoSession()) return;
+    if (skipIfNoProvider()) return;
 
     const tag = `live-stress-${Date.now()}`;
     const out = await agent.run(`remember "${tag}" then search memories for it`, {
@@ -277,6 +309,7 @@ describe('coded goals — live agent', () => {
   it('GOAL-3: token spend on a one-step goal is below the pre-optimisation baseline', async () => {
     if (skipIfOffline()) return;
     if (skipIfNoSession()) return;
+    if (skipIfNoProvider()) return;
 
     const out = await agent.run('what models do I have available', {
       log: () => {},
@@ -299,6 +332,7 @@ describe('coded goals — live agent', () => {
   it('GOAL-4: a hallucinated command id is refused without killing the run', async () => {
     if (skipIfOffline()) return;
     if (skipIfNoSession()) return;
+    if (skipIfNoProvider()) return;
 
     // Inject one bad decision, then let the real model self-correct.
     // We only override `ask` here — dispatch is still the real one.

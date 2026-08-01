@@ -1,5 +1,5 @@
 {
-  "_comment": "Curated GGUF model catalog. All models are fetched from Hugging Face Hub using direct .gguf download URLs. sha256 values are PENDING_VERIFICATION — real hashes must be confirmed against official HF repository commits before shipping. No model can reach state=ready in the registry without a verified hash.",
+  "_comment": "Curated GGUF model catalog. All models are fetched from Hugging Face Hub using direct .gguf download URLs, from ungated repositories only — a gated repo would need an auth token we must never ship. Every sha256 below was computed from the downloaded bytes, not copied from a page. No model can reach state=ready in the registry without a verified hash.",
   "schemaVersion": 1,
   "updatedAt": "2026-07-31T21:42:59.753Z",
   "models": [

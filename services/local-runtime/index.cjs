@@ -45,10 +45,19 @@ function _dataRoot() {
 /**
  * True when a ready runtime AND at least one ready model are in the registry.
  */
-function isAvailable() {
+function isAvailable(capability = 'chat') {
   try {
     const reg = _registry();
-    return !!reg.activeRuntime() && reg.readyModels().length > 0;
+    if (!reg.activeRuntime()) return false;
+    const ready = reg.readyModels();
+    if (!ready.length) return false;
+    // Capability matters: this used to answer "any model at all is ready",
+    // but every caller asks it to decide whether local can serve a CHAT turn.
+    // Install only the embedding model and local advertised itself as a chat
+    // provider, got selected ahead of the cloud, and returned a 500 instead of
+    // degrading — defaultModel() was null the whole time.
+    if (!capability) return true;
+    return ready.some(m => (m.capabilities || []).includes(capability));
   } catch { return false; }
 }
 

@@ -24,7 +24,7 @@ const createAIService = require(path.join(APP_ROOT, 'services', 'ai.js'));
 /** Minimal real deps — no provider keys, so cloud paths stay unreachable. */
 function makeService(settingsOverride = {}) {
   const settings = {
-    models: { chat: { provider: 'ollama', model: 'test-model' } },
+    models: { chat: { provider: 'local', model: 'test-model' } },
     prefs: {},
     ...settingsOverride,
   };
@@ -67,7 +67,7 @@ describe('baseline: kernelLLM surface', () => {
       // A role the settings file does not define forces the documented
       // `settings.models[role] || settings.models.chat` fallback.
       models: {
-        get chat() { seenRole = 'chat'; return { provider: 'ollama', model: 'm' }; },
+        get chat() { seenRole = 'chat'; return { provider: 'local', model: 'm' }; },
       },
     });
     await svc.kernelLLM('x').catch(() => {});

@@ -14,14 +14,27 @@ describe('Vault and block storage contract', () => {
   let tempDir;
   let originalFetch;
 
+  let originalDataPath;
+
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aeon-storage-test-'));
     originalFetch = global.fetch;
     global.fetch = vi.fn().mockRejectedValue(new Error('embedding unavailable in unit test'));
+
+    // Mocking fetch only blocks the CLOUD embedding path. The native local
+    // runtime talks to a llama-server on loopback, not through fetch, so on a
+    // machine with a local embed model installed this suite escaped the mock,
+    // booted a real inference server, and blew the 10s timeout — while passing
+    // on any machine that happened to have no model. Point the runtime lookup
+    // at the temp dir so the registry is genuinely empty either way.
+    originalDataPath = process.env.DATA_PATH;
+    process.env.DATA_PATH = path.join(tempDir, 'data');
   });
 
   afterEach(() => {
     global.fetch = originalFetch;
+    if (originalDataPath === undefined) delete process.env.DATA_PATH;
+    else process.env.DATA_PATH = originalDataPath;
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 

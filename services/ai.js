@@ -720,7 +720,14 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
         console.warn(`[KERNEL] ${p} failed (${e.message.slice(0, 120)}), trying next provider`);
       }
     }
-    throw lastErr || new Error('No LLM provider available (check API keys in Settings)');
+    // Every candidate provider was tried and none could serve. That is a
+    // configuration state, not an internal fault — a clean install with no API
+    // keys and no local chat model lands here on the very first request. The
+    // router turns this flag into a 503 so the caller gets an actionable
+    // "nothing is configured" instead of a bare 500.
+    const exhausted = lastErr || new Error('No LLM provider available (check API keys in Settings)');
+    exhausted.noProviderAvailable = true;
+    throw exhausted;
   };
 
   return {
