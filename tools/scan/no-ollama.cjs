@@ -40,8 +40,6 @@ const MIGRATION_ALLOWED = new Set([
   'services/local-runtime/runtime-installer.cjs',
   'services/local-runtime/runtime-probe.cjs',
   'services/local-runtime/model-installer.cjs',
-  'services/local-runtime/worker.mjs',
-  'services/local-runtime/supervisor.cjs',
   'services/local-runtime/index.cjs',
   'services/local-runtime/paths.cjs',
   'services/local-runtime/queue.cjs',
@@ -54,7 +52,7 @@ const RULES = [
   { id: 'ollama-port',    re: /localhost:11434|127\.0\.0\.1:11434|:11434\b/g, msg: 'Ollama daemon port' },
   { id: 'ollama-api',     re: /\/api\/(generate|embed|embeddings|pull|tags|show)\b/g, msg: 'Ollama HTTP API path' },
   { id: 'ollama-ident',   re: /\bollama\b/gi,                                  msg: 'Ollama identifier' },
-  { id: 'ollama-storage', re: /\.ollama\b/g,                                   msg: 'Ollama model store' },
+  { id: 'ollama-storage', re: /\.ollama\b/g,                                   msg: 'Ollama model store' }, // aeon-path-authority-allow — this IS the detector's own pattern
 ];
 
 function walk(dir, out = []) {

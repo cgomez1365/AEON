@@ -175,7 +175,10 @@ describe('generated .env.usb contract (BO-USB)', () => {
   });
 
   it('routes every state path through the drive root token', () => {
-    for (const key of ['DATA_PATH', 'VAULT_PATH', 'AEON_SECRETS_DIR', 'AEON_WORKSPACE', 'OLLAMA_MODELS']) {
+    // OLLAMA_MODELS became AEON_LOCAL_MODELS_DIR when the bundle stopped
+    // shipping a second, system-wide model daemon (N10). The invariant is
+    // unchanged: every state path is drive-relative.
+    for (const key of ['DATA_PATH', 'VAULT_PATH', 'AEON_SECRETS_DIR', 'AEON_WORKSPACE', 'AEON_LOCAL_MODELS_DIR']) {
       const line = envUsb.match(new RegExp(`^${key}=(.*)$`, 'm'));
       expect(line, `${key} missing`).toBeTruthy();
       expect(line[1], `${key} must be drive-relative`).toContain('__USB_ROOT__');
@@ -249,12 +252,32 @@ describe('portable mode binds to loopback (BO-USB)', () => {
   // fresh drive no operator account exists yet, so the auth gate is not armed.
   // It also triggers a Windows Firewall prompt that writes a rule outliving
   // the drive. Loopback is the only defensible default for portable media.
-  it('selects 127.0.0.1 when portable and 0.0.0.0 otherwise', () => {
+  //
+  // BO-0 generalised this: every clause above is equally true of a consumer
+  // desktop, so loopback is now the default in ALL modes and AEON_BIND is the
+  // deliberate opt-out. Asserted through the real resolver rather than by
+  // regex over server.js — the behaviour is the contract, not its spelling.
+  it('binds loopback when portable', () => {
+    const bind = require(path.join(process.cwd(), 'src/kernel/server-utils/bind.cjs'));
+    expect(bind.resolveBind({ AEON_PORTABLE: 'true' })).toBe('127.0.0.1');
+    expect(bind.isExposed({ AEON_PORTABLE: 'true' })).toBe(false);
+  });
+
+  it('binds loopback when NOT portable too', () => {
+    const bind = require(path.join(process.cwd(), 'src/kernel/server-utils/bind.cjs'));
+    expect(bind.resolveBind({})).toBe('127.0.0.1');
+    expect(bind.isExposed({})).toBe(false);
+  });
+
+  it('still honours an explicit AEON_BIND opt-out', () => {
+    const bind = require(path.join(process.cwd(), 'src/kernel/server-utils/bind.cjs'));
+    expect(bind.resolveBind({ AEON_BIND: '0.0.0.0', AEON_PORTABLE: 'true' })).toBe('0.0.0.0');
+  });
+
+  it('server.js takes its bind from the authority, not an inline expression', () => {
     const src = fs.readFileSync(path.join(process.cwd(), 'server/server.js'), 'utf8');
-    const bind = src.slice(src.indexOf('const BIND'), src.indexOf('const startServer'));
-    expect(bind).toMatch(/AEON_PORTABLE.*===.*'true'.*\?.*'127\.0\.0\.1'/s);
-    expect(bind).toMatch(/'0\.0\.0\.0'/);
-    expect(bind).toMatch(/process\.env\.AEON_BIND/);
+    expect(src).toMatch(/const BIND = bind\.resolveBind\(\)/);
+    expect(src).not.toMatch(/'0\.0\.0\.0'/);
   });
 
   it('no longer hardcodes 0.0.0.0 at the listen call', () => {

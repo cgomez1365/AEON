@@ -18,14 +18,12 @@
 
 const fs = require('fs');
 const path = require('path');
-const https = require('https');
-const http = require('http');
 const crypto = require('crypto');
 const os = require('os');
-const { createWriteStream } = require('fs');
 
 const P = require('./paths.cjs');
 const R = require('./registry.cjs');
+const { download: sharedDownload } = require('./download.cjs');
 const { probe, canExec } = require('./runtime-probe.cjs');
 
 const ASSETS = require('./runtime-assets.json');
@@ -54,41 +52,45 @@ function selectAsset(opts = {}) {
 /**
  * Download a URL to destPath, streaming.
  *
+ * The implementation lives in ./download.cjs — one copy, shared with
+ * model-installer.cjs. See that file for why the previous inline version
+ * killed the process on every real download.
+ *
  * @param {string} url
  * @param {string} destPath
  * @param {{ onProgress?: (pct: number, bytes: number, total: number) => void }} opts
- * @returns {Promise<void>}
+ * @returns {Promise<{url:string, bytes:number, redirects:number}>}
  */
 function download(url, destPath, { onProgress } = {}) {
-  return new Promise((resolve, reject) => {
-    const proto = url.startsWith('https') ? https : http;
-    const file = createWriteStream(destPath, { flags: 'wx' });
+  return sharedDownload(url, destPath, { onProgress, timeoutMs: 120_000 });
+}
 
-    const req = proto.get(url, { timeout: 120_000 }, (res) => {
-      if (res.statusCode === 301 || res.statusCode === 302) {
-        file.close(() => fs.unlinkSync(destPath));
-        return download(res.headers.location, destPath, { onProgress }).then(resolve).catch(reject);
-      }
-      if (res.statusCode !== 200) {
-        file.close(() => { try { fs.unlinkSync(destPath); } catch {} });
-        return reject(new Error(`Download failed: HTTP ${res.statusCode} for ${url}`));
-      }
-
-      const total = parseInt(res.headers['content-length'] || '0', 10);
-      let received = 0;
-
-      res.on('data', (chunk) => {
-        received += chunk.length;
-        if (onProgress && total) onProgress(Math.round(received / total * 100), received, total);
-      });
-      res.pipe(file);
-      file.on('finish', () => file.close(resolve));
-      file.on('error', (e) => { try { fs.unlinkSync(destPath); } catch {} reject(e); });
-    });
-
-    req.on('error', (e) => { try { fs.unlinkSync(destPath); } catch {} reject(e); });
-    req.on('timeout', () => { req.destroy(); reject(new Error(`Download timed out: ${url}`)); });
-  });
+/**
+ * Refuse to install anything whose hash was never verified.
+ *
+ * Extracted so it can be tested against a SYNTHETIC value. It used to be
+ * inline, and its test asserted that the shipped manifest still contained
+ * PENDING_VERIFICATION — so filling in real hashes broke the test that
+ * protects the invariant. A guard's test must not depend on the guard
+ * currently having something to catch.
+ *
+ * @param {string} kind   'Runtime asset' | 'Model'
+ * @param {string} id
+ * @param {string} sha256
+ * @param {string} manifest  filename to point the operator at
+ */
+function assertHashVerified(kind, id, sha256, manifest) {
+  if (sha256 === 'PENDING_VERIFICATION') {
+    throw new Error(
+      `${kind} ${id} has a PENDING_VERIFICATION SHA-256. ` +
+      `Compute the real hash from the downloaded file — never copy one from a page — ` +
+      `with: node tools/fetch-runtime-hashes.mjs. ` +
+      `See services/local-runtime/${manifest}.`
+    );
+  }
+  if (!/^[0-9a-f]{64}$/.test(String(sha256 || ''))) {
+    throw new Error(`${kind} ${id} has a malformed SHA-256 in ${manifest}: ${JSON.stringify(String(sha256).slice(0, 80))}`);
+  }
 }
 
 /**
@@ -105,32 +107,57 @@ function sha256File(filePath) {
 }
 
 /**
- * Extract a .zip archive into destDir without any shell.
- * Uses the system unzip on POSIX; on Windows uses PowerShell's Expand-Archive
- * (available since PowerShell 5, standard on Win10+).
+ * Extract an archive IN PROCESS. No shell, no external tool, no PATH lookup.
  *
- * If a subdir is specified in the asset, only that subdir is extracted.
+ * This used to shell out: PowerShell's Expand-Archive on Windows, `unzip` on
+ * POSIX. Both were liabilities:
+ *
+ *   - Expand-Archive was invoked through `-Command` with the paths interpolated
+ *     into a single-quoted PowerShell string, and dataRoot derives from
+ *     DATA_PATH, which the user controls. A quote in that path closed the
+ *     literal.
+ *   - `unzip` is absent on minimal Linux images and not guaranteed on macOS.
+ *     When missing, spawnSync set status=null, and a `status !== 0` check threw
+ *     "Extraction failed: " with an empty message.
+ *
+ * adm-zip and tar are already dependencies. Using them removes an entire class
+ * of failure: nothing to inject into, nothing to be missing, and identical
+ * behaviour on every platform. It is also what makes .tar.gz releases usable —
+ * llama.cpp ships macOS and Linux as tarballs.
+ *
+ * @param {string} archivePath
+ * @param {string} destDir
+ * @param {'zip'|'tar.gz'} kind
+ * @param {number} stripComponents  leading path segments to drop (tar only)
  */
-function extractZip(zipPath, destDir) {
-  const { spawnSync } = require('child_process');
-
+async function extractArchive(archivePath, destDir, kind = 'zip', stripComponents = 1) {
   if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
 
-  if (os.platform() === 'win32') {
-    const result = spawnSync('powershell.exe', [
-      '-NoProfile', '-NonInteractive', '-Command',
-      `Expand-Archive -LiteralPath '${zipPath}' -DestinationPath '${destDir}' -Force`,
-    ], { timeout: 120_000, shell: false, windowsHide: true });
-    if (result.status !== 0) {
-      throw new Error(`Extraction failed: ${(result.stderr || result.stdout || '').toString().trim()}`);
+  try {
+    if (kind === 'tar.gz') {
+      const tar = require('tar');
+      // llama.cpp's tarballs nest everything under a version directory
+      // (llama-b10216/...) while the Windows zips are flat. Stripping one
+      // component normalises both to the same on-disk layout, so requiredFiles
+      // and the entrypoint path are platform-independent.
+      await tar.x({ file: archivePath, cwd: destDir, strip: stripComponents });
+      return;
     }
-  } else {
-    const result = spawnSync('unzip', ['-o', zipPath, '-d', destDir], {
-      timeout: 120_000, shell: false,
-    });
-    if (result.status !== 0) {
-      throw new Error(`Extraction failed: ${(result.stderr || result.stdout || '').toString().trim()}`);
+    const AdmZip = require('adm-zip');
+    const zip = new AdmZip(archivePath);
+    // Guard against a crafted archive escaping destDir (zip-slip). The hash is
+    // verified before we get here, so this is defence in depth rather than the
+    // primary control — but the check is nearly free.
+    const root = path.resolve(destDir);
+    for (const entry of zip.getEntries()) {
+      const target = path.resolve(root, entry.entryName);
+      if (target !== root && !target.startsWith(root + path.sep)) {
+        throw new Error(`archive entry escapes the extract directory: ${entry.entryName}`);
+      }
     }
+    zip.extractAllTo(destDir, true);
+  } catch (e) {
+    throw new Error(`Extraction failed (${kind}): ${e.message}`);
   }
 }
 
@@ -185,13 +212,7 @@ async function installRuntime({ dataRoot, preferBackend, onProgress, onStatus } 
   emit(`Selected runtime: ${asset.id} (${asset.backend})`);
 
   // Guard: pending-verification hash means this manifest was never finalized.
-  if (asset.sha256 === 'PENDING_VERIFICATION') {
-    throw new Error(
-      `Runtime asset ${asset.id} has a PENDING_VERIFICATION SHA-256. ` +
-      `Fetch the real hash from the GitHub release page before shipping. ` +
-      `See services/local-runtime/runtime-assets.json.`
-    );
-  }
+  assertHashVerified('Runtime asset', asset.id, asset.sha256, 'runtime-assets.json');
 
   // ── 2. Check if already installed and ready ─────────────────────────────
   const existing = reg.load().runtimes.find(r => r.id === asset.id && r.state === 'ready');
@@ -203,7 +224,13 @@ async function installRuntime({ dataRoot, preferBackend, onProgress, onStatus } 
 
   // ── 3. Prepare staging paths ─────────────────────────────────────────────
   P.ensureManagedDirs(dataRoot);
-  const stagingDir = P.stagingPath(dataRoot);
+  // stagingPath() requires a caller-supplied token so two concurrent installs
+  // never collide on one .part file — see paths.cjs. Both installers were
+  // calling it with no token at all, which threw before a single byte was
+  // fetched. Nothing had ever executed this path.
+  const stagingToken = `rt-${asset.id}-${crypto.randomBytes(6).toString('hex')}`;
+  const stagingDir = P.stagingPath(dataRoot, stagingToken);
+  fs.mkdirSync(stagingDir, { recursive: true });
   const zipName = asset.filename;
   const zipStage = path.join(stagingDir, zipName);
   const extractTarget = path.join(stagingDir, `extract-${asset.id}`);
@@ -220,7 +247,7 @@ async function installRuntime({ dataRoot, preferBackend, onProgress, onStatus } 
     backend: asset.backend,
     platform: asset.platform,
     arch: asset.arch,
-    relPath: P.toRegistryRelative(dataRoot, path.join(P.runtimePath(dataRoot), asset.id)),
+    relPath: P.toRegistryRelative(dataRoot, P.runtimePath(dataRoot, asset.id)),
     entrypoint: asset.entrypoint,
     installedAt: new Date().toISOString(),
   });
@@ -245,7 +272,7 @@ async function installRuntime({ dataRoot, preferBackend, onProgress, onStatus } 
 
     // ── 7. Extract ───────────────────────────────────────────────────────────
     emit('Extracting…');
-    extractZip(zipStage, extractTarget);
+    await extractArchive(zipStage, extractTarget, asset.archive || 'zip', asset.stripComponents ?? 1);
 
     // ── 8. Verify layout ─────────────────────────────────────────────────────
     verifyLayout(extractTarget, asset);
@@ -253,7 +280,7 @@ async function installRuntime({ dataRoot, preferBackend, onProgress, onStatus } 
     emit('Layout verified');
 
     // ── 9. Move to managed runtime dir (atomic on same filesystem) ───────────
-    const finalDir = path.join(P.runtimePath(dataRoot), asset.id);
+    const finalDir = P.runtimePath(dataRoot, asset.id);
     if (fs.existsSync(finalDir)) fs.rmSync(finalDir, { recursive: true, force: true });
     fs.renameSync(extractTarget, finalDir);
     emit(`Installed to managed runtime dir`);
@@ -289,7 +316,6 @@ async function installRuntime({ dataRoot, preferBackend, onProgress, onStatus } 
   } catch (err) {
     // Any failure: quarantine the registry entry, clean staging.
     try {
-      reg.setModelState; // no-op reference — use correct API for runtimes
       const current = reg.load().runtimes.find(r => r.id === asset.id);
       if (current && current.state === 'staged') {
         // No setRuntimeState shorthand; use upsertRuntime to set quarantined.
@@ -323,4 +349,4 @@ async function removeRuntime(dataRoot, runtimeId) {
   // No removeRuntime in registry (runtimes are superseded, not deleted), so just quarantine.
 }
 
-module.exports = { installRuntime, removeRuntime, selectAsset, sha256File, download };
+module.exports = { installRuntime, removeRuntime, selectAsset, sha256File, download, assertHashVerified };

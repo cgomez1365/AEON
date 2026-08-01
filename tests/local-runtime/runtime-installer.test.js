@@ -112,21 +112,94 @@ describe('sha256File', () => {
 // ── PENDING_VERIFICATION guard ─────────────────────────────────────────────
 
 describe('PENDING_VERIFICATION guard', () => {
-  it('installRuntime throws before any download if sha256 is PENDING_VERIFICATION', async () => {
-    const { installRuntime } = require(path.join(LR, 'runtime-installer.cjs'));
-    // All current assets have PENDING_VERIFICATION — this IS the expected state
-    // until we fetch real hashes. The guard must fire.
-    await expect(installRuntime({ dataRoot })).rejects.toThrow(/PENDING_VERIFICATION/);
+  // This used to assert that the SHIPPED manifest still contained
+  // PENDING_VERIFICATION, so filling in real hashes broke the test protecting
+  // the invariant. The guard is now a pure function and is tested against
+  // synthetic values — it must hold whether or not the catalog happens to
+  // have something for it to catch.
+  const { assertHashVerified } = require(path.join(LR, 'runtime-installer.cjs'));
+
+  it('rejects a PENDING_VERIFICATION hash', () => {
+    expect(() => assertHashVerified('Runtime asset', 'x', 'PENDING_VERIFICATION', 'runtime-assets.json'))
+      .toThrow(/PENDING_VERIFICATION/);
   });
 
-  it('registry stays clean (no entry) after a PENDING_VERIFICATION rejection', async () => {
-    const { installRuntime } = require(path.join(LR, 'runtime-installer.cjs'));
-    try { await installRuntime({ dataRoot }); } catch {}
-    // May or may not have written a staged entry — but if it did, state must NOT be "ready"
-    const reg = R.createRegistry(dataRoot);
-    const { registry } = reg.read();
-    const readyRuntimes = registry.runtimes.filter(r => r.state === 'ready');
-    expect(readyRuntimes).toHaveLength(0);
+  it('rejects a malformed hash — wrong length, wrong alphabet, empty, missing', () => {
+    for (const bad of ['abc', 'z'.repeat(64), 'A'.repeat(64), '', null, undefined, 'a'.repeat(63)]) {
+      expect(() => assertHashVerified('Model', 'x', bad, 'model-catalog.json'))
+        .toThrow(/malformed SHA-256/);
+    }
+  });
+
+  it('accepts a well-formed lowercase hex digest', () => {
+    expect(() => assertHashVerified('Model', 'x', 'a'.repeat(64), 'model-catalog.json')).not.toThrow();
+  });
+
+  it('every shipped runtime asset carries a verified hash', () => {
+    // The shipping manifest's own state, asserted directly rather than through
+    // the guard. Fails loudly if an asset is added without hashing it.
+    const ASSETS = require(path.join(LR, 'runtime-assets.json'));
+    for (const p of ASSETS.platforms) {
+      expect(() => assertHashVerified('Runtime asset', p.id, p.sha256, 'runtime-assets.json')).not.toThrow();
+    }
+  });
+
+  it('a rejected install leaves no ready runtime in the registry', async () => {
+    const { installRuntime, selectAsset } = require(path.join(LR, 'runtime-installer.cjs'));
+    const ASSETS = require(path.join(LR, 'runtime-assets.json'));
+    // Force a deterministic failure by pointing this platform's asset at a
+    // closed port. Once real hashes shipped, the PENDING guard no longer
+    // short-circuits, and asserting on "a failed install" would otherwise have
+    // pulled 18MB over the network from a unit test.
+    const asset = ASSETS.platforms.find(a => a.id === selectAsset().id);
+    const realUrl = asset.url;
+    asset.url = 'http://127.0.0.1:1/unreachable.zip';
+    try {
+      await expect(installRuntime({ dataRoot })).rejects.toThrow();
+      const reg = R.createRegistry(dataRoot);
+      const { registry } = reg.read();
+      expect(registry.runtimes.filter(r => r.state === 'ready')).toHaveLength(0);
+    } finally {
+      asset.url = realUrl;
+    }
+  });
+});
+
+// ── Probe: stream capture ──────────────────────────────────────────────────
+
+describe('probe captures stderr, not just stdout', () => {
+  const { probe } = require(path.join(LR, 'runtime-probe.cjs'));
+
+  it('parses a version that the binary printed to stderr', () => {
+    // llama.cpp b5060 prints NOTHING to stdout on --version; the banner goes to
+    // stderr and it exits 0. The probe used execFileSync, which returns only
+    // stdout on success, so it recorded reportedVersion "unknown" for a binary
+    // that had just printed "version: 5060" — and execFileSync's inherited
+    // stderr leaked that banner into the installer's console at the same time.
+    //
+    // node -e is a real process whose output split we control exactly.
+    const script = "process.stderr.write('version: 5060 (0c74b043)\nbuilt with MSVC 19.43 for x64\n')";
+    const result = probe(process.execPath, ['-e', script]);
+    expect(result.reportedVersion).toBe('b5060');
+  });
+
+  it('still reads a version from stdout when a build writes it there', () => {
+    const script = "process.stdout.write('version: 4242 (deadbee)\n')";
+    expect(probe(process.execPath, ['-e', script]).reportedVersion).toBe('b4242');
+  });
+
+  it('detects a GPU backend announced on stderr', () => {
+    const script = "process.stderr.write('ggml_cuda_init: found 1 CUDA devices:\n')";
+    expect(probe(process.execPath, ['-e', script]).gpuBackend).toBe('cuda');
+  });
+
+  it('throws rather than returning "unknown" when a binary prints nothing at all', () => {
+    expect(() => probe(process.execPath, ['-e', '0'])).toThrow(/no output/i);
+  });
+
+  it('rejects a relative path and a missing binary', () => {
+    expect(() => probe('llama-cli')).toThrow(/must be absolute/);
+    expect(() => probe(path.join(tmp, 'nope.exe'))).toThrow(/not found/);
   });
 });
 

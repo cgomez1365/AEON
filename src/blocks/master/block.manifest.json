@@ -73,7 +73,6 @@
     "targets": {
       "local": true,
       "vercel": true,
-      "docker": true,
       "cloudflare": true
     },
     "commands": [

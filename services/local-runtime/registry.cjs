@@ -327,8 +327,25 @@ function createRegistry(dataRoot) {
   }
 
   /** Resolve a registry entry's stored relative path to an absolute one. */
+  /**
+   * Absolute path to an entry's executable/weights file.
+   *
+   * A MODEL's relPath already points at the .gguf. A RUNTIME's relPath points
+   * at the extracted DIRECTORY, and the file to run is named separately in
+   * `entrypoint` — which this ignored, so every caller received a directory
+   * where it expected a binary. index.cjs handed that directory to the
+   * supervisor and to the embedder; runtime-installer worked only because it
+   * appended `${relPath}/${entrypoint}` by hand on its own return path.
+   *
+   * Appending entrypoint here makes the one resolver correct for both kinds
+   * and removes the hand-assembly. Entries without an entrypoint (models) are
+   * unchanged.
+   */
   function resolveEntryPath(entry) {
-    return P.fromRegistryRelative(dataRoot, entry.relPath);
+    const rel = entry && entry.entrypoint
+      ? `${entry.relPath}/${entry.entrypoint}`
+      : entry.relPath;
+    return P.fromRegistryRelative(dataRoot, rel);
   }
 
   function assertTransition(kind, from, to) {

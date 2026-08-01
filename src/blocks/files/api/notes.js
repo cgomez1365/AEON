@@ -1,17 +1,25 @@
 const { createClient } = require("@supabase/supabase-js");
 const { vaultSync } = require('../../../kernel/vaultSync.cjs');
+const cloud = require('../../../kernel/server-utils/cloudGuard.cjs');
 
 // =============================================
 //  /api/notes — Cloud Notes CRUD
 //  Stores and retrieves CEO notes from Supabase.
 //  Table: aeon_notes (id, title, body, tags, created_at, updated_at)
 //  Auth: anon key + open RLS policy (server-only, no browser exposure)
+//
+//  Offline behaviour (BO-E4): with no Supabase credentials this used to build
+//  a client from `undefined` and await forever — GET and POST both hung with
+//  no response at all. It now refuses immediately with 503, and every query
+//  carries a deadline so "configured but unreachable" is bounded too.
 // =============================================
 
-const getSupabase = () => createClient(
-  process.env.SUPABASE_URL      || process.env.VITE_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY
-);
+const { supabaseConfig } = cloud;
+
+const getSupabase = () => {
+  const { url, key } = supabaseConfig();
+  return createClient(url, key);
+};
 
 // Route: /api/notes
 const _handler = async (req, res) => {
@@ -19,6 +27,8 @@ const _handler = async (req, res) => {
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST,PUT,DELETE');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   if (req.method === 'OPTIONS') return res.status(200).end();
+
+  if (cloud.requireCloud(res, { service: 'Supabase', feature: 'Cloud Notes' })) return;
 
   const supabase = getSupabase();
 
@@ -81,7 +91,12 @@ const _handler = async (req, res) => {
 };
 
 module.exports = (app, deps) => {
-  // Supports GET, POST, PUT, DELETE by delegating to the internal handler
+  // Supports GET, POST, PUT, DELETE by delegating to the internal handler.
+  // The handler is wrapped in a deadline so a wedged upstream ends the REQUEST
+  // rather than holding the socket open indefinitely (BO-E4).
   const methods = ['get', 'post', 'put', 'delete', 'options'];
-  methods.forEach(m => app[m]('/api/notes', (req, res) => _handler(req, res)));
+  methods.forEach(m => app[m]('/api/notes', (req, res) => {
+    cloud.withDeadline(Promise.resolve().then(() => _handler(req, res)), cloud.DEFAULT_DEADLINE_MS, 'Cloud Notes')
+      .catch(err => { if (!res.headersSent) cloud.sendFailure(res, err, 'Cloud Notes'); });
+  }));
 };

@@ -2,14 +2,14 @@
 /**
  * AEON — Portable USB bundle builder (BO-USB)
  *
- *   node scripts/build-usb.js --target E:\ --model qwen3:8b --platform win
+ *   node scripts/build-usb.js --target E:\ --model qwen3-1.7b-q8 --platform win
  *
- * Assembles a drive that boots AEON on a machine with NO Node, NO Ollama, and
- * NO internet. The drive carries its own runtime, its own models, and its own
- * data — nothing is installed on, or written to, the host.
+ * Assembles a drive that boots AEON on a machine with NO Node and NO internet.
+ * The drive carries its own runtime, its own models, and its own data — nothing
+ * is installed on, or written to, the host.
  *
  * Layering note (this is the part people get wrong): GitHub can only supply the
- * SOURCE layer. node_modules is gitignored, the Node/Ollama binaries are
+ * SOURCE layer. node_modules is gitignored, the Node binaries are
  * per-platform and git-hostile, and model weights blow past GitHub's 100MB file
  * cap. So a bundle is SEEDED ONCE on a machine with a network, and from then on
  * the drive is self-sufficient. --from github fetches source from a release
@@ -22,7 +22,7 @@
  *   --from <src>       local | github                      (default: local)
  *   --deps <mode>      copy | install | none               (default: copy)
  *   --skip-build       reuse existing dist/ instead of rebuilding
- *   --skip-runtime     don't download Node/Ollama (source-only bundle)
+ *   --skip-runtime     don't download the portable Node (source-only bundle)
  *   --dry-run          print the plan, touch nothing
  *   --force            overwrite a non-empty target
  */
@@ -38,7 +38,6 @@ const ROOT = path.join(__dirname, '..');
 
 // Pinned so a bundle built today and one built next month are the same shape.
 const NODE_VERSION = process.env.AEON_USB_NODE_VERSION || 'v22.14.0';
-const OLLAMA_RELEASE = 'https://github.com/ollama/ollama/releases/latest/download';
 
 // ── arg parsing ─────────────────────────────────────────────────────────────
 function parseArgs(argv) {
@@ -184,11 +183,6 @@ const NODE_ASSET = {
   mac:   { file: `node-${NODE_VERSION}-darwin-arm64.tar.gz`, bin: 'node' },
   linux: { file: `node-${NODE_VERSION}-linux-x64.tar.xz`,    bin: 'node' },
 };
-const OLLAMA_ASSET = {
-  win:   'ollama-windows-amd64.zip',
-  mac:   'Ollama-darwin.zip',
-  linux: 'ollama-linux-amd64.tgz',
-};
 
 // ── main ────────────────────────────────────────────────────────────────────
 async function main() {
@@ -206,7 +200,7 @@ ${C.bold('aeon build-usb')} — assemble a portable AEON drive
   --from <src>       local | github                     ${C.dim('(default: local)')}
   --deps <mode>      copy | install | none              ${C.dim('(default: copy)')}
   --skip-build       reuse existing dist/
-  --skip-runtime     no Node/Ollama download
+  --skip-runtime     no portable Node download
   --dry-run          print the plan only
   --force            overwrite a non-empty target
 `);
@@ -228,7 +222,7 @@ ${C.bold('aeon build-usb')} — assemble a portable AEON drive
   log(`  source     ${args.from}`);
   log(`  deps       ${args.deps}`);
   log(`  model      ${args.model || C.dim('(none — user supplies)')}`);
-  log(`  runtime    ${args.skipRuntime ? C.warn('skipped') : 'Node ' + NODE_VERSION + ' + Ollama'}`);
+  log(`  runtime    ${args.skipRuntime ? C.warn('skipped') : 'Node ' + NODE_VERSION}`);
   if (args.dryRun) log(C.warn('\n  DRY RUN — nothing will be written'));
 
   // ── 0. target sanity ──
@@ -329,10 +323,10 @@ ${C.bold('aeon build-usb')} — assemble a portable AEON drive
   // ── 4. runtime ──
   step(4, 'Portable runtime');
   if (args.skipRuntime) {
-    log(C.warn('  skipped (--skip-runtime) — host must already have Node + Ollama'));
+    log(C.warn('  skipped (--skip-runtime) — host must already have Node'));
   } else if (args.dryRun) {
     for (const p of platforms) {
-      log(C.dim(`  would fetch node ${NODE_VERSION} (${p}) + ${OLLAMA_ASSET[p]}`));
+      log(C.dim(`  would fetch node ${NODE_VERSION} (${p})`));
     }
   } else {
     const cache = path.join(os.tmpdir(), 'aeon-usb-cache');
@@ -350,16 +344,11 @@ ${C.bold('aeon build-usb')} — assemble a portable AEON drive
         log(C.ok('      ✓'));
       } catch (e) { log(C.err(`      ✗ ${e.message}`)); }
 
-      const ollamaUrl = `${OLLAMA_RELEASE}/${OLLAMA_ASSET[p]}`;
-      const ollamaArc = path.join(cache, OLLAMA_ASSET[p]);
-      log(`  ollama (${p}) ${C.dim(OLLAMA_ASSET[p])}`);
-      try {
-        if (!fs.existsSync(ollamaArc)) await download(ollamaUrl, ollamaArc);
-        else log(C.dim('      cached'));
-        fs.mkdirSync(path.join(TARGET, 'runtime', 'ollama', p), { recursive: true });
-        fs.copyFileSync(ollamaArc, path.join(TARGET, 'runtime', 'ollama', p, OLLAMA_ASSET[p]));
-        log(C.ok('      ✓'));
-      } catch (e) { log(C.err(`      ✗ ${e.message}`)); }
+      // No Ollama. AEON runs local models through its own bundled
+      // llama.cpp worker (services/local-runtime), installed into
+      // data/local-runtime by the Cookbook block. Shipping a second,
+      // system-wide model daemon on the drive contradicted that and left an
+      // identity keypair on every host machine it touched.
     }
     log(C.dim('  archives are expanded by the launcher on first run (keeps the'));
     log(C.dim('  bundle filesystem-agnostic — no exec bits to lose on FAT/exFAT)'));
@@ -373,19 +362,37 @@ ${C.bold('aeon build-usb')} — assemble a portable AEON drive
     log(C.dim('  none requested — the launcher pulls one on first run if online,'));
     log(C.dim('  or the owner drops GGUF weights into models/ by hand.'));
   } else if (args.dryRun) {
-    log(C.dim(`  would run: ollama pull ${args.model} → models/`));
+    log(C.dim(`  would fetch catalog model ${args.model} → models/`));
   } else {
-    log(`  pulling ${args.model} into ${C.dim(modelsDir)}`);
-    try {
-      execFileSync('ollama', ['pull', args.model], {
-        stdio: 'inherit',
-        env: { ...process.env, OLLAMA_MODELS: modelsDir },
-        shell: process.platform === 'win32',
-      });
-      log(C.ok(`  ✓ ${args.model} (${human(dirSize(modelsDir))})`));
-    } catch {
-      log(C.warn(`  ! ollama pull failed — is ollama installed and on PATH?`));
-      log(C.dim('    the bundle is still valid; seed models/ later.'));
+    // Straight from the curated GGUF catalog, hash-verified — the same source
+    // and the same verification the Cookbook block uses at runtime. Previously
+    // this shelled out to `ollama pull`, which required a system-wide daemon on
+    // the BUILD machine and produced a store AEON no longer reads.
+    const CATALOG = require(path.join(ROOT, 'services/local-runtime/model-catalog.json'));
+    const entry = CATALOG.models.find(m => m.id === args.model);
+    if (!entry) {
+      log(C.warn(`  ! unknown model id "${args.model}"`));
+      log(C.dim(`    available: ${CATALOG.models.map(m => m.id).join(', ')}`));
+    } else if (entry.sha256 === 'PENDING_VERIFICATION') {
+      log(C.warn(`  ! ${entry.id} has no verified hash yet — refusing to bundle it`));
+      log(C.dim('    run: node tools/fetch-runtime-hashes.mjs models --write'));
+    } else {
+      const dest = path.join(modelsDir, entry.filename);
+      log(`  fetching ${entry.displayName} → ${C.dim(modelsDir)}`);
+      try {
+        await download(entry.url, dest);
+        const crypto = require('crypto');
+        const actual = crypto.createHash('sha256').update(fs.readFileSync(dest)).digest('hex');
+        if (actual !== entry.sha256.toLowerCase()) {
+          fs.unlinkSync(dest);
+          log(C.err(`  ✗ SHA-256 mismatch — deleted. expected ${entry.sha256}, got ${actual}`));
+        } else {
+          log(C.ok(`  ✓ ${entry.id} (${human(dirSize(modelsDir))}) hash verified`));
+        }
+      } catch (e) {
+        log(C.warn(`  ! fetch failed: ${e.message}`));
+        log(C.dim('    the bundle is still valid; seed models/ later.'));
+      }
     }
   }
 
@@ -437,17 +444,16 @@ VAULT_PATH=__USB_ROOT__/AEON/Vault
 AEON_SECRETS_DIR=__USB_ROOT__/AEON/secrets
 AEON_WORKSPACE=__USB_ROOT__/AEON
 
-# Local inference only.
-OLLAMA_HOST=http://localhost:11434
-OLLAMA_MODELS=__USB_ROOT__/models
-OLLAMA_DEFAULT_MODEL=${args.model || 'qwen3:8b'}
+# Local inference only - AEON's own llama.cpp runtime, no external daemon.
+# Weights live on the drive; the runtime installs into AEON/data/local-runtime.
+AEON_LOCAL_MODELS_DIR=__USB_ROOT__/models
 
 # AEON_PORTABLE=true already forces local-only (services/cloud.js); this is
 # belt-and-braces for anyone who edits the flag above without reading the code.
 AEON_LOCAL_ONLY=1
 
 # Vault keyslots are generated on first boot into AEON_SECRETS_DIR.
-# Cloud keys intentionally absent — every role resolves to Ollama.
+# Cloud keys intentionally absent - every role resolves to the local runtime.
 `;
   fs.writeFileSync(path.join(aeonDir, '.env.usb'), env);
 }
@@ -468,7 +474,6 @@ echo   Drive: %USB_ROOT%
 echo.
 
 set "NODE_DIR=%USB_ROOT%\\runtime\\node\\win"
-set "OLLAMA_DIR=%USB_ROOT%\\runtime\\ollama\\win"
 
 REM Expand the pinned runtimes on first boot. Archives ship instead of loose
 REM binaries so the bundle survives FAT/exFAT, which has no exec permission bit.
@@ -479,10 +484,6 @@ if exist "%NODE_DIR%\\*.zip" if not exist "%NODE_DIR%\\node.exe" (
     copy /y "%%D\\node.exe" "%NODE_DIR%\\node.exe" >nul 2>&1
     xcopy /e /i /y /q "%%D\\node_modules" "%NODE_DIR%\\node_modules" >nul 2>&1
   )
-)
-if exist "%OLLAMA_DIR%\\*.zip" if not exist "%OLLAMA_DIR%\\ollama.exe" (
-  echo   Extracting portable Ollama...
-  for %%F in ("%OLLAMA_DIR%\\*.zip") do powershell -NoProfile -Command "Expand-Archive -LiteralPath '%%~F' -DestinationPath '%OLLAMA_DIR%' -Force"
 )
 
 if exist "%NODE_DIR%\\node.exe" (
@@ -495,44 +496,16 @@ if exist "%NODE_DIR%\\node.exe" (
   )
   echo   [!] Using this PC's Node - portable runtime not found on drive.
 )
-if exist "%OLLAMA_DIR%\\ollama.exe" set "PATH=%OLLAMA_DIR%;%PATH%"
-
-set "OLLAMA_MODELS=%USB_ROOT%\\models"
-set "OLLAMA_HOME=%USB_ROOT%\\runtime\\ollama\\home"
 set "AEON_PORTABLE=true"
-if not exist "%OLLAMA_HOME%" mkdir "%OLLAMA_HOME%" >nul 2>&1
 
 REM .env.usb is the template; .env is the materialised copy with the real
 REM drive letter substituted for __USB_ROOT__.
 echo   Configuring for %USB_ROOT%...
 powershell -NoProfile -Command "(Get-Content -Raw '%USB_ROOT%\\AEON\\.env.usb') -replace '__USB_ROOT__', ('%USB_ROOT%' -replace '\\\\','/') | Set-Content -NoNewline '%USB_ROOT%\\AEON\\.env'"
 
-REM Labels may not live inside a parenthesised block — cmd parses the whole
-REM block up front and rejects them. Keep this control flow flat.
-REM OLLAMA_OURS records whether WE started it, so shutdown never kills an
-REM Ollama that already belonged to the host machine.
-set "OLLAMA_OURS="
-where ollama >nul 2>&1 || goto :ollama_done
-tasklist /fi "imagename eq ollama.exe" 2>nul | find /i "ollama.exe" >nul && goto :ollama_already
-echo   Starting Ollama...
-REM Ollama derives its identity key and cache from the user's home directory,
-REM NOT from OLLAMA_MODELS. Without this it writes an SSH keypair into the host
-REM profile (%%USERPROFILE%%\\.ollama) and leaves it behind. Override USERPROFILE
-REM for the child process only, so nothing lands on the host machine.
-start "" /b cmd /c "set "USERPROFILE=%OLLAMA_HOME%" && set "HOME=%OLLAMA_HOME%" && ollama serve"
-set "OLLAMA_OURS=1"
-REM 'timeout' reads the console and dies with 'Input redirection is not
-REM supported' whenever stdin is redirected, which silently burns every retry
-REM in milliseconds. 'ping' is the portable sleep that survives redirection.
-for /l %%i in (1,1,30) do (
-  powershell -NoProfile -Command "try{(Invoke-WebRequest -Uri http://127.0.0.1:11434 -TimeoutSec 1 -UseBasicParsing).StatusCode}catch{exit 1}" >nul 2>&1 && goto :ollama_done
-  ping -n 2 127.0.0.1 >nul 2>&1
-)
-echo   [!] Ollama did not come up in 30s - continuing without it.
-goto :ollama_done
-:ollama_already
-echo   Ollama is already running on this PC - using it, and leaving it running.
-:ollama_done
+REM No model daemon to start. AEON serves local models in-process through its
+REM own llama.cpp worker (services/local-runtime), so there is nothing to
+REM launch, nothing to health-poll, and nothing left running on the host.
 
 cd /d "%USB_ROOT%\\AEON"
 echo   Starting AEON...
@@ -540,12 +513,7 @@ start "" http://localhost:3000
 node server.cjs
 
 echo.
-if defined OLLAMA_OURS (
-  echo   AEON stopped. Shutting down the Ollama this drive started...
-  taskkill /f /im ollama.exe >nul 2>&1
-) else (
-  echo   AEON stopped. Leaving this PC's Ollama alone.
-)
+endlocal
 endlocal
 `.replace(/\n/g, '\r\n');
 
@@ -562,7 +530,6 @@ echo "  Drive: $USB_ROOT"
 echo
 
 NODE_DIR="$USB_ROOT/runtime/node/linux"
-OLLAMA_DIR="$USB_ROOT/runtime/ollama/linux"
 
 # Archives ship instead of loose binaries: exFAT/FAT drop the exec bit, so we
 # expand and chmod on the host at boot rather than trusting drive permissions.
@@ -574,18 +541,8 @@ if [ -d "$NODE_DIR" ] && [ ! -x "$NODE_DIR/bin/node" ]; then
     chmod +x "$NODE_DIR/bin/node" 2>/dev/null || true
   fi
 fi
-if [ -d "$OLLAMA_DIR" ] && [ ! -x "$OLLAMA_DIR/ollama" ]; then
-  arc=$(ls "$OLLAMA_DIR"/ollama-*.tgz 2>/dev/null | head -1 || true)
-  if [ -n "\${arc:-}" ]; then
-    echo "  Extracting portable Ollama…"
-    tar -xzf "$arc" -C "$OLLAMA_DIR" 2>/dev/null || true
-    chmod +x "$OLLAMA_DIR/ollama" "$OLLAMA_DIR/bin/ollama" 2>/dev/null || true
-  fi
-fi
 
 [ -x "$NODE_DIR/bin/node" ] && export PATH="$NODE_DIR/bin:$PATH"
-[ -x "$OLLAMA_DIR/ollama" ] && export PATH="$OLLAMA_DIR:$PATH"
-[ -x "$OLLAMA_DIR/bin/ollama" ] && export PATH="$OLLAMA_DIR/bin:$PATH"
 
 command -v node >/dev/null 2>&1 || {
   echo "  [X] No portable Node on the drive and none installed on this machine."
@@ -593,29 +550,15 @@ command -v node >/dev/null 2>&1 || {
   exit 1
 }
 
-export OLLAMA_MODELS="$USB_ROOT/models"
+export AEON_LOCAL_MODELS_DIR="$USB_ROOT/models"
 export AEON_PORTABLE=true
 
 echo "  Configuring for $USB_ROOT…"
 sed "s|__USB_ROOT__|$USB_ROOT|g" "$USB_ROOT/AEON/.env.usb" > "$USB_ROOT/AEON/.env"
 
-OLLAMA_PID=""
-if command -v ollama >/dev/null 2>&1; then
-  echo "  Starting Ollama…"
-  ollama serve >/dev/null 2>&1 &
-  OLLAMA_PID=$!
-  for _ in $(seq 1 30); do
-    curl -sf http://localhost:11434 >/dev/null 2>&1 && break
-    sleep 1
-  done
-fi
-
-cleanup() {
-  echo
-  echo "  AEON stopped. Shutting down Ollama…"
-  [ -n "$OLLAMA_PID" ] && kill "$OLLAMA_PID" 2>/dev/null || true
-}
-trap cleanup EXIT INT TERM
+# No model daemon to start: AEON serves local models in-process through its
+# own llama.cpp worker (services/local-runtime). Nothing is left running on
+# the host when the drive is pulled.
 
 cd "$USB_ROOT/AEON"
 echo "  Starting AEON…"
@@ -626,10 +569,6 @@ node server.cjs
   const command = sh
     .replace('# AEON — portable launcher (Linux)', '# AEON — portable launcher (macOS)')
     .replace(/runtime\/node\/linux/g, 'runtime/node/mac')
-    .replace(/runtime\/ollama\/linux/g, 'runtime/ollama/mac')
-    .replace(/ollama-\*\.tgz/g, 'Ollama-darwin.zip')
-    .replace('tar -xzf "$arc" -C "$OLLAMA_DIR" 2>/dev/null || true',
-             'unzip -oq "$arc" -d "$OLLAMA_DIR" 2>/dev/null || true')
     .replace('xdg-open http://localhost:3000 >/dev/null 2>&1 || true',
              'open http://localhost:3000 >/dev/null 2>&1 || true');
 
@@ -660,7 +599,6 @@ WHAT IS ON THIS DRIVE
 ---------------------------------------------------------------------
   AEON/           the application, with node_modules and a built dist/
   runtime/node/   portable Node ${nodeVersion} — nothing is installed
-  runtime/ollama/ portable Ollama — the local inference engine
   models/         model weights${args.model ? ` (${args.model} included)` : ' (empty — see below)'}
 
 
@@ -674,13 +612,10 @@ and to be plugged into machines you do not control. Every AI role
 resolves to the local model in models/.
 
 ${args.model ? `${args.model} is already on the drive. You are fully offline-capable.`
-             : `models/ is EMPTY. On a machine with internet, run once:
-
-    ollama pull qwen3:8b
-
-  with OLLAMA_MODELS set to this drive's models/ folder — or just launch
-  AEON while online and it will pull on first boot. After that the drive
-  never needs a network again.`}
+             : `models/ is EMPTY. On a machine with internet, open AEON and
+  install a model from the Cookbook block — it downloads into the drive's
+  own data/local-runtime folder and verifies the file's SHA-256 before use.
+  After that the drive never needs a network again.`}
 
 
 YOUR DATA STAYS ON THE DRIVE
@@ -696,16 +631,16 @@ Treat this drive like a key — anyone holding it holds the vault.
 
 FIRST BOOT IS SLOWER
 ---------------------------------------------------------------------
-The launcher expands the portable Node and Ollama archives once. Expect
-30–90 seconds the first time and under 20 seconds after that.
+The launcher expands the portable Node archive once. Expect 30–90 seconds
+the first time and under 20 seconds after that.
 
 
 TROUBLESHOOTING
 ---------------------------------------------------------------------
 "No portable Node"       the bundle was built with --skip-runtime.
                          Rebuild without it.
-Ollama won't start       another Ollama may already be running on the
-                         host and holding port 11434. Quit it first.
+No local model           open Cookbook inside AEON and install one. The
+                         drive works with cloud keys in the meantime.
 Port 3000/3001 in use    close whatever holds them, or set PORT and
                          VITE_PORT in AEON/.env.usb.
 Slow model responses     the model streams off the drive. USB 3.2 or
@@ -726,5 +661,5 @@ if (require.main === module) {
 module.exports = {
   main, writeEnvUsb, writeLaunchers, writeReadme,
   shouldExclude, EXCLUDE, copyTree, dirSize, human,
-  NODE_VERSION, NODE_ASSET, OLLAMA_ASSET,
+  NODE_VERSION, NODE_ASSET,
 };

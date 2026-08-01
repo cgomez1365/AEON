@@ -33,6 +33,7 @@ const fs = require('fs');
 function createBlockHost({ blocksDir, baseDeps, createScopedDeps, registry, readiness, getSyncCtx, log = console }) {
   let inner = express.Router();     // replaced wholesale on every rescan
   let generation = 0;               // bumps per rescan — UI remount signal (#3)
+  let lastSkipped = [];             // API modules the last rescan could not mount
   const lifecycles = new Map();     // blockId → { cleanups, timers, listeners }
 
   // Stable trampoline — the ONLY thing server.cjs ever mounts.
@@ -97,44 +98,80 @@ function createBlockHost({ blocksDir, baseDeps, createScopedDeps, registry, read
     };
   }
 
+  /**
+   * Is this value something Express can actually mount?
+   *
+   * Checked structurally, not by `.name === 'router'`. The name is a minifier-
+   * and version-dependent implementation detail of Express; the stack is the
+   * thing that makes it mountable.
+   */
+  function isMountableRouter(v) {
+    return typeof v === 'function' && typeof v.use === 'function' && Array.isArray(v.stack);
+  }
+
   function mountBlock(router, folder, manifest) {
+    const result = { mounted: 0, skipped: [] };
     const apiDir = path.join(blocksDir, folder, 'api');
-    if (!fs.existsSync(apiDir)) return 0;
+    if (!fs.existsSync(apiDir)) return result;
     const blockDeps = createScopedDeps(baseDeps, manifest, folder);
     blockDeps.lifecycle = makeLifecycle(folder);
 
-    let mounted = 0;
+    const skip = (file, why) => {
+      result.skipped.push({ block: folder, file, why });
+      // R-05: a module that contributes no routes is a silent failure unless it
+      // is said out loud. This was how fleet_control/local-status.js went
+      // missing — an arity-1 `(app) => …` plugin receives blockDeps, calls .get
+      // on the sandbox proxy, is denied, and returns a bare handler. The old
+      // code counted it as mounted and moved on.
+      log.error(`[BLOCK HOST] NOT MOUNTED: ${folder}/${file} — ${why}`);
+    };
+
     const apiFiles = fs.readdirSync(apiDir).filter(f => (f.endsWith('.js') || f.endsWith('.cjs')) && !f.startsWith('_'));
     for (const file of apiFiles) {
       try {
         const dynamicRequire = eval('require');
         const factory = dynamicRequire(path.join(apiDir, file));
-        if (typeof factory !== 'function') continue;
-        if (factory.name === 'router' || (typeof factory.use === 'function' && Array.isArray(factory.stack))) {
+
+        if (isMountableRouter(factory)) {
+          // Shape 1 — the module exports a ready-made router.
           router.use(`/block/${folder}`, gateRunning(folder, factory, { exclusive: true }));
           router.use('/api', gateRunning(folder, factory));
+        } else if (typeof factory !== 'function') {
+          skip(file, `export is ${factory === null ? 'null' : typeof factory}, expected a function or a router`);
+          continue;
         } else if (factory.length === 1) {
-          const result = factory(blockDeps);
-          if (result && result.name === 'router') {
-            router.use(`/block/${folder}`, gateRunning(folder, result, { exclusive: true }));
-            router.use('/api', gateRunning(folder, result));
+          // Shape 2 — a factory that receives deps and RETURNS a router.
+          // An arity-1 module that instead registers on its argument is
+          // indistinguishable here by signature, so it is caught by its return
+          // value and reported rather than dropped.
+          const produced = factory(blockDeps);
+          if (!isMountableRouter(produced)) {
+            skip(file, 'arity-1 factory did not return an Express router '
+              + '(a `(app) => { app.get(...) }` plugin must declare a second parameter '
+              + 'so it is mounted as `(router, deps)`)');
+            continue;
           }
+          router.use(`/block/${folder}`, gateRunning(folder, produced, { exclusive: true }));
+          router.use('/api', gateRunning(folder, produced));
         } else {
-          // Plugin pattern registers verbs directly; the inner router quacks
-          // enough like `app` (verified: only get/post/put/delete in use) and
-          // is discarded on rescan, which is what makes these tear-downable.
-          // Run-state gating: plugins register on a per-block sub-router that
-          // is itself gated, preserving interruption for this pattern too.
+          // Shape 3 — plugin: registers verbs directly on the router it is
+          // handed. The inner router quacks enough like `app` (verified: only
+          // get/post/put/delete in use) and is discarded on rescan, which is
+          // what makes these tear-downable. Run-state gating applies here too.
           const sub = express.Router();
           factory(sub, blockDeps);
+          if (!sub.stack.length) {
+            skip(file, `plugin (arity ${factory.length}) registered zero routes`);
+            continue;
+          }
           router.use(gateRunning(folder, sub));
         }
-        mounted++;
+        result.mounted++;
       } catch (e) {
-        log.error(`[BLOCK HOST] Failed: ${folder}/${file}: ${e.message}`);
+        skip(file, `threw during mount: ${e.message}`);
       }
     }
-    return mounted;
+    return result;
   }
 
   /**
@@ -170,26 +207,37 @@ function createBlockHost({ blocksDir, baseDeps, createScopedDeps, registry, read
     for (const k of Object.keys(readiness)) delete readiness[k];
 
     let mounted = 0;
+    const skipped = [];
     for (const folder of folders) {
       let manifest = null;
       try { manifest = JSON.parse(fs.readFileSync(path.join(blocksDir, folder, 'block.manifest.json'), 'utf8')); } catch {}
       registry.push(manifest || { id: folder, label: folder, tier: 'unknown' });
       const s = synced.find(b => b.id === folder);
       if (s) readiness[folder] = s.readiness;
-      mounted += mountBlock(fresh, folder, manifest);
+      const r = mountBlock(fresh, folder, manifest);
+      mounted += r.mounted;
+      skipped.push(...r.skipped);
     }
 
     inner = fresh;
     generation++;
+    lastSkipped = skipped;
     const ms = Date.now() - t0;
     log.log(`[BLOCK HOST] rescan(${reason}) gen ${generation}: ${folders.length} blocks, ${mounted} API mounts, ${ms}ms`);
-    return { ok: true, generation, blocks: folders.length, mounted, ms, reason };
+    // The count above is now routes actually mounted, not files processed.
+    // A non-empty skip list means the UI is calling something nothing serves.
+    if (skipped.length) {
+      log.error(`[BLOCK HOST] ${skipped.length} API module(s) did not mount: `
+        + skipped.map(s => `${s.block}/${s.file}`).join(', '));
+    }
+    return { ok: true, generation, blocks: folders.length, mounted, skipped, ms, reason };
   }
 
   return {
     router: trampoline,
     rescan,
     getGeneration: () => generation,
+    getSkipped: () => lastSkipped.slice(),
     _lifecycles: lifecycles, // exposed for tests (test-hotreload.cjs)
   };
 }

@@ -15,8 +15,20 @@ const path = require('path');
 
 const ROOT = path.join(__dirname, '..', '..');
 
-/** Production trees only — tests legitimately construct fixture paths. */
-const SCAN_DIRS = ['services', 'server', 'src', 'security'];
+/**
+ * Production trees only — tests legitimately construct fixture paths.
+ *
+ * BO-G widened this. The original four dirs left `tools/`, `scripts/`, `api/`
+ * and every root file unscanned, and that is exactly where the operator's own
+ * machine path had accumulated: five stress harnesses defaulted to
+ * `C:\Users\cgome\Desktop\AEON`, and the icon generator wrote to
+ * `~/Desktop/AEON-Icons`. A gate that cannot see a directory does not protect
+ * it — and `launch.js` (root) is the first file a consumer ever executes.
+ */
+const SCAN_DIRS = ['services', 'server', 'src', 'security', 'tools', 'scripts', 'api'];
+
+/** Root-level files are scanned individually — there is no root "dir" to walk. */
+const SCAN_FILES = ['launch.js', 'server.cjs', 'vite.config.js', 'vitest.config.js'];
 
 const SKIP_DIR = new Set(['node_modules', 'dist', '.git', 'tests', 'data', 'coverage']);
 const EXT = new Set(['.js', '.cjs', '.mjs', '.jsx']);
@@ -48,11 +60,32 @@ const RULES = [
   },
   {
     id: 'legacy-model-root',
-    re: /\.ollama\b|[\\/]models[\\/]blobs\b/g,
+    re: /\.ollama\b|[\\/]models[\\/]blobs\b/g, // aeon-path-authority-allow — this IS the detector's own pattern
     msg: 'legacy external model root reference',
     allowAll: false,
   },
 ];
+
+/**
+ * Blank out comments, preserving byte offsets so line numbers stay correct.
+ *
+ * A path written in prose is documentation, not behaviour — and without this
+ * the scanners flag their own rule definitions, which teaches everyone to
+ * sprinkle the opt-out annotation until the gate means nothing.
+ *
+ * Line comments are matched only when `//` is not preceded by `:` so that a
+ * `https://` inside a string is left alone.
+ */
+function stripComments(src) {
+  let out = src.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '));
+  out = out.split('\n').map((line) => {
+    const m = line.match(/(^|[^:'"`\\])\/\//);
+    if (!m) return line;
+    const at = m.index + m[1].length;
+    return line.slice(0, at) + ' '.repeat(line.length - at);
+  }).join('\n');
+  return out;
+}
 
 function walk(dir, out = []) {
   let entries;
@@ -74,23 +107,29 @@ function rel(p) { return path.relative(ROOT, p).split(path.sep).join('/'); }
 
 function main() {
   const findings = [];
-  for (const d of SCAN_DIRS) {
-    for (const file of walk(path.join(ROOT, d))) {
-      const r = rel(file);
-      if (ALLOWED.has(r)) continue;
-      const src = fs.readFileSync(file, 'utf8');
-      const lines = src.split('\n');
-      for (const rule of RULES) {
-        rule.re.lastIndex = 0;
-        let m;
-        while ((m = rule.re.exec(src)) !== null) {
-          const line = src.slice(0, m.index).split('\n').length;
-          const text = (lines[line - 1] || '').trim();
-          // An eslint-style opt-out keeps a genuine migration adapter legal,
-          // but forces it to be explicit and greppable.
-          if (/aeon-path-authority-allow/.test(text)) continue;
-          findings.push({ file: r, line, rule: rule.id, msg: rule.msg, text: text.slice(0, 140) });
-        }
+  const targets = [];
+  for (const d of SCAN_DIRS) targets.push(...walk(path.join(ROOT, d)));
+  for (const f of SCAN_FILES) {
+    const p = path.join(ROOT, f);
+    if (fs.existsSync(p)) targets.push(p);
+  }
+
+  for (const file of targets) {
+    const r = rel(file);
+    if (ALLOWED.has(r)) continue;
+    const raw = fs.readFileSync(file, 'utf8');
+    const src = stripComments(raw);
+    const lines = raw.split('\n');
+    for (const rule of RULES) {
+      rule.re.lastIndex = 0;
+      let m;
+      while ((m = rule.re.exec(src)) !== null) {
+        const line = src.slice(0, m.index).split('\n').length;
+        const text = (lines[line - 1] || '').trim();
+        // An eslint-style opt-out keeps a genuine migration adapter legal,
+        // but forces it to be explicit and greppable.
+        if (/aeon-path-authority-allow/.test(text)) continue;
+        findings.push({ file: r, line, rule: rule.id, msg: rule.msg, text: text.slice(0, 140) });
       }
     }
   }

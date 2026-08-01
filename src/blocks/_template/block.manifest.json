@@ -42,10 +42,17 @@
     "storage": {
       "type": "none",
       "scope": "block",
-      "local": { "indexed": false, "retention": "operational" },
+      "local": {
+        "indexed": false,
+        "retention": "operational"
+      },
       "access": "scoped"
     },
-    "memory": { "mode": "none", "indexed": false, "userConfigurable": false },
+    "memory": {
+      "mode": "none",
+      "indexed": false,
+      "userConfigurable": false
+    },
     "ai": {
       "canGenerate": false,
       "canAnalyze": false,
@@ -55,7 +62,6 @@
     "targets": {
       "local": true,
       "vercel": true,
-      "docker": true,
       "cloudflare": true
     },
     "commands": [],

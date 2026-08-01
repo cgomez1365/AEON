@@ -21,6 +21,12 @@ const R = require(path.join(LR, 'registry.cjs'));
 const CATALOG = require(path.join(LR, 'model-catalog.json'));
 const MI = require(path.join(LR, 'model-installer.cjs'));
 
+// Derived from the catalog, never hardcoded: these tests broke when a catalog
+// id changed, which meant they were asserting on shipping data rather than on
+// the installer's behaviour.
+const SAMPLE_ID = CATALOG.models[0].id;
+const EMBED_ID = (CATALOG.models.find(m => (m.capabilities || []).includes('embed')) || CATALOG.models[0]).id;
+
 let tmp, dataRoot;
 beforeEach(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'aeon-model-'));
@@ -111,9 +117,9 @@ describe('listCatalog', () => {
   it('shows installed state for a model that is in the registry', () => {
     const reg = R.createRegistry(dataRoot);
     reg.upsertModel({
-      id: 'qwen3-1.7b-q4',
+      id: SAMPLE_ID,
       state: 'ready',
-      relPath: 'local-runtime/models/qwen3-1.7b-q4/model.gguf',
+      relPath: `local-runtime/models/${SAMPLE_ID}/model.gguf`,
       bytes: 1100000000,
       sha256: 'a'.repeat(64),
       capabilities: ['chat'],
@@ -121,24 +127,24 @@ describe('listCatalog', () => {
     });
 
     const list = MI.listCatalog(dataRoot);
-    const item = list.find(m => m.id === 'qwen3-1.7b-q4');
+    const item = list.find(m => m.id === SAMPLE_ID);
     expect(item.installState).toBe('ready');
   });
 
   it('shows quarantined state correctly', () => {
     const reg = R.createRegistry(dataRoot);
     reg.upsertModel({
-      id: 'qwen3-1.7b-q4',
+      id: SAMPLE_ID,
       state: 'staged',
-      relPath: 'local-runtime/models/qwen3-1.7b-q4/model.gguf',
+      relPath: `local-runtime/models/${SAMPLE_ID}/model.gguf`,
       bytes: 1100000000,
       capabilities: ['chat'],
       installedAt: new Date().toISOString(),
     });
-    reg.setModelState('qwen3-1.7b-q4', 'quarantined', 'hash mismatch');
+    reg.setModelState(SAMPLE_ID, 'quarantined', 'hash mismatch');
 
     const list = MI.listCatalog(dataRoot);
-    const item = list.find(m => m.id === 'qwen3-1.7b-q4');
+    const item = list.find(m => m.id === SAMPLE_ID);
     expect(item.installState).toBe('quarantined');
     expect(item.quarantineReason).toBe('hash mismatch');
   });
@@ -147,16 +153,41 @@ describe('listCatalog', () => {
 // ── PENDING_VERIFICATION guard ─────────────────────────────────────────────
 
 describe('PENDING_VERIFICATION guard', () => {
-  it('installModel throws before any download if sha256 is PENDING_VERIFICATION', async () => {
-    await expect(MI.installModel({ dataRoot, modelId: 'qwen3-1.7b-q4' }))
-      .rejects.toThrow(/PENDING_VERIFICATION/);
+  // The guard itself is a pure function tested in runtime-installer.test.js.
+  // Here we assert the CATALOG's own state and the installer's failure path.
+  const { assertHashVerified } = require(path.join(LR, 'runtime-installer.cjs'));
+
+  it('every shipped catalog model carries a verified hash', () => {
+    for (const m of CATALOG.models) {
+      expect(() => assertHashVerified('Model', m.id, m.sha256, 'model-catalog.json')).not.toThrow();
+    }
   });
 
-  it('no model reaches ready state after a PENDING_VERIFICATION rejection', async () => {
-    try { await MI.installModel({ dataRoot, modelId: 'qwen3-1.7b-q4' }); } catch {}
-    const reg = R.createRegistry(dataRoot);
-    const ready = reg.readyModels();
-    expect(ready).toHaveLength(0);
+  it('installModel refuses a model whose hash was never verified', async () => {
+    const original = CATALOG.models[0].sha256;
+    CATALOG.models[0].sha256 = 'PENDING_VERIFICATION';
+    try {
+      await expect(MI.installModel({ dataRoot, modelId: SAMPLE_ID }))
+        .rejects.toThrow(/PENDING_VERIFICATION/);
+    } finally {
+      CATALOG.models[0].sha256 = original;
+    }
+  });
+
+  it('no model reaches ready state after a rejected install', async () => {
+    // Deterministic failure via a closed port — see the note in
+    // runtime-installer.test.js. Keeps this suite network-free now that the
+    // catalog carries real hashes and the PENDING guard no longer fires.
+    const entry = CATALOG.models.find(m => m.id === SAMPLE_ID);
+    const realUrl = entry.url;
+    entry.url = 'http://127.0.0.1:1/unreachable.gguf';
+    try {
+      await expect(MI.installModel({ dataRoot, modelId: SAMPLE_ID })).rejects.toThrow();
+      const reg = R.createRegistry(dataRoot);
+      expect(reg.readyModels()).toHaveLength(0);
+    } finally {
+      entry.url = realUrl;
+    }
   });
 
   it('throws for an unknown modelId', async () => {
@@ -169,9 +200,14 @@ describe('PENDING_VERIFICATION guard', () => {
 
 describe('probeGgufHeader', () => {
   function makeGguf(version = 3, archStr = null) {
-    // GGUF magic (4 bytes LE) + version (4 bytes LE) + minimal padding
+    // GGUF magic (the four ASCII bytes) + version (4 bytes LE) + padding.
+    //
+    // This wrote the hex literal 0x46465547 — the same transposed constant the
+    // implementation had — so the fixture was a "GUFF" file and the test passed
+    // against something no real model resembles. Writing the actual bytes means
+    // the fixture cannot drift from reality again.
     const buf = Buffer.alloc(256, 0);
-    buf.writeUInt32LE(0x46465547, 0);  // magic "GGUF"
+    buf.write('GGUF', 0, 'ascii');
     buf.writeUInt32LE(version, 4);
     if (archStr) {
       // Write a rough approximation of "general.architecture" + value

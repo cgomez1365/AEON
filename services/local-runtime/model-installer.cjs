@@ -14,12 +14,11 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { createWriteStream } = require('fs');
-const https = require('https');
-const http = require('http');
 
 const P = require('./paths.cjs');
 const R = require('./registry.cjs');
+const { download: sharedDownload } = require('./download.cjs');
+const { assertHashVerified } = require('./runtime-installer.cjs');
 const CATALOG = require('./model-catalog.json');
 
 // ── GGUF header probe ────────────────────────────────────────────────────────
@@ -28,7 +27,12 @@ const CATALOG = require('./model-catalog.json');
 // key from the metadata KV block (offset 12+). Full parsing is complex; we
 // only need enough to confirm the file is a real GGUF and grab architecture.
 
-const GGUF_MAGIC = 0x46465547; // "GGUF" in little-endian uint32
+// Derived from the string, never written as a hex literal. The literal here
+// used to be 0x46465547, which is "GUFF" — the last two bytes transposed. Every
+// real GGUF file was rejected as "Not a GGUF file", so no model could ever be
+// installed. The unit test wrote the SAME transposed literal into its fixture,
+// so it passed against a file that no model in the catalog resembles.
+const GGUF_MAGIC = Buffer.from('GGUF', 'ascii').readUInt32LE(0); // 0x46554747
 
 function probeGgufHeader(filePath) {
   const fd = fs.openSync(filePath, 'r');
@@ -61,36 +65,12 @@ function probeGgufHeader(filePath) {
   }
 }
 
-// ── Download helper (same as runtime-installer, no shared dep) ──────────────
+// ── Download helper — shared with runtime-installer (BO-A0) ─────────────────
+// Was a byte-identical copy differing only in timeout, so every fix had to land
+// twice. Model files are large, hence the longer per-hop deadline.
 
 function download(url, destPath, { onProgress } = {}) {
-  return new Promise((resolve, reject) => {
-    const proto = url.startsWith('https') ? https : http;
-    const file = createWriteStream(destPath, { flags: 'wx' });
-
-    const req = proto.get(url, { timeout: 600_000 }, (res) => {
-      if (res.statusCode === 301 || res.statusCode === 302) {
-        file.close(() => { try { fs.unlinkSync(destPath); } catch {} });
-        return download(res.headers.location, destPath, { onProgress }).then(resolve).catch(reject);
-      }
-      if (res.statusCode !== 200) {
-        file.close(() => { try { fs.unlinkSync(destPath); } catch {} });
-        return reject(new Error(`HTTP ${res.statusCode}: ${url}`));
-      }
-      const total = parseInt(res.headers['content-length'] || '0', 10);
-      let received = 0;
-      res.on('data', chunk => {
-        received += chunk.length;
-        if (onProgress && total) onProgress(Math.round(received / total * 100), received, total);
-      });
-      res.pipe(file);
-      file.on('finish', () => file.close(resolve));
-      file.on('error', e => { try { fs.unlinkSync(destPath); } catch {} reject(e); });
-    });
-
-    req.on('error', e => { try { fs.unlinkSync(destPath); } catch {} reject(e); });
-    req.on('timeout', () => { req.destroy(); reject(new Error(`Download timed out: ${url}`)); });
-  });
+  return sharedDownload(url, destPath, { onProgress, timeoutMs: 600_000 });
 }
 
 function sha256File(filePath) {
@@ -147,13 +127,7 @@ async function installModel({ dataRoot, modelId, onProgress, onStatus } = {}) {
   const entry = CATALOG.models.find(m => m.id === modelId);
   if (!entry) throw new Error(`Unknown model id: ${modelId}`);
 
-  if (entry.sha256 === 'PENDING_VERIFICATION') {
-    throw new Error(
-      `Model ${modelId} has a PENDING_VERIFICATION SHA-256. ` +
-      `Fetch the real hash from the HuggingFace repository before installing. ` +
-      `See services/local-runtime/model-catalog.json.`
-    );
-  }
+  assertHashVerified('Model', modelId, entry.sha256, 'model-catalog.json');
 
   const reg = R.createRegistry(dataRoot);
 
@@ -171,7 +145,12 @@ async function installModel({ dataRoot, modelId, onProgress, onStatus } = {}) {
   const relPath = entry.relPathTemplate;
   const absDir = path.dirname(path.join(dataRoot, ...relPath.split('/')));
   const absFile = path.join(dataRoot, ...relPath.split('/'));
-  const stagingFile = path.join(P.stagingPath(dataRoot), entry.filename);
+  // Caller-supplied staging token (see paths.cjs): concurrent installs of the
+  // same model must not collide on one .part file. Was called with no token,
+  // which threw before any download.
+  const stagingToken = `md-${modelId}-${crypto.randomBytes(6).toString('hex')}`;
+  const stagingFile = P.stagingPath(dataRoot, stagingToken, entry.filename);
+  fs.mkdirSync(path.dirname(stagingFile), { recursive: true });
 
   // Clean stale staging
   try { if (fs.existsSync(stagingFile)) fs.unlinkSync(stagingFile); } catch {}

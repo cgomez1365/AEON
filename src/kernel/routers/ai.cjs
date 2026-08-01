@@ -11,7 +11,15 @@ module.exports = function createAIRouter(deps) {
       const text = await kernelLLM(prompt, { role, provider, model, background, advisorModel });
       res.json({ text, role: role || 'chat' });
     } catch (err) {
-      res.status(err.needsLocalConfirm ? 409 : 500).json({ error: err.message, needsLocalConfirm: !!err.needsLocalConfirm });
+      // 409 = local needs confirming. 503 = nothing is configured to answer
+      // (no API key, no local chat model) — a state the user can fix, so it
+      // must not read as an internal error. 500 stays for real faults.
+      const status = err.needsLocalConfirm ? 409 : err.noProviderAvailable ? 503 : 500;
+      res.status(status).json({
+        error: err.message,
+        needsLocalConfirm: !!err.needsLocalConfirm,
+        noProviderAvailable: !!err.noProviderAvailable,
+      });
     }
   });
 

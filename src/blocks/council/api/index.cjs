@@ -4,6 +4,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { loadSettings } = require('../../../../services/settings.js');
 
 module.exports = function createCompareRouter(deps) {
   const router = express.Router();
@@ -195,10 +196,10 @@ module.exports = function createCompareRouter(deps) {
       models.push({ id, name: name || id, engine });
     };
 
-    // Settings roles — the operator's actual choices come first
+    // Settings roles — the operator's actual choices come first.
+    // Read through the settings authority (BO-F1), not a relative path walk.
     try {
-      const SETTINGS_FILE = path.join(__dirname, '..', '..', '..', 'aeon-settings.json');
-      const s = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'));
+      const s = loadSettings();
       for (const cfg of Object.values(s.models || {})) {
         if (cfg && cfg.provider && cfg.model) add(cfg.model, cfg.model, cfg.provider);
       }

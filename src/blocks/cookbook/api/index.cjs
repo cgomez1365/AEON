@@ -909,7 +909,11 @@ module.exports = function createCookbookRouter(deps) {
       try {
         const { getLocalRuntimeRegistry } = deps;
         const reg = getLocalRuntimeRegistry ? getLocalRuntimeRegistry() : null;
-        const dataRoot = reg ? path.resolve(reg.file, '..', '..', '..') : null;
+        // reg.file is <dataRoot>/local-runtime/local-runtime.json — two levels
+        // up, not three. Three resolved to the app root, so the runtime landed
+        // outside data/ where lr.status() would never look for it: the install
+        // reported success and the model stayed invisible.
+        const dataRoot = reg ? path.resolve(reg.file, '..', '..') : null;
         if (!dataRoot) return res.status(500).json({ ok: false, error: 'registry unavailable' });
 
         const sessionId = `lr-install-${Date.now()}`;
@@ -924,9 +928,14 @@ module.exports = function createCookbookRouter(deps) {
           preferBackend,
           onStatus: (msg) => { if (activeTasks[sessionId]) activeTasks[sessionId].log = msg; },
           onProgress: (pct) => { if (activeTasks[sessionId]) activeTasks[sessionId].pct = pct; },
-        }).then(() => {
+        }).then((r) => {
+          console.log(`[LOCAL RUNTIME] Install complete: ${r && r.runtimeId ? r.runtimeId : preferBackend}`);
           if (activeTasks[sessionId]) { activeTasks[sessionId].status = 'done'; activeTasks[sessionId].pct = 100; }
         }).catch((e) => {
+          // R-05: the failure was written only into an in-memory task map — not
+          // logged, not surfaced by /cookbook/local/status. A user clicked
+          // Install, it failed, and nothing anywhere said so.
+          console.error(`[LOCAL RUNTIME] Install FAILED (${preferBackend}): ${e.message}`);
           if (activeTasks[sessionId]) { activeTasks[sessionId].status = 'error'; activeTasks[sessionId].error = e.message; }
         });
       } catch (e) {
@@ -970,7 +979,11 @@ module.exports = function createCookbookRouter(deps) {
       if (!reg || !reg.file) {
         return res.status(503).json({ ok: false, error: 'Local runtime registry not available' });
       }
-      const dataRoot = path.resolve(reg.file, '..', '..', '..');
+      // Two levels up, not three — same off-by-one the runtime route had. Three
+      // resolved to the app root, so the model downloaded and verified fine but
+      // landed outside data/ where readyModels() never looks: the install said
+      // OK and the model stayed invisible forever.
+      const dataRoot = path.resolve(reg.file, '..', '..');
 
       const sessionId = `local-install-${crypto.randomBytes(4).toString('hex')}`;
       const logFile = path.join(LOGS_DIR, `${sessionId}.log`);
@@ -989,9 +1002,14 @@ module.exports = function createCookbookRouter(deps) {
         },
         onProgress: (pct) => logStream.write(`[PROGRESS] ${pct}%\n`),
       }).then(() => {
+        console.log(`[LOCAL MODEL] Install complete: ${modelId}`);
         logStream.write('LOCAL_MODEL_INSTALL_OK\n');
         logStream.end();
       }).catch(e => {
+        // R-05: the outcome only ever reached a per-session log file on disk.
+        // Nothing on the console, nothing in any status route — a failed model
+        // install looked identical to one that never started.
+        console.error(`[LOCAL MODEL] Install FAILED (${modelId}): ${e.message}`);
         logStream.write(`ERROR: ${e.message}\nLOCAL_MODEL_INSTALL_FAILED\n`);
         logStream.end();
       });
@@ -1005,7 +1023,10 @@ module.exports = function createCookbookRouter(deps) {
       if (!reg || !reg.file) {
         return res.status(503).json({ ok: false, error: 'Local runtime registry not available' });
       }
-      const dataRoot = path.resolve(reg.file, '..', '..', '..');
+      // Two levels up. With three, delete pointed at the app root and could
+      // never find the model it was asked to remove — so uninstall silently
+      // freed nothing while the real file stayed on disk.
+      const dataRoot = path.resolve(reg.file, '..', '..');
       try {
         await modelInstaller.removeModel(dataRoot, modelId);
         res.json({ ok: true });
@@ -1022,7 +1043,18 @@ module.exports = function createCookbookRouter(deps) {
       try {
         const active = reg.activeRuntime();
         const ready = reg.readyModels();
-        res.json({ ok: true, runtimeReady: !!active, activeRuntime: active ? active.id : null, readyModels: ready.length, models: ready.map(m => ({ id: m.id, displayName: m.displayName, capabilities: m.capabilities })) });
+        // Surface the most recent runtime-install outcome. Without this a failed
+        // install is invisible to the UI: the panel just keeps saying "not
+        // installed" with no reason, which reads as the button doing nothing.
+        let install = null;
+        const runs = Object.entries(activeTasks)
+          .filter(([, t]) => t && t.type === 'runtime-install')
+          .sort((a, b) => (b[1].started_at || 0) - (a[1].started_at || 0));
+        if (runs.length) {
+          const t = runs[0][1];
+          install = { status: t.status, pct: t.pct || 0, log: t.log || null, error: t.error || null };
+        }
+        res.json({ ok: true, runtimeReady: !!active, activeRuntime: active ? active.id : null, readyModels: ready.length, install, models: ready.map(m => ({ id: m.id, displayName: m.displayName, capabilities: m.capabilities })) });
       } catch (e) {
         res.status(500).json({ ok: false, error: e.message });
       }
