@@ -435,6 +435,30 @@ module.exports = function createCookbookRouter(deps) {
         _emitter: emitter, _proc: proc,
       };
 
+      // A spawn that cannot start emits 'error', not 'close'. With no listener
+      // that is an unhandled 'error' event — it throws, hits the global
+      // uncaughtException handler, and calls process.exit(1). A missing
+      // interpreter took the whole kernel down, AFTER the client had already
+      // been told { ok: true }. services/local-runtime/download.cjs documents
+      // this exact class as fixed; it was never carried to this route.
+      proc.on('error', (err) => {
+        const task = activeTasks[sessionId];
+        const detail = err.code === 'ENOENT'
+          ? `Could not start "${cmd}" — not found on PATH. Install it, or use the built-in model installer, which needs no external tools.`
+          : `Could not start "${cmd}": ${err.message}`;
+        console.error(`[COOKBOOK] download spawn failed (${sessionId}): ${detail}`);
+        try {
+          logStream.write(`\n=== Failed to start process ===\n${detail}\nDOWNLOAD_FAILED\n`);
+          logStream.end();
+        } catch { /* stream already gone */ }
+        if (task) {
+          task.status = 'error';
+          task.exitCode = null;
+          task.error = detail;
+          task._emitter.emit('done', null);
+        }
+      });
+
       proc.on('close', (code) => {
         const task = activeTasks[sessionId];
         if (task) {

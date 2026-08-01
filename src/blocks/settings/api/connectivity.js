@@ -174,6 +174,14 @@ module.exports = (app, deps) => {
         };
         proc.stdout.on('data', onData);
         proc.stderr.on('data', onData);
+        // A spawn that never starts emits 'error', not 'exit'. Without this the
+        // event is unhandled — it throws past this promise and takes the server
+        // down instead of failing the request.
+        proc.on('error', (err) => {
+          clearTimeout(timer);
+          _tunnel.proc = null;
+          reject(new Error(`Could not start cloudflared: ${err.message}`));
+        });
         proc.on('exit', (code) => {
           clearTimeout(timer);
           _tunnel.proc = null;

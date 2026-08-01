@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 
 module.exports = (app, deps) => {
-  const { supabase, NOTES_FILE, getBlockDataFile } = deps;
+  const { supabase, NOTES_FILE, getBlockDataFile, kernelLLM } = deps;
   const isVercel = !!process.env.VERCEL;
   // On Vercel /tmp is the only writable dir — ephemeral per-invocation; Supabase
   // is the source of truth. Locally, drafts live in the PRIVATE data root
@@ -31,29 +31,38 @@ module.exports = (app, deps) => {
     return `\n\nWRITING STYLE PROFILE (match this author's voice):\n${profile.summary}\nKey traits: ${profile.traits.join(' · ')}`;
   }
 
-  function callKernelLLM(prompt, role = 'creative') {
-    const http = require('http');
-    const port = process.env.PORT || 3001;
-    const body = JSON.stringify({ prompt, role });
-    return new Promise((resolve, reject) => {
-      const r = http.request({ hostname: '127.0.0.1', port, path: '/api/kernel/llm', method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }
-      }, (resp) => { let d = ''; resp.on('data', c => d += c); resp.on('end', () => { try { resolve(JSON.parse(d)); } catch { reject(new Error(d)); } }); });
-      r.on('error', reject);
-      r.write(body); r.end();
-    });
+  // Writer used to POST to its own server at /api/kernel/llm over loopback. That
+  // request carried no session, so with the auth guard armed the kernel answered
+  // 401 — and the old client never read resp.statusCode, so the error body parsed
+  // as a result. result.text was undefined, every handler fell back to '', and the
+  // editor wrote that empty string over the user's document. kernelLLM is already
+  // injected here (manifest declares permissions.ai: true); call it directly. An
+  // in-process block does not authenticate to itself over the network.
+  //
+  // Returns a string. Throws on failure — callers must surface, never substitute
+  // empty content for an error (that substitution WAS the data-loss bug).
+  async function llm(prompt, opts = {}) {
+    if (typeof kernelLLM !== 'function') {
+      const e = new Error('AI is unavailable: this block was mounted without the kernel LLM service.');
+      e.aiUnavailable = true;
+      throw e;
+    }
+    const out = await kernelLLM(prompt, { role: 'creative', ...opts });
+    const text = typeof out === 'string' ? out : out?.text;
+    if (typeof text !== 'string' || text.trim() === '') {
+      const e = new Error('AI returned no content. Check the Creative model in Settings.');
+      e.aiUnavailable = true;
+      throw e;
+    }
+    return text;
   }
 
-  function callKernelChat(messages) {
-    const http = require('http');
-    const port = process.env.PORT || 3001;
-    const body = JSON.stringify({ messages });
-    return new Promise((resolve, reject) => {
-      const r = http.request({ hostname: '127.0.0.1', port, path: '/api/kernel/llm', method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }
-      }, (resp) => { let d = ''; resp.on('data', c => d += c); resp.on('end', () => { try { resolve(JSON.parse(d)); } catch { reject(new Error(d)); } }); });
-      r.on('error', reject);
-      r.write(body); r.end();
+  // One shape for every AI failure, so the UI can always say something true.
+  function aiError(res, e) {
+    const status = e.needsLocalConfirm ? 409 : (e.noProviderAvailable || e.aiUnavailable) ? 503 : 502;
+    return res.status(status).json({
+      error: e.message || 'AI request failed',
+      aiUnavailable: !!(e.aiUnavailable || e.noProviderAvailable),
     });
   }
 
@@ -154,7 +163,7 @@ module.exports = (app, deps) => {
       if (samples.length === 0) return res.status(400).json({ error: 'No documents found. Save some writing first.' });
 
       const corpus = samples.map(s => `--- ${s.title} ---\n${s.text}`).join('\n\n');
-      const result = await callKernelLLM(
+      const text = await llm(
         `Analyze the writing style of these samples and return a JSON object with:
 - "summary": 2-3 sentence description of voice and style
 - "traits": array of 6-10 style traits
@@ -166,16 +175,23 @@ Return ONLY valid JSON.\n\nSamples:\n${corpus}`
 
       let profile;
       try {
-        const match = (result.text || '').match(/\{[\s\S]*\}/);
-        profile = JSON.parse(match ? match[0] : result.text);
+        const match = text.match(/\{[\s\S]*\}/);
+        profile = JSON.parse(match ? match[0] : text);
       } catch {
-        profile = { summary: result.text || '', traits: [], formality: 'unknown', avgSentenceLength: 'unknown', toneKeywords: [] };
+        // An unparseable answer is a failed analysis, not an empty profile. The
+        // old code wrote a blank fallback to disk, overwriting a good profile
+        // with garbage and lighting up "Style DNA" as if it had succeeded.
+        return res.status(502).json({ error: 'Could not read a style profile from the model response. Nothing was changed.' });
       }
+      if (!profile || typeof profile !== 'object' || !profile.summary) {
+        return res.status(502).json({ error: 'Style analysis returned an incomplete profile. Nothing was changed.' });
+      }
+      profile.traits = Array.isArray(profile.traits) ? profile.traits : [];
       profile.analyzedAt = new Date().toISOString();
       profile.sampleCount = samples.length;
       fs.writeFileSync(STYLE_FILE, JSON.stringify(profile, null, 2));
       res.json({ profile, sampleCount: samples.length });
-    } catch (e) { res.status(500).json({ error: e.message }); }
+    } catch (e) { aiError(res, e); }
   });
 
   // ── GENERATE (write / braindump / continue / stylecheck) ─────────────────────
@@ -204,9 +220,9 @@ Return ONLY valid JSON.\n\nSamples:\n${corpus}`
         userMsg = prompt;
       }
 
-      const result = await callKernelLLM(`${system}\n\n${userMsg}`);
-      res.json({ content: result.text || '', usedStyle: !!profile });
-    } catch (e) { res.status(500).json({ error: e.message }); }
+      const content = await llm(`${system}\n\n${userMsg}`);
+      res.json({ content, usedStyle: !!profile });
+    } catch (e) { aiError(res, e); }
   });
 
   // ── IMPROVE (improve/expand/shorten/casual/professional/critique) ─────────────
@@ -227,14 +243,16 @@ Return ONLY valid JSON.\n\nSamples:\n${corpus}`
     const styleNote = profile ? `\nAuthor style traits: ${profile.traits.slice(0, 4).join(', ')}` : '';
 
     try {
+      // llm() throws rather than returning '' — previously a failure here
+      // returned { content: '' } with no error key, and the editor wrote that
+      // over the whole document. Never return empty content from this route.
       if (selection && selection.trim() && text.includes(selection)) {
-        const result = await callKernelLLM(`${instr}${styleNote}\n\nReturn ONLY the rewritten fragment:\n\n${selection}`);
-        const rewritten = (result.text || '').trim();
+        const rewritten = (await llm(`${instr}${styleNote}\n\nReturn ONLY the rewritten fragment:\n\n${selection}`)).trim();
         return res.json({ content: text.replace(selection, rewritten), selectionReplaced: true });
       }
-      const result = await callKernelLLM(`${instr}${styleNote}\n\nReturn ONLY the result:\n\n${text}`);
-      res.json({ content: result.text || '' });
-    } catch (e) { res.status(500).json({ error: e.message }); }
+      const content = await llm(`${instr}${styleNote}\n\nReturn ONLY the result:\n\n${text}`);
+      res.json({ content });
+    } catch (e) { aiError(res, e); }
   });
 
   // ── CO-WRITE CHAT ────────────────────────────────────────────────────────────
@@ -258,9 +276,9 @@ Return ONLY valid JSON.\n\nSamples:\n${corpus}`
       ]).join('\n');
 
       const fullPrompt = `${systemMsg}\n\n${historyMsgs ? historyMsgs + '\n\n' : ''}User: ${prompt}\n\nAssistant:`;
-      const result = await callKernelLLM(fullPrompt);
-      res.json({ response: result.text || '' });
-    } catch (e) { res.status(500).json({ error: e.message }); }
+      const response = await llm(fullPrompt);
+      res.json({ response });
+    } catch (e) { aiError(res, e); }
   });
 
   // ── PUSH DOC TO MEMORY (save to notes) ───────────────────────────────────────
@@ -309,8 +327,8 @@ Return ONLY valid JSON.\n\nSamples:\n${corpus}`
       bullets: `Convert to bullet points. Return ONLY the bullets:\n\n${text}`,
     };
     try {
-      const result = await callKernelLLM(prompts[action] || prompts.improve);
-      res.json({ ok: true, result: result.text || '' });
-    } catch (e) { res.status(500).json({ error: e.message }); }
+      const result = await llm(prompts[action] || prompts.improve);
+      res.json({ ok: true, result });
+    } catch (e) { aiError(res, e); }
   });
 };

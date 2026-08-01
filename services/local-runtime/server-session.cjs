@@ -163,6 +163,15 @@ class ServerSession {
     this.child.stderr.on('data', (c) => this._recordStderr(c.toString()));
 
     let exited = null;
+    // A binary that cannot launch at all (missing, unreadable, wrong arch)
+    // emits 'error' and never 'exit'. Unhandled, that event throws and kills
+    // the kernel rather than failing this session.
+    this.child.on('error', (err) => {
+      exited = { code: null, signal: null };
+      this.state = 'error';
+      this.lastError = `llama-server could not start: ${err.message}`;
+      this._recordStderr(`[spawn error] ${err.message}\n`);
+    });
     this.child.on('exit', (code, signal) => {
       exited = { code, signal };
       if (this.state !== 'stopped') {
