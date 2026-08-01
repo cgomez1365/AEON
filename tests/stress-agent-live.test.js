@@ -16,6 +16,7 @@
  */
 import { beforeAll, describe, expect, it } from 'vitest';
 import { createRequire } from 'module';
+import { fileURLToPath } from 'url';
 import fs from 'fs';
 import path from 'path';
 
@@ -23,7 +24,7 @@ const require = createRequire(import.meta.url);
 const client  = require('../tools/terminal/client.cjs');
 const agent   = require('../tools/terminal/agent.cjs');
 
-const ROOT       = path.join(new URL('.', import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1'), '..');
+const ROOT       = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const BLOCKS_DIR = path.join(ROOT, 'src', 'blocks');
 
 // ── connectivity gate ────────────────────────────────────────────────────────

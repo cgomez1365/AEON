@@ -11,9 +11,14 @@
 import { describe, expect, it } from 'vitest';
 import path from 'path';
 import { createRequire } from 'module';
+import { fileURLToPath } from 'url';
 
 const require = createRequire(import.meta.url);
-const LR = path.join(path.dirname(new URL(import.meta.url).pathname.slice(1)), '..', '..', 'services', 'local-runtime');
+// fileURLToPath, not pathname.slice(1). On Windows the URL pathname is
+// /C:/... so dropping one char happens to work; on Linux it is /home/... and
+// slice(1) strips the ROOT slash, producing a relative path that resolves
+// against cwd and fails. This passed on the dev box and only ever broke in CI.
+const LR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'services', 'local-runtime');
 
 const CATALOG = require(path.join(LR, 'model-catalog.json'));
 const ASSETS = require(path.join(LR, 'runtime-assets.json'));
