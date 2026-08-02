@@ -1,8 +1,17 @@
 name: AEON CI
 
+# Runs on EVERY branch push, not just main.
+#
+# This used to be `push: branches: [main]`, so work in progress got no signal
+# until a pull request was opened — the branch where the code is actually
+# written was the one place the gates never ran. Combined with a workflow that
+# had never parsed (fixed 2026-08-01) and an audit set to continue-on-error,
+# that made three checks in a row which could not fail.
+#
+# Branch pushes run the full matrix. A PR to main additionally re-runs it
+# against the merge result, which is a different commit and worth checking.
 on:
   push:
-    branches: [ main ]
   pull_request:
     branches: [ main ]
 
