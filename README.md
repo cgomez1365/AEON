@@ -1,6 +1,6 @@
 # AEON 3 — Console
 
-**An AI-native operating system.** Free console. Capabilities as cartridges. Runs on your computer — your data never leaves it unless you connect your own cloud.
+**A local-first AI workspace built from governed blocks.** Your personal force multiplier. Runs on your computer — your data never leaves it unless you connect your own cloud.
 
 > Think Linux, for the AI era: a kernel that discovers self-contained blocks, a nervous system (Settings) every block reports to, a vault that encrypts your keys, and one LLM layer that routes every AI call by role.
 

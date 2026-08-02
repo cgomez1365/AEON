@@ -1,6 +1,20 @@
 const fs = require('fs');
 const path = require('path');
 
+/**
+ * Is this request from the machine AEON runs on?
+ *
+ * Reads the socket, not the Host header. Two routes below used
+ * `req.get('host').includes('localhost')` to decide "local-only" — but Host: is
+ * a string the client sends. Anyone able to reach the port could set
+ * `Host: localhost` and write .env or trigger a restart. req.ip reflects the
+ * real peer and cannot be spoofed by a header.
+ */
+function isLocalRequest(req) {
+  const ip = req.ip || req.socket?.remoteAddress || req.connection?.remoteAddress || '';
+  return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+}
+
 module.exports = (app, deps) => {
   const APP_ROOT = path.join(__dirname, '..', '..', '..', '..');
   // Kernel endpoint registry — the single source of truth for local hosts (BO7).
@@ -1038,9 +1052,8 @@ module.exports = (app, deps) => {
 
   // ── POST /api/settings/env — non-secret runtime config only ─────────
   app.post('/api/settings/env', (req, res) => {
-    const host = req.get('host') || '';
-    if (!(host.includes('localhost') || host.includes('127.0.0.1')) && !process.env.AEON_ALLOW_REMOTE_ENV)
-      return res.status(403).json({ error: 'Env writes are localhost-only (the desktop is the source of truth).' });
+    if (!isLocalRequest(req) && !process.env.AEON_ALLOW_REMOTE_ENV)
+      return res.status(403).json({ error: 'Env writes are local-only (the desktop is the source of truth).' });
     const { vars } = req.body || {};
     if (!vars || typeof vars !== 'object') return res.status(400).json({ error: 'vars object required' });
     if (Object.keys(vars).some((key) => /(?:KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL)/.test(key))) {
@@ -1065,9 +1078,8 @@ module.exports = (app, deps) => {
 
   // ── POST /api/settings/restart — apply config by restarting AEON ──
   app.post('/api/settings/restart', (req, res) => {
-    const host = req.get('host') || '';
-    if (!(host.includes('localhost') || host.includes('127.0.0.1')))
-      return res.status(403).json({ error: 'Restart is localhost-only.' });
+    if (!isLocalRequest(req))
+      return res.status(403).json({ error: 'Restart is local-only.' });
     res.json({ ok: true, restarting: true });
     // Detach the restart script so it survives this process dying.
     setTimeout(() => {
@@ -1075,6 +1087,8 @@ module.exports = (app, deps) => {
         const { spawn } = require('child_process');
         const bat = path.join(__dirname, '..', '..', '..', '..', 'restart.bat');
         if (fs.existsSync(bat)) {
+          // aeon-shell-allow: launching restart.bat requires cmd.exe; `bat` is a
+          // server-side path.join constant, never request-derived.
           spawn('cmd.exe', ['/c', bat], { detached: true, stdio: 'ignore', windowsHide: false }).unref();
         } else {
           process.exit(0); // fallback: a supervisor/launcher relaunches

@@ -116,14 +116,24 @@ module.exports = ({ app, ROOT, isVercel, loadSettings, baseDeps }) => {
 
   if (isVercel && typeof global.mountStaticBlocks === 'function') {
     console.log('[BLOCK ROUTER] Running in Vercel mode. Using explicit static mounts.');
-    global.mountStaticBlocks(app, {
-      supabase: baseDeps.supabase, geminiRequest: baseDeps.geminiRequest,
-      groqRequest: baseDeps.groqRequest, validateSDI: baseDeps.validateSDI,
-      writeOSAudit: baseDeps.writeOSAudit, path, fs,
-      VAULT_ROOT: baseDeps.VAULT_ROOT, DATA_ROOT: baseDeps.DATA_ROOT,
-      getVaultFile: baseDeps.getVaultFile, getDataFile: baseDeps.getDataFile,
-      getBlockVaultFile: baseDeps.getBlockVaultFile, getBlockDataFile: baseDeps.getBlockDataFile,
-    });
+    // Cloud and local now resolve dependencies through the SAME contract.
+    // Previously this path passed a hardcoded 13-key object to every block:
+    // manifest permissions were a local-only guarantee (principle 02), and any
+    // block expecting a dep outside those 13 got undefined — which is why
+    // dashboard/chat 500'd on every AI message in production.
+    const manifestCache = new Map();
+    const depsFor = (blockId) => {
+      if (!manifestCache.has(blockId)) {
+        let manifest = null;
+        try {
+          manifest = JSON.parse(fs.readFileSync(
+            path.join(ROOT, 'src', 'blocks', blockId, 'block.manifest.json'), 'utf8'));
+        } catch { manifest = null; }
+        manifestCache.set(blockId, createScopedDeps({ ...baseDeps, path, fs }, manifest, blockId));
+      }
+      return manifestCache.get(blockId);
+    };
+    global.mountStaticBlocks(app, { ...baseDeps, path, fs }, depsFor);
   } else {
     const blocksDir = path.join(ROOT, 'src', 'blocks');
     if (!fs.existsSync(blocksDir)) {

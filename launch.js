@@ -53,7 +53,7 @@ p('     ██║  ██║███████╗╚██████╔╝�
 p('     ╚═╝  ╚═╝╚══════╝ ╚═════╝ ╚═╝  ╚═══╝    ╚═════╝ ', LP);
 p('');
 p('  ────────────────────────────────────────────────────────────', DG);
-p('     AEON Console  ·  an AI-native operating system', GR);
+p('     AEON  ·  a local-first AI workspace', GR);
 p('     Broken Gear Industries', GR);
 p('  ────────────────────────────────────────────────────────────', DG);
 p('');
@@ -61,11 +61,17 @@ p('');
 // ── 1. environment scan ─────────────────────────────────────────────────────
 p('  ENVIRONMENT', PU);
 
+// Keep in step with "engines.node" in package.json — a test asserts they agree.
+// This gate said 18 while pdfjs-dist (required server-side) needs >=22.13, and
+// npm only WARNS on EBADENGINE, so a user on 18 or 20 passed this check, was
+// told they were fine, and then failed during install with a broken build.
+const NODE_MIN_MAJOR = 22;
+const NODE_MIN_MINOR = 13;
 const nodeVer = process.versions.node;
-const nodeMajor = parseInt(nodeVer.split('.')[0], 10);
-if (nodeMajor < 18) {
-  fail(`Node.js ${nodeVer} is too old — AEON needs 18 or newer.`);
-  fail('Download the latest from https://nodejs.org and run LAUNCH again.');
+const [nodeMajor, nodeMinor] = nodeVer.split('.').map(n => parseInt(n, 10));
+if (nodeMajor < NODE_MIN_MAJOR || (nodeMajor === NODE_MIN_MAJOR && nodeMinor < NODE_MIN_MINOR)) {
+  fail(`Node.js ${nodeVer} is too old — AEON needs ${NODE_MIN_MAJOR}.${NODE_MIN_MINOR} or newer.`);
+  fail('Download the current LTS from https://nodejs.org and run LAUNCH again.');
   process.exit(1);
 }
 ok(`Node.js ${nodeVer} (${os.platform()} ${os.arch()})`);

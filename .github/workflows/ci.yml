@@ -1,25 +1,74 @@
 name: AEON CI
 
+# Runs on EVERY branch push, not just main.
+#
+# This used to be `push: branches: [main]`, so work in progress got no signal
+# until a pull request was opened — the branch where the code is actually
+# written was the one place the gates never ran. Combined with a workflow that
+# had never parsed (fixed 2026-08-01) and an audit set to continue-on-error,
+# that made three checks in a row which could not fail.
+#
+# Branch pushes run the full matrix. A PR to main additionally re-runs it
+# against the merge result, which is a different commit and worth checking.
 on:
   push:
-    branches: [ main ]
   pull_request:
     branches: [ main ]
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # Windows is the platform AEON actually ships on, and Linux is what CI used
+    # to run exclusively — a test that resolved paths with pathname.slice(1) was
+    # green on every dev box and broken only in CI, which is the same gap in the
+    # other direction. Run both.
+    #
+    # The 22.13 leg proves the floor declared in package.json engines and
+    # launch.js is real: the previous gate allowed Node 18 while pdfjs-dist
+    # needed >=22.13, and nothing ever built at the version we claimed to support.
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # npm ci is the reproducible install and the one that must gate a
+          # merge. The lockfile is written by npm 11, which ships with Node 24.
+          - os: ubuntu-latest
+            node: '24'
+            install: npm ci
+          - os: windows-latest
+            node: '24'
+            install: npm ci
+          # The floor leg uses `npm install`, deliberately — because that is
+          # what a real user runs. launch.js:203 shells out to
+          # `npm install --prefer-offline`, never `npm ci`.
+          #
+          # Node 22.13 bundles npm 10, which resolves esbuild's optional
+          # platform packages differently from the npm 11 that wrote the
+          # lockfile, so `npm ci` refuses it. That is a lockfile/tooling
+          # mismatch, not a broken floor — and using `npm ci` here would test a
+          # command no consumer ever runs while claiming to verify the consumer
+          # path. This leg answers the question that actually matters: can
+          # someone on the version we DECLARE in engines install and build?
+          - os: ubuntu-latest
+            node: '22.13'
+            install: npm install --no-audit --no-fund
+    # Windows runners default to PowerShell; the node -e and grep steps below
+    # are bash. GitHub's Windows images ship bash, so pin it for every step
+    # rather than maintaining two dialects of the same check.
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v5
 
       - name: Set up Node.js
         uses: actions/setup-node@v5
         with:
-          node-version: '24'
+          node-version: ${{ matrix.node }}
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm ci
+        run: ${{ matrix.install }}
 
       - name: Syntax-check server
         run: node --check server.cjs

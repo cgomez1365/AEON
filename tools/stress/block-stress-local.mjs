@@ -33,7 +33,7 @@ async function req(method, url, body, timeout = 30000) {
 }
 
 async function ai(prompt, timeout = 120000) {
-  return req('POST', '/api/ai', { provider: 'ollama', model: MODEL, prompt }, timeout);
+  return req('POST', '/api/ai', { provider: 'local', model: MODEL, prompt }, timeout);
 }
 
 async function waitForServer(maxMs = 15000) {
@@ -66,39 +66,40 @@ async function main() {
   const commands = cmdsR.data.commands || [];
   record('0c command registry populated', commands.length >= 30, `${commands.length} commands`);
 
-  // ── 0d. Ollama smoke — qwen3:1.7b fits in GTX 1050 VRAM ─────────────────
-  section('0. Ollama smoke');
-  let ollamaOk = false;
-  let ollamaModels = [];
-  try {
-    const tagsR = await fetch('http://localhost:11434/api/tags', { signal: AbortSignal.timeout(5000) });
-    const tagsD = await tagsR.json();
-    ollamaModels = (tagsD.models || []).map(m => m.name);
-    ollamaOk = ollamaModels.length > 0;
-  } catch (e) { /* Ollama not running */ }
-  record('0d ollama running with models', ollamaOk, `models=${ollamaModels.join(',')}`);
+  // ── 0d. Local runtime smoke ─────────────────────────────────────────────
+  // Was a probe of a system-wide daemon on a fixed port. AEON manages llama.cpp
+  // inside its own data root now, so readiness comes from the app, not a port.
+  section('0. Local runtime smoke');
+  let localOk = false;
+  let localModels = [];
+  const lr = await req('GET', '/api/cookbook/local/status', null, 10000);
+  if (lr.ok) {
+    localModels = (lr.data.models || []).map(m => m.id);
+    localOk = !!lr.data.runtimeReady && localModels.length > 0;
+  }
+  record('0d local runtime ready with models', localOk, `models=${localModels.join(',')}`);
 
-  // Cold-load smoke: qwen3:1.7b ~1.4GB, fits in GPU VRAM, ~10-15s cold start
+  // Cold-load smoke — a small local model answers within the cold-start window.
   const smoke = await ai('Reply with only the word READY.', 60000);
   const smokeText = String(smoke.data?.text || '').trim();
-  record('0e ollama qwen3:1.7b responds', smoke.ok && smokeText.length > 0,
+  record('0e local model responds', smoke.ok && smokeText.length > 0,
     smoke.ok ? `"${smokeText.slice(0, 40)}"` : JSON.stringify(smoke.data).slice(0, 80));
 
   // ── 16. AI ROUTES ─────────────────────────────────────────────────────────
   section('16. AI routes — direct + NL dispatch');
   const directAI = await ai('What is 2+2? Answer with only the number.', 60000);
-  record('16a /api/ai ollama answers', directAI.ok && directAI.data.text,
+  record('16a /api/ai local answers', directAI.ok && directAI.data.text,
     directAI.ok ? `"${String(directAI.data.text || '').trim().slice(0, 30)}"` : `err=${String(directAI.data?.error || '').slice(0, 60)}`);
 
-  // writer/generate uses kernelLLM chain (ignores provider param); with cloud
-  // keys revoked the chain falls through to ollama — allow full fallback time
+  // writer/generate uses the injected kernelLLM (ignores provider param); with
+  // cloud keys revoked the chain falls through to local — allow full fallback time
   const gen = await req('POST', '/api/writer/generate',
-    { prompt: 'One sentence about AEON OS.', provider: 'ollama', model: MODEL }, 180000);
+    { prompt: 'One sentence about AEON OS.', provider: 'local', model: MODEL }, 180000);
   record('16b writer generate (kernel chain)', gen.status !== 0 && gen.status < 500,
     gen.ok ? `"${String(gen.data.content || '').slice(0, 50)}"` : `status=${gen.status}`);
 
   const nlDispatch = await req('POST', '/api/ai/dispatch',
-    { input: 'show GPU stats', provider: 'ollama', model: MODEL }, 30000);
+    { input: 'show GPU stats', provider: 'local', model: MODEL }, 30000);
   record('16c /api/ai/dispatch responds', nlDispatch.status !== 0, `status=${nlDispatch.status}`);
 
   // ── 1. MASTER block ───────────────────────────────────────────────────────
@@ -118,13 +119,13 @@ async function main() {
 
   const ns = await req('GET', '/api/settings/nervous-system');
   record('2b /providers responds', ns.ok, `status=${ns.status}`);
-  // Ollama was removed in favour of the native llama.cpp runtime; the provider
-  // map should expose `local`, not the retired daemon.
+  // The system-wide model daemon was removed in favour of the native llama.cpp
+  // runtime; the provider map should expose `local`, not the retired daemon.
   record('2c provider map has local', !!(ns.data.providers?.local), '');
 
   // NL set — expect 400 on bad format or 200 on success; 500 = bug
   const nlSet = await req('POST', '/api/settings/nl',
-    { input: 'set primary_model to ollama qwen3:14b' }, 90000);
+    { input: 'set primary_model to local qwen3-1.7b-q4' }, 90000);
   record('2d NL set no server crash', nlSet.status !== 500 && nlSet.status !== 0,
     `status=${nlSet.status} action=${nlSet.data.action||nlSet.data.error||''}`);
 
@@ -157,7 +158,7 @@ async function main() {
   // ── 5. MEMORY CORE ────────────────────────────────────────────────────────
   section('5. memory_core — store + retrieve');
   const memAdd = await req('POST', '/api/memory/add', {
-    text: 'AEON block stress test 2026-07-28 local Ollama models.',
+    text: 'AEON block stress test 2026-07-28 local models.',
     tags: ['stress-test'],
   });
   record('5a /remember stores memory', [200, 201].includes(memAdd.status), `status=${memAdd.status}`);
@@ -243,12 +244,12 @@ async function main() {
 
   // ── 15. GOD ROUTES — vault + data ─────────────────────────────────────────
   section('15. god routes — data + keys');
-  const godData = await req('GET', '/api/god/data');
+  const godData = await req('GET', '/api/console/data');
   record('15a /data list responds', godData.ok, `status=${godData.status}`);
   record('15b namespaces returned', typeof godData.data === 'object',
     `keys=${Object.keys(godData.data||{}).length}`);
 
-  const godBlock = await req('GET', '/api/god/data?block=settings');
+  const godBlock = await req('GET', '/api/console/data?block=settings');
   record('15c /data?block=settings responds', godBlock.status !== 0, `status=${godBlock.status}`);
 
   // (AI route tests moved to immediately after 0d pre-warm above)

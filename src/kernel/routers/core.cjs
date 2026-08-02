@@ -106,8 +106,15 @@ module.exports = function createCoreRouter(deps) {
     });
   });
 
-  // POST /api/system/scan — full matrix scan + Supabase 2-way sync
-  router.post('/scan', async (req, res) => {
+  // POST /api/system/audit — block readiness audit + matrix scan + Supabase sync
+  //
+  // This was registered as POST /api/system/scan, which host_os also registers.
+  // host_os mounts first (block loader, server.js) and Express matches in
+  // registration order, so this handler had never run — the richer of the two
+  // was unreachable dead code, and nothing compared the routes. host_os keeps
+  // /system/scan (its manifest declares it, and the terminal calls it); the
+  // kernel's audit gets a name that says what it actually does.
+  router.post('/audit', async (req, res) => {
     const logs = [];
     const settings = _loadSettings();
 

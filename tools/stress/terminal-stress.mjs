@@ -1,4 +1,4 @@
-// Part B — 10 God Mode terminal stress variations, against a live server.
+// Part B — 10 Operator Console terminal stress variations, against a live server.
 // Usage: node terminal-stress.mjs [baseUrl] [authToken]
 //   authToken is optional — pass it to test WITH guard enabled (a session
 //   from POST /api/auth/login). Without it, guard-active instances will
@@ -40,7 +40,7 @@ async function getCommands() {
 }
 
 async function main() {
-  console.log(`\nGod Mode terminal stress test against ${BASE}\n`);
+  console.log(`\nOperator Console terminal stress test against ${BASE}\n`);
 
   // ── 1. Baseline sequential legit commands ──────────────────────────
   console.log('1. Baseline sequential legit commands');
@@ -48,8 +48,8 @@ async function main() {
   record('1a /api/ping answers', ping.ok && ping.data?.name === 'aeon', `status ${ping.status}`);
   const commands = await getCommands();
   record('1b /api/commands returns a list', Array.isArray(commands) && commands.length > 0, `${commands.length} commands`);
-  const blocks = await req('GET', '/api/god/blocks');
-  record('1c /api/god/blocks answers', blocks.ok, `status ${blocks.status}`);
+  const blocks = await req('GET', '/api/console/blocks');
+  record('1c /api/console/blocks answers', blocks.ok, `status ${blocks.status}`);
 
   // ── 2. Concurrent "heavy simulated users" ──────────────────────────
   console.log('2. Concurrent simulated users (15 parallel dispatches)');
@@ -157,9 +157,9 @@ async function main() {
 
   // ── 10. Injection-style input ─────────────────────────────────────────
   console.log('10. Injection-style input against god.cjs file routes');
-  const traversal = await req('GET', '/api/god/data/' + encodeURIComponent('../../../../etc'));
+  const traversal = await req('GET', '/api/console/data/' + encodeURIComponent('../../../../etc'));
   record('10a path traversal in :blockId is contained', traversal.status === 404 || traversal.status === 400, `status ${traversal.status}`);
-  const nullByte = await req('POST', '/api/god/file-save', { name: 'x .txt', content: 'test', folder: '../../outside' });
+  const nullByte = await req('POST', '/api/console/file-save', { name: 'x .txt', content: 'test', folder: '../../outside' });
   record('10b safeJoin rejects a folder escape attempt', !nullByte.ok, `status ${nullByte.status} ${JSON.stringify(nullByte.data).slice(0, 150)}`);
 
   // ── Summary ────────────────────────────────────────────────────────

@@ -157,7 +157,7 @@ function DesktopNav({ user, groups, iconOverrides }) {
             : <div style={{ width: 28, height: 28, borderRadius: "50%", background: "rgba(0,242,255,0.2)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 }}>👤</div>
           }
           <div>
-            <div style={{ fontSize: 11, fontWeight: 700, color: "#e5e2e1" }}>{user?.displayName || "CEO"}</div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#e5e2e1" }}>{user?.displayName || "You"}</div>
             <div style={{ fontSize: 9, color: "rgba(0,242,255,0.7)", fontFamily: "monospace", marginTop: 2 }}>v5.0 · AUTH</div>
           </div>
         </div>

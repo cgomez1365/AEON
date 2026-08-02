@@ -8,6 +8,7 @@
 const express = require('express');
 const path    = require('path');
 const fs      = require('fs');
+const { isInside } = require('../../../kernel/pathContainment.cjs');
 
 module.exports = function secondBrainFactory(deps) {
   const router = express.Router();
@@ -133,8 +134,9 @@ module.exports = function secondBrainFactory(deps) {
     if (!filePath) return res.status(400).json({ error: 'Missing ?path=' });
 
     const resolved = path.resolve(DATA_ROOT, filePath);
-    // Security: ensure it stays within DATA_ROOT
-    if (!resolved.startsWith(DATA_ROOT)) return res.status(403).json({ error: 'Access denied' });
+    // Containment, not a string prefix: startsWith() let a sibling directory
+    // through (…/data-backup passes a check against …/data).
+    if (!isInside(DATA_ROOT, resolved, { allowRoot: true })) return res.status(403).json({ error: 'Access denied' });
     if (!fs.existsSync(resolved)) return res.status(404).json({ error: 'Not found' });
 
     const content = fs.readFileSync(resolved, 'utf8');
@@ -148,7 +150,7 @@ module.exports = function secondBrainFactory(deps) {
     if (!filePath) return res.status(400).json({ error: 'Missing ?path=' });
 
     const resolved = path.resolve(DATA_ROOT, filePath);
-    if (!resolved.startsWith(DATA_ROOT)) return res.status(403).json({ error: 'Access denied' });
+    if (!isInside(DATA_ROOT, resolved, { allowRoot: true })) return res.status(403).json({ error: 'Access denied' });
     if (!fs.existsSync(resolved)) return res.status(404).json({ error: 'Not found' });
 
     const ext = (resolved.split('.').pop() || '').toLowerCase();
@@ -165,7 +167,7 @@ module.exports = function secondBrainFactory(deps) {
     if (!filePath) return res.status(400).json({ error: 'Missing ?path=' });
 
     const resolved = path.resolve(DATA_ROOT, filePath);
-    if (!resolved.startsWith(DATA_ROOT)) return res.status(403).json({ error: 'Access denied' });
+    if (!isInside(DATA_ROOT, resolved, { allowRoot: true })) return res.status(403).json({ error: 'Access denied' });
     if (!fs.existsSync(resolved)) return res.status(404).json({ error: 'Not found' });
 
     try {
@@ -184,7 +186,7 @@ module.exports = function secondBrainFactory(deps) {
     if (!filePath) return res.status(400).json({ error: 'Missing ?path=' });
 
     const resolved = path.resolve(DATA_ROOT, filePath);
-    if (!resolved.startsWith(DATA_ROOT)) return res.status(403).json({ error: 'Access denied' });
+    if (!isInside(DATA_ROOT, resolved, { allowRoot: true })) return res.status(403).json({ error: 'Access denied' });
     if (!fs.existsSync(resolved)) return res.status(404).json({ error: 'Not found' });
 
     try {
@@ -210,7 +212,7 @@ module.exports = function secondBrainFactory(deps) {
     if (!filePath) return res.status(400).json({ error: 'Missing ?path=' });
 
     const resolved = path.resolve(DATA_ROOT, filePath);
-    if (!resolved.startsWith(DATA_ROOT)) return res.status(403).json({ error: 'Access denied' });
+    if (!isInside(DATA_ROOT, resolved, { allowRoot: true })) return res.status(403).json({ error: 'Access denied' });
     if (!fs.existsSync(resolved)) return res.status(404).send('PDF not found');
 
     res.setHeader('Content-Type', 'application/pdf');

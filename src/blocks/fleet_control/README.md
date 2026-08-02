@@ -18,7 +18,7 @@ The UI (`index.jsx`) polls every 8 seconds and renders four panels:
    total LLM calls + tokens this session, provider health ratio, and
    autopilot status.
 2. **Provider health & key pools** — one row per LLM provider (groq, gemini,
-   ollama, ...) showing healthy/unhealthy state and, when available, how many
+   local runtime, ...) showing healthy/unhealthy state and, when available, how many
    API keys are in that provider's rotation pool and which slot is active.
 3. **LLM engine telemetry** — per-model breakdown (engine, requests, tokens,
    average latency, error count) sourced from the kernel's in-memory
@@ -61,11 +61,10 @@ and `/api/*` unless noted otherwise.
   Routes: `GET /hwfit/system`, `GET /hwfit/models`, `GET /hwfit/profiles`,
   `GET /hwfit/fit` (become `/api/hwfit/*`). Not currently wired into the
   `index.jsx` UI — available for a future hardware panel.
-- **`api/ollama-status.js`** — plugin pattern (`(app, deps) => {...}`,
-  registers verbs directly, not dual-mounted). `GET/POST/PUT/DELETE/OPTIONS
-  /api/ollama-status` — pings `OLLAMA_HOST` (default
-  `http://localhost:11434`) for `/api/tags` and reports online state +
-  available models, with `fallback: 'gemini'` when Ollama is unreachable.
+- **`api/local-status.js`** — reports whether the bundled local runtime and a
+  ready model are available. (An earlier status probe for a system-wide model
+  daemon was deleted with that dependency, but this file kept documenting it —
+  docs/ sat outside every scanner until 2026-08-01.)
 - **`api/telemetry.js`** — plugin pattern, same as above. `GET/POST/PUT/
   DELETE/OPTIONS /api/telemetry` — fetches aggregate usage stats from the GAS
   Hub (`VITE_GAS_URL`) when configured, otherwise returns small placeholder
@@ -85,23 +84,20 @@ the plugin-registration path).
 
 - `filesystem: "read"` — `api/missions.cjs` reads Vault mission files only,
   never writes.
-- `network: "external"` — `api/ollama-status.js` and `api/telemetry.js` both
-  make outbound `fetch()` calls (Ollama host, GAS Hub).
-- `secrets: true` — `api/ollama-status.js` reads `OLLAMA_SSH_KEY` from the
-  environment and forwards it as a request header.
-- `shell: true` — `api/hwfit.cjs` uses `child_process.exec`/`execSync`
-  (`nvidia-smi`) for GPU detection.
+- `network: "external"` — `api/telemetry.js` makes outbound `fetch()` calls
+  (GAS Hub).
+- `shell: true` — `api/hwfit.cjs` runs `nvidia-smi` via `execFile` with an
+  argument array for GPU detection.
 - `ai: false` — no file in this block calls `kernelLLM`/`geminiRequest`/
-  `groqRequest`/`ollamaRequest`; it only *displays* telemetry that other
-  parts of the kernel produce.
+  `groqRequest`; it only *displays* telemetry that other parts of the kernel
+  produce.
 
 This block does **not** use Supabase — mission history is read from the
 Vault filesystem, not a database. `contract.requires.apis`/`env` were
 previously left over from an older Supabase-backed design and made the
 block report `ready: false` for a dependency it never actually calls; both
 are now empty. The env vars actually referenced by this block's code
-(`OLLAMA_HOST`, `OLLAMA_MODEL`, `OLLAMA_SSH_KEY`, `VITE_GAS_URL`) are all
-optional — every one of them has a safe in-code fallback, so none of them
+(`VITE_GAS_URL`) are all optional — every one of them has a safe in-code fallback, so none of them
 gate readiness.
 
 ## Files
@@ -110,7 +106,7 @@ gate readiness.
 - `components/AgentTelemetry.jsx` — placeholder stub, not currently imported anywhere
 - `api/missions.cjs` — VP mission history reader (Vault-backed)
 - `api/hwfit.cjs` — hardware detection + model fit ranking (not yet wired into the UI)
-- `api/ollama-status.js` — Ollama reachability probe
+- `api/local-status.js` — local runtime readiness probe
 - `api/telemetry.js` — GAS Hub usage telemetry (Vercel-side fallback)
 - `block.manifest.json` — kernel metadata, auto-normalized on every boot
 

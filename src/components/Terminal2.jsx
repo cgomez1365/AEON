@@ -1,10 +1,14 @@
 /**
  * AEON Terminal 2.0 — the window, not the switchboard.
  *
- * The terminal knows exactly three verbs (sigil router):
+ * The terminal knows two verbs (sigil router):
  *   bare text → POST /api/chat/stream   (LLM, role from settings)
  *   /command  → POST /api/commands/dispatch (manifest-discovered registry)
- *   > shell   → POST /api/os/shell      (raw OS, allowlist-gated server-side)
+ *
+ * '>' used to run arbitrary OS commands. That route is gone: mixing chat, app
+ * commands, key entry and raw shell in one input box gave the user no way to
+ * know when they were changing their computer. Named OS operations live at
+ * /api/os/action with typed arguments.
  *
  * Everything else lives in block manifests and the kernel:
  *   - command palette populated from GET /api/commands + client UI commands
@@ -76,7 +80,7 @@ const Terminal2 = ({ onUsageUpdate }) => {
   const [input, setInput] = useState('');
   const [pendingImage, setPendingImage] = useState(null); // { dataUri, name }
   const fileInputRef = useRef(null);
-  const [feed, setFeed] = useState([{ id: 0, type: 'msg', role: 'system', content: 'AEON TERMINAL 2.0 — link established. Type / for commands, > for shell.' }]);
+  const [feed, setFeed] = useState([{ id: 0, type: 'msg', role: 'system', content: 'AEON Operator Console — link established. Type / for commands.' }]);
   const [isLoading, setIsLoading] = useState(false);
   const [commands, setCommands] = useState([]);
   const [showPalette, setShowPalette] = useState(false);
@@ -103,7 +107,7 @@ const Terminal2 = ({ onUsageUpdate }) => {
   // ── Model hotswap: providers grouped by key availability ──
   const [modelGroups, setModelGroups] = useState([]);
   const [showModelPicker, setShowModelPicker] = useState(false);
-  const refreshModelGroups = () => fetch('/api/god/models').then(r => r.json()).then(d => setModelGroups(d.groups || [])).catch(() => {});
+  const refreshModelGroups = () => fetch('/api/console/models').then(r => r.json()).then(d => setModelGroups(d.groups || [])).catch(() => {});
   // Lazy-load: fetch fresh data each time the picker opens so /addkey changes appear immediately.
   useEffect(() => { if (showModelPicker) refreshModelGroups(); }, [showModelPicker]);
 
@@ -111,7 +115,7 @@ const Terminal2 = ({ onUsageUpdate }) => {
     setShowModelPicker(false);
     if (!model) return;
     try {
-      const res = await fetch('/api/god/model-swap', {
+      const res = await fetch('/api/console/model-swap', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ role: 'chat', provider, model }),
       });
@@ -133,7 +137,7 @@ const Terminal2 = ({ onUsageUpdate }) => {
     for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
     const b64 = btoa(binary);
     try {
-      const res = await fetch('/api/god/file-drop', {
+      const res = await fetch('/api/console/file-drop', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: file.name, content: b64, encoding: 'base64' }),
       });
@@ -146,7 +150,7 @@ const Terminal2 = ({ onUsageUpdate }) => {
   const saveDrop = async (entry, folder) => {
     setFeed(prev => prev.filter(e => e.id !== entry.id));
     try {
-      const res = await fetch('/api/god/file-save', {
+      const res = await fetch('/api/console/file-save', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: entry.name, content: entry.content, folder, encoding: 'base64' }),
       });
@@ -277,7 +281,7 @@ const Terminal2 = ({ onUsageUpdate }) => {
     if (cmdToken === '/model') { setShowModelPicker(v => !v); return; }
     if (cmdToken === '/open') {
       try {
-        const d = await fetch('/api/god/blocks').then(r => r.json());
+        const d = await fetch('/api/console/blocks').then(r => r.json());
         const q = arg.toLowerCase().trim();
         if (!q) {
           push({ type: 'msg', role: 'system', content: (d.blocks || []).filter(b => !b.hidden).map(b => `${b.icon} ${b.label} — /open ${b.id}`).join('\n') });
@@ -318,23 +322,24 @@ const Terminal2 = ({ onUsageUpdate }) => {
     }
   };
 
-  // ── Verb 3: shell ──
+  // ── Verb 3: shell — removed ──
+  //
+  // '>' used to POST an arbitrary command to /api/os/shell, which ran it through
+  // PowerShell. Mixing chat, app commands, key entry and raw OS execution in one
+  // input box gave a user no way to know when they were changing their computer,
+  // and the route was reachable from any loopback caller with no session. The
+  // route is deleted; this explains rather than fails silently.
   const runShell = async (text) => {
     const cmd = text.slice(1).trim();
     const pid = nextPid();
-    const t0 = Date.now();
-    const chipId = push({ type: 'chip', pid, kind: 'SHELL', label: cmd, status: 'running', expanded: true });
-    try {
-      const res = await fetch('/api/os/shell', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ command: cmd }),
-      });
-      const data = await res.json().catch(() => ({}));
-      const out = data.stdout || data.output || data.error || data.stderr || '(no output)';
-      patch(chipId, { status: res.ok && !data.error ? 'ok' : 'fail', output: out, latencyMs: Date.now() - t0 });
-    } catch (e) {
-      patch(chipId, { status: 'fail', output: e.message });
-    }
+    push({
+      type: 'chip', pid, kind: 'SHELL', label: cmd, status: 'fail', expanded: true,
+      output:
+        'Shell execution was removed from AEON.\n\n' +
+        'Use /commands for AEON operations, or your own terminal for OS commands.\n' +
+        'Type /help to see what this console can do.',
+      latencyMs: 0,
+    });
   };
 
   // ── The router — the terminal's entire brain ──

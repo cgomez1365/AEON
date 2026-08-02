@@ -110,7 +110,7 @@
         "cmd": "/addkey",
         "desc": "Add an API key — /addkey groq gsk_…",
         "method": "POST",
-        "route": "/api/god/keys",
+        "route": "/api/console/keys",
         "param": "arg",
         "mode": "instant",
         "category": "system"

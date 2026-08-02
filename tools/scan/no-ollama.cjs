@@ -17,12 +17,20 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOT = path.join(__dirname, '..', '..');
-const SCAN_DIRS = ['services', 'server', 'src', 'security', 'api'];
+// tools/ and scripts/ were outside this scan, which is how tools/terminal/
+// router.cjs kept routing on an "ollama" keyword and scripts/verify-usb.js kept
+// checking for a runtime/ollama/ staging dir — in a gate whose stated purpose is
+// zero Ollama assumptions. docs/ was outside EVERY scanner, which is why 14 doc
+// files still described Ollama as the live provider long after the migration.
+const SCAN_DIRS = ['services', 'server', 'src', 'security', 'api', 'tools', 'scripts', 'docs'];
 // Root-level entrypoints live outside any scanned dir. launch.js shipped a
 // hard require() of a deleted Ollama vendor module because nothing walked here.
-const SCAN_FILES = ['launch.js', 'server.cjs'];
+const SCAN_FILES = ['launch.js', 'server.cjs', 'README.md'];
+// tests/ stays excluded deliberately: fixtures legitimately construct strings
+// that would false-positive, and a test asserting Ollama is gone must be able
+// to name it.
 const SKIP_DIR = new Set(['node_modules', 'dist', '.git', 'tests', 'data', 'coverage']);
-const EXT = new Set(['.js', '.cjs', '.mjs', '.jsx', '.json']);
+const EXT = new Set(['.js', '.cjs', '.mjs', '.jsx', '.json', '.md']);
 
 /**
  * Files still permitted to mention Ollama during the migration window.
@@ -45,6 +53,14 @@ const MIGRATION_ALLOWED = new Set([
   'services/local-runtime/queue.cjs',
   'services/local-runtime/registry.cjs',
   'services/storage.js',
+  // The scanners define the patterns they search for; matching themselves is
+  // not a finding.
+  'tools/scan/no-ollama.cjs',
+  'tools/scan/path-authority.cjs',
+  // The architecture decision record that SUPERSEDED the daemon. It must name
+  // what it replaced or it cannot explain the decision — this is the one file
+  // where the word is load-bearing.
+  'docs/architecture/native-local-runtime.md',
 ]);
 
 const RULES = [

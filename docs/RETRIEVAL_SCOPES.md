@@ -117,6 +117,6 @@ This is how an HR department or medical practice defends their AEON usage if a r
 node tools/reseed-retrieval.cjs
 ```
 
-Deterministic ops bot — zero LLM tokens. Reads `vault_index.json`, filters tooling paths, ingests into `personal_notes` (owner: `second_brain`). Rerunnable at any time. Run with Ollama active for cosine embeddings on top of the BM25 floor.
+Deterministic ops bot — zero LLM tokens. Reads `vault_index.json`, filters tooling paths, ingests into `personal_notes` (owner: `second_brain`). Rerunnable at any time. Run with a local embedding model installed for cosine embeddings on top of the BM25 floor.
 
-BM25 is the deterministic fallback: always works, zero tokens, survives Ollama being down. The doctrine holds on the BM25 floor alone.
+BM25 is the deterministic fallback: always works, zero tokens, survives the embedding model being unavailable. The doctrine holds on the BM25 floor alone.

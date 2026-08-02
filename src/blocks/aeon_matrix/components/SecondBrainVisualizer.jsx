@@ -356,10 +356,28 @@ const SecondBrainVisualizer = () => {
 
   // ── Save to Memory ────────────────────────────────────────────────────────
 
+  // Save status for the Memory buttons. Previously this function ended in a
+  // bare `catch {}` and set no state on success either — so pressing Memory was
+  // indistinguishable from a no-op no matter what the server did. The route was
+  // mounted and the request was fine; the outcome simply never reached the UI.
+  //
+  // Listen, right next to it, appears to work for one reason: it is a synchronous
+  // setViewMode() whose feedback never depends on a network call. That difference
+  // was the entire bug. EditorMode.jsx in this same block already does this
+  // correctly — same pattern, kept deliberately consistent.
+  const [memoryStatus, setMemoryStatus] = useState('');
+  const memoryStatusTimer = useRef(null);
+  const flashMemoryStatus = (msg, holdMs = 2500) => {
+    setMemoryStatus(msg);
+    clearTimeout(memoryStatusTimer.current);
+    memoryStatusTimer.current = setTimeout(() => setMemoryStatus(''), holdMs);
+  };
+
   const saveToMemory = async (contentToSave, titlePrefix = 'Document') => {
     const text = contentToSave || aiText;
-    if (!text) return;
+    if (!text) { flashMemoryStatus('⚠ Nothing to save yet.'); return; }
     const fileName = selectedFile?.split(/[/\\]/).pop() || 'Unknown';
+    setMemoryStatus('Saving…');
     try {
       const response = await fetch('/api/memory/add', {
         method: 'POST',
@@ -374,8 +392,15 @@ const SecondBrainVisualizer = () => {
           refs: selectedFile ? [{ kind: 'matrix-node', id: selectedFile, title: fileName }] : [],
         })
       });
-      if (!response.ok) throw new Error(`Memory Core save failed (${response.status})`);
-    } catch {}
+      if (!response.ok) {
+        let reason = `${response.status}`;
+        try { reason = (await response.json())?.error || reason; } catch { /* non-JSON body */ }
+        throw new Error(reason);
+      }
+      flashMemoryStatus('✅ Saved to Memory Core');
+    } catch (e) {
+      flashMemoryStatus(`❌ Save failed: ${e.message}`, 5000);
+    }
   };
 
   // ── Tab rendering ──────────────────────────────────────────────────────────
@@ -574,9 +599,19 @@ const SecondBrainVisualizer = () => {
                   🎙️ Listen
                 </button>
               )}
+              {memoryStatus && (
+                <span style={{
+                  fontSize: '11px', marginRight: '4px',
+                  color: memoryStatus.startsWith('❌') ? '#ff6b6b'
+                    : memoryStatus.startsWith('✅') ? '#22d36f' : '#999',
+                }}>
+                  {memoryStatus}
+                </span>
+              )}
               {!!aiText && viewMode === 'READ' && (
                 <button onClick={() => saveToMemory(null, 'Document')}
-                  style={{ background: 'none', color: '#999', border: '1px solid #444', padding: '4px 10px', borderRadius: '4px', cursor: 'pointer', fontSize: '11px' }}>
+                  disabled={memoryStatus === 'Saving…'}
+                  style={{ background: 'none', color: '#999', border: '1px solid #444', padding: '4px 10px', borderRadius: '4px', cursor: memoryStatus === 'Saving…' ? 'default' : 'pointer', fontSize: '11px' }}>
                   💾 Memory
                 </button>
               )}

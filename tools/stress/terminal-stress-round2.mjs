@@ -1,4 +1,4 @@
-// Round 2 God Mode terminal stress test — 10 scenarios, deliberately
+// Round 2 Operator Console terminal stress test — 10 scenarios, deliberately
 // DIFFERENT from round 1 (settings-audit.mjs / terminal-stress.mjs).
 // Round 1 focused on raw HTTP-level security/robustness (concurrency,
 // injection, malformed input, the guard-bypass hypothesis). Round 2 focuses
@@ -55,7 +55,7 @@ async function login() {
 }
 
 async function main() {
-  console.log(`\nGod Mode terminal stress test ROUND 2 (different scenarios) against ${BASE}\n`);
+  console.log(`\nOperator Console terminal stress test ROUND 2 (different scenarios) against ${BASE}\n`);
 
   const status = await req('GET', '/api/auth/status');
   if (!status.data.configured) {
@@ -123,7 +123,7 @@ async function main() {
 
   // ── 6. Block-not-ready `when` clause gating ─────────────────────────
   console.log('6. A command whose block reports not-ready is gated, never proxied');
-  const blocksRes = await req('GET', '/api/god/blocks', undefined, workingToken);
+  const blocksRes = await req('GET', '/api/console/blocks', undefined, workingToken);
   const notReadyBlock = (blocksRes.data?.blocks || []).find(b => b.ready === false);
   if (notReadyBlock) {
     const cmdForThatBlock = commands.find(c => c.blockId === notReadyBlock.id);

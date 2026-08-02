@@ -140,8 +140,8 @@ function DrawerMenu({ open, onClose, groups }) {
               : <div style={{ width: 32, height: 32, borderRadius: "50%", background: "rgba(0,242,255,0.2)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 }}>👤</div>
             }
             <div>
-              <div style={{ fontSize: 13, fontWeight: 600, color: "#e5e2e1" }}>{user?.displayName || "CEO"}</div>
-              <div style={{ fontSize: 10, color: "rgba(229,226,225,0.4)", fontFamily: "monospace" }}>v5.0 · CEO</div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: "#e5e2e1" }}>{user?.displayName || "You"}</div>
+              <div style={{ fontSize: 10, color: "rgba(229,226,225,0.4)", fontFamily: "monospace" }}>v5.0</div>
             </div>
           </div>
         <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>

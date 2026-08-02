@@ -101,7 +101,7 @@
     },
     {
       "method": "POST",
-      "path": "/api/search",
+      "path": "/api/activity/search",
       "auth": false
     },
     {

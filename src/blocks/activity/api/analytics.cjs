@@ -14,7 +14,17 @@ module.exports = (deps) => {
   // a local per-process cache does the same job without touching the sandbox.
   const pdfTextCache = {};
 
-  router.post('/search', async (req, res) => {
+  // POST /api/activity/search — namespaced to this block.
+  //
+  // This was '/search', which aeon_matrix/api/retrieve.cjs also claims as the
+  // canonical semantic-recall route. Blocks mount in readdir order and
+  // 'activity' precedes 'aeon_matrix', so this handler silently shadowed the
+  // Matrix recall gate. The same collision was hit before with outreach's
+  // search route (see retrieve.cjs's header) and fixed by deleting that block —
+  // this second claimant was never noticed. No live caller uses POST /api/search
+  // today, so nothing was visibly broken; a second handler on a route is a
+  // defect regardless of whether anything is currently walking into it.
+  router.post('/activity/search', async (req, res) => {
     try {
       const { query } = req.body;
       if (!query) return res.json({ documents: [] });

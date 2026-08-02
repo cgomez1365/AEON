@@ -1,18 +1,22 @@
 {
   "name": "aeon3",
-  "description": "AEON Console — an AI-native operating system. Free console, capabilities as cartridges, run anywhere.",
+  "description": "AEON — a local-first AI workspace built from governed blocks. Runs anywhere.",
   "author": "Broken Gear Industries <cristian@brokengear.io>",
   "private": true,
   "license": "Apache-2.0",
   "version": "3.0.0",
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "bin": {
     "aeon": "tools/aeon-cli.cjs"
   },
   "scripts": {
     "aeon": "node tools/aeon-cli.cjs",
     "dev": "vite",
-    "build": "node tools/copy-assets.mjs && vite build",
+    "build": "node scripts/gen-vercel-mounts.cjs && node scripts/gen-block-docs.cjs && node tools/copy-assets.mjs && vite build",
     "prep:mounts": "node scripts/gen-vercel-mounts.cjs",
+    "prep:docs": "node scripts/gen-block-docs.cjs",
     "preview": "vite preview",
     "server": "node server.cjs",
     "brand:icons": "node tools/generate-aeon-brand-icons.mjs",

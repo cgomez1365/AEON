@@ -1,7 +1,7 @@
 {
   "name": "AEON CORTEX",
   "short_name": "AEON",
-  "description": "AEON Console \u2014 your AI-native operating system",
+  "description": "AEON — a local-first AI workspace built from governed blocks",
   "theme_color": "#020508",
   "background_color": "#020508",
   "display": "standalone",

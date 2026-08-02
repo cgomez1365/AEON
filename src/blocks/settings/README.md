@@ -113,8 +113,8 @@ reachable two different ways.
 
 - **+40** — a model is actually assigned to the block's declared role
   (`contract.ai.role`) in `settings.models`.
-- **+40** — that role's provider is actually reachable right now. Ollama
-  counts as alive unless `health.localConfirmed === false`; every other
+- **+40** — that role's provider is actually reachable right now. The local
+  runtime counts as alive unless `health.localConfirmed === false`; every other
   provider needs `health.providers[provider].healthy` from
   `GET /core/provider-health`.
 - **+20** — if the block also declares `supabase` in `requires.apis`, it

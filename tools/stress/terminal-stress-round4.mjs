@@ -36,7 +36,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const RL = /rate.?limit|429|quota|unavailable|allow-local|abort|timeout/i;
 // status 0 = our own fetch timed out. Once local fallback is authorised, a
 // rate-limited cloud call silently becomes a LOCAL call, and local inference
-// on this box takes 90s+ (GTX 1050 lost CUDA in Ollama 0.32.4 -> CPU only).
+// on this box takes 90s+ (GTX 1050 fell back to CPU-only local inference).
 // That is the provider quota plus the hardware, not an AEON defect, so it is
 // reported as no-verdict rather than as a failure.
 const isRateLimited = (r) => !r.ok && (r.status === 0 || RL.test(JSON.stringify(r.data || {})));
@@ -187,7 +187,7 @@ async function main() {
 
   // ── 7. Block readiness with keys present ────────────────────────────
   console.log('7. Block readiness now that provider keys exist');
-  const blocks = (await req('GET', '/api/god/blocks')).data?.blocks || [];
+  const blocks = (await req('GET', '/api/console/blocks')).data?.blocks || [];
   const ready = blocks.filter(b => b.ready !== false).length;
   record('7a all blocks report ready with keys in the vault', ready === blocks.length && blocks.length >= 17, `${ready}/${blocks.length} ready`);
 

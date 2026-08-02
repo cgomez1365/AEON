@@ -157,6 +157,19 @@ export default function Writer() {
     toastTimer.current = setTimeout(() => setToast(''), 2500);
   };
 
+  // Every AI action funnels its failures here. Two rules, both learned the hard
+  // way: an AI failure must never be silent, and it must never reach setVal() —
+  // writing an empty result over the document was destroying user work.
+  const aiFail = (d, res) => {
+    if (res && !res.ok) {
+      showToast(d?.error || `AI unavailable (${res.status})`);
+      return true;
+    }
+    if (d?.error) { showToast(d.error); return true; }
+    return false;
+  };
+  const aiCrash = (e) => showToast(e?.message ? `AI request failed: ${e.message}` : 'AI request failed');
+
   // ── Autosave: debounce 2.5s after last edit + 30s safety interval ──
   const silentSave = useCallback(async (currentContent, currentTitle, currentId) => {
     if (!currentId && !currentContent.trim()) return;
@@ -280,10 +293,17 @@ export default function Writer() {
       const r = await fetch('/api/writer/improve', { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: content, action, selection: sel || undefined }) });
       const d = await r.json();
-      if (d.error) { setAiLoading(false); return; }
+      if (aiFail(d, r)) { setAiLoading(false); return; }
+      // Guard the write itself as well as the error path: never replace the
+      // document with an empty or non-string result, whatever the status said.
+      if (typeof d.content !== 'string' || d.content.trim() === '') {
+        showToast('AI returned no content — your document was not changed.');
+        setAiLoading(false);
+        return;
+      }
       if (action === 'critique') { setCritiqueText(d.content); }
       else { setVal(d.content); }
-    } catch {}
+    } catch (e) { aiCrash(e); }
     setAiLoading(false);
   };
 
@@ -306,8 +326,10 @@ export default function Writer() {
       const r = await fetch('/api/writer/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt: p, mode: writeMode, draft: content, tone: generateTone, length: generateLength }) });
       const d = await r.json();
+      if (aiFail(d, r)) { setAiLoading(false); return; }
       if (d.content) setVal(d.content);
-    } catch {}
+      else showToast('AI returned no content.');
+    } catch (e) { aiCrash(e); }
     setAiLoading(false);
   };
 
@@ -318,8 +340,10 @@ export default function Writer() {
       const r = await fetch('/api/writer/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ mode: 'continue', draft: content }) });
       const d = await r.json();
+      if (aiFail(d, r)) { setAiLoading(false); return; }
       if (d.content) setVal(content + '\n\n' + d.content);
-    } catch {}
+      else showToast('AI returned no continuation.');
+    } catch (e) { aiCrash(e); }
     setAiLoading(false);
   };
 
@@ -330,8 +354,10 @@ export default function Writer() {
       const r = await fetch('/api/writer/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ mode: 'stylecheck', draft: content, prompt: content }) });
       const d = await r.json();
+      if (aiFail(d, r)) { setAiLoading(false); return; }
       if (d.content) setCritiqueText(d.content);
-    } catch {}
+      else showToast('Style check returned no feedback.');
+    } catch (e) { aiCrash(e); }
     setAiLoading(false);
   };
 
@@ -342,8 +368,10 @@ export default function Writer() {
     try {
       const r = await fetch('/api/writer/style/analyze', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
       const d = await r.json();
-      if (d.profile) setStyleProfile(d.profile);
-    } catch {}
+      if (aiFail(d, r)) { setAiLoading(false); return; }
+      if (d.profile) { setStyleProfile(d.profile); showToast('Writing DNA updated.'); }
+      else showToast('Style analysis returned no profile — nothing was changed.');
+    } catch (e) { aiCrash(e); }
     setAiLoading(false);
   };
 

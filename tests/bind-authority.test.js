@@ -71,7 +71,7 @@ describe('first-run lockdown — no account on an exposed bind', () => {
     app.use(express.json());
     authGate.mountAuth(app);
     app.use(authGate.guard);
-    app.get('/api/god/vault/tree', (req, res) => res.json({ ok: true, folders: ['secrets'] }));
+    app.get('/api/console/vault/tree', (req, res) => res.json({ ok: true, folders: ['secrets'] }));
     app.get('/api/auth/status', (req, res) => res.json({ ok: true, hasAccount: false }));
     app.post('/api/auth/setup', (req, res) => res.json({ ok: true, created: true }));
     server = await new Promise(resolve => {
@@ -95,9 +95,9 @@ describe('first-run lockdown — no account on an exposed bind', () => {
     expect(sessions.guardActive(sessions.loadPolicy())).toBe(false);
   });
 
-  it('refuses God Mode from off-machine before setup', async () => {
+  it('refuses Operator Console from off-machine before setup', async () => {
     process.env.AEON_BIND = '0.0.0.0';
-    const res = await fetch(`${baseUrl}/api/god/vault/tree`);
+    const res = await fetch(`${baseUrl}/api/console/vault/tree`);
     expect(res.status).toBe(403);
     const body = await res.json();
     expect(body.error).toBe('SETUP_INCOMPLETE');
@@ -124,7 +124,7 @@ describe('first-run lockdown — no account on an exposed bind', () => {
 
   it('leaves the local first-run flow untouched on the default bind', async () => {
     delete process.env.AEON_BIND; // loopback default
-    const tree = await fetch(`${baseUrl}/api/god/vault/tree`);
+    const tree = await fetch(`${baseUrl}/api/console/vault/tree`);
     expect(tree.status).toBe(200);
     const setup = await fetch(`${baseUrl}/api/auth/setup`, {
       method: 'POST',

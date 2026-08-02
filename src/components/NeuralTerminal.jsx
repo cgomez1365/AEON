@@ -365,7 +365,7 @@ const NeuralTerminal = ({ brainData, allData, onQuerySent, onTypingChange, onHis
     if (query === '/clear') {
       try {
         await fetch('/api/chat', { method: 'DELETE' });
-        setHistory([{ role: 'system', content: 'SYSTEM RESET. WAITING FOR CEO COMMAND.' }]);
+        setHistory([{ role: 'system', content: 'SYSTEM RESET. READY.' }]);
       } catch (e) {}
       setIsLoading(false);
       setInput('');
@@ -668,7 +668,10 @@ const NeuralTerminal = ({ brainData, allData, onQuerySent, onTypingChange, onHis
           }]);
         } else {
           const deficit = liveDeficit != null ? Math.abs(liveDeficit).toFixed(2) : '??';
-          const bleed = (dailyBleed ?? parseFloat(localStorage.getItem('aeon_snap_bleed')) ?? 9.41).toFixed(2);
+          // No numeric default: 9.41 was one operator's actual daily interest,
+          // shown to every user as if it were their own.
+          const bleedVal = dailyBleed ?? parseFloat(localStorage.getItem('aeon_snap_bleed'));
+          const bleed = Number.isFinite(bleedVal) ? bleedVal.toFixed(2) : '??';
           const principal = parseFloat(localStorage.getItem('aeon_snap_principal')) || null;
           const accrued = liveDeficit != null && principal != null ? (Math.abs(liveDeficit) - Math.abs(principal)).toFixed(2) : '??';
           setHistory(prev => [...prev, {
@@ -998,29 +1001,21 @@ Make it CEO-ready. Professional tone. Minimum 1500 words.`, 4000);
       return;
     }
 
+    // OS command execution was removed. /api/exec ran a caller-supplied string
+    // through a shell behind a prefix allowlist — a filter, not a boundary.
+    // Named OS operations live at /api/os/action with typed arguments.
     if (isLocal && isCliCommand) {
-      const commandToRun = isPrefixCommand ? query.substring(1).trim() : query;
-      setHistory(prev => [...prev, { role: 'user', content: query }]);
-      setInput('');
-      try {
-        const res = await fetch('/api/exec', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ command: commandToRun })
-        });
-        const data = await res.json();
-        setHistory(prev => [...prev, {
+      setHistory(prev => [...prev,
+        { role: 'user', content: query },
+        {
           role: 'assistant',
-          content: data.success 
-            ? `[Terminal Command Output]\n\n${data.stdout || '(Executed with no output)'}` 
-            : `[Command Failed (Exit Code: ${data.exitCode})]\n\n${data.stderr || data.error || '(No error details)'}`,
-          meta: { model: 'Local OS CMD', provider: 'host-pc', latencyMs: 0 }
+          content:
+            'OS command execution was removed from AEON.\n\n' +
+            'Use /commands for AEON operations, or your own terminal for OS commands.',
+          meta: { model: 'Kernel', provider: 'localhost', latencyMs: 0 },
         }]);
-      } catch (err) {
-        setHistory(prev => [...prev, { role: 'error', content: `OS Exec Bridge Error: ${err.message}` }]);
-      } finally {
-        setIsLoading(false);
-      }
+      setInput('');
+      setIsLoading(false);
       return;
     }
 
@@ -1243,17 +1238,16 @@ Make it CEO-ready. Professional tone. Minimum 1500 words.`, 4000);
         .map(m => `${m.role === 'user' ? 'USER' : 'CORE'}: ${m.content}`)
         .join('\n');
 
+      // This prompt shipped with one operator's personal loan balance, daily
+      // interest and accrued interest hardcoded into every request — so every
+      // user's assistant was primed with somebody else's financial situation.
+      // The prompt describes AEON's role; the user's own data reaches the model
+      // through NEURAL CONTEXT and memory, which is where user data belongs.
       const prompt = `### SYSTEM PROTOCOL: AEON_CORTEX_V4 (HYBRID_INTELLIGENCE)
-Identity: AEON — the operator's Second Brain AI
-User_Identity: Operator
+Identity: AEON — your Second Brain AI
 Current Date & Time: ${new Date().toLocaleString('en-US', { timeZoneName: 'short' })}
 Active Model: ${selectedModel || 'gemini'}
 
-### LIVE FINANCIAL TELEMETRY (real-time, always accurate):
-- System Deficit: ${liveDeficit != null ? `-$${Math.abs(liveDeficit).toFixed(4)}` : 'Unknown'}
-- Daily Interest Bleed: $${(dailyBleed ?? parseFloat(localStorage.getItem('aeon_snap_bleed')) ?? 9.41).toFixed(2)} / day
-- Accrued Interest: $${(() => { const p = parseFloat(localStorage.getItem('aeon_snap_principal')); return liveDeficit != null && p != null ? (Math.abs(liveDeficit) - Math.abs(p)).toFixed(4) : 'Unknown'; })()}
-- Base Loan Principal: ${localStorage.getItem('aeon_snap_principal') ? `-$${Math.abs(parseFloat(localStorage.getItem('aeon_snap_principal'))).toFixed(2)}` : 'Unknown'}
 ### DIRECTIVES:
 1. Ground your answer in the NEURAL CONTEXT below. Cite which source document when possible.
 2. If the context is insufficient, say so honestly and offer general knowledge as a supplement.
@@ -1373,7 +1367,7 @@ If you need more info to complete an action, output regular text to ask the user
         const chatRes = await fetch('/api/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ prompt: prompt + imageContext, model: selectedModel || 'gemini', sender: 'ceo', name: 'CEO', content: query })
+          body: JSON.stringify({ prompt: prompt + imageContext, model: selectedModel || 'gemini', sender: 'user', name: 'You', content: query })
         });
         if (!chatRes.ok) {
           let errMessage = chatRes.statusText;

@@ -7,6 +7,7 @@
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+const { isInside } = require('../../../kernel/pathContainment.cjs');
 
 module.exports = (deps) => {
   const router = express.Router();
@@ -48,7 +49,7 @@ module.exports = (deps) => {
   router.get('/fleet/mission/:id', (req, res) => {
     const id = req.params.id.replace(/[^a-z0-9_-]/gi, '');
     const full = path.join(MISSIONS_DIR, `${id}.md`);
-    if (!full.startsWith(MISSIONS_DIR) || !fs.existsSync(full)) return res.status(404).json({ error: 'Mission not found' });
+    if (!isInside(MISSIONS_DIR, full) || !fs.existsSync(full)) return res.status(404).json({ error: 'Mission not found' });
     res.json({ id, content: fs.readFileSync(full, 'utf8') });
   });
 

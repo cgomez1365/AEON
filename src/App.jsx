@@ -143,18 +143,27 @@ export default function App() {
     window.fetch = async function(...args) {
       const url = typeof args[0] === 'string' ? args[0] : (args[0]?.url || '');
       const isApi = url.startsWith('/api');
-      const _isVercel = window.location.hostname.includes('vercel.app');
 
       try {
         const response = await originalFetch.apply(this, args);
-        // /api/kernel/llm is excluded — components handle their own 409 (needsLocalConfirm) gracefully
-        // /api/auth/status 404s by design when no auth block is installed — settings handles it.
-        const ignoredEndpoints = ['/api/chat', '/api/audit', '/api/search', '/api/health', '/api/canva/status', '/api/telemetry', '/api/llm-telemetry', '/api/local-status', '/api/gas/status', '/api/transcribe', '/api/shell/exec', '/api/kernel/llm', '/api/auth/status'];
+        // Endpoints whose failures are handled by the caller, so a banner would
+        // be noise. Each entry needs that justification — this list is not a
+        // place to quiet something that is actually broken.
+        //
+        // /api/chat used to be here, and cloud was suppressed wholesale by a
+        // hostname check. Between them, dashboard chat answered HTTP 500 on
+        // every AI message in production and no user or developer ever saw a
+        // signal. R-05 has no cloud exemption: a failure the operator cannot
+        // see is a silent failure.
+        //
+        // /api/kernel/llm — components handle their own 409 (needsLocalConfirm).
+        // /api/auth/status — 404s by design when no auth block is installed.
+        const ignoredEndpoints = ['/api/audit', '/api/search', '/api/health', '/api/canva/status', '/api/telemetry', '/api/llm-telemetry', '/api/local-status', '/api/gas/status', '/api/transcribe', '/api/kernel/llm', '/api/auth/status'];
         // 401 on auth/security routes is EXPECTED when locked or signed out —
         // the AuthGate handles it, so it must never raise the forensics banner.
         const isExpectedAuth401 = response.status === 401 && (url.startsWith('/api/auth/') || url.startsWith('/api/security/'));
         // 428 = intentional confirmation gate (dangerous commands) — not an error
-        if (isApi && !response.ok && response.status !== 428 && !isExpectedAuth401 && !ignoredEndpoints.includes(url) && !_isVercel) {
+        if (isApi && !response.ok && response.status !== 428 && !isExpectedAuth401 && !ignoredEndpoints.includes(url)) {
           // Ignore silent background checks
           const clone = response.clone();
           try {
@@ -169,7 +178,7 @@ export default function App() {
         }
         return response;
       } catch (err) {
-        if (isApi && !_isVercel) {
+        if (isApi) {
           setToastMessage(<span>⚠️ [NETWORK DEAD] {url} <span style={{ fontFamily: 'monospace', color: '#ffb4ab', marginLeft: '8px' }}>Trace ID: PENDING_OR_UNREACHABLE</span></span>);
           setTimeout(() => setToastMessage(''), 10000);
         }

@@ -85,7 +85,7 @@ async function main() {
   // ── 2. /set actually changes a setting, and it persists ─────────────
   console.log('2. settings.set — the "fix this setting" case');
   const before = (await req('GET', '/api/settings')).data?.settings?.models?.research;
-  const setRes = await dispatch({ id: 'settings.set', arg: 'set research to ollama qwen3:14b' });
+  const setRes = await dispatch({ id: 'settings.set', arg: 'set research to local qwen3-1.7b-q4' });
   const after = (await req('GET', '/api/settings')).data?.settings?.models?.research;
   record('2a /set dispatch succeeds', setRes.ok && setRes.data?.ok, JSON.stringify(setRes.data?.text || setRes.data?.error));
   record('2b the change is actually persisted in settings', after?.model === 'qwen3:14b', `${JSON.stringify(before)} -> ${JSON.stringify(after)}`);

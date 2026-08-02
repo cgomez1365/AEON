@@ -1,4 +1,5 @@
 /**
+const { isInside } = require('../../../kernel/pathContainment.cjs');
  * Second Brain — Retrieval API
  * Embeds the query (native local runtime) → cosine similarity against each document's
  * cached summary embedding in vault_index.json → reads the full text of the
@@ -58,7 +59,7 @@ module.exports = function retrieveFactory(deps) {
   function resolveIndexedPath(relPath) {
     const rel = relPath.startsWith('Vault/') ? relPath.slice('Vault/'.length) : relPath;
     const full = path.resolve(VAULT_ROOT, rel);
-    return full.startsWith(VAULT_ROOT) ? full : null;
+    return isInside(VAULT_ROOT, full, { allowRoot: true }) ? full : null;
   }
 
   function readIndex() {

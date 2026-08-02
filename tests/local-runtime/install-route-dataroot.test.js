@@ -69,7 +69,27 @@ describe('install routes: failures are not silent (R-05)', () => {
   it('local status surfaces the last runtime-install outcome', () => {
     // Without this the panel can only say "not installed", never "failed, and
     // here is why".
-    expect(ROUTE_SRC).toMatch(/install,\s*models:/);
-    expect(ROUTE_SRC).toMatch(/type === 'runtime-install'/);
+    expect(ROUTE_SRC).toMatch(/\binstall,/);
+    expect(ROUTE_SRC).toMatch(/latest\('runtime-install'\)/);
+  });
+
+  it('local status surfaces the last MODEL-install outcome too', () => {
+    // The status route only ever reported runtime installs, and the model
+    // installer never registered a task at all — so a failed model install
+    // showed as "not installed" with no reason, which reads to a user as the
+    // button doing nothing. That is the failure the CEO hit on a clean machine.
+    expect(ROUTE_SRC).toMatch(/type: 'model-install'/);
+    expect(ROUTE_SRC).toMatch(/latest\('model-install'\)/);
+    expect(ROUTE_SRC).toMatch(/modelInstall,/);
+  });
+
+  it('the model catalog is reachable from the Cookbook UI', () => {
+    // The self-contained installer (no Python, no HF CLI) existed but had no
+    // button. The only model-install control called the HF/python path, which
+    // is why a clean machine could not install a model at all.
+    const ui = fs.readFileSync(
+      path.join(APP_ROOT, 'src', 'blocks', 'cookbook', 'index.jsx'), 'utf8');
+    expect(ui).toMatch(/\/api\/cookbook\/local\/catalog/);
+    expect(ui).toMatch(/\/api\/cookbook\/local\/install['"]/);
   });
 });

@@ -658,7 +658,7 @@ export default function MobileCommandDashboard({ chatHistory = [], auditLogs = [
           <div>
             <div style={{ fontSize: 10, color: "rgba(0,242,255,0.6)", fontFamily: "monospace", letterSpacing: "2px" }}>{greeting.toUpperCase()}</div>
             <div style={{ fontSize: 20, fontWeight: 800, color: "#fff", marginTop: 2 }}>
-              {user?.displayName?.split(" ")[0] || "CEO"} <span style={{ color: "#00f2ff" }}>↗</span>
+              {user?.displayName?.split(" ")[0] || "You"} <span style={{ color: "#00f2ff" }}>↗</span>
             </div>
             <div style={{ fontSize: 11, color: "rgba(255,255,255,0.35)", marginTop: 4 }}>
               {new Date().toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" })}

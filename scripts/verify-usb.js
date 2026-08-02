@@ -166,7 +166,7 @@ if (!fs.existsSync(envUsbPath)) {
   const need = {
     AEON_PORTABLE: 'true', AEON_MODE: 'usb', AEON_LOCAL_ONLY: '1',
     DATA_PATH: null, VAULT_PATH: null, AEON_SECRETS_DIR: null,
-    AEON_WORKSPACE: null, OLLAMA_HOST: null, OLLAMA_MODELS: null,
+    AEON_WORKSPACE: null,
   };
   for (const [k, expected] of Object.entries(need)) {
     const m = env.match(new RegExp(`^${k}=(.*)$`, 'm'));
@@ -176,7 +176,7 @@ if (!fs.existsSync(envUsbPath)) {
   }
   // Every path var must be drive-relative. A literal absolute host path here
   // means the bundle writes to whatever machine built it.
-  for (const k of ['DATA_PATH', 'VAULT_PATH', 'AEON_SECRETS_DIR', 'AEON_WORKSPACE', 'OLLAMA_MODELS']) {
+  for (const k of ['DATA_PATH', 'VAULT_PATH', 'AEON_SECRETS_DIR', 'AEON_WORKSPACE']) {
     const m = env.match(new RegExp(`^${k}=(.*)$`, 'm'));
     if (!m) continue;
     const v = m[1].trim();
@@ -230,17 +230,16 @@ for (const name of ['launch.sh', 'launch.command']) {
 // ── 6. runtime + models ──
 section('6. Runtime and models');
 const rtNode = path.join(T, 'runtime', 'node');
-const rtOllama = path.join(T, 'runtime', 'ollama');
+// This used to also verify a staged model-daemon runtime. The builder stopped staging
+// system-wide model daemon when AEON moved to its own bundled llama.cpp
+// runtime; the check was never updated, so it warned about a directory nothing
+// creates any more. Local inference now lives under the app's own data root and
+// is verified by the runtime registry, not by a staged vendor folder.
 if (fs.existsSync(rtNode)) {
   const plats = fs.readdirSync(rtNode).filter((p) => fs.statSync(path.join(rtNode, p)).isDirectory());
   plats.length ? PASS(`portable Node staged`, `${plats.join(', ')} — ${human(dirSize(rtNode))}`)
                : WARN('runtime/node/ is empty');
 } else WARN('runtime/node/ absent', 'host must already have Node');
-if (fs.existsSync(rtOllama)) {
-  const plats = fs.readdirSync(rtOllama).filter((p) => fs.statSync(path.join(rtOllama, p)).isDirectory());
-  plats.length ? PASS('portable Ollama staged', `${plats.join(', ')} — ${human(dirSize(rtOllama))}`)
-               : WARN('runtime/ollama/ is empty');
-} else WARN('runtime/ollama/ absent', 'host must already have Ollama');
 
 const modelsSize = dirSize(path.join(T, 'models'));
 modelsSize > 0 ? PASS('models/ seeded', human(modelsSize))
