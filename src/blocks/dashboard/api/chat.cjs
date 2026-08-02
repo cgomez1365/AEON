@@ -149,9 +149,11 @@ module.exports = function createChatRouter(deps) {
 
         // Second Brain recall — /matrix <request> forces it explicitly; otherwise it's
         // gated locally (mirrors retrieve.cjs's isRecallQuery) so ordinary chat never
-        // pays for a lookup. NOTE: hits /api/crn/second-brain/retrieve, not /api/search —
-        // outreach/api/search.js also claims /api/search and loads first (blocks mount
-        // alphabetically), so that path silently never reaches Second Brain.
+        // pays for a lookup. Calls /api/crn/second-brain/retrieve, the block's own
+        // unambiguous route. (This used to be a workaround for /api/search being
+        // shadowed by another block; both claimants are resolved now and
+        // tests/route-collisions keeps it that way — but naming the route you
+        // actually mean is still the better habit.)
         const SB_RECALL_PATTERNS = [
           /\b(remember|told|said|mentioned|last time|earlier|before|yesterday|history|historical|conversation|we discussed|i asked)\b/i,
           /\b(my notes?|my docs?|my files?|second brain|brain|knowledge base|what do i know)\b/i,

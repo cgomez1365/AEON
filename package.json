@@ -14,7 +14,7 @@
   "scripts": {
     "aeon": "node tools/aeon-cli.cjs",
     "dev": "vite",
-    "build": "node tools/copy-assets.mjs && vite build",
+    "build": "node scripts/gen-vercel-mounts.cjs && node tools/copy-assets.mjs && vite build",
     "prep:mounts": "node scripts/gen-vercel-mounts.cjs",
     "preview": "vite preview",
     "server": "node server.cjs",
