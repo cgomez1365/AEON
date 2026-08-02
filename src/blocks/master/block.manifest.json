@@ -117,7 +117,7 @@
         "cmd": "/data",
         "desc": "Read a block's saved data — /data cookbook  (omit block to list all)",
         "method": "GET",
-        "route": "/api/god/data",
+        "route": "/api/console/data",
         "params": [
           {
             "name": "block",

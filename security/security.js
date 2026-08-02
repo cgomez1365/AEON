@@ -64,10 +64,21 @@ module.exports = ({ supabase, getLocalFile, WORKSPACE, AUDIT_FILE, SDI_VIOLATION
     },
   });
 
-  // ── Tunnel gate: AEON_MOBILE_SECRET on non-localhost /api ──
+  // Is this request from the machine AEON is running on?
+  //
+  // Read the SOCKET, never the Host header. Host: is a string the client sends —
+  // anyone who can reach the port can claim `Host: localhost` and be trusted.
+  // req.ip reflects the actual peer. This is a signal about origin, not proof of
+  // identity: a malicious local process, a compromised browser tab, or an
+  // exposed dev proxy are all 127.0.0.1. Never let it stand in for a session.
+  const isLoopbackRequest = (req) => {
+    const ip = req.ip || req.socket?.remoteAddress || req.connection?.remoteAddress || '';
+    return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+  };
+
+  // ── Tunnel gate: AEON_MOBILE_SECRET on non-local /api ──
   const tunnelGate = (req, res, next) => {
-    const host = req.get('host') || '';
-    if (host.includes('localhost') || host.includes('127.0.0.1') || process.env.VERCEL) {
+    if (isLoopbackRequest(req) || process.env.VERCEL) {
       return next();
     }
     const authHeader = req.headers.authorization;
@@ -83,25 +94,41 @@ module.exports = ({ supabase, getLocalFile, WORKSPACE, AUDIT_FILE, SDI_VIOLATION
     next();
   };
 
-  // ── Hard gate for OS-level shell endpoints — no localhost bypass, fail-closed ──
+  // ── Gate for privileged OS endpoints ──
+  //
+  // This function's own comment used to promise "no localhost bypass,
+  // fail-closed" — ten lines above the line that returned next() for every
+  // loopback caller. Both halves were wrong: the comment was false, and a
+  // shared secret is not a user session anyway.
+  //
+  // Now: a valid operator session is required from every origin. Loopback earns
+  // no exemption. AEON_MOBILE_SECRET remains accepted for remote/tunnel callers
+  // that have no browser session, and remains fail-closed when unset.
   const requireShellAuth = (req, res, next) => {
+    // Required lazily: sessionValidator resolves its secrets dir at module load,
+    // and tests set AEON_SECRETS_DIR before requiring. Loading it at the top of
+    // security.js would pin the wrong path.
+    let sessionOk = false;
+    try {
+      const sessions = require('../src/kernel/server-utils/sessionValidator.cjs');
+      sessionOk = !!sessions.validateSession(req)?.ok;
+    } catch { sessionOk = false; }
+    if (sessionOk) return next();
+
     const mobileSecret = process.env.AEON_MOBILE_SECRET;
     if (!mobileSecret) {
-      console.warn('[SECURITY] Shell endpoint blocked: AEON_MOBILE_SECRET not configured (fail-closed).');
+      console.warn('[SECURITY] Privileged OS endpoint blocked: no session and AEON_MOBILE_SECRET not configured (fail-closed).');
       return res.status(503).json({
         correlation_id: req.correlationId || 'AEON-SYS',
-        error: 'Shell endpoints disabled: server secret (AEON_MOBILE_SECRET) not configured.'
+        error: 'OS endpoints disabled: sign in, or configure AEON_MOBILE_SECRET for headless access.'
       });
     }
-    const ip = req.ip || req.connection?.remoteAddress || '';
-    const isLocalhost = ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
-    if (isLocalhost) return next();
     const authHeader = req.headers.authorization || '';
     if (authHeader !== `Bearer ${mobileSecret}`) {
-      console.warn(`[SECURITY] Unauthorized shell access attempt on ${req.path} from ${req.ip}.`);
+      console.warn(`[SECURITY] Unauthorized OS access attempt on ${req.path} from ${req.ip}.`);
       return res.status(401).json({
         correlation_id: req.correlationId || 'AEON-SYS',
-        error: 'Unauthorized: a valid Bearer token is required for OS shell endpoints.'
+        error: 'Unauthorized: an operator session or a valid Bearer token is required.'
       });
     }
     next();

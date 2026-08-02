@@ -1001,29 +1001,21 @@ Make it CEO-ready. Professional tone. Minimum 1500 words.`, 4000);
       return;
     }
 
+    // OS command execution was removed. /api/exec ran a caller-supplied string
+    // through a shell behind a prefix allowlist — a filter, not a boundary.
+    // Named OS operations live at /api/os/action with typed arguments.
     if (isLocal && isCliCommand) {
-      const commandToRun = isPrefixCommand ? query.substring(1).trim() : query;
-      setHistory(prev => [...prev, { role: 'user', content: query }]);
-      setInput('');
-      try {
-        const res = await fetch('/api/exec', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ command: commandToRun })
-        });
-        const data = await res.json();
-        setHistory(prev => [...prev, {
+      setHistory(prev => [...prev,
+        { role: 'user', content: query },
+        {
           role: 'assistant',
-          content: data.success 
-            ? `[Terminal Command Output]\n\n${data.stdout || '(Executed with no output)'}` 
-            : `[Command Failed (Exit Code: ${data.exitCode})]\n\n${data.stderr || data.error || '(No error details)'}`,
-          meta: { model: 'Local OS CMD', provider: 'host-pc', latencyMs: 0 }
+          content:
+            'OS command execution was removed from AEON.\n\n' +
+            'Use /commands for AEON operations, or your own terminal for OS commands.',
+          meta: { model: 'Kernel', provider: 'localhost', latencyMs: 0 },
         }]);
-      } catch (err) {
-        setHistory(prev => [...prev, { role: 'error', content: `OS Exec Bridge Error: ${err.message}` }]);
-      } finally {
-        setIsLoading(false);
-      }
+      setInput('');
+      setIsLoading(false);
       return;
     }
 

@@ -48,7 +48,7 @@ async function start({ json = false } = {}) {
   const modelLine = status.portable ? 'portable · local model' : (status.connected ? 'connected' : 'standalone');
   console.log('');
   console.log(render.box([
-    c.neon(c.bold('AEON Terminal · God Mode')),
+    c.neon(c.bold('AEON Terminal · Operator Console')),
     null,
     status.connected
       ? `${c.dim('server ')} ${c.green('●')} ${client.baseUrl()}`
@@ -118,7 +118,7 @@ async function start({ json = false } = {}) {
     },
 
     async blocks() {
-      const res = await client.withAuth(() => client.request('GET', '/api/god/blocks'));
+      const res = await client.withAuth(() => client.request('GET', '/api/console/blocks'));
       if (!res.ok) {
         // Standalone or locked — the manifests on disk still answer this.
         const ids = [...new Set(commands.map((s) => s.blockId))];

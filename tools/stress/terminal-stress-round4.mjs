@@ -187,7 +187,7 @@ async function main() {
 
   // ── 7. Block readiness with keys present ────────────────────────────
   console.log('7. Block readiness now that provider keys exist');
-  const blocks = (await req('GET', '/api/god/blocks')).data?.blocks || [];
+  const blocks = (await req('GET', '/api/console/blocks')).data?.blocks || [];
   const ready = blocks.filter(b => b.ready !== false).length;
   record('7a all blocks report ready with keys in the vault', ready === blocks.length && blocks.length >= 17, `${ready}/${blocks.length} ready`);
 

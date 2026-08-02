@@ -253,6 +253,61 @@ export default function CookbookHardware() {
     // status will update via task completion
   }, []);
 
+  // ── Built-in model catalog (the installer that needs no external tools) ──
+  //
+  // The only model-install control the UI offered was the HF "Download Model"
+  // field, which shells out to the `hf` CLI or `python`. AEON installs neither
+  // and never checked for them, so on a clean machine `where python` resolved
+  // to the Windows Store alias stub, which exits non-zero with a Store ad — and
+  // none of the diagnostic patterns matched that. The install just "failed".
+  //
+  // Meanwhile services/local-runtime/model-installer.cjs — pure Node HTTPS,
+  // SHA-256 verified, GGUF-probed — had no button at all. It does now.
+  const [catalog, setCatalog] = useState([]);
+  const [catalogError, setCatalogError] = useState('');
+  const [installingModel, setInstallingModel] = useState(null);
+
+  const fetchCatalog = useCallback(async () => {
+    try {
+      const res = await fetch('/api/cookbook/local/catalog');
+      const d = await res.json();
+      if (d.ok) { setCatalog(d.models || []); setCatalogError(''); }
+      else setCatalogError(d.error || 'Could not read the model catalog.');
+    } catch (e) { setCatalogError(e.message); }
+  }, []);
+
+  const installLocalModel = useCallback(async (modelId) => {
+    setInstallingModel(modelId);
+    try {
+      const res = await fetch('/api/cookbook/local/install', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ modelId }),
+      });
+      const d = await res.json();
+      if (!res.ok || !d.ok) {
+        setCatalogError(d.error || `Install could not start (${res.status}).`);
+        setInstallingModel(null);
+      }
+    } catch (e) {
+      setCatalogError(e.message);
+      setInstallingModel(null);
+    }
+  }, []);
+
+  useEffect(() => { fetchCatalog(); }, [fetchCatalog]);
+
+  // Clear the in-progress marker once status reports the install finished, and
+  // surface the reason when it failed rather than silently going idle.
+  useEffect(() => {
+    const mi = lrStatus?.modelInstall;
+    if (!mi || !installingModel) return;
+    if (mi.status === 'done') { setInstallingModel(null); fetchCatalog(); }
+    else if (mi.status === 'error') {
+      setCatalogError(mi.error || 'Model install failed.');
+      setInstallingModel(null);
+    }
+  }, [lrStatus, installingModel, fetchCatalog]);
+
   // ── GPU Probe ──
   const probeGpus = useCallback(async () => {
     setScanning(true);
@@ -556,6 +611,60 @@ export default function CookbookHardware() {
           {lrStatus?.runtimeReady && (
             <div style={{ fontSize: '11px', color: '#22d36f', marginBottom: '12px' }}>
               ✓ llama.cpp installed — {lrStatus.readyModels} model{lrStatus.readyModels !== 1 ? 's' : ''} ready
+            </div>
+          )}
+
+          {/* Built-in model catalog — no Python, no HF CLI, nothing to install first. */}
+          {lrStatus?.runtimeReady && catalog.length > 0 && (
+            <div style={{ ...cardStyle, marginBottom: '16px' }}>
+              <div style={{ fontSize: '13px', fontWeight: 600, marginBottom: '4px' }}>Local models</div>
+              <div style={{ fontSize: '11.5px', color: 'var(--text-dim)', lineHeight: 1.6, marginBottom: '10px' }}>
+                Downloaded and verified by AEON itself — no Python or Hugging Face CLI required.
+                Each file's checksum is checked before it is installed.
+              </div>
+
+              {catalogError && <div style={errorBox}>{catalogError}</div>}
+
+              {lrStatus?.modelInstall?.status === 'running' && (
+                <div style={{ fontSize: '11px', color: 'var(--color-primary, #00f2ff)', marginBottom: '8px' }}>
+                  Installing {lrStatus.modelInstall.target}… {lrStatus.modelInstall.pct || 0}%
+                  {lrStatus.modelInstall.log ? ` — ${lrStatus.modelInstall.log}` : ''}
+                </div>
+              )}
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                {catalog.map(m => (
+                  <div key={m.id} style={{
+                    display: 'flex', alignItems: 'center', gap: '10px',
+                    padding: '7px 9px', borderRadius: '4px',
+                    background: 'rgba(255,255,255,0.02)',
+                  }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: '12px' }}>{m.displayName || m.id}</div>
+                      <div style={{ fontSize: '10.5px', color: 'var(--text-dim)' }}>
+                        {(m.capabilities || []).join(' · ') || 'model'}
+                        {m.sizeMb ? ` · ${m.sizeMb} MB` : ''}
+                      </div>
+                    </div>
+                    {m.installed ? (
+                      <span style={{ fontSize: '11px', color: '#22d36f' }}>✓ installed</span>
+                    ) : (
+                      <button
+                        onClick={() => installLocalModel(m.id)}
+                        disabled={!!installingModel}
+                        style={{
+                          ...btnStyle,
+                          padding: '4px 10px', fontSize: '11px',
+                          background: installingModel ? 'rgba(255,255,255,0.05)' : 'var(--color-primary, #00f2ff)',
+                          color: installingModel ? 'var(--text-dim)' : '#000',
+                        }}>
+                        <Download size={12} />
+                        {installingModel === m.id ? 'Installing…' : 'Install'}
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 

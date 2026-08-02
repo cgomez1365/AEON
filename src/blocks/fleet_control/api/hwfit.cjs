@@ -2,7 +2,7 @@
 // Ported from hwfit_routes.py. Runs natively on Windows via child_process + os module.
 const express = require('express');
 const os = require('os');
-const { exec, execSync } = require('child_process');
+const { execFile } = require('child_process');
 
 const MANUAL_BACKENDS = new Set(['cuda', 'rocm', 'metal', 'cpu_x86', 'cpu_arm']);
 
@@ -11,15 +11,14 @@ module.exports = function createHwfitRouter(deps) {
   const detectionCache = {};
   const CACHE_TTL = 30 * 60 * 1000;
 
-  function runCmd(cmd, timeout = 10000) {
+  // execFile, not exec: no shell is involved, so nothing here can ever be
+  // reinterpreted as a command. Callers pass an executable and an argument
+  // array. These probes are fixed literals today; the shape guarantees they
+  // stay safe if a caller ever becomes dynamic.
+  function runCmd(file, args = [], timeout = 10000) {
     return new Promise((resolve) => {
-      exec(cmd, { timeout, windowsHide: true }, (err, stdout, stderr) => {
-        resolve({
-          ok: !err,
-          stdout: (stdout || '').trim(),
-          stderr: (stderr || '').trim(),
-          code: err ? err.code : 0,
-        });
+      execFile(file, args, { timeout, windowsHide: true }, (err, stdout, stderr) => {
+        resolve({ ok: !err, stdout: (stdout || '').trim(), stderr: (stderr || '').trim(), code: err ? err.code : 0 });
       });
     });
   }
@@ -55,8 +54,7 @@ module.exports = function createHwfitRouter(deps) {
   // ── GPU Detection (nvidia-smi) ─────────────────────────────────
 
   async function detectGpus() {
-    const query = 'nvidia-smi --query-gpu=index,name,memory.free,memory.total,memory.used,utilization.gpu,uuid --format=csv,noheader,nounits';
-    const result = await runCmd(query);
+    const result = await runCmd('nvidia-smi', ['--query-gpu=index,name,memory.free,memory.total,memory.used,utilization.gpu,uuid', '--format=csv,noheader,nounits']);
     if (!result.ok || !result.stdout) return { gpus: [], error: result.stderr || 'nvidia-smi not found' };
 
     const gpus = [];

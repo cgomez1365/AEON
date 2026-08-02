@@ -5,6 +5,9 @@
   "private": true,
   "license": "Apache-2.0",
   "version": "3.0.0",
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "bin": {
     "aeon": "tools/aeon-cli.cjs"
   },

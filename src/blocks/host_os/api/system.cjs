@@ -98,6 +98,8 @@ module.exports = function createSystemRouter(deps) {
     // 2026-07 entry). __dirname is src/blocks/host_os/api, so this walks up to
     // the repo root before descending into scripts/.
     const restartScript = path.join(__dirname, '..', '..', '..', '..', 'scripts', 'restart.bat');
+    // aeon-shell-allow: launching a .bat requires cmd.exe; restartScript is a
+    // server-side path.join constant, never request-derived.
     const child = spawn('cmd.exe', ['/c', restartScript], {
       detached: true, stdio: 'ignore', windowsHide: false
     });

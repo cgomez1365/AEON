@@ -318,16 +318,23 @@ const aiRouter = require('../src/kernel/routers/ai.cjs')(_routerDeps);
 const blocksRouter = require('../src/kernel/routers/blocks.cjs')(_routerDeps);
 const eventsRouter = require('../src/kernel/routers/events.cjs')(_routerDeps);
 
-// God Mode — kernel-level terminal superpowers (desktop only, never cloud)
+// Operator Console — kernel-level control surface (desktop only, never cloud).
+//
+// Mounted behind its own session gate. It used to have none at all, relying
+// entirely on the global auth gate — which is a no-op whenever guardEnabled is
+// false, and that is the default. On a stock install every console route,
+// including an arbitrary-filename vault write, answered anyone who could reach
+// the port.
 if (!isVercel) {
   try {
-    const godRouter = require('../src/kernel/routers/god.cjs')({
+    const { requireOperator } = require('../src/kernel/server-utils/requireOperator.cjs');
+    const consoleRouter = require('../src/kernel/routers/console.cjs')({
       storage, kernelLLM: ai.kernelLLM,
       _blockRegistry: loader.blockRegistry, _blockReadiness: loader.blockReadiness,
     });
-    app.use('/api/god', godRouter);
-    console.log('[GOD MODE] /api/god mounted — blocks, data reader, vault drops, model hotswap, key adds');
-  } catch (e) { console.error('[GOD MODE] mount failed:', e.message); }
+    app.use('/api/console', requireOperator({ name: 'Operator Console' }), consoleRouter);
+    console.log('[CONSOLE] /api/console mounted — blocks, data reader, vault drops, model hotswap, key adds');
+  } catch (e) { console.error('[CONSOLE] mount failed:', e.message); }
 }
 
 // Canonical paths

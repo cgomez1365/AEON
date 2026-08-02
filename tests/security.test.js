@@ -28,9 +28,33 @@ describe('security.js — hardening middleware is wired', () => {
     expect(serverJs).toMatch(/production/);
   });
 
-  it('enforces fail-closed shell auth', () => {
+  it('enforces fail-closed auth on privileged OS endpoints', () => {
     expect(securityJs).toMatch(/requireShellAuth/);
-    expect(securityJs).toMatch(/Shell endpoints disabled/);
+    // With no session and no configured secret, refuse — never fall through.
+    expect(securityJs).toMatch(/OS endpoints disabled/);
+  });
+
+  it('privileged OS auth requires a session, with no loopback exemption', () => {
+    // The old gate returned next() for every loopback caller, directly beneath a
+    // comment claiming "no localhost bypass". Loopback is not authentication: a
+    // malicious local process, a compromised tab and an exposed dev proxy all
+    // originate from 127.0.0.1.
+    const fn = /const requireShellAuth = \(req, res, next\) => \{[\s\S]*?\n  \};/.exec(securityJs);
+    expect(fn, 'requireShellAuth not found').toBeTruthy();
+    const body = fn[0];
+    expect(body).toMatch(/validateSession/);
+    expect(body).not.toMatch(/isLocalhost/);
+    expect(body).not.toMatch(/127\.0\.0\.1/);
+  });
+
+  it('no trust decision is made from the client-supplied Host header', () => {
+    // req.get('host') is a string the caller sends. Deciding "this is local"
+    // from it let anyone who could reach the port claim to be local.
+    const hostChecks = securityJs
+      .split('\n')
+      .filter(l => !l.trim().startsWith('//'))
+      .filter(l => /req\.get\(\s*['"]host['"]\s*\)|req\.headers\.host/.test(l));
+    expect(hostChecks, `Host header read at: ${hostChecks.join(' | ')}`).toEqual([]);
   });
 });
 

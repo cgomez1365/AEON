@@ -13,6 +13,7 @@
  */
 const express = require('express');
 const path = require('path');
+const { isInside } = require('../../../kernel/pathContainment.cjs');
 const fs = require('fs');
 const { loadExtractors, extractText } = require('./_lib.cjs');
 
@@ -32,7 +33,7 @@ module.exports = function cloudVaultFactory(deps) {
   function resolveIndexedPath(relPath) {
     const rel = relPath.startsWith('Vault/') ? relPath.slice('Vault/'.length) : relPath;
     const full = path.resolve(VAULT_ROOT, rel);
-    return full.startsWith(VAULT_ROOT) ? full : null;
+    return isInside(VAULT_ROOT, full, { allowRoot: true }) ? full : null;
   }
 
   const readJSON = (f, fb) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return fb; } };

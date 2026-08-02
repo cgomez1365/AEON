@@ -243,12 +243,12 @@ async function main() {
 
   // ── 15. GOD ROUTES — vault + data ─────────────────────────────────────────
   section('15. god routes — data + keys');
-  const godData = await req('GET', '/api/god/data');
+  const godData = await req('GET', '/api/console/data');
   record('15a /data list responds', godData.ok, `status=${godData.status}`);
   record('15b namespaces returned', typeof godData.data === 'object',
     `keys=${Object.keys(godData.data||{}).length}`);
 
-  const godBlock = await req('GET', '/api/god/data?block=settings');
+  const godBlock = await req('GET', '/api/console/data?block=settings');
   record('15c /data?block=settings responds', godBlock.status !== 0, `status=${godBlock.status}`);
 
   // (AI route tests moved to immediately after 0d pre-warm above)

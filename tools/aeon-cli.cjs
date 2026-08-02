@@ -9,12 +9,12 @@
  *   aeon dev <id>         isolated dev server on :3002 (staging/ or src/blocks/), hot-remount on save
  *   aeon new <id>         copy _template into staging/<id> and personalize
  *
- * BO-TGM (God Mode terminal) — operate a running AEON without a browser:
+ * BO-TGM (Operator Console terminal) — operate a running AEON without a browser:
  *   aeon "<natural language>"   intent-routed, falls back to the model
  *   aeon shell                  interactive REPL
  *   aeon status | blocks | commands | run | login | logout
  *
- * God Mode is a CLIENT of the kernel's existing command bus
+ * Operator Console is a CLIENT of the kernel's existing command bus
  * (src/kernel/commandRegistry.cjs → /api/commands, /api/commands/dispatch).
  * It deliberately owns no dispatch logic of its own: confirmation gates,
  * when-clauses and permissions stay enforced server-side, so the terminal
@@ -165,7 +165,7 @@ const commands = {
     app.listen(3002, () => console.log(`[aeon dev] ${path.basename(dir)} on http://localhost:3002 (isolated, staging-safe)`));
   },
 
-  // ── God Mode (BO-TGM) ────────────────────────────────────────────────────
+  // ── Operator Console (BO-TGM) ────────────────────────────────────────────────────
   shell() {
     return require('./terminal/repl.cjs').start({ json: flags.json });
   },
@@ -216,7 +216,7 @@ const commands = {
   async blocks() {
     const client = require('./terminal/client.cjs');
     const render = require('./terminal/renderers.cjs');
-    const res = await client.withAuth(() => client.request('GET', '/api/god/blocks'));
+    const res = await client.withAuth(() => client.request('GET', '/api/console/blocks'));
     if (flags.json) return console.log(JSON.stringify(res.data, null, 2));
     if (!res.ok) {
       // Fall back to what the manifests say — works with no server at all.
@@ -375,7 +375,7 @@ async function naturalLanguage(input) {
   }
 
   if (!flags.json) {
-    console.log(`\n  ${c.neon('●')} ${c.bold('AEON')} ${c.dim('· God Mode')}`);
+    console.log(`\n  ${c.neon('●')} ${c.bold('AEON')} ${c.dim('· Operator Console')}`);
     console.log(c.dim('  ' + '─'.repeat(45)));
     console.log(`  ${c.dim('Routing →')} ${c.bold(route.blockLabel)} ${c.dim('/')} ${route.cmd}`
       + (route.via === 'llm' ? c.dim('   (model-routed)') : ''));
@@ -390,7 +390,7 @@ function usage() {
   console.log(`
 ${c.neon(c.bold('aeon'))} ${c.dim('— AEON terminal')}
 
-${c.bold('GOD MODE')} ${c.dim('(operate a running AEON, no browser)')}
+${c.bold('CONSOLE')} ${c.dim('(operate a running AEON, no browser)')}
   aeon ${c.dim('"<natural language>"')}   route by intent, model as fallback
   aeon shell                interactive REPL — history, tab complete, context
   aeon status               server, vault, model, portable state
