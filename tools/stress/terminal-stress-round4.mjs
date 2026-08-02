@@ -36,7 +36,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const RL = /rate.?limit|429|quota|unavailable|allow-local|abort|timeout/i;
 // status 0 = our own fetch timed out. Once local fallback is authorised, a
 // rate-limited cloud call silently becomes a LOCAL call, and local inference
-// on this box takes 90s+ (GTX 1050 lost CUDA in Ollama 0.32.4 -> CPU only).
+// on this box takes 90s+ (GTX 1050 fell back to CPU-only local inference).
 // That is the provider quota plus the hardware, not an AEON defect, so it is
 // reported as no-verdict rather than as a failure.
 const isRateLimited = (r) => !r.ok && (r.status === 0 || RL.test(JSON.stringify(r.data || {})));

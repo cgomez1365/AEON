@@ -41,7 +41,7 @@ const OLD_OBSERVATION_LIMIT = 120; // older steps collapse to a one-liner
 const CATALOGUE_LIMIT = Number(process.env.AEON_AGENT_CATALOGUE) || 12;
 const AGENT_ROLE = process.env.AEON_AGENT_ROLE || 'agent_worker';
 // A 14B model on CPU-only inference (this machine's GTX 1050 lost CUDA
-// support in Ollama 0.32.4) answers a catalogue-sized prompt in minutes, not
+// support in a past local-runtime build) answers a catalogue-sized prompt in minutes, not
 // seconds. Overridable so a fast cloud model isn't held to a slow default.
 const MODEL_TIMEOUT = Number(process.env.AEON_AGENT_TIMEOUT_MS) || 180000;
 

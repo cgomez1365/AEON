@@ -129,7 +129,7 @@ exist.
   | `network` | `none \| internal \| external` | Informational today; `"external"` documents that the block calls out to third-party APIs. |
   | `secrets` | boolean | `false` strips `deps.GEMINI_KEY_POOL` — no vault key access. |
   | `shell` | boolean | `false` strips `deps.requireShellAuth`, `deps.SAFE_EXEC_PREFIXES`, `deps.INSTANT_PATTERNS` — no shell execution path. |
-  | `ai` | boolean | `false` strips `deps.kernelLLM`, `deps.geminiRequest`, `deps.groqRequest`, `deps.ollamaRequest` — your API literally cannot call an LLM. |
+  | `ai` | boolean | `false` strips `deps.kernelLLM`, `deps.geminiRequest`, `deps.groqRequest` — your API literally cannot call an LLM. |
 
   The sandbox is **warn-only** (a denied access logs `[SANDBOX] Block "<id>"
   accessed denied dep: <name>` instead of crashing), so a wrong permission
@@ -358,7 +358,7 @@ block's UI should pass:
 
 Every block gets `deps.kernelLLM` injected (unless `contract.permissions.ai`
 is `false`, in which case it's stripped — see Permissions above). The engine
-is provider-agnostic — your block works the same on Ollama, Groq, Gemini,
+is provider-agnostic — your block works the same on the local runtime, Groq, Gemini,
 OpenRouter, or Claude without any code changes.
 
 ```js

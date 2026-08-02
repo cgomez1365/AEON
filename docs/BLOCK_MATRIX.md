@@ -139,7 +139,7 @@ Every block's ownership boundaries. If a block isn't listed under "Reads", it ha
 - **Owns:** GPU probe data, model download/serve tasks
 - **Reads:** /api/cookbook/gpus, /api/model/cached, /api/hwfit/*
 - **Writes:** /api/model/download, /api/model/serve, /api/cookbook/delete-cache
-- **Requires:** ollama (local)
+- **Requires:** the bundled local runtime
 - **Can be deleted:** YES
 
 ### Render Studio

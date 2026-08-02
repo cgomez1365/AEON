@@ -65,7 +65,7 @@ gating that makes it safe to hold that power lives in several layers:
 
 `contract.permissions.ai` is `false` — despite the powerful shell/filesystem
 grant, this block makes no LLM calls itself (no `geminiRequest`/
-`groqRequest`/`ollamaRequest`/`kernelLLM` usage anywhere in `api/`).
+`groqRequest`/`kernelLLM` usage anywhere in `api/`).
 
 ## API routes
 

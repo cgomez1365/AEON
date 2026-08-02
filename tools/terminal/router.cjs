@@ -28,7 +28,7 @@ const INTENTS = [
   { block: 'files',        terms: ['file', 'files', 'folder', 'directory', 'list files'], weight: 2 },
   { block: 'settings',     terms: ['setting', 'settings', 'config', 'configure', 'preference'], weight: 2 },
   { block: 'security',     terms: ['lock', 'unlock', 'guard', 'security', 'flush', 'session'], weight: 3 },
-  { block: 'cookbook',     terms: ['model', 'models', 'gpu', 'pull model', 'ollama', 'runtime'], weight: 3 },
+  { block: 'cookbook',     terms: ['model', 'models', 'gpu', 'pull model', 'download model', 'runtime', 'llama.cpp'], weight: 3 },
   { block: 'orion_search', terms: ['search the web', 'web search', 'google', 'orion', 'look up online'], weight: 3 },
   { block: 'host_os',      terms: ['scan', 'system', 'autopilot', 'upload', 'host'], weight: 2 },
   { block: 'dashboard',    terms: ['dashboard', 'push', 'pull', 'sync'], weight: 1 },

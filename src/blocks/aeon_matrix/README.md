@@ -101,12 +101,12 @@ entirely by environment variables (below) plus two constants in
 
 ## Dependencies
 
-- **Ollama** (local, free, private) — `nomic-embed-text` for embeddings.
-  Reachable at `OLLAMA_HOST` (default `http://localhost:11434`). Required
-  for the query side of retrieval to work well; without it, indexing and
-  search fall back to Gemini.
-- **Gemini embedding fallback** — `text-embedding-004`, used when Ollama is
-  unreachable. Rotates across `GEMINI_PAID_KEY`, `GEMINI_API_KEY`, and any
+- **Bundled local runtime** (free, private, no daemon) — an embedding model
+  such as `nomic-embed-text-q8`, installed through Cookbook and managed inside
+  AEON's own data root. Required for the query side of retrieval to work well;
+  without it, indexing and search fall back to Gemini.
+- **Gemini embedding fallback** — `text-embedding-004`, used when no local
+  embedding model is installed. Rotates across `GEMINI_PAID_KEY`, `GEMINI_API_KEY`, and any
   `GEMINI_FREE_KEY_1..N` on 429s. Vectors from different embedding models
   are never compared against each other (tagged per-entry via
   `embeddingModel`).

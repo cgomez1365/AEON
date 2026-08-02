@@ -1,6 +1,6 @@
 # AEON Kernel
 
-The kernel is `server.cjs` — an Express server that provides routing, LLM abstraction, block loading, and system services.
+The kernel is `server/server.js` — the composition root: an Express server providing routing, LLM abstraction, block loading, and system services. `server.cjs` at the repo root is a 12-line compatibility shim that re-exports it; earlier docs described the shim as the kernel.
 
 ## Boot Sequence
 
@@ -10,7 +10,7 @@ The kernel is `server.cjs` — an Express server that provides routing, LLM abst
 3. Create Express app
 4. Mount middleware (CORS, auth, JSON parser, multer)
 5. Initialize Supabase client
-6. Define LLM functions (geminiRequest, groqRequest, ollamaRequest, kernelLLM)
+6. Define LLM functions (geminiRequest, groqRequest, localNativeRequest, kernelLLM)
 7. Define system functions (writeOSAudit, validateSDI, fetchDuckDuckGo)
 8. Mount modular plugins (modules/*.js — ats_engine, hr_arsenal, logistics)
 9. Scan src/blocks/*/block.manifest.json → mount API routes (Block Router v2)
@@ -26,7 +26,7 @@ The kernel is `server.cjs` — an Express server that provides routing, LLM abst
 ### Direct Functions (internal use by routes)
 - `geminiRequest(prompt, model)` — Gemini API with key rotation and 429 failover
 - `groqRequest(prompt, model)` — Groq Cloud API
-- `ollamaRequest(prompt, model)` — Local Ollama instance
+- `localNativeRequest(prompt, model)` — AEON's bundled llama.cpp runtime, managed inside the app's data root
 
 ### Kernel LLM (preferred for blocks)
 ```
@@ -49,7 +49,7 @@ Reads `aeon-settings.json` for role → provider/model mapping:
 
 **Roulette mode:** When enabled, randomly picks between available providers to distribute rate limits across free-tier keys.
 
-**Failover chain:** Gemini (with key rotation) → Groq → Ollama (local). Automatic on 429 or connection failure.
+**Failover chain:** Gemini (with key rotation) → Groq → local runtime. Automatic on 429 or connection failure.
 
 ## Block Router v2
 
@@ -68,7 +68,7 @@ Blocks without manifests are still loaded but flagged as `tier: 'unknown'`.
 | routes/os.js | /api/exec, /api/os/* | OS-level commands (allowlisted) |
 | routes/trading.js | /api/trading/* | Trading engine supervisor |
 | routes/fs.js | /api/fs/* | Filesystem CRUD |
-| routes/gemini.js | /api/ollama, /api/email-draft, /api/transcribe | LLM endpoints |
+| routes/gemini.js | /api/email-draft, /api/transcribe | LLM endpoints |
 | routes/chat.js | /api/chat, /api/terminal-* | Chat log + terminal SSE |
 | routes/media.js | /api/video/*, /api/media/* | Video pipeline + components |
 | routes/brain.js | /api/brain_file, /api/notes, /api/narrator/* | Second Brain file access |
@@ -87,8 +87,8 @@ Blocks without manifests are still loaded but flagged as `tier: 'unknown'`.
 
 1. **CORS allowlist** — Only listed origins permitted (localhost + configured domains)
 2. **Bearer auth** — External requests require `AEON_MOBILE_SECRET`
-3. **Shell auth** — OS exec endpoints require auth even from localhost (fail-closed)
-4. **Exec allowlist** — Only whitelisted command prefixes can execute
+3. **Session on privileged OS endpoints** — `requireShellAuth` requires an operator session from every origin, loopback included. Loopback is not authentication: a malicious local process, a compromised browser tab and an exposed dev proxy all originate from 127.0.0.1. `AEON_MOBILE_SECRET` remains accepted for headless callers, and the gate is fail-closed when neither is present.
+4. **No shell execution surface** — AEON does not run a caller-supplied string through a shell. `POST /api/os/action` exposes named operations with typed parameters, each launched with a fixed executable and an argument array.
 5. **Path allowlist** — Filesystem access restricted to `ALLOWED_ROOTS`
 6. **SDI validator** — Schema validation on all structured data writes
 7. **Audit trail** — Every action logged to `audit_log.json` + Supabase

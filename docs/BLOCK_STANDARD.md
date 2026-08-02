@@ -26,8 +26,8 @@ src/blocks/<block_id>/
   "deployment": "universal | local_required | hybrid",
   "tier": "core | free | plugin",
   "requires": {
-    "apis": ["groq", "gemini", "supabase", "firebase", "ollama"],
-    "local": ["ffmpeg", "python", "ollama"],
+    "apis": ["groq", "gemini", "supabase", "firebase"],
+    "local": ["ffmpeg", "python"],
     "blocks": ["research"]
   },
   "api_routes": true,
@@ -63,7 +63,7 @@ Full JSON Schema: [block.schema.json](../block.schema.json)
 
 ### Deployment Tags
 - `universal` — Works on localhost AND Vercel/cloud. No OS access, no local files.
-- `local_required` — Needs OS access, hardware, or local services (Ollama, FFmpeg, Python).
+- `local_required` — Needs OS access, hardware, or local services (FFmpeg, Python, the bundled local runtime).
 - `hybrid` — Core features work on cloud, advanced features need local.
 
 ### What Blocks Cannot Do

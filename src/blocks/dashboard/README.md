@@ -28,13 +28,13 @@ below.
   `/api/terminal-history` (get/save) and the legacy `/api/terminal-stream`
   SSE bridge. Handles in-chat command interception (`/link`, `/scrape`,
   `/web`, `/matrix` + implicit Second Brain recall), the daily-cost kill
-  switch (forces the local Ollama model once `KILL_SWITCH_THRESHOLD` is
+  switch (forces the local model once `KILL_SWITCH_THRESHOLD` is
   hit), and a Gemini → Groq → offline-failsafe fallback chain.
 - `api/chat-stream.cjs` — SSE token-by-token streaming chat:
   `POST /api/chat/stream`, `POST /api/chat/stop`. Reads role→provider→model
   from `aeon-settings.json`, injects VP's persistent memory + approved
   skills into the system prompt, and falls back configured provider → Groq
-  → Ollama if a provider errors mid-stream. Also fires a non-blocking
+  → local runtime if a provider errors mid-stream. Also fires a non-blocking
   auto-memory-extraction call after each turn when `brain_settings.auto_memory`
   is on.
 - `api/audit.js` — `GET/POST/PUT/DELETE/OPTIONS /api/audit`: Supabase-backed
@@ -87,9 +87,6 @@ directly on `/api` only (see `src/kernel/blockHost.cjs`).
   fallbacks) — used by `api/audit.js` and `api/chat.cjs` for the
   Supabase-backed chat log / audit log / terminal history, with local-file
   fallback when Supabase is unset.
-- `OLLAMA_HOST` — base URL for the local Ollama server, defaults to
-  `http://localhost:11434` (`api/chat-stream.cjs`). This is a real
-  Ollama-service default, distinct from the kernel-loopback fix below.
 - `AEON_KERNEL_URL` / `PORT` — used to build the base URL for in-process
   kernel loopback calls (`/api/orion-scrape`, `/api/crn/second-brain/retrieve`,
   `/api/ai`, `/api/memory/add`). Defaults to
@@ -98,8 +95,8 @@ directly on `/api` only (see `src/kernel/blockHost.cjs`).
 - `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` — read directly in the
   browser (`index.jsx`, via `src/config.js`) as the fallback path when the
   primary `/api/token-analytics/*` fetches fail.
-- Provider keys for Groq/Gemini/Ollama are resolved by the kernel's shared
-  `geminiRequest`/`groqRequest`/`ollamaRequest` helpers and, in
+- Provider keys for Groq/Gemini are resolved by the kernel's shared
+  `geminiRequest`/`groqRequest` helpers (local inference needs no key) and, in
   `chat-stream.cjs`, directly from the vault (`GROQ_API_KEY`,
   `GEMINI_PAID_KEY`/`GEMINI_FREE_KEY_1`, `OPENROUTER_API_KEY`,
   `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) — this is why
@@ -127,10 +124,6 @@ directly on `/api` only (see `src/kernel/blockHost.cjs`).
 - **`contract.permissions.filesystem`** was `"read"` despite `api/chat.cjs`
   writing `LOG_FILE`, `TERMINAL_HISTORY_FILE`, and `quick-links.json` —
   corrected to `"write"`.
-- **`requires.apis`/`env`** were missing `ollama`/`OLLAMA_HOST` despite
-  `api/chat.cjs` and `api/chat-stream.cjs` both calling `ollamaRequest`/
-  streaming from Ollama as a real fallback path — added (matches the
-  pattern in `aeon_matrix`/`fleet_control`'s manifests).
 - **`description`** referenced a "treasury" panel that no longer exists in
   `index.jsx` — rewritten to describe what's actually rendered (telemetry,
   spend, heatmap, audit feed).

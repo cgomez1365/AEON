@@ -17,14 +17,16 @@ secret is unset. Secrets at rest are AES-256-GCM encrypted in the vault, keyed b
 | Control | Where | Notes |
 |---------|-------|-------|
 | RLS deny-all on sensitive tables | `db/migrations/001_enable_rls.sql` | anon gets nothing |
-| Server boundary (service_role) | `server.cjs`, `src/kernel/vault.cjs` | key server-only |
-| CORS allowlist (no wildcard) | `server.cjs` | fail-closed on bad origin |
-| Bearer auth on `/api` (external) | `server.cjs` | localhost bypass for local only |
-| Hard fail-closed shell auth | `requireShellAuth` | no localhost bypass |
-| Security headers (helmet) | `server.cjs` | HSTS, X-Frame-Options, etc. |
-| Rate limiting | `server.cjs` | 120/min/IP default, tunable |
+| Server boundary (service_role) | `server/server.js`, `src/kernel/vault.cjs` | key server-only |
+| CORS allowlist (no wildcard) | `server/server.js` | fail-closed on bad origin |
+| Bearer auth on `/api` (external) | `server/server.js` | local requests identified by socket address, never the `Host:` header |
+| Session required on privileged OS endpoints | `requireShellAuth` | operator session from every origin, loopback included; `AEON_MOBILE_SECRET` for headless callers; fail-closed when neither is present |
+| No shell execution surface | `src/blocks/host_os/api/os.cjs` | named actions with argument arrays; no client string ever reaches a shell |
+| Session gate on the Operator Console | `requireOperator` | independent of global guard state; pre-account access is loopback-only so a fresh install can reach setup |
+| Security headers (helmet) | `server/server.js` | HSTS, X-Frame-Options, etc. |
+| Rate limiting | `server/server.js` | 120/min/IP default, tunable |
 | Encrypted vault | `src/kernel/vault.cjs` | AES-256-GCM, atomic writes, mode 0600 |
-| Crash guards | `server.cjs` | uncaught/unhandled → log + restart |
+| Crash guards | `server/server.js` | uncaught/unhandled → log + restart |
 | Log redaction | `src/kernel/logger.cjs` | secrets censored in logs |
 | Anon canary | `tools/rls-canary.cjs` | alerts if a table goes public |
 | Dependency audit | `.github/workflows/ci.yml`, dependabot | weekly |

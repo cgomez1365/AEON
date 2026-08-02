@@ -344,7 +344,7 @@ ${C.bold('aeon build-usb')} — assemble a portable AEON drive
         log(C.ok('      ✓'));
       } catch (e) { log(C.err(`      ✗ ${e.message}`)); }
 
-      // No Ollama. AEON runs local models through its own bundled
+      // No system-wide model daemon. AEON runs local models through its own bundled
       // llama.cpp worker (services/local-runtime), installed into
       // data/local-runtime by the Cookbook block. Shipping a second,
       // system-wide model daemon on the drive contradicted that and left an
@@ -366,7 +366,7 @@ ${C.bold('aeon build-usb')} — assemble a portable AEON drive
   } else {
     // Straight from the curated GGUF catalog, hash-verified — the same source
     // and the same verification the Cookbook block uses at runtime. Previously
-    // this shelled out to `ollama pull`, which required a system-wide daemon on
+    // this shelled out to a system-wide model daemon's pull command, which required that daemon on
     // the BUILD machine and produced a store AEON no longer reads.
     const CATALOG = require(path.join(ROOT, 'services/local-runtime/model-catalog.json'));
     const entry = CATALOG.models.find(m => m.id === args.model);

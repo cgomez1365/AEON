@@ -365,7 +365,7 @@ const NeuralTerminal = ({ brainData, allData, onQuerySent, onTypingChange, onHis
     if (query === '/clear') {
       try {
         await fetch('/api/chat', { method: 'DELETE' });
-        setHistory([{ role: 'system', content: 'SYSTEM RESET. WAITING FOR CEO COMMAND.' }]);
+        setHistory([{ role: 'system', content: 'SYSTEM RESET. READY.' }]);
       } catch (e) {}
       setIsLoading(false);
       setInput('');
@@ -1367,7 +1367,7 @@ If you need more info to complete an action, output regular text to ask the user
         const chatRes = await fetch('/api/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ prompt: prompt + imageContext, model: selectedModel || 'gemini', sender: 'ceo', name: 'CEO', content: query })
+          body: JSON.stringify({ prompt: prompt + imageContext, model: selectedModel || 'gemini', sender: 'user', name: 'You', content: query })
         });
         if (!chatRes.ok) {
           let errMessage = chatRes.statusText;

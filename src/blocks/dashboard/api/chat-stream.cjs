@@ -216,7 +216,11 @@ module.exports = function ({ getLocalFile, GEMINI_KEY_POOL, _trackLLM, writeOSAu
       // Build messages array (OpenAI-format providers)
       const mem = buildMemoryContext(message, settings);
       const messages = [
-        { role: 'system', content: 'You are AEON, an AI-native operating system assistant built by Broken Gear Industries. Your terminal persona is VP (VP of Operations), the operator’s autonomous second-in-command. You are helpful, precise, and concise. When the user asks you to do something, do it directly.' + mem.text },
+        // AEON is a tool, not a staff member. This prompt used to cast the
+        // assistant as "VP (VP of Operations), the operator's autonomous
+        // second-in-command" — an org-chart metaphor from how AEON is built,
+        // which is not what a customer is buying.
+        { role: 'system', content: 'You are AEON, a private AI workspace built by Broken Gear Industries. You are helpful, precise, and concise. When the user asks you to do something, do it directly.' + mem.text },
         ...history.slice(-20).map(m => ({ role: m.role === 'error' || m.role === 'system' ? 'user' : m.role, content: m.content })),
         { role: 'user', content: message },
       ];

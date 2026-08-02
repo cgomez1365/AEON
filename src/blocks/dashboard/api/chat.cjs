@@ -286,7 +286,7 @@ module.exports = function createChatRouter(deps) {
   router.delete('/chat', async (req, res) => {
     try {
       const init = [
-        { id: `chat_${Date.now()}`, sender: 'system', name: 'AEON_CORTEX', content: 'SYSTEM RESET. WAITING FOR CEO COMMAND.', timestamp: new Date().toISOString(), color: '#00f2ff' }
+        { id: `chat_${Date.now()}`, sender: 'system', name: 'AEON_CORTEX', content: 'SYSTEM RESET. READY.', timestamp: new Date().toISOString(), color: '#00f2ff' }
       ];
       if (isVercel && supabase) {
         await supabase.from('aeon_chat_log').delete().neq('id', '0');

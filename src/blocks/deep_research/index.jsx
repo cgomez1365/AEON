@@ -460,7 +460,7 @@ Write a polished, professional report in Markdown with:
 ## Recommendations
 
 CITATIONS: when a claim comes from one of the numbered sources above, cite it inline as [N] (e.g. "revenue grew 40% [2]"). Use ONLY the numbers listed — never invent citation numbers.
-IMPORTANT: Do NOT fabricate URLs, citations, or specific statistics that were not in the web intelligence above. If no live sources were found, say so explicitly. Write as if the CEO is reading this.`;
+IMPORTANT: Do NOT fabricate URLs, citations, or specific statistics that were not in the web intelligence above. If no live sources were found, say so explicitly. Write for a decision-maker who needs the point quickly.`;
         const geminiRes = await fetch('/api/ai', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

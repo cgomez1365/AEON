@@ -624,7 +624,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   // ── Default system identity — injected on every kernelLLM call unless
   // the caller provides their own system prompt. Blocks can override with
   // opts.system for specialized personas (grader, researcher, councilor).
-  const AEON_SYSTEM = 'You are AEON, an AI-powered business operating system. You are concise, accurate, and action-oriented. When given a task, execute it directly. When asked a question, answer it directly. Never fabricate data.';
+  const AEON_SYSTEM = 'You are AEON, a private AI workspace. You are concise, accurate, and action-oriented. When given a task, execute it directly. When asked a question, answer it directly. Never fabricate data.';
 
   const kernelLLM = async (prompt, opts = {}) => {
     const role = opts.role || 'chat';

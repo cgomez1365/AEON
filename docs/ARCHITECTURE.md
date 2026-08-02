@@ -19,7 +19,7 @@ AEON is a modular, offline-first AI operations portal. React + Vite frontend, Ex
 │  server.cjs + routes/*              │     LLM service layer, SDI validator
 ├─────────────────────────────────────┤
 │    PROVIDERS                        │
-│  Groq | Gemini | Ollama | OpenAI    │  ← Cloud APIs + local models
+│  Groq | Gemini | OpenAI | local     │  ← Cloud APIs + bundled llama.cpp
 ├─────────────────────────────────────┤
 │    NEURAL TERMINAL                  │  ← User interface, slash commands
 └─────────────────────────────────────┘
@@ -33,7 +33,7 @@ Every block lives in `src/blocks/<block_id>/` and must contain:
 - `block.manifest.json` — Declares ID, route, deployment tag, dependencies
 - `api/` (optional) — Express route handlers auto-loaded by the kernel
 
-The kernel block loader (server.cjs) scans `src/blocks/*/` at boot, reads each `block.manifest.json`, and mounts any `api/*.js` files as Express routes. Frontend routing is in `DesktopLayout.jsx`.
+The kernel block loader (`server/block-loader.js`, wired from `server/server.js`) scans `src/blocks/*/` at boot, reads each `block.manifest.json`, and mounts any `api/*.js` files as Express routes. Frontend routing is in `DesktopLayout.jsx`.
 
 ### Adding a new block
 
@@ -92,7 +92,7 @@ The kernel reads `aeon-settings.json` to determine which provider/model handles 
 
 **Roulette mode**: When enabled, the kernel randomly picks between available free-tier providers to distribute rate limits.
 
-**Failover chain**: Gemini → Groq → Ollama. If one provider 429s or errors, the next is tried automatically.
+**Failover chain**: Gemini → Groq → local runtime. If one provider 429s or errors, the next is tried automatically.
 
 ## Data Architecture
 
@@ -107,7 +107,8 @@ Every block that needs cloud sync follows the pattern: try local API → Supabas
 
 | File | Purpose |
 |------|---------|
-| `server.cjs` | Express backend — kernel, routes, block loader, LLM functions |
+| `server/server.js` | Express backend — the kernel composition root: routes, block loader, LLM functions |
+| `server.cjs` | 12-line compatibility shim re-exporting `server/server.js` |
 | `src/config.js` | Shared frontend config (WORKSPACE, SB_URL, SB_KEY from env) |
 | `src/kernel/supabase.js` | Shared Supabase client |
 | `.env` | All API keys and configuration (never committed) |
@@ -120,8 +121,8 @@ Every block that needs cloud sync follows the pattern: try local API → Supabas
 
 - `.env` contains all secrets, never committed to git
 - `AEON_MOBILE_SECRET` bearer token required for external API access
-- `requireShellAuth` middleware on all OS-level endpoints (fail-closed)
-- `SAFE_EXEC_PREFIXES` allowlist for command execution
+- `requireShellAuth` on privileged OS endpoints: operator session required from every origin (loopback included), `AEON_MOBILE_SECRET` for headless callers, fail-closed when neither is present
+- No shell execution surface — `POST /api/os/action` runs named operations with fixed executables and argument arrays, so no caller-supplied string reaches a shell
 - `ALLOWED_ROOTS` for filesystem access boundaries
 - Supabase RLS enabled on all tables
 - Groq/Gemini keys only in `.env`, referenced via `import.meta.env.VITE_*` in frontend

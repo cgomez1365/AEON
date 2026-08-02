@@ -89,8 +89,8 @@ removed in the 2026-07-24 cleanup.
 Grading (`grade.js`, `grade-all.js`) does **not** call Groq or Gemini
 directly — it goes through the injected `kernelLLM(prompt, { role: 'grading' })`,
 which is provider-agnostic and resolves to whichever provider/model is
-currently assigned to the `grading` role (Ollama locally as of this
-writing, per `.aeon.runtime.json`). Because of that, `GROQ_API_KEY` was
+currently assigned to the `grading` role (the bundled local runtime by
+default, per `.aeon.runtime.json`). Because of that, `GROQ_API_KEY` was
 removed from this block's declared requirements — nothing in this block's
 code reads it or calls Groq directly.
 
