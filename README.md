@@ -17,6 +17,21 @@
 
 The launcher checks your computer, walks you through setup, and opens AEON in your browser. **Every question can be skipped by pressing Enter** — you can finish everything later inside AEON under **Settings**.
 
+> **Platform support, stated precisely.** AEON is developed and released on
+> **Windows**, and `LAUNCH.bat` is the only launcher that has been run
+> end-to-end on its own operating system.
+>
+> `launch.command` (macOS) and `launch.sh` (Linux) are **partially verified**:
+> both pass a shell syntax check, and both have been executed with Node present
+> and confirmed to reach `node launch.js`, which is the entire cross-platform
+> body of the launcher. What has *not* been exercised on real hardware is the
+> Node **auto-install** branch (`apt`/`dnf`/`pacman`, Homebrew), macOS Gatekeeper
+> and the Finder double-click path, and AEON itself running on either OS.
+>
+> If you are on macOS or Linux: install Node yourself from
+> [nodejs.org](https://nodejs.org) first, then run the script. That path is the
+> one we have evidence for. Reports of the rest are welcome.
+
 ### Free AI, two ways
 - **Cloud (free keys)** — grab a free key from [aistudio.google.com](https://aistudio.google.com) (Gemini) or [console.groq.com](https://console.groq.com) (Groq). Paste it when the launcher asks, or later via Settings — or just type `/addkey groq YOUR_KEY` in the terminal.
 - **Local (no keys, fully private)** — open the **Cookbook** block and install the local runtime, then download a model with one click. Models run inside AEON on a bundled llama.cpp worker — nothing is installed system-wide, and no internet is needed after the download.

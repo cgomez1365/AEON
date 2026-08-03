@@ -153,6 +153,46 @@ describe('describeRoleLocal — the sync resolver readiness depends on', () => {
     expect(r.model).toBe('llama-3.1-8b-instant');
   });
 
+  // BO-A5b — found in the operator's own restored registry, not invented.
+  // Three roles were assigned models a GROQ endpoint does not serve
+  // (qwen3-1.7b-q4, qwen3-4b-q4, gemini-2.5-flash) and readiness reported
+  // ok:true for every one. The router would have 404'd on the first call.
+  // Stale assignments are normal — they survive a provider being re-pointed, a
+  // model being retired, or a config restored from another machine. Reporting
+  // them is the fix, not preventing them.
+  it('refuses a role assigned a model the endpoint does not serve', () => {
+    const reg = groqRegistry(['llama-3.3-70b-versatile', 'llama-3.1-8b-instant']);
+    reg.roles = { creative: { endpoint_id: 'groq-test', model: 'qwen3-4b-q4' } };
+    writeRegistry(reg);
+
+    const r = endpoints.describeRoleLocal('creative');
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe('model_not_on_endpoint');
+    // The error must name the remedy, not just the fault (BO-F3's rule).
+    expect(r.detail).toMatch(/Settings/);
+    expect(r.detail).toMatch(/qwen3-4b-q4/);
+  });
+
+  it('stays permissive when the endpoint has no discovered model list', () => {
+    // An empty models[] means discovery never ran, not that the endpoint
+    // serves nothing. Failing closed there would report every fresh install as
+    // broken — a worse lie than the one being fixed.
+    const reg = groqRegistry([]);
+    reg.roles = { creative: { endpoint_id: 'groq-test', model: 'anything-at-all' } };
+    writeRegistry(reg);
+
+    const r = endpoints.describeRoleLocal('creative');
+    expect(r.ok).toBe(true);
+    expect(r.model).toBe('anything-at-all');
+  });
+
+  it('accepts a role whose model IS on the endpoint', () => {
+    const reg = groqRegistry(['llama-3.3-70b-versatile']);
+    reg.roles = { creative: { endpoint_id: 'groq-test', model: 'llama-3.3-70b-versatile' } };
+    writeRegistry(reg);
+    expect(endpoints.describeRoleLocal('creative').ok).toBe(true);
+  });
+
   it('auto-picks the preferred chat model when the prefer pattern matches', () => {
     writeRegistry(groqRegistry(['whisper-large-v3', 'llama-3.3-70b-versatile']));
     const r = endpoints.describeRoleLocal('creative');

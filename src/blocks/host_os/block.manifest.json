@@ -16,7 +16,11 @@
     "iconAssetPng": "/brand/block-icons/png/host_os.png",
     "hidden": false
   },
-  "widget": null,
+  "widget": {
+    "endpoint": "/api/host_os/widget",
+    "label": "Operator Console",
+    "refresh_ms": 30000
+  },
   "requires": {
     "apis": [],
     "env": [],
@@ -201,6 +205,21 @@
     {
       "method": "GET",
       "path": "/api/health",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/host_os/audit",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/host_os/safe-mode",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/host_os/widget",
       "auth": true
     },
     {

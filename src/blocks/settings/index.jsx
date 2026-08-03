@@ -2074,6 +2074,71 @@ function BlockWidget({ w }) {
         </div>
       )}
 
+      {/* ── Optional richer surfaces a widget MAY declare (BO-A5a) ──────
+          A widget that returns `capabilities` gets capability badges with a
+          preflight preview: the exact executable and argv that would run, shown
+          BEFORE anything is approved. That is the whole point of retiring a
+          shell in favour of named actions — the operator can read the command.
+          A widget that returns `safeMode` gets the toggle.
+          Both are optional; a widget declaring neither renders as a plain card. */}
+      {data && Array.isArray(data.capabilities) && data.capabilities.length > 0 && (
+        <div style={{ marginTop: 10 }}>
+          <div style={{ fontSize: 11, color: 'var(--text-dim)', marginBottom: 4 }}>
+            Capabilities
+          </div>
+          {data.capabilities.map(c => (
+            <div key={c.id} style={{ marginBottom: 6 }}>
+              <span style={{
+                display: 'inline-block', padding: '1px 6px', borderRadius: 3,
+                border: '1px solid var(--accent)', color: 'var(--accent)',
+                fontSize: 10, marginRight: 6,
+              }}>{c.id}</span>
+              <span style={{ fontSize: 11 }}>{c.description}</span>
+              {Array.isArray(c.preflight) && (
+                <div style={{ fontSize: 10, opacity: 0.65, fontFamily: 'monospace', marginTop: 2 }}>
+                  runs: {c.preflight.join(' ')}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {data && typeof data.safeMode === 'boolean' && (
+        <div className="pref-toggle-row" style={{ marginTop: 8 }}>
+          <div className="pref-toggle-info">
+            <span className="pref-toggle-label">Safe mode</span>
+            <span className="pref-toggle-desc">
+              Refuse every OS action. Enforced at the execution entry point, not in this UI.
+            </span>
+          </div>
+          <button
+            type="button"
+            className={`roulette-btn ${data.safeMode ? 'roulette-btn--on' : ''}`}
+            role="switch"
+            aria-checked={data.safeMode}
+            aria-label="Safe mode"
+            onClick={async () => {
+              try {
+                const r = await fetch(`/api/${w.id}/safe-mode`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ enabled: !data.safeMode }),
+                });
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                const d = await r.json();
+                setData(prev => ({ ...prev, safeMode: d.safeMode }));
+              } catch (e) {
+                // R-05: a failed toggle must not render as a successful one.
+                setErr(`safe mode toggle failed — ${e.message}`);
+              }
+            }}
+          >
+            {data.safeMode ? 'ON' : 'OFF'}
+          </button>
+        </div>
+      )}
+
       {/* Least privilege, stated rather than assumed. This is the same
           information createScopedDeps() enforces server-side. */}
       <div style={{ marginTop: 8, fontSize: 10, color: 'var(--text-dim)' }}>
@@ -2261,7 +2326,19 @@ function BlocksNeedsPanel({ onManageModels }) {
         <div className="agent-tools-desc" style={{ margin: 0, flex: 1 }}>
           Your blocks and what each one needs. Set your models once — every block uses them automatically.
         </div>
-        {aiBlocks.length > 0 && <SciBadge score={agg} title={`System confidence — ${agg}/100 across ${aiBlocks.length} AI blocks. 80+ = deploy-ready.`} />}
+        {/* BO-A5c — say WHICH product the number scores, every time it is
+            quoted. The Bible describes two: the workspace (p4–25) and the
+            business layer (p26–27: paid packs, deployments, marketplace).
+            This score covers the workspace only. Counting an unbuilt
+            commercial layer against engineering readiness would be dishonest
+            in both directions — it understates the engineering and overstates
+            the business. */}
+        {aiBlocks.length > 0 && (
+          <SciBadge
+            score={agg}
+            title={`Workspace confidence — ${agg}/100 across ${aiBlocks.length} AI blocks. 80+ = deploy-ready. Scores the workspace only; the business layer (paid packs, marketplace) is not built and is not counted.`}
+          />
+        )}
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10 }}>
         {aiBlocks.length === 0 && <div style={{ fontSize: 12, color: 'var(--text-dim, #4a6a8a)' }}>No AI blocks installed.</div>}

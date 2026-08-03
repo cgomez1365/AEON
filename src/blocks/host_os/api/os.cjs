@@ -20,6 +20,7 @@ module.exports = function createOsRouter(deps) {
   const router = express.Router();
   const {
     isVercel, WORKSPACE, ALLOWED_ROOTS, writeOSAudit, requireShellAuth,
+    AUDIT_FILE,
   } = deps;
 
   /** Every OS action is a named operation with a fixed executable. */
@@ -43,6 +44,15 @@ module.exports = function createOsRouter(deps) {
   // POST /api/os/action — the only execution entry point.
   router.post('/os/action', requireShellAuth, (req, res) => {
     if (isVercel) return res.status(403).json({ error: 'Desktop Only feature' });
+    // Safe mode is enforced HERE, at the single execution entry point, not in
+    // the UI. A toggle that only greys out a button is decoration.
+    if (safeMode) {
+      writeOSAudit('OS_ACTION_REFUSED', `safe mode: ${req.body && req.body.action}`, 1, 0, req.correlationId || 'AEON-SYS');
+      return res.status(423).json({
+        error: 'Safe mode is on — OS actions are refused. Turn it off in Settings → Blocks → Operator Console.',
+        safeMode: true,
+      });
+    }
     const { action, params = {} } = req.body || {};
     const spec = ACTIONS[action];
     if (!spec) {
@@ -86,6 +96,90 @@ module.exports = function createOsRouter(deps) {
       ok: true,
       actions: Object.entries(ACTIONS).map(([id, s]) => ({ id, description: s.describe({}) })),
     });
+  });
+
+  // ── Operator Console obligations (BO-A5a) ─────────────────────────────────
+  // God Mode became the Operator Console and the execution surface was deleted.
+  // The obligations that came with the rename — capability badges, preflight
+  // preview, an audit screen, and safe mode — have been outstanding since
+  // 2026-08-02. They are built here as a WIDGET under BO-A2's contract rather
+  // than as bespoke settings pages, so two build orders close with one piece of
+  // work: an audit screen and a safe-mode toggle are precisely "a block
+  // declaring a control surface in settings."
+
+  // Safe mode — refuses every OS action without touching auth or the vault.
+  // Deliberately in-memory: it is a "not right now" switch the operator can
+  // flip during a demo or an untrusted session, not a persisted security
+  // policy. Persisting it would create a second, quieter place for the install
+  // to be disabled, and a restart is the obvious way to clear it.
+  let safeMode = false;
+
+  // GET /api/host_os/widget — the settings control surface.
+  //
+  // The path is /api/host_os/ rather than /api/os/ only because it is the
+  // block's widget rather than an OS operation; the widget gate checks the
+  // block's declared routes, so either would pass. Kept distinct so the
+  // console surface and the execution surface are never confused.
+  router.get('/host_os/widget', requireShellAuth, (req, res) => {
+    let recent = [];
+    try {
+      const audit = require('fs').existsSync(AUDIT_FILE)
+        ? JSON.parse(require('fs').readFileSync(AUDIT_FILE, 'utf8'))
+        : [];
+      recent = audit.slice(-5).reverse().map(e => ({
+        label: `${e.action} · ${String(e.details || '').slice(0, 60)}`,
+        at: e.timestamp,
+        status: e.status_code,
+      }));
+    } catch { /* an unreadable audit file must not take the widget down */ }
+
+    res.json({
+      label: 'Operator Console',
+      kind: 'list',
+      value: Object.keys(ACTIONS).length,
+      sub: safeMode ? 'SAFE MODE — actions refused' : `${Object.keys(ACTIONS).length} actions available`,
+      safeMode,
+      // Capability badges: what this install can actually do, named.
+      capabilities: Object.entries(ACTIONS).map(([id, s]) => ({
+        id,
+        description: s.describe({}),
+        // Preflight preview — the exact executable and argv that would run.
+        // The operator sees the command BEFORE approving it, which is the
+        // whole point of retiring a shell in favour of named actions.
+        preflight: (() => {
+          try { return [s.file, ...(s.args ? s.args({}) : [])]; }
+          catch { return [s.file]; }
+        })(),
+      })),
+      items: recent.length ? recent : [{ label: 'no OS actions recorded yet' }],
+    });
+  });
+
+  // POST /api/host_os/safe-mode — the toggle.
+  //
+  // Deliberately carries NO isVercel guard. host_os declares
+  // contract.targets.vercel:false so it never mounts in cloud, and /os/action
+  // already refuses there regardless — a third check would be a cloud branch
+  // that can never execute. The BO-A3a ratchet caught the redundant guard when
+  // it was first written, which is the entire point of having one.
+  router.post('/host_os/safe-mode', requireShellAuth, (req, res) => {
+    safeMode = !!(req.body && req.body.enabled);
+    writeOSAudit('SAFE_MODE', safeMode ? 'enabled' : 'disabled', 0, 0, req.correlationId || 'AEON-SYS');
+    res.json({ ok: true, safeMode });
+  });
+
+  // GET /api/host_os/audit — the audit screen's data.
+  router.get('/host_os/audit', requireShellAuth, (req, res) => {
+    try {
+      const fsMod = require('fs');
+      const audit = fsMod.existsSync(AUDIT_FILE)
+        ? JSON.parse(fsMod.readFileSync(AUDIT_FILE, 'utf8'))
+        : [];
+      res.json({ ok: true, entries: audit.slice(-50).reverse() });
+    } catch (e) {
+      // R-05: an unreadable audit trail is reported, never rendered as "clean".
+      res.status(500).json({ ok: false, error: `audit unreadable: ${e.message}` });
+    }
   });
 
   // POST /api/os/open — native file/app launcher.

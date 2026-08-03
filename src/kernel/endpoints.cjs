@@ -358,6 +358,34 @@ function describeRoleLocal(role) {
   const ep = (reg.endpoints || []).find(e => e.id === mapping.endpoint_id);
   if (!ep) return { ok: false, reason: 'endpoint_missing' };
 
+  // BO-A5b — an assignment must name a model the endpoint actually serves.
+  //
+  // Found in the operator's own restored registry: agent_worker →
+  // `qwen3-1.7b-q4`, agent_heavy → `qwen3-4b-q4`, agent_memory_manager →
+  // `gemini-2.5-flash`, all three assigned to a GROQ endpoint that serves none
+  // of them. Readiness reported ok:true for every one. That is precisely the
+  // BO-F3 defect this build order exists to remove: the badge promising what
+  // the router will not deliver — here it would 404 on the first call.
+  //
+  // Stale assignments are normal and expected: they survive a provider being
+  // re-pointed, a model being retired, or a config restored from another
+  // machine. Reporting them is the fix, not preventing them.
+  //
+  // Only enforced when the endpoint HAS a discovered model list. An empty
+  // models[] means discovery never ran, not that the endpoint serves nothing —
+  // failing closed there would report every fresh install as broken.
+  const known = Array.isArray(ep.models) ? ep.models : [];
+  if (known.length && !known.includes(mapping.model)) {
+    return {
+      ok: false,
+      provider: ep.provider,
+      model: mapping.model,
+      reason: 'model_not_on_endpoint',
+      // Name the remedy, and name the cheaper one first (BO-F3's rule).
+      detail: `${ep.provider} does not serve "${mapping.model}". Pick a model this provider offers in Settings → Model Assignment, or re-scan the provider's model list.`,
+    };
+  }
+
   return { ok: true, provider: ep.provider, model: mapping.model };
 }
 

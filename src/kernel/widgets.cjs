@@ -14,9 +14,22 @@
  *
  * TWO RULES, both enforced here rather than trusted to block code:
  *
- *  1. A widget may only name an endpoint inside its OWN block namespace.
- *     A block does not get to point its settings card at another block's
- *     route. This is the "refused something undeclared" gate (DoD #4).
+ *  1. A widget may only name a route THE BLOCK ITSELF DECLARES. A block does
+ *     not get to point its settings card at another block's route. This is the
+ *     "refused something undeclared" gate (DoD #4).
+ *
+ *     The check is against the block's own generated `routes[]`, not against a
+ *     naming convention. An earlier draft required `/api/<id>/`, which master
+ *     satisfies — but blocks legitimately own prefixes that are not their id:
+ *     host_os serves `/api/os/*`, memory_core serves `/api/memory/*`. Forcing a
+ *     second prefix on them to satisfy a widget rule would have been the
+ *     manifest bending to the gate instead of the gate reading the manifest.
+ *
+ *     Manifests have been generated from the code since 2026-08-03 and are held
+ *     current by a staleness gate, so `routes[]` is a trustworthy statement of
+ *     what a block actually serves. Using it makes this rule strictly stronger
+ *     than the prefix check: a widget must name a real, declared, GET-able
+ *     route rather than merely a well-named one.
  *
  *  2. Absence is the correct rendering of absence. A block declaring no
  *     widget contributes NOTHING — no placeholder, no empty card, no
@@ -26,10 +39,36 @@
  * declaration is an operator-visible fact, not a silent omission.
  */
 
-// Endpoint must live under the block's own /api/<id>/ prefix. Anchored, and
-// the trailing slash matters: /api/masterfoo must not pass as /api/master.
+// Fallback when a registry entry carries no routes[] (a hand-built entry, or a
+// block with no API at all). The trailing slash matters: /api/masterfoo must
+// not pass as /api/master.
 function ownNamespace(id) {
   return `/api/${id}/`;
+}
+
+/**
+ * Does the block declare this endpoint as a route it serves?
+ * Compares against the block's own generated routes[], tolerating the
+ * `:param` segments the generator emits.
+ */
+function declaresRoute(block, endpoint) {
+  const routes = Array.isArray(block.routes) ? block.routes : null;
+  if (!routes || routes.length === 0) return null; // unknown — caller falls back
+
+  return routes.some((r) => {
+    if (!r || typeof r.path !== 'string') return false;
+    const method = String(r.method || '').toUpperCase();
+    // A widget is fetched with GET. ALL covers it (resume_grader registers via
+    // a runtime verb list, which the generator honestly emits as ALL).
+    if (method !== 'GET' && method !== 'ALL') return false;
+    if (r.path === endpoint) return true;
+    // `/api/foo/*` and `/api/foo/:id` shapes.
+    const re = new RegExp('^' + r.path
+      .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+      .replace(/:[^/]+/g, '[^/]+')
+      .replace(/\*/g, '.*') + '$');
+    return re.test(endpoint);
+  });
 }
 
 /**
@@ -95,17 +134,30 @@ function buildWidgetCatalogue(registry) {
       continue;
     }
 
-    // Rule 1 — own namespace only. A widget pointing at another block's route
-    // is reaching for something its manifest never declared.
-    const prefix = ownNamespace(block.id);
-    if (!w.endpoint.startsWith(prefix)) {
-      refuse(`widget.endpoint must start with ${prefix} — declared ${w.endpoint}`);
-      continue;
-    }
-    // No traversal out of the namespace by way of the path itself.
+    // No traversal out of the block's surface by way of the path itself.
+    // Checked before anything else: `..` must never be normalised away by a
+    // pattern match further down.
     if (w.endpoint.includes('..')) {
       refuse('widget.endpoint must not contain ".."');
       continue;
+    }
+
+    // Rule 1 — the block must declare the route it points at. A widget
+    // reaching for another block's route is reaching for something its own
+    // manifest never claimed.
+    const declared = declaresRoute(block, w.endpoint);
+    if (declared === false) {
+      refuse(`widget.endpoint ${w.endpoint} is not a GET route ${block.id} declares`);
+      continue;
+    }
+    if (declared === null) {
+      // No routes[] to check against — fall back to the namespace rule rather
+      // than admitting anything.
+      const prefix = ownNamespace(block.id);
+      if (!w.endpoint.startsWith(prefix)) {
+        refuse(`widget.endpoint must start with ${prefix} — declared ${w.endpoint}`);
+        continue;
+      }
     }
 
     const scope = deriveScope(block);
@@ -129,4 +181,4 @@ function buildWidgetCatalogue(registry) {
   return { widgets, refused };
 }
 
-module.exports = { buildWidgetCatalogue, deriveScope, describeScope, ownNamespace };
+module.exports = { buildWidgetCatalogue, deriveScope, describeScope, ownNamespace, declaresRoute };
