@@ -2010,6 +2010,111 @@ function BlockSettingControl({ def, value, onChange }) {
   );
 }
 
+// ── Widget contract, consumer side ──────────────────────────────────────
+// "Add a block and settings gains a control surface." Until 2026-08-04 that
+// sentence was true of the data model and false of the product: the manifest
+// carried `widget`, blockStandard passed it through, and nothing rendered it.
+//
+// Absence is the correct rendering of absence — a block declaring no widget
+// contributes nothing here. No placeholder, no empty card, no disabled control.
+function BlockWidget({ w }) {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
+
+  useEffect(() => {
+    let alive = true;
+    const pull = async () => {
+      try {
+        const r = await fetch(w.endpoint);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const d = await r.json();
+        if (alive) { setData(d); setErr(null); }
+      } catch (e) {
+        // R-05: a widget that cannot answer says so. It does not render stale
+        // data as if it were live, and it does not disappear.
+        if (alive) setErr(e.message || 'unreachable');
+      }
+    };
+    pull();
+    if (!w.refresh_ms) return () => { alive = false; };
+    const t = setInterval(pull, w.refresh_ms);
+    return () => { alive = false; clearInterval(t); };
+  }, [w.endpoint, w.refresh_ms]);
+
+  return (
+    <div className="admin-card">
+      <div className="agent-tools-desc" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <b>{w.label}</b>
+        <code style={{ fontSize: 10, opacity: 0.5 }}>{w.endpoint}</code>
+        {!w.ready && <span className="block-chip-missing">not ready</span>}
+      </div>
+
+      {err ? (
+        <div style={{ fontSize: 12, color: 'var(--danger, #ff4466)' }}>
+          Widget unavailable — {err}
+        </div>
+      ) : data === null ? (
+        <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>Loading…</div>
+      ) : (
+        <div>
+          {data.kind === 'list' && Array.isArray(data.items) ? (
+            <ul style={{ margin: 0, paddingLeft: 16, fontSize: 12 }}>
+              {data.items.slice(0, 8).map((it, i) => (
+                <li key={i}>{typeof it === 'string' ? it : (it.label ?? JSON.stringify(it))}</li>
+              ))}
+            </ul>
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+              <span style={{ fontSize: 24, fontWeight: 600, color: 'var(--accent)' }}>
+                {String(data.value ?? '—')}
+              </span>
+              {data.sub && <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>{data.sub}</span>}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Least privilege, stated rather than assumed. This is the same
+          information createScopedDeps() enforces server-side. */}
+      <div style={{ marginTop: 8, fontSize: 10, color: 'var(--text-dim)' }}>
+        Access: {w.scopeLabel}
+      </div>
+    </div>
+  );
+}
+
+function BlockWidgetsPanel() {
+  const [cat, setCat] = useState(null);
+
+  useEffect(() => {
+    fetch('/api/blocks/widgets')
+      .then(r => r.json())
+      .then(d => setCat(d && Array.isArray(d.widgets) ? d : { widgets: [], refused: [] }))
+      .catch(() => setCat({ widgets: [], refused: [] }));
+  }, []);
+
+  if (!cat) return null;
+  if (cat.widgets.length === 0 && cat.refused.length === 0) return null;
+
+  return (
+    <>
+      {cat.widgets.map(w => <BlockWidget key={w.id} w={w} />)}
+
+      {/* A refused declaration is an operator-visible fact, not a silent drop. */}
+      {cat.refused.length > 0 && (
+        <div className="admin-card">
+          <div className="agent-tools-desc"><b>Widget declarations refused</b></div>
+          {cat.refused.map(r => (
+            <div key={r.id} style={{ fontSize: 12, color: 'var(--danger, #ff4466)' }}>
+              <code>{r.id}</code> — {r.reason}
+            </div>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
 function BlockSettingsPanel({ blockSettings, onChange }) {
   // Manifests come from the frontend registry — the same source as nav, so
   // this list is always exactly the installed blocks (modularity guarantee).
@@ -2600,6 +2705,7 @@ export default function SystemSettings() {
               })}
             </div>
           </div>
+          <BlockWidgetsPanel />
           <BlockSettingsPanel blockSettings={settings.blockSettings} onChange={updateBlockSetting} />
         </>
       )}

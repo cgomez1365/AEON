@@ -95,11 +95,6 @@
   "routes": [
     {
       "method": "POST",
-      "path": "/api/writer/ai",
-      "auth": true
-    },
-    {
-      "method": "POST",
       "path": "/api/writer/cowrite",
       "auth": true
     },

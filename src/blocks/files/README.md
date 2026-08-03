@@ -36,7 +36,7 @@ Second Brain folder trigger an automatic re-index.
   60s; local: `/api/fs/serve`).
 - **Edit** — text-ish files (`.txt .md .json .js .jsx .html .css .py .bat`)
   open in an in-browser textarea editor (local mode only) and save back via
-  `/api/fs/write`.
+  `/api/fs/write` — a route owned by **host_os**, not this block (BO-A2d).
 - **Second Brain re-index** — any local upload under
   `WORKSPACE/Data/Second_Brain` triggers `tools/incremental-index.mjs` after
   the upload completes (fire-and-forget, logged, non-blocking). This is
@@ -49,8 +49,7 @@ Second Brain folder trigger an automatic re-index.
 | `block.manifest.json` | Block Standard v4 manifest (permissions, routes, env, deployment target `hybrid`) |
 | `index.jsx` | Main UI — `FileManager` (local/cloud/dual toggle, preview modal, editor modal) + `FilePane` (per-mode browser) |
 | `api/notes.js` | `/api/notes` CRUD (CommonJS plugin pattern) — Supabase `aeon_notes` table, used for CEO notes, vault-synced on every write |
-| `api/fs/read.js`, `api/fs/write.js` | `/api/fs/read`, `/api/fs/write` — **Vercel-only** proxy that reads/writes generic small JSON blobs to the Supabase `app_state` table (keyed by filename minus extension), standing in for local disk access when deployed serverless. Not loaded in local dev — locally `host_os/api/fs.cjs` owns these same routes against real disk. CommonJS plugin pattern, matching `api/notes.js`. |
-| `components/DataNotes.jsx` | A markdown notes editor (`Daily Notes.md` / `Inbox.md` / `Master List.md` under `AGENTS_DIR`) that calls `/api/fs/read` and `/api/fs/write`. **Not currently wired into `index.jsx` or any route** — the block loader only auto-mounts each block's `index.jsx` (see `src/kernel/blockRegistry.js`), so this component is dead code today. Left in place pending a decision on whether to surface it (e.g. as a tab inside `FileManager`) or remove it. |
+| _(removed BO-A2d)_ | `api/fs/read.js` and `api/fs/write.js` were Vercel-only Supabase proxies that also mounted in local dev, colliding with `host_os/api/fs.cjs` on `POST /api/fs/read` and `/api/fs/write`. They had zero callers — their only documented consumer, `components/DataNotes.jsx`, had already been deleted — and carried wildcard CORS on a write route. **host_os owns filesystem access.** |
 
 ## Cloud requirements
 

@@ -90,6 +90,68 @@ describe('no two handlers claim the same route', () => {
     expect(collisions, `duplicate routes:\n${collisions.join('\n')}`).toEqual([]);
   });
 
+  /**
+   * BO-A2d — the manifest-based check, and why it had to be added.
+   *
+   * The source scan above prefixes EVERY block route with `/api`. That is only
+   * correct for factory modules. A plugin module registers absolute paths on
+   * the router it is handed, with no prefix — so `files/api/fs/read.js` doing
+   * `app.post('/api/fs/read')` was compared as `/api/api/fs/read` and never
+   * collided with host_os's `router.post('/fs/read')` → `/api/fs/read`.
+   *
+   * The gate had the same arity blind spot the route GENERATOR was fixed for
+   * on 08-03. It reported green over a live collision for as long as it has
+   * existed.
+   *
+   * Manifests are now generated from the code at build time and held current by
+   * block-manifest-routes.test.js, so they are the authoritative route table:
+   * public paths, already prefix-correct, with no arity guessing at all.
+   */
+  it('no two blocks declare the same public route', () => {
+    const blocksDir = path.join(ROOT, 'src', 'blocks');
+    const owners = new Map();
+
+    for (const id of fs.readdirSync(blocksDir)) {
+      if (id.startsWith('_')) continue;
+      const mPath = path.join(blocksDir, id, 'block.manifest.json');
+      if (!fs.existsSync(mPath)) continue;
+      const manifest = JSON.parse(fs.readFileSync(mPath, 'utf8'));
+      for (const r of manifest.routes || []) {
+        const key = `${String(r.method).toUpperCase()} ${r.path}`;
+        if (!owners.has(key)) owners.set(key, new Set());
+        owners.get(key).add(id);
+      }
+    }
+
+    const collisions = [...owners.entries()]
+      .filter(([, who]) => who.size > 1)
+      .map(([key, who]) => `${key} → ${[...who].sort().join(' vs ')}`);
+
+    expect(
+      collisions,
+      `two blocks claim one route; one of them is dead code:\n${collisions.join('\n')}`,
+    ).toEqual([]);
+  });
+
+  it('filesystem access is owned by exactly one block (host_os)', () => {
+    // The ownership decision from BO-A2d, pinned so it cannot silently revert.
+    // host_os is the block whose declared purpose is host access and which
+    // enforces ALLOWED_ROOTS. The files block's duplicate pair were Vercel
+    // proxies with wildcard CORS on a write route, mounted unconditionally in
+    // local dev, with zero callers — their only documented consumer
+    // (DataNotes.jsx) had already been deleted.
+    const filesFs = path.join(ROOT, 'src', 'blocks', 'files', 'api', 'fs');
+    expect(
+      fs.existsSync(filesFs),
+      'src/blocks/files/api/fs/ was removed in BO-A2d; host_os owns /api/fs/*',
+    ).toBe(false);
+
+    const hostOs = fs.readFileSync(
+      path.join(ROOT, 'src', 'blocks', 'host_os', 'api', 'fs.cjs'), 'utf8');
+    expect(hostOs).toMatch(/router\.post\('\/fs\/read'/);
+    expect(hostOs).toMatch(/router\.post\('\/fs\/write'/);
+  });
+
   it('the kernel audit route no longer shadows host_os /system/scan', () => {
     const core = fs.readFileSync(path.join(ROOT, 'src', 'kernel', 'routers', 'core.cjs'), 'utf8');
     const hostOs = fs.readFileSync(

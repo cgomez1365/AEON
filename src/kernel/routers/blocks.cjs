@@ -1,4 +1,5 @@
 const express = require('express');
+const { buildWidgetCatalogue } = require('../widgets.cjs');
 
 module.exports = function createBlocksRouter(deps) {
   const router = express.Router();
@@ -8,6 +9,17 @@ module.exports = function createBlocksRouter(deps) {
     res.json(
       _blockRegistry.map(b => ({ ...b, readiness: _blockReadiness[b.id] || null }))
     );
+  });
+
+  // Widget catalogue — the consumer side of the widget contract.
+  // Settings renders one card per entry. A block declaring no widget is
+  // absent from `widgets` entirely; a block declaring a malformed or
+  // out-of-namespace one appears in `refused` with the reason, because a
+  // silently dropped declaration is exactly the class of dishonesty
+  // BO-F3 existed to remove.
+  router.get('/widgets', (_req, res) => {
+    const withReadiness = _blockRegistry.map(b => ({ ...b, readiness: _blockReadiness[b.id] || null }));
+    res.json(buildWidgetCatalogue(withReadiness));
   });
 
   // Live per-block state — whatever each block last wrote via vaultSync()

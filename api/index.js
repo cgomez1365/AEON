@@ -23,8 +23,6 @@ global.mountStaticBlocks = function(app, deps, depsFor) {
     { block: 'dashboard', file: '../src/blocks/dashboard/api/health.js' },
     { block: 'dashboard', file: '../src/blocks/dashboard/api/pipeline-metrics.js' },
     { block: 'deep_research', file: '../src/blocks/deep_research/api/index.cjs' },
-    { block: 'files', file: '../src/blocks/files/api/fs/read.js' },
-    { block: 'files', file: '../src/blocks/files/api/fs/write.js' },
     { block: 'files', file: '../src/blocks/files/api/notes.js' },
     { block: 'fleet_control', file: '../src/blocks/fleet_control/api/hwfit.cjs' },
     { block: 'fleet_control', file: '../src/blocks/fleet_control/api/local-status.js' },

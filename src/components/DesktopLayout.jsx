@@ -27,6 +27,31 @@ const EXTRA_ROUTES = [];
 // can't be static module-level constants anymore.
 const BLOCK_ROUTES = [...getRoutes(), ...EXTRA_ROUTES];
 
+/**
+ * The honest zero-block state. AEON's central claim is that it is a shell and
+ * capability arrives as cartridges — which means booting with nothing
+ * installed is a supported state, not an error. It renders as one: the shell
+ * is up, and it says plainly that nothing is installed. No dead navigation, no
+ * spinner that never resolves, no redirect loop.
+ */
+export function EmptyShell() {
+  return (
+    <div style={{
+      display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center',
+      height: '60vh', gap: 10, fontFamily: 'monospace', textAlign: 'center', padding: 24,
+    }}>
+      <div style={{ fontSize: 14, letterSpacing: 2, color: 'rgba(0,242,255,0.8)' }}>
+        AEON SHELL RUNNING
+      </div>
+      <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.55)', maxWidth: 420, lineHeight: 1.6 }}>
+        No capabilities are installed. AEON is a shell — every capability
+        arrives as a block. Add a block folder under <code>src/blocks/</code> and
+        it appears here, in the sidebar, and in settings.
+      </div>
+    </div>
+  );
+}
+
 // The sidebar REFLECTS icon changes but never offers the edit affordance —
 // customization lives on the Home dashboard only. `iconOverrides` is the live
 // per-block icon map fetched from /api/blocks/nav, keyed by block id.
@@ -391,7 +416,14 @@ export default function DesktopLayout({ chatHistory, auditLogs }) {
                 }
               />
             ))}
-            <Route path="*" element={<Navigate to="/" replace />} />
+            {/* AEON is a shell; capability arrives as cartridges. With no
+                cartridge installed there is nothing to route to, and the
+                catch-all below would redirect "/" to "/" forever. Say what is
+                true instead: the shell is running and nothing is installed.
+                (BO-A2c — the empty-shell test.) */}
+            {BLOCK_ROUTES.length === 0
+              ? <Route path="*" element={<EmptyShell />} />
+              : <Route path="*" element={<Navigate to="/" replace />} />}
           </Routes>
           </Suspense>
         </div>

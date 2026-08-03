@@ -147,3 +147,6 @@ src/blocks/*/db/*.json
 # Native local runtime — generated state, never shipped (Phase 2)
 data/local-runtime.json
 data/local-runtime/
+
+# BO-A2c empty-shell test tree (created and removed per run)
+.aeon-empty-shell-test/

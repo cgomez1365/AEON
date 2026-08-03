@@ -74,44 +74,11 @@
       "vercel": true,
       "cloudflare": true
     },
-    "commands": [
-      {
-        "cmd": "/read",
-        "desc": "Read a file from the workspace",
-        "method": "POST",
-        "route": "/api/fs/read",
-        "param": "filePath",
-        "mode": "instant",
-        "category": "content"
-      },
-      {
-        "cmd": "/write",
-        "desc": "Write a file in the workspace",
-        "method": "POST",
-        "route": "/api/fs/write",
-        "params": [
-          "filePath",
-          "content"
-        ],
-        "dangerous": true,
-        "mode": "instant",
-        "category": "content"
-      }
-    ],
+    "commands": [],
     "settings_keys": [],
     "settings": []
   },
   "routes": [
-    {
-      "method": "POST",
-      "path": "/api/fs/read",
-      "auth": true
-    },
-    {
-      "method": "POST",
-      "path": "/api/fs/write",
-      "auth": true
-    },
     {
       "method": "ALL",
       "path": "/api/notes",

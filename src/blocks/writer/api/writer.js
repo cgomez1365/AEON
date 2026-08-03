@@ -394,22 +394,7 @@ Return ONLY valid JSON.\n\nSamples:\n${corpus}`
     }
   });
 
-  // ── LEGACY AI ASSIST (kept for backwards compat) ─────────────────────────────
-
-  app.post('/api/writer/ai', async (req, res) => {
-    const { text, action = 'improve' } = req.body || {};
-    if (!text) return res.status(400).json({ error: 'text required' });
-    const prompts = {
-      improve: `Improve this text. Return ONLY the improved text:\n\n${text}`,
-      expand: `Expand this text with more detail. Return ONLY the expanded text:\n\n${text}`,
-      summarize: `Summarize this text concisely. Return ONLY the summary:\n\n${text}`,
-      formal: `Rewrite formally. Return ONLY the rewritten text:\n\n${text}`,
-      casual: `Rewrite casually. Return ONLY the rewritten text:\n\n${text}`,
-      bullets: `Convert to bullet points. Return ONLY the bullets:\n\n${text}`,
-    };
-    try {
-      const result = await llm(prompts[action] || prompts.improve);
-      res.json({ ok: true, result });
-    } catch (e) { aiError(res, e); }
-  });
+  // BO-A2d: POST /api/writer/ai is gone. It was labelled "kept for backwards
+  // compat" and had no caller anywhere in the tree — the UI uses
+  // /api/writer/improve. Proven dead by grep across the repo, then deleted.
 };
