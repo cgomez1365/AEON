@@ -160,21 +160,56 @@ describe('describeRoleLocal — the sync resolver readiness depends on', () => {
     expect(r.model).toBe('llama-3.3-70b-versatile'); // not the transcription model
   });
 
-  // PINS A KNOWN DEFECT, deliberately — this is not the desired behaviour.
-  //
-  // resolveForRole's prefer pattern is
-  //   /llama.*(versatile|instruct)|instruct|gpt-4|gemini|claude|chat/i
-  // and `llama-3.1-8b-instant` matches none of it: "instant", not "instruct".
-  // So on an endpoint whose model list happens to start with a transcription or
-  // guard model, auto-pick hands the chat role a model that cannot chat.
-  //
-  // describeRoleLocal mirrors that on purpose. Correcting the pattern here and
-  // not in resolveForRole would make the badge promise what the router will not
-  // deliver — the precise defect class BO-F3 exists to remove. When the pattern
-  // is fixed, fix it in BOTH and this test flips to expecting the chat model.
-  it('mirrors the router exactly, including where the router is wrong', () => {
+  // FLIPPED BY BO-A4. This test previously pinned a known defect: the prefer
+  // pattern was an allow-list that `llama-3.1-8b-instant` did not match
+  // ("instant", not "instruct"), so auto-pick handed the chat role the
+  // transcription model at the head of the list. describeRoleLocal mirrored
+  // the router's mistake on purpose, and the comment said this test flips when
+  // BOTH are fixed. Both are fixed — one shared pickChatModel() predicate,
+  // deny-list rather than allow-list.
+  it('skips a transcription model to reach a chat model the old allow-list missed', () => {
     writeRegistry(groqRegistry(['whisper-large-v3', 'llama-3.1-8b-instant']));
-    expect(endpoints.describeRoleLocal('creative').model).toBe('whisper-large-v3');
+    expect(endpoints.describeRoleLocal('creative').model).toBe('llama-3.1-8b-instant');
+  });
+
+  it('the badge and the router share one predicate, so they cannot disagree', () => {
+    // Both call sites in endpoints.cjs must go through pickChatModel. Fixing
+    // one alone is what makes the badge promise what the router will not
+    // deliver (BO-F3's defect class).
+    const src = fs.readFileSync(
+      require.resolve('../src/kernel/endpoints.cjs'), 'utf8');
+    const calls = src.match(/pickChatModel\(candidate\.models\)/g) || [];
+    expect(calls.length, 'resolveForRole and describeRoleLocal must both use it').toBe(2);
+    // And the old allow-list must be gone from the CODE, not merely bypassed.
+    // Comments are stripped first — the fix documents the old pattern by
+    // quoting it, and a naive scan would match that explanation.
+    const code = src
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/^\s*\/\/.*$/gm, '');
+    expect(code).not.toMatch(/versatile\|instruct/);
+  });
+
+  it('picks a chat model regardless of list ordering — no ordering luck', () => {
+    const { pickChatModel } = endpoints;
+    expect(pickChatModel(['whisper-large-v3', 'llama-3.1-8b-instant'])).toBe('llama-3.1-8b-instant');
+    expect(pickChatModel(['llama-guard-4-12b', 'llama-3.1-8b-instant'])).toBe('llama-3.1-8b-instant');
+    expect(pickChatModel(['text-embedding-3-small', 'gpt-4o'])).toBe('gpt-4o');
+    expect(pickChatModel(['whisper-large-v3', 'llama-3.3-70b-versatile'])).toBe('llama-3.3-70b-versatile');
+  });
+
+  it('treats an unknown model name as chat-capable rather than skipping it', () => {
+    // A new chat model must work the day it ships. The failure mode of a
+    // wrong guess here is a visible bad answer, not a silently skipped model.
+    expect(endpoints.pickChatModel(['some-brand-new-model-2027'])).toBe('some-brand-new-model-2027');
+    expect(endpoints.pickChatModel(['whisper-large-v3', 'brand-new-2027'])).toBe('brand-new-2027');
+  });
+
+  it('falls back to the first model rather than reporting none when all look non-chat', () => {
+    // Reporting "no model" for an endpoint that HAS models would be a worse
+    // lie than offering an imperfect one.
+    expect(endpoints.pickChatModel(['whisper-large-v3'])).toBe('whisper-large-v3');
+    expect(endpoints.pickChatModel([])).toBe(null);
+    expect(endpoints.pickChatModel(null)).toBe(null);
   });
 
   it('never throws on a corrupt registry — an unreadable file is not configured', () => {

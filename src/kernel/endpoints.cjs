@@ -176,6 +176,71 @@ async function discoverModels(provider, base_url, apiKey) {
   }
 }
 
+// ── One truth for "is this provider configured?" ─────────────────────
+/**
+ * BO-A4a. Two systems described the same providers:
+ *
+ *   - services/ai.js  isConfigured() → reads process.env
+ *   - this file       the endpoint registry → reads the file + the vault
+ *
+ * On the operator's machine every provider key in .env is BLANK; the Groq key
+ * lives in the vault and reaches process.env only through
+ * hydrateEnvFromVault(). That function is async and is invoked at module load
+ * WITHOUT await, so there is a real window during boot in which the registry
+ * says a provider is configured and process.env says it is not.
+ *
+ * The window is observable, not theoretical: /core/provider-health calls
+ * isConfigured(), and settings fetches provider-health on mount. A read landing
+ * in that window reports "not configured" for a provider that is configured —
+ * the same class as BO-F3, where AEON knew more about its own state than it
+ * told the operator.
+ *
+ * So the registry is the truth and process.env is a hydration cache of it.
+ * Sync, local-file only: this must be callable from the same places
+ * isConfigured() already is.
+ */
+function isProviderConfigured(provider) {
+  const reg = readLocal();
+  if (!reg || !Array.isArray(reg.endpoints)) return false;
+  return reg.endpoints.some(e => e.provider === provider && !!e.auth_ref);
+}
+
+// ── Auto-pick: which model on an endpoint can actually hold a conversation ──
+/**
+ * BO-A4. The previous rule was an ALLOW-list of model-name fragments:
+ *
+ *   /llama.*(versatile|instruct)|instruct|gpt-4|gemini|claude|chat/i
+ *
+ * `llama-3.1-8b-instant` matches none of it — "instant", not "instruct" — so
+ * on an endpoint whose model list began with a transcription or guard model,
+ * auto-pick handed the chat role a model that cannot chat. It worked in
+ * practice only because the operator's registry happened to start with
+ * `llama-3.3-70b-versatile`. That is ordering-dependent luck, not a rule.
+ *
+ * An allow-list of chat models is unmaintainable: every provider ships new
+ * names monthly and each one is a silent failure until someone notices. The
+ * intent was always the inverse — the comment at the call site said "prefer a
+ * chat-capable model over transcription/guard models" — so this is a DENY-list
+ * of the few model families that demonstrably cannot serve a chat turn.
+ *
+ * Unknown names are treated as chat-capable. That is the right default: a new
+ * chat model works the day it ships, and the failure mode of a mistake here is
+ * a visible bad answer rather than a silently skipped model.
+ *
+ * Used by BOTH resolveForRole (the router) and describeRoleLocal (the badge).
+ * Fixing one and not the other would make the badge promise what the router
+ * will not deliver — the precise defect class BO-F3 exists to remove.
+ */
+const NON_CHAT_MODEL_RE = /whisper|(^|[-_/])tts([-_]|$)|text-to-speech|embed|guard|moderation|rerank|stable-diffusion|sdxl|flux|dall-?e/i;
+
+function pickChatModel(models) {
+  const list = (Array.isArray(models) ? models : []).filter(m => typeof m === 'string' && m);
+  // First model that is not a known non-chat family; else fall back to the
+  // first entry, because returning nothing when an endpoint HAS models would
+  // report "no model" for a merely unrecognised list.
+  return list.find(m => !NON_CHAT_MODEL_RE.test(m)) || list[0] || null;
+}
+
 // ── RESOLVER: role → concrete { provider, model, base_url, key, via } ─
 /**
  * Picks the endpoint for a role that is actually reachable from this runtime.
@@ -215,8 +280,7 @@ async function resolveForRole(role, supabase) {
     const candidate = reachable.find(e => e.auth_ref) || reachable[0];
     if (!candidate) return { ok: false, error: `No model assigned for role "${role}"` };
     // Prefer a chat-capable model over transcription/guard models.
-    const prefer = (candidate.models || []).find(m => /llama.*(versatile|instruct)|instruct|gpt-4|gemini|claude|chat/i.test(m));
-    mapping = { endpoint_id: candidate.id, model: prefer || (candidate.models || [])[0] || null };
+    mapping = { endpoint_id: candidate.id, model: pickChatModel(candidate.models) };
   }
   if (!mapping.model) return { ok: false, error: `No model available on endpoint for role "${role}"` };
 
@@ -287,9 +351,7 @@ function describeRoleLocal(role) {
     const reachable = reg.endpoints.filter(e => (e.reachable_from || []).includes(runtime));
     const candidate = reachable.find(e => e.auth_ref) || reachable[0];
     if (!candidate) return { ok: false, reason: 'no_reachable_endpoint' };
-    const prefer = (candidate.models || [])
-      .find(m => /llama.*(versatile|instruct)|instruct|gpt-4|gemini|claude|chat/i.test(m));
-    mapping = { endpoint_id: candidate.id, model: prefer || (candidate.models || [])[0] || null };
+    mapping = { endpoint_id: candidate.id, model: pickChatModel(candidate.models) };
   }
   if (!mapping.model) return { ok: false, reason: 'no_model_on_endpoint' };
 
@@ -304,4 +366,6 @@ module.exports = {
   addEndpoint, removeEndpoint, assignRole,
   discoverModels, resolveForRole, isVercel,
   lmStudioHost, isPortable, describeRoleLocal,
+  // Exported so the gate tests the REAL predicate rather than re-implementing it.
+  pickChatModel, NON_CHAT_MODEL_RE, isProviderConfigured,
 };

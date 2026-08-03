@@ -62,12 +62,35 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     notify(`⏸ ${p} in cooldown ${Math.round(ms / 1000)}s: ${message.slice(0, 120)}`, { provider: p });
   };
 
+  // BO-A4a — one truth, two readers collapsed.
+  //
+  // This used to answer purely from process.env / the module-load key-pool
+  // snapshots. But on this machine every provider key in .env is BLANK: the
+  // keys live in the vault and reach process.env only via hydrateEnvFromVault(),
+  // which is async and called at module load WITHOUT await. Any read landing
+  // before that promise settles reported a configured provider as unconfigured
+  // — and /core/provider-health, which settings fetches on mount, is exactly
+  // such a read.
+  //
+  // The endpoint registry is the source of truth (it is what the vault is keyed
+  // from); process.env is a hydration cache of it. Ask the cache first because
+  // it is cheapest, then fall back to the registry so the boot window cannot
+  // produce a wrong answer.
   const isConfigured = (p) => {
-    if (p === 'groq') return !!process.env.GROQ_API_KEY;
-    if (p === 'gemini') return GEMINI_KEY_POOL.length > 0;
-    if (p === 'openrouter') return KEY_POOLS.openrouter.length > 0;
     if (p === 'local') { const lr = _getLocalRT(); return !!(lr && lr.isAvailable()); }
-    return false;
+
+    const cached =
+      p === 'groq' ? !!process.env.GROQ_API_KEY :
+      p === 'gemini' ? GEMINI_KEY_POOL.length > 0 :
+      p === 'openrouter' ? KEY_POOLS.openrouter.length > 0 :
+      false;
+    if (cached) return true;
+
+    // Registry fallback — covers the pre-hydration window and any provider
+    // whose key was added in Settings this session.
+    try {
+      return !!(aeonEndpoints && aeonEndpoints.isProviderConfigured(p));
+    } catch { return false; }
   };
 
   const getProviderHealth = () => {
