@@ -207,3 +207,105 @@ describe('isModelInstalled — refuses only when it is sure', () => {
     expect(modelKey('qwen3-4b-instruct-q4_k_m.gguf')).toContain('qwen3-4b');
   });
 });
+
+// ── BO-F2c — hardware fit ────────────────────────────────────────────────────
+const {
+  estimateVram, requestedGpuLayers, checkVramFit, vramErrorMessage,
+} = require('../src/blocks/cookbook/api/_serveCommand.cjs');
+
+const GTX_1050 = 3; // the operator's actual card, in GB
+
+describe('estimateVram — quantisation is what makes the number usable', () => {
+  it('reads the parameter count out of the name', () => {
+    expect(estimateVram('Qwen/Qwen3-4B').paramsB).toBe(4);
+    expect(estimateVram('unsloth/Qwen3-1.7B-GGUF').paramsB).toBe(1.7);
+    expect(estimateVram('meta-llama/Llama-3.1-8B-Instruct').paramsB).toBe(8);
+  });
+
+  it('a Q4 4B is ~2.5 GB, not the ~8 GB an fp16 assumption gives', () => {
+    const q4 = estimateVram('Qwen3-4B-q4_k_m');
+    expect(q4.neededGb).toBeGreaterThan(2);
+    expect(q4.neededGb).toBeLessThan(3.2);
+    expect(estimateVram('Qwen/Qwen3-4B').neededGb).toBeGreaterThan(8);
+  });
+
+  it('reports unknown as unknown rather than guessing', () => {
+    const e = estimateVram('some-model-with-no-size');
+    expect(e.paramsB).toBeNull();
+    expect(e.neededGb).toBeNull();
+  });
+});
+
+describe('requestedGpuLayers', () => {
+  it('finds -ngl and its aliases, inline or spaced', () => {
+    expect(requestedGpuLayers(['-ngl', '99'])).toBe(99);
+    expect(requestedGpuLayers(['--n-gpu-layers', '20'])).toBe(20);
+    expect(requestedGpuLayers(['--gpu-layers=35'])).toBe(35);
+  });
+  it('is null when the command does not mention offload', () => {
+    expect(requestedGpuLayers(['--port', '8080'])).toBeNull();
+  });
+});
+
+describe('checkVramFit — decisive only when it can be', () => {
+  it('the reported field case: Qwen3-4B with -ngl 99 does NOT fit a GTX 1050', () => {
+    const fit = checkVramFit({
+      repoId: 'Qwen/Qwen3-4B',
+      args: ['--model', 'Qwen/Qwen3-4B', '-ngl', '99'],
+      vramGb: GTX_1050,
+    });
+    expect(fit.fits).toBe(false);
+    expect(fit.fullOffload).toBe(true);
+  });
+
+  it('Qwen3 1.7B Q8 — the model prior sessions settled on — DOES fit', () => {
+    const fit = checkVramFit({
+      repoId: 'unsloth/Qwen3-1.7B-GGUF-q8_0',
+      args: ['-ngl', '99'],
+      vramGb: GTX_1050,
+    });
+    expect(fit.fits).toBe(true);
+    expect(fit.headroomGb).toBeGreaterThan(0);
+  });
+
+  it('partial offload of an oversized model is not flagged — slow, not broken', () => {
+    const fit = checkVramFit({ repoId: 'Qwen/Qwen3-4B', args: ['-ngl', '10'], vramGb: GTX_1050 });
+    expect(fit.fits).toBe(false);
+    expect(fit.fullOffload).toBe(false);
+  });
+
+  it('no GPU probe means unknown, never a refusal', () => {
+    expect(checkVramFit({ repoId: 'Qwen/Qwen3-4B', args: ['-ngl', '99'], vramGb: 0 }).fits).toBeNull();
+  });
+
+  it('a name with no parameter count means unknown, never a refusal', () => {
+    expect(checkVramFit({ repoId: 'mystery-model', args: ['-ngl', '99'], vramGb: GTX_1050 }).fits).toBeNull();
+  });
+});
+
+describe('vramErrorMessage — names both remedies, cheaper first', () => {
+  const fit = checkVramFit({ repoId: 'Qwen/Qwen3-4B', args: ['-ngl', '99'], vramGb: GTX_1050 });
+
+  it('leads with the remedy that needs no download', () => {
+    const msg = vramErrorMessage(fit, 'Qwen/Qwen3-4B', 'unsloth/Qwen3-1.7B-GGUF-q8_0');
+    expect(msg).toMatch(/lower -ngl/i);
+    expect(msg.toLowerCase().indexOf('-ngl')).toBeLessThan(msg.toLowerCase().indexOf('instead'));
+  });
+
+  it('names the second remedy too, with a model that actually fits', () => {
+    const msg = vramErrorMessage(fit, 'Qwen/Qwen3-4B', 'unsloth/Qwen3-1.7B-GGUF-q8_0');
+    expect(msg).toContain('unsloth/Qwen3-1.7B-GGUF-q8_0');
+  });
+
+  it('states both numbers so the operator can check the reasoning', () => {
+    const msg = vramErrorMessage(fit, 'Qwen/Qwen3-4B', null);
+    expect(msg).toContain(String(fit.neededGb));
+    expect(msg).toContain(String(GTX_1050));
+  });
+
+  it('degrades honestly when nothing installed fits', () => {
+    const msg = vramErrorMessage(fit, 'Qwen/Qwen3-4B', null);
+    expect(msg).not.toMatch(/instead/i);
+    expect(msg).toMatch(/lower -ngl/i);
+  });
+});

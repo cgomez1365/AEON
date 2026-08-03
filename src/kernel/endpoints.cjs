@@ -249,9 +249,59 @@ async function resolveForRole(role, supabase) {
   };
 }
 
+/**
+ * Can this role be served right now? Synchronous, local registry only.
+ *
+ * resolveForRole() is async because it awaits the Supabase mirror and unwraps
+ * the API key from the vault. Readiness needs neither: it asks whether a role
+ * maps to an endpoint carrying a model, which the local file already answers.
+ * Keeping it sync is what lets checkReadiness() stay sync, which is what keeps
+ * this change to two blocks instead of every caller in the tree.
+ *
+ * Mirrors resolveForRole's decision path deliberately — portable short-circuit,
+ * explicit mapping, then the same auto-pick. If those two ever disagree, the
+ * badge would promise something the router will not deliver, which is the exact
+ * class of defect this build order exists to remove.
+ *
+ * @returns {{ok: boolean, provider?: string, model?: string, reason?: string}}
+ */
+function describeRoleLocal(role) {
+  if (isPortable()) {
+    const st = (() => {
+      try { return require('../../services/local-runtime/index.cjs').status(); } catch { return null; }
+    })();
+    const model = st?.readyModels?.[0]?.id || null;
+    return model
+      ? { ok: true, provider: 'local', model }
+      : { ok: false, provider: 'local', reason: 'no_local_model' };
+  }
+
+  const reg = readLocal();
+  if (!reg || !Array.isArray(reg.endpoints) || !reg.endpoints.length) {
+    return { ok: false, reason: 'no_providers_configured' };
+  }
+
+  const runtime = isVercel ? 'cloud' : 'local';
+  let mapping = (reg.roles || {})[role] || (reg.roles || {})['chat'];
+  if (!mapping) {
+    const reachable = reg.endpoints.filter(e => (e.reachable_from || []).includes(runtime));
+    const candidate = reachable.find(e => e.auth_ref) || reachable[0];
+    if (!candidate) return { ok: false, reason: 'no_reachable_endpoint' };
+    const prefer = (candidate.models || [])
+      .find(m => /llama.*(versatile|instruct)|instruct|gpt-4|gemini|claude|chat/i.test(m));
+    mapping = { endpoint_id: candidate.id, model: prefer || (candidate.models || [])[0] || null };
+  }
+  if (!mapping.model) return { ok: false, reason: 'no_model_on_endpoint' };
+
+  const ep = (reg.endpoints || []).find(e => e.id === mapping.endpoint_id);
+  if (!ep) return { ok: false, reason: 'endpoint_missing' };
+
+  return { ok: true, provider: ep.provider, model: mapping.model };
+}
+
 module.exports = {
   PROVIDER_TRANSPORT, load, save,
   addEndpoint, removeEndpoint, assignRole,
   discoverModels, resolveForRole, isVercel,
-  lmStudioHost, isPortable,
+  lmStudioHost, isPortable, describeRoleLocal,
 };

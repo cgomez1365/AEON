@@ -315,10 +315,50 @@ function checkReadiness(manifest, env) {
   }
   const depTarget = typeof manifest.deployment === 'object' ? manifest.deployment.target : manifest.deployment;
   const localMissing = (depTarget === 'local_required' && process.env.VERCEL) ? ['desktop'] : [];
+
+  // ── Declared AI roles ─────────────────────────────────────────────────────
+  // Readiness used to be computed from requires.apis ALONE. Writer leaves that
+  // empty while declaring contract.ai.roles ["creative"], so Writer reported
+  // ready even when its role pointed at a provider with no model — the operator
+  // clicked an AI action and got an error from a block the UI called ready.
+  //
+  // Roles are reported SEPARATELY rather than folded into `ready`, and that is
+  // a deliberate line. memory_core declares role "chat" for its distill route,
+  // but /api/memory/add needs no model at all — saving a memory is a file
+  // write. Failing the whole block because one AI capability cannot serve would
+  // overstate in the opposite direction and would have broken memory saving,
+  // which is the capability BO-F1 exists to make trustworthy.
+  //
+  // So: `ready` keeps meaning "hard requirements met, the block will mount and
+  // its non-AI capabilities work". `roles` says which declared AI capabilities
+  // can actually serve right now, and `degraded` is the one-word summary a
+  // badge or an error message can act on.
+  const declaredRoles = manifest.contract?.ai?.roles || [];
+  let roles = null;
+  if (declaredRoles.length) {
+    let describe = null;
+    try { describe = require('./endpoints.cjs').describeRoleLocal; } catch { /* endpoints absent */ }
+    roles = {};
+    for (const role of declaredRoles) {
+      if (!describe) { roles[role] = { ready: null, reason: 'resolver_unavailable' }; continue; }
+      try {
+        const r = describe(role);
+        roles[role] = r.ok
+          ? { ready: true, provider: r.provider, model: r.model }
+          : { ready: false, reason: r.reason, provider: r.provider || null };
+      } catch (e) {
+        // R-05: an unresolvable role is reported, never silently treated as fine.
+        roles[role] = { ready: false, reason: 'resolver_threw', error: e.message };
+      }
+    }
+  }
+
   return {
     ready: missing.length === 0 && localMissing.length === 0,
     missingApis: missing,
     localMissing,
+    roles,
+    degraded: !!roles && Object.values(roles).some(r => r.ready === false),
   };
 }
 
