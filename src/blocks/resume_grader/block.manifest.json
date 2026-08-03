@@ -18,16 +18,8 @@
   },
   "widget": null,
   "requires": {
-    "apis": [
-      "gemini",
-      "supabase"
-    ],
-    "env": [
-      "GEMINI_FREE_KEY_1",
-      "GEMINI_PAID_KEY",
-      "SUPABASE_URL",
-      "SUPABASE_SERVICE_ROLE_KEY"
-    ],
+    "apis": [],
+    "env": [],
     "local": [],
     "blocks": []
   },
@@ -70,7 +62,9 @@
       "canGenerate": false,
       "canAnalyze": false,
       "canAutomate": false,
-      "roles": [],
+      "roles": [
+        "grading"
+      ],
       "role": "grading",
       "blurb": "Grades résumés and candidates"
     },

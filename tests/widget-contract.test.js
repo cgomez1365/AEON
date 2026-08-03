@@ -67,6 +67,24 @@ describe('widget catalogue — rendering', () => {
     expect(widgets.find(w => w.id === 'b').refresh_ms).toBe(0);
   });
 
+  it('clamps refresh at BOTH ends — the ceiling is the one that bites', () => {
+    // Found by driving hostile declarations through the gate during the
+    // BO-A alignment stress test. setInterval stores its delay in a signed
+    // 32-bit int, so a value above 2147483647 ms overflows and the timer fires
+    // IMMEDIATELY in a tight loop. `refresh_ms: 1e12` reads like "essentially
+    // never" and would have hammered the endpoint harder than any small value
+    // could — the floor alone let the exact abuse it existed to stop through
+    // the other end.
+    const { widgets } = buildWidgetCatalogue([
+      block('a', { widget: { endpoint: '/api/a/w', refresh_ms: 1e12 } }),
+      block('b', { widget: { endpoint: '/api/b/w', refresh_ms: 2147483648 } }),
+    ]);
+    for (const w of widgets) {
+      expect(w.refresh_ms).toBeLessThanOrEqual(3600000);
+      expect(w.refresh_ms).toBeLessThan(2 ** 31 - 1);
+    }
+  });
+
   it('an unready block still lists its widget, flagged rather than hidden', () => {
     const { widgets } = buildWidgetCatalogue([
       block('x', { widget: { endpoint: '/api/x/w' }, readiness: { ready: false } }),

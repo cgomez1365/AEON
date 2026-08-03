@@ -2026,7 +2026,17 @@ function BlockWidget({ w }) {
     const pull = async () => {
       try {
         const r = await fetch(w.endpoint);
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        if (!r.ok) {
+          // Name the remedy, not just the fault (BO-F3c). A widget guarding a
+          // privileged surface answers 401 to an operator who simply has not
+          // signed in; "HTTP 401" tells them nothing they can act on. Found by
+          // driving the real surface — host_os/widget sits behind
+          // requireShellAuth, which does not accept loopback as authentication.
+          if (r.status === 401 || r.status === 403) {
+            throw new Error('sign in as operator to view this control surface');
+          }
+          throw new Error(`HTTP ${r.status}`);
+        }
         const d = await r.json();
         if (alive) { setData(d); setErr(null); }
       } catch (e) {

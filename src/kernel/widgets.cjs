@@ -165,10 +165,19 @@ function buildWidgetCatalogue(registry) {
       id: block.id,
       label: typeof w.label === 'string' && w.label ? w.label : (block.label || block.id),
       endpoint: w.endpoint,
-      // Clamp refresh: 0/absent means "do not poll". Floor of 5s so a manifest
-      // cannot ask settings to hammer a route.
+      // Clamp refresh: 0/absent means "do not poll".
+      //
+      // BOTH bounds matter, and the ceiling is the non-obvious one. setInterval
+      // stores its delay in a signed 32-bit int: a value above 2147483647 ms
+      // overflows and the timer fires IMMEDIATELY, in a tight loop. So a
+      // manifest declaring refresh_ms: 1e12 — which reads like "essentially
+      // never" — would hammer the endpoint harder than any small value could.
+      // The floor alone let the exact abuse it existed to stop through the
+      // other end. Found by driving hostile declarations through this gate.
+      //
+      // One hour is well inside the safe range and past any real refresh need.
       refresh_ms: Number.isFinite(w.refresh_ms) && w.refresh_ms > 0
-        ? Math.max(5000, Math.floor(w.refresh_ms))
+        ? Math.min(3600000, Math.max(5000, Math.floor(w.refresh_ms)))
         : 0,
       scope,
       scopeLabel: describeScope(scope),

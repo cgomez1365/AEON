@@ -55,9 +55,21 @@ beforeEach(clearRegistry);
 afterAll(() => { try { fs.rmSync(tempSecrets, { recursive: true, force: true }); } catch {} });
 
 describe('the manifests this change actually touches', () => {
-  it('writer and memory_core are the only blocks declaring AI roles', () => {
-    // If a third block starts declaring roles, its reported state changes too —
+  it('exactly writer, memory_core and resume_grader declare AI roles', () => {
+    // If another block starts declaring roles, its reported state changes too —
     // this test is the reminder to go verify it, not a style check.
+    //
+    // resume_grader was added 2026-08-04 (BO-A5b), and the verification the
+    // reminder asks for was done: it declared requires.apis ["gemini",
+    // "supabase"] and used NEITHER — grade-resume.js calls
+    // kernelLLM(role:'grading') and there is no gemini or supabase reference
+    // anywhere in the block. That stale provider lock-in kept it permanently
+    // not-ready on an install with a working Groq key, which is the opposite of
+    // Bible principle 05: providers are policy, not product identity.
+    //
+    // It is now the same shape as writer — no hard API requirements, one
+    // declared AI role — so `ready` reflects that the block mounts and its
+    // non-AI work functions, while `roles` reports whether grading can serve.
     const blocksDir = path.join(__dirname, '..', 'src', 'blocks');
     const declaring = fs.readdirSync(blocksDir).filter((id) => {
       try {
@@ -65,7 +77,19 @@ describe('the manifests this change actually touches', () => {
         return (m.contract?.ai?.roles || []).length > 0;
       } catch { return false; }
     });
-    expect(declaring.sort()).toEqual(['memory_core', 'writer']);
+    expect(declaring.sort()).toEqual(['memory_core', 'resume_grader', 'writer']);
+  });
+
+  it('resume_grader declares no API it does not use', () => {
+    const m = require(path.join(__dirname, '..', 'src', 'blocks', 'resume_grader', 'block.manifest.json'));
+    expect(m.requires.apis).toEqual([]);
+    expect(m.contract.ai.roles).toContain('grading');
+
+    // Proof rather than assertion: the block genuinely routes by role.
+    const api = fs.readFileSync(path.join(
+      __dirname, '..', 'src', 'blocks', 'resume_grader', 'api', 'grade-resume.js'), 'utf8');
+    expect(api).toMatch(/role:\s*'grading'/);
+    expect(api).not.toMatch(/gemini|supabase/i);
   });
 
   it('writer declares a creative role and requires no APIs — the exact gap', () => {

@@ -38,6 +38,12 @@ const API_ENV = {
 // Providers requiring ALL listed vars (vs any-one).
 const API_ENV_ALL = new Set(['supabase']);
 
+// APIs whose credentials live in the endpoint registry + vault, so a blank env
+// var proves nothing. Deliberately NOT the whole list: supabase, firebase and
+// gas are genuine .env config rather than vault-sealed provider keys, and
+// asking the registry about them would always answer no.
+const PROVIDER_APIS = new Set(['groq', 'gemini', 'openai', 'claude']);
+
 // Label overrides used to live here. Deleted 2026-07-29: the frontend registry
 // never read them, so the kernel said "Resume Grader" while the UI said "ATS
 // Engine" and every boot logged a [REGISTRY] mismatch warning. Folder is the
@@ -309,9 +315,30 @@ function checkReadiness(manifest, env) {
       if (!ok) missing.push(a);
       continue;
     }
-    const present = API_ENV_ALL.has(a)
+    let present = API_ENV_ALL.has(a)
       ? vars.every(v => !!env[v])
       : vars.some(v => !!env[v]);
+
+    // BO-A5b/A4a — env is a CACHE of the endpoint registry, not the truth.
+    //
+    // Found by driving the live surface: with a working, vault-held Groq key,
+    // `dashboard` and `deep_research` reported groq MISSING and sat at
+    // not-ready. Provider keys set in Settings are sealed into the vault and
+    // reach process.env only through hydrateEnvFromVault(), which is async;
+    // readiness is computed during boot sync, before that promise settles, and
+    // the result is cached in _blockReadiness and never recomputed.
+    //
+    // So a configured provider read as absent for the life of the process.
+    // That is the arithmetic behind "11/17 ready" — it was never purely about
+    // missing credentials.
+    //
+    // Same collapse as services/ai.js: ask the cache, then the registry.
+    if (!present && PROVIDER_APIS.has(a)) {
+      try {
+        present = require('./endpoints.cjs').isProviderConfigured(a);
+      } catch { /* registry unreadable — keep the env answer */ }
+    }
+
     if (!present) missing.push(a);
   }
   const depTarget = typeof manifest.deployment === 'object' ? manifest.deployment.target : manifest.deployment;
