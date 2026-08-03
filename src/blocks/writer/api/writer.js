@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 
 module.exports = (app, deps) => {
-  const { supabase, NOTES_FILE, getBlockDataFile, kernelLLM } = deps;
+  const { supabase, getBlockDataFile, kernelLLM, VAULT_ROOT } = deps;
   const isVercel = !!process.env.VERCEL;
   // On Vercel /tmp is the only writable dir — ephemeral per-invocation; Supabase
   // is the source of truth. Locally, drafts live in the PRIVATE data root
@@ -281,36 +281,117 @@ Return ONLY valid JSON.\n\nSamples:\n${corpus}`
     } catch (e) { aiError(res, e); }
   });
 
-  // ── PUSH DOC TO MEMORY (save to notes) ───────────────────────────────────────
+  // ── PUSH DOC TO MEMORY CORE ──────────────────────────────────────────────────
+  //
+  // Was: wrote a row into <data>/aeon_notes.json and answered `{ ok: true }`
+  // unconditionally, with the only write inside a bare `catch {}`. The button
+  // said "Saved to Memory" while Memory Core showed 0 MEMORIES — both true about
+  // different files. Destination is now Memory Core's own store.
+  //
+  // MATRIX DECISION (F1d): pushing promotes into Memory Core ONLY — it does not
+  // also copy the document into the Vault as a second file. Memory Core already
+  // mirrors every record to VAULT_ROOT/Agents/vp/memory/<id>.md
+  // (memory_core/api/memory.cjs mdMirror), and aeon_matrix/api/ingest.cjs walks
+  // all of VAULT_ROOT, so one push is both a memory and an indexable vault file.
+  // A second copy of the same draft would be a second source of truth to keep in
+  // sync, and drafts stay private in data/writer/ by design.
+  //
+  // TRANSPORT: in-process, not loopback HTTP. commandRegistry.cjs and
+  // security/api/guardian.cjs forward Authorization/Cookie on their internal
+  // fetches because they dispatch to routes only known at runtime; this
+  // destination is fixed and known at build time. A loopback call here would
+  // build its URL from `process.env.PORT || 3001` and, from a test or a second
+  // instance, write into whatever install owns that port. Memory Core resolves
+  // its store from the same VAULT_ROOT dep writer is handed, so calling its
+  // router directly hits the exact store Memory Core reads.
+
+  // /api/memory/context stops filling at the FIRST record that overruns its
+  // budget (memory.cjs `break`), so one novel-length memory would starve every
+  // other memory out of the injection payload. The full draft stays in
+  // data/writer/ and is cited in refs.
+  const MEMORY_TEXT_LIMIT = 2000;
+
+  let _memoryCore = null;
+  function memoryCore() {
+    if (_memoryCore) return _memoryCore;
+    const createMemoryRouter = require('../../memory_core/api/memory.cjs');
+    _memoryCore = createMemoryRouter({ VAULT_ROOT, kernelLLM });
+    return _memoryCore;
+  }
+
+  // Drive one of Memory Core's own routes in-process. No port, no auth gate —
+  // the caller already cleared the gate to reach this route. Every outcome
+  // resolves to a status + body; nothing is swallowed.
+  function callMemory(method, url, body) {
+    return new Promise((resolve) => {
+      let router;
+      try { router = memoryCore(); }
+      catch (e) {
+        return resolve({ status: 503, body: { reason: 'memory_core_unavailable', error: `Memory Core is not installed on this runtime (${e.message}).` } });
+      }
+      const req = { method, url, originalUrl: url, headers: {}, body: body || {}, params: {}, query: {} };
+      const res = {
+        statusCode: 200,
+        status(code) { this.statusCode = code; return this; },
+        json(payload) { resolve({ status: this.statusCode, body: payload }); },
+      };
+      try {
+        router(req, res, (err) => resolve(err
+          ? { status: 502, body: { reason: 'memory_core_threw', error: `Memory Core could not write the record: ${err.message}` } }
+          : { status: 502, body: { reason: 'memory_core_no_route', error: `Memory Core has no route for ${method} ${url}.` } }));
+      } catch (e) {
+        resolve({ status: 502, body: { reason: 'memory_core_threw', error: `Memory Core could not write the record: ${e.message}` } });
+      }
+    });
+  }
 
   app.post('/api/writer/doc/:id/to-memory', async (req, res) => {
-    const fp = path.join(DOCS_DIR, `${req.params.id}.md`);
-    if (!fs.existsSync(fp)) return res.status(404).json({ error: 'Not found' });
-    const docs = loadDocs();
-    const doc = docs.find(d => d.id === req.params.id);
-    const content = fs.readFileSync(fp, 'utf8');
-    const newNote = {
-      id: Date.now().toString(36),
-      title: doc?.title || 'Writer Draft',
-      body: content.slice(0, 8000),
-      tags: ['writer', 'draft'],
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    };
-    // Write to local notes file directly — no block-to-block HTTP
-    if (NOTES_FILE) {
-      try {
-        let notes = [];
-        try { notes = JSON.parse(fs.readFileSync(NOTES_FILE, 'utf8')); } catch {}
-        notes.unshift(newNote);
-        fs.writeFileSync(NOTES_FILE, JSON.stringify(notes, null, 2));
-      } catch {}
+    try {
+      const fp = path.join(DOCS_DIR, `${req.params.id}.md`);
+      if (!fs.existsSync(fp)) return res.status(404).json({ ok: false, reason: 'doc_not_found', error: 'Document not found.' });
+      const doc = loadDocs().find(d => d.id === req.params.id);
+      const title = doc?.title || 'Writer Draft';
+      const raw = fs.readFileSync(fp, 'utf8').trim();
+      // Memory Core rejects text under 6 chars; say so here rather than let it
+      // come back as an opaque 400.
+      if (raw.length < 6) {
+        return res.status(400).json({ ok: false, reason: 'doc_too_short', error: 'Nothing to promote — the document is empty.' });
+      }
+
+      const truncated = raw.length > MEMORY_TEXT_LIMIT;
+      const text = `${title}\n\n${truncated ? `${raw.slice(0, MEMORY_TEXT_LIMIT)}\n…[truncated — full draft in data/writer/${req.params.id}.md]` : raw}`;
+
+      const add = await callMemory('POST', '/memory/add', {
+        text, title, category: 'project', type: 'outline', tags: ['writer', 'draft'],
+        source: 'writer',
+        refs: [{ kind: 'file', file: `data/writer/${req.params.id}.md`, at: new Date().toISOString() }],
+      });
+      const memoryId = add.body?.memory?.id;
+      if (add.status >= 400 || !add.body?.ok || !memoryId) {
+        return res.status(add.status >= 400 ? add.status : 502).json({
+          ok: false,
+          reason: add.body?.reason || 'memory_core_rejected',
+          error: add.body?.error || 'Memory Core did not accept the record.',
+        });
+      }
+
+      // R-05: "saved" is a claim about what is on disk, not about what we sent.
+      // Read the store back THROUGH Memory Core before saying ok.
+      const list = await callMemory('GET', '/memory', null);
+      if (!Array.isArray(list.body?.memories) || !list.body.memories.some(m => m.id === memoryId)) {
+        return res.status(502).json({
+          ok: false, reason: 'memory_not_persisted',
+          error: 'Memory Core accepted the record but it is not in the store.',
+        });
+      }
+
+      // No aeon_notes mirror any more: that table is the Notes block's, and
+      // writing it was the original lie. This route promotes to Memory Core or
+      // it reports why it could not.
+      res.json({ ok: true, memoryId, deduped: !!add.body.deduped, truncated, store: 'memory_core' });
+    } catch (e) {
+      res.status(500).json({ ok: false, reason: 'push_failed', error: `Push to Memory Core failed: ${e.message}` });
     }
-    // Mirror to Supabase if available
-    if (supabase) {
-      supabase.from('aeon_notes').insert([newNote]).then(() => {}).catch(() => {});
-    }
-    res.json({ ok: true });
   });
 
   // ── LEGACY AI ASSIST (kept for backwards compat) ─────────────────────────────

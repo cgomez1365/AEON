@@ -412,15 +412,20 @@ export default function Writer() {
     setVal(before + gap + text + '\n\n' + after);
   };
 
-  // ── Push to Memory ─────────────────────────────────────────────────────────
+  // ── Push to Memory Core ────────────────────────────────────────────────────
+  // The toast reports what the route actually did. It used to read `d.ok`,
+  // which the route set unconditionally — so "✓ Saved to Memory" appeared
+  // whether the write happened, threw, or was skipped entirely.
 
   const pushToMemory = async () => {
     if (!activeId) { showToast('Save document first'); return; }
     try {
       const r = await fetch(`/api/writer/doc/${activeId}/to-memory`, { method: 'POST', headers: { 'Content-Type': 'application/json' } });
-      const d = await r.json();
-      showToast(d.ok ? '✓ Saved to Memory' : '✗ Memory save failed');
-    } catch { showToast('✗ Memory save error'); }
+      const d = await r.json().catch(() => null);
+      if (!r.ok || !d?.ok) { showToast(d?.error || `✗ Memory Core save failed (${r.status})`); return; }
+      if (d.deduped) showToast('✓ Already in Memory Core');
+      else showToast(d.truncated ? '✓ Saved to Memory Core (long draft trimmed)' : '✓ Saved to Memory Core');
+    } catch (e) { showToast(`✗ Memory Core unreachable: ${e?.message || 'network error'}`); }
   };
 
   // ── Export ──────────────────────────────────────────────────────────────────
@@ -710,7 +715,7 @@ export default function Writer() {
             {styleProfile && <span style={{ color: 'var(--w-green)' }}>DNA active</span>}
           </span>
           <div className="writer-footer-actions">
-            {activeId && <button className="writer-btn-sm" onClick={pushToMemory} title="Save to Memory"><BookOpen size={12} /> Memory</button>}
+            {activeId && <button className="writer-btn-sm" onClick={pushToMemory} title="Promote this draft into Memory Core"><BookOpen size={12} /> Memory</button>}
             <button className="writer-btn-sm" onClick={() => exportDoc('md')} title="Export MD"><Download size={12} /> MD</button>
             <button className="writer-btn-sm" onClick={() => exportDoc('html')} title="Export HTML"><Download size={12} /> HTML</button>
             {activeId && <button className="writer-btn-sm" title="Export Word (.doc)"
