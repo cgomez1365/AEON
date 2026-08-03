@@ -262,7 +262,22 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   const localNativeRequest = async (prompt, modelId, opts = {}) => {
     const lr = _getLocalRT();
     if (!lr || !lr.isAvailable()) {
-      throw new Error('Native local runtime not ready. Install the runtime and a model in Cookbook.');
+      // F3c — an error with two remedies must name both, cheaper first.
+      // This said only "Install the runtime and a model in Cookbook." True, and
+      // incomplete: the operator fixed it the other way, by repointing the role
+      // at a provider that was already configured and working. That path needs
+      // no download and the message never mentioned it, so a first-time user
+      // reads this banner and goes to fetch 1.4 GB. AEON already knows which
+      // providers are healthy — it just was not using that knowledge when it
+      // explained a failure.
+      const alive = Object.entries(getProviderHealth())
+        .filter(([p, h]) => p !== 'local' && h.configured && h.healthy)
+        .map(([p]) => p);
+      throw new Error(
+        alive.length
+          ? `No local model is installed. Assign a configured provider (${alive.join(', ')}) in Settings → Model Assignment — that works now and needs no download — or install a local model in Cookbook.`
+          : 'No local model is installed and no cloud provider is configured. Install a local model in Cookbook, or add a provider key in Settings → Connections.'
+      );
     }
     const _t0 = Date.now();
     const flatPrompt = typeof prompt === 'string' ? prompt : (Array.isArray(prompt) ? prompt.map(m => m.content || '').join('\n') : String(prompt));

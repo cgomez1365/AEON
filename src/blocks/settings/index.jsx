@@ -201,14 +201,34 @@ function ProviderCard({ id, label, connected, onTest, providerRegistry }) {
     setTesting(false);
   };
 
+  // F3b — ONE status, derived from ability to serve.
+  //
+  // This badge said "Connected" from CONFIGURATION while the Test button's live
+  // probe said "Failed" in a toast, and the card showed both at once with
+  // nothing saying which question each had answered. The operator saw
+  // "Local · Connected · 11 ms" beside "local: Failed" and neither was wrong.
+  //
+  // "Connected" now requires a probe that actually came back. Configuration
+  // alone earns "Configured" — true, and it does not claim the provider can
+  // serve. The probe result stays as detail BENEATH the badge, never as a
+  // contradiction beside it.
+  const status = !connected
+    ? { text: 'Not configured', tone: 'off' }
+    : result == null
+      ? { text: 'Configured', tone: 'idle' }
+      : result.ok
+        ? { text: 'Connected', tone: 'ok' }
+        : { text: 'Configured · not responding', tone: 'warn' };
+
   return (
-    <div className={`provider-card ${connected ? 'provider-card--ok' : 'provider-card--off'}`}>
+    <div className={`provider-card provider-card--${status.tone === 'ok' ? 'ok' : status.tone === 'off' ? 'off' : status.tone}`}>
       <div className="provider-card-header">
-        <span className={`provider-dot ${connected ? 'provider-dot--on' : ''}`} />
+        <span className={`provider-dot ${status.tone === 'ok' ? 'provider-dot--on' : ''}`} />
         <span className="provider-card-icon">{reg?.icon || '🔌'}</span>
         <span className="provider-card-label">{label}</span>
-        <span className={`provider-card-status ${connected ? '' : 'provider-card-status--off'}`}>
-          {connected ? 'Connected' : 'Not configured'}
+        <span className={`provider-card-status ${status.tone === 'off' ? 'provider-card-status--off' : ''}`}
+              title={status.tone === 'idle' ? 'Configured. Press Test to check it can serve.' : undefined}>
+          {status.text}
         </span>
       </div>
       {result && result.ok && result.models && (

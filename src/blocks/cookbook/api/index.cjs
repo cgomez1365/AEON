@@ -8,7 +8,9 @@ const crypto = require('crypto');
 const { spawn, execFile, execFileSync } = require('child_process');
 const EventEmitter = require('events');
 const os = require('os');
-const { parseServeCommand, isModelInstalled } = require('./_serveCommand.cjs');
+const {
+  parseServeCommand, isModelInstalled, checkVramFit, estimateVram, vramErrorMessage,
+} = require('./_serveCommand.cjs');
 
 const SESSION_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const REPO_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -584,6 +586,41 @@ module.exports = function createCookbookRouter(deps) {
         repo_id,
         error: `${short} is not installed. Install it from Local models first.`,
       });
+    }
+
+    // Will it actually fit? The "What Fits" tab has ranked models against
+    // detected VRAM since this block was ported; serve never asked. quickServe
+    // sends `-ngl 99` — every layer on the GPU — so on a 3 GB card a 4B model
+    // is a predictable OOM that arrives as a red badge with no reason.
+    //
+    // Only decisive when it can be: no parameter count in the name, or no GPU
+    // probe, and the serve proceeds. `force: true` is the operator override —
+    // an estimate must never be the last word on the operator's own hardware.
+    if (!req.body.force) {
+      let vramGb = 0;
+      try {
+        const probe = await probeNvidiaGpus();
+        // total_mb, not free_mb: the verdict must be reproducible. Judging by
+        // free VRAM would make the same command succeed or fail depending on
+        // what else happens to be open, which is a worse experience than a
+        // stable "this model does not fit this card".
+        vramGb = Math.max(0, ...(probe.gpus || []).map(g => (g.total_mb || 0) / 1024));
+      } catch { /* no probe — checkVramFit returns fits:null and we proceed */ }
+
+      const fit = checkVramFit({ repoId: repo_id, args: serveArgs, vramGb });
+      if (fit.fits === false && fit.fullOffload) {
+        const fits = (installedModelIds() || [])
+          .map(id => ({ id, est: estimateVram(id) }))
+          .filter(m => m.est.neededGb && m.est.neededGb <= vramGb)
+          .sort((a, b) => b.est.neededGb - a.est.neededGb)[0];
+        return res.status(409).json({
+          ok: false,
+          code: 'model_exceeds_vram',
+          repo_id,
+          fit,
+          error: vramErrorMessage(fit, repo_id, fits?.id),
+        });
+      }
     }
 
     const sessionId = `serve-${crypto.randomBytes(4).toString('hex')}`;

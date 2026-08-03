@@ -183,11 +183,129 @@ function isModelInstalled(repoId, installed) {
   return false;
 }
 
+// ── Hardware fit ────────────────────────────────────────────────────────────
+// /cookbook/hf-latest has ranked models against detected VRAM since this block
+// was ported. /model/serve never asked. The result on the operator's GTX 1050
+// (3 GB): quickServe sends `-ngl 99` — offload EVERY layer — for a 4B model
+// needing ~2.5 GB before context, and an 8B that cannot load at all. The probe
+// data existed, the fit maths existed, and the serve path used neither.
+//
+// Bytes per parameter by quantisation. hf-latest assumed fp16 (2.0) for
+// everything, which is right for a raw HF repo and badly wrong for the GGUF
+// builds Local models actually installs — a Q4_K_M 4B is ~2.4 GB, not ~8 GB.
+// Reading the quant out of the name is what makes the refusal trustworthy
+// enough to act on.
+const QUANT_BYTES_PER_PARAM = {
+  f32: 4.0, fp32: 4.0,
+  f16: 2.0, fp16: 2.0, bf16: 2.0,
+  q8: 1.06, iq8: 1.06,
+  q6: 0.82, iq6: 0.82,
+  q5: 0.70, iq5: 0.70,
+  q4: 0.60, iq4: 0.55, awq: 0.60, gptq: 0.60,
+  q3: 0.46, iq3: 0.42,
+  q2: 0.35, iq2: 0.31,
+};
+
+const KV_CACHE_OVERHEAD = 1.15; // context + activations, empirical
+
+/**
+ * Estimate what a model needs in VRAM, from its identifier alone.
+ *
+ * Returns nulls rather than guesses when the name carries no parameter count —
+ * an unknown is reported as unknown and never blocks a serve.
+ */
+function estimateVram(id) {
+  const s = String(id == null ? '' : id);
+  const paramMatch = s.match(/[-_/](\d+(?:\.\d+)?)\s*[Bb](?![a-zA-Z])/);
+  const paramsB = paramMatch ? parseFloat(paramMatch[1]) : null;
+
+  const quantMatch = s.toLowerCase().match(/(?:^|[-_.])(iq\d|q\d|bf16|fp16|f16|fp32|f32|awq|gptq)/);
+  const quant = quantMatch ? quantMatch[1] : null;
+  const bytesPerParam = quant ? (QUANT_BYTES_PER_PARAM[quant] ?? 2.0) : 2.0;
+
+  if (!paramsB) return { paramsB: null, quant, bytesPerParam, weightsGb: null, neededGb: null };
+
+  const weightsGb = paramsB * bytesPerParam;
+  return {
+    paramsB,
+    quant,
+    bytesPerParam,
+    weightsGb: Math.round(weightsGb * 10) / 10,
+    neededGb: Math.round(weightsGb * KV_CACHE_OVERHEAD * 10) / 10,
+  };
+}
+
+/** How many layers the command asks the GPU to hold. `-ngl 99` means all. */
+function requestedGpuLayers(args) {
+  const list = args || [];
+  for (let i = 0; i < list.length; i++) {
+    const a = list[i];
+    if (a === '-ngl' || a === '--n-gpu-layers' || a === '--gpu-layers') {
+      const n = parseInt(list[i + 1], 10);
+      return Number.isFinite(n) ? n : null;
+    }
+    const inline = /^(?:--n-gpu-layers|--gpu-layers)=(\d+)$/.exec(a);
+    if (inline) return parseInt(inline[1], 10);
+  }
+  return null;
+}
+
+/**
+ * Does this model fit the detected card, given what the command asks for?
+ *
+ * Deliberately only decisive when it CAN be: no parameter count in the name, or
+ * no GPU probe, returns `fits: null` — unknown, proceed. The same asymmetry as
+ * isModelInstalled(): a false "too big" blocks a serve that would have worked.
+ *
+ * Partial offload is not a failure case. Only full offload (-ngl >= 99, or any
+ * value with no headroom) of a model larger than VRAM is a predictable OOM.
+ */
+function checkVramFit({ repoId, args, vramGb }) {
+  const est = estimateVram(repoId);
+  const ngl = requestedGpuLayers(args);
+  const base = { ...est, ngl, vramGb: vramGb || null };
+
+  if (!est.neededGb || !vramGb || vramGb <= 0) return { ...base, fits: null };
+
+  const headroomGb = Math.round((vramGb - est.neededGb) * 10) / 10;
+  if (est.neededGb <= vramGb) return { ...base, fits: true, headroomGb };
+
+  // Too big for the card. Only an error if the command insists on full offload;
+  // a partial -ngl spills to system RAM and is slow, not broken.
+  const fullOffload = ngl === null ? false : ngl >= 99;
+  return { ...base, fits: false, headroomGb, fullOffload };
+}
+
+/**
+ * The message for a model that will not fit.
+ *
+ * Names BOTH remedies and the cheaper one first. The operator hit exactly this
+ * class in Writer: told to install a runtime when repointing a role at an
+ * already-working provider was one dropdown away, and the message never said
+ * so. An error that has two remedies must name both.
+ */
+function vramErrorMessage(fit, repoId, largestThatFits) {
+  const short = String(repoId).split('/').pop() || repoId;
+  const q = fit.quant ? ` (${fit.quant})` : '';
+  const alt = largestThatFits
+    ? ` Or serve ${largestThatFits} instead, which fits.`
+    : '';
+  return (
+    `${short}${q} needs about ${fit.neededGb} GB of VRAM and this GPU has ${fit.vramGb} GB. ` +
+    `Lower -ngl to offload only some layers to the GPU — that works today and needs no download.${alt}`
+  );
+}
+
 module.exports = {
   SHELL_METACHARS,
   DEFAULT_ALLOWED,
+  QUANT_BYTES_PER_PARAM,
   tokenizeCommand,
   parseServeCommand,
   modelKey,
   isModelInstalled,
+  estimateVram,
+  requestedGpuLayers,
+  checkVramFit,
+  vramErrorMessage,
 };
