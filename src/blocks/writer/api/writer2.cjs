@@ -61,7 +61,7 @@ const TEMPLATES = [
 ];
 
 module.exports = (app, deps) => {
-  const isVercel = !!process.env.VERCEL;
+  const isVercel = require('../../../kernel/runtime.cjs').isCloud();
   // Must match writer.js exactly — same store, same folder (Vault/blocks/writer/).
   const DOCS_DIR = isVercel
     ? '/tmp/aeon_writer'

@@ -6,6 +6,7 @@
 const fs = require('fs');
 const path = require('path');
 const multer = require('multer');
+const { isCloud: _isCloud } = require('../src/kernel/runtime.cjs');
 
 // ── Smart install-root detection ────────────────────────────────────────────
 // AEON must "just work" wherever it's unzipped — no env var, no config, no
@@ -36,7 +37,7 @@ function detectAeonRoot() {
 const ROOT = detectAeonRoot();
 
 const getLocalFile = (filename) => {
-  if (process.env.VERCEL) return path.join('/tmp', filename);
+  if (_isCloud()) return path.join('/tmp', filename);
 
   const dbFiles = ['activity_heatmap.json', 'aeon_ats.json', 'aeon_notes.json', 'aeon_terminal_history.json', 'ats_candidates.json', 'audit_log.json', 'chat_log.json', 'process_registry.json', 'token_ledger.json', 'cloud_relay_schema.sql', 'logs', 'clients.json', 'inventory.json', 'quick-links.json', 'training-data.json'];
   const docsFiles = ['AEON_HISTORY.md', 'claude_transcript.md', 'GEMINI.md', '2026-06-12.md', 'AEON-SECURITY-HANDOFF.md', 'AEON-TELEMETRY-AUDIT.md', 'AEON_PHASE0-1_PATCH_BRIEFING.txt', 'CLAUDE-MEMORY-CONTEXT.md'];
@@ -82,7 +83,7 @@ const DATA_ROOT = process.env.DATA_PATH || path.join(ROOT, 'data');
 
 const getVaultFile = (relPath) => path.join(VAULT_ROOT, relPath);
 const getDataFile = (relPath) => {
-  if (process.env.VERCEL) return path.join('/tmp', relPath);
+  if (_isCloud()) return path.join('/tmp', relPath);
   return path.join(DATA_ROOT, relPath);
 };
 
@@ -101,7 +102,7 @@ function getScopedFile(root, blockId, relPath = '') {
 // Blocks get a namespace, never an unrestricted root. Vault content is
 // durable/indexed; Data content is operational and intentionally unindexed.
 const getBlockVaultFile = (blockId, relPath = '') => getScopedFile(path.join(VAULT_ROOT, 'blocks'), blockId, relPath);
-const getBlockDataFile = (blockId, relPath = '') => getScopedFile(process.env.VERCEL ? '/tmp' : DATA_ROOT, blockId, relPath);
+const getBlockDataFile = (blockId, relPath = '') => getScopedFile(_isCloud() ? '/tmp' : DATA_ROOT, blockId, relPath);
 
 // data/local-runtime.json — written by the Cookbook block (the owner of local
 // models): models_dir, available runtimes, and every installed local model.
@@ -188,8 +189,8 @@ const logTrivial = (e) => {
 };
 
 function cleanupOrphans() {
-  const stagingDir = process.env.VERCEL ? path.join('/tmp', 'temp_staging') : getLocalFile('staging');
-  const tempDir = process.env.VERCEL ? path.join('/tmp', 'temp_frames') : getLocalFile('temp_frames');
+  const stagingDir = _isCloud() ? path.join('/tmp', 'temp_staging') : getLocalFile('staging');
+  const tempDir = _isCloud() ? path.join('/tmp', 'temp_frames') : getLocalFile('temp_frames');
   const now = Date.now();
 
   const cleanDir = (dir, maxAgeMs) => {

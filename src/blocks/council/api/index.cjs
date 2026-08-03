@@ -18,7 +18,7 @@ module.exports = function createCompareRouter(deps) {
   // Was also a depth-miscalculation bug: '../src/blocks/compare/data' from
   // council/api/ resolved to council/src/blocks/compare/data (nested garbage),
   // not the intended top-level location — getDataFile() fixes that structurally.
-  const isVercel = !!process.env.VERCEL;
+  const isVercel = require('../../../kernel/runtime.cjs').isCloud();
   const COMPARE_DIR = getDataFile ? getDataFile('council/compare') : path.join(__dirname, '../src/blocks/compare/data');
   const HISTORY_FILE = path.join(COMPARE_DIR, 'history.json');
   try { if (!fs.existsSync(COMPARE_DIR)) fs.mkdirSync(COMPARE_DIR, { recursive: true }); } catch {}

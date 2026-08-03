@@ -1,0 +1,7 @@
+{
+  "note": "BO-A3a ratchet. These numbers may FALL, never rise. Lower them in the same commit that deletes the branches.",
+  "envReads": 0,
+  "flagUses": 95,
+  "total": 95,
+  "files": 22
+}

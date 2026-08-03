@@ -19,7 +19,7 @@ const fs = require('fs');
 const path = require('path');
 const vault = require('./vault.cjs');
 
-const isVercel = !!process.env.VERCEL;
+const isVercel = require('./runtime.cjs').isCloud();
 const APP_ROOT = path.join(__dirname, '..', '..');
 // Honors AEON_SECRETS_DIR, same as vault.cjs:22. Without this the endpoint
 // registry stays pinned to the install dir while the vault follows the env —

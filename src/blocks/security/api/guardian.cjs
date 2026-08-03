@@ -26,7 +26,7 @@ const crypto = require('crypto');
 const sessions = require('../../../kernel/server-utils/sessionValidator.cjs');
 
 module.exports = (app, deps) => {
-  const isVercel = !!process.env.VERCEL;
+  const isVercel = require('../../../kernel/runtime.cjs').isCloud();
   const APP_ROOT = path.join(__dirname, '..', '..', '..', '..');
   const PORT = Number(process.env.PORT) || 3001;
   const {

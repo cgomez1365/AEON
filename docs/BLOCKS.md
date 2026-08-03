@@ -70,7 +70,7 @@ receives only what it declares.
 - **Targets:** desktop + cloud
 - **Memory mode:** `summary`
 - **Declared capabilities:** `filesystem:write`, `network:external`, `secrets`
-- **API files:** `fs/read.js`, `fs/write.js`, `notes.js`
+- **API files:** `notes.js`
 
 ### Fleet Control
 

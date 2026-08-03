@@ -15,7 +15,7 @@ const bind = require('../src/kernel/server-utils/bind.cjs');
 
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
-const isVercel = !!process.env.VERCEL;
+const isVercel = require('../src/kernel/runtime.cjs').isCloud();
 const ROOT = path.join(__dirname, '..');
 
 // ── Vault first-run guard — the vault must ALWAYS be usable out of the box ──

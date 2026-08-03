@@ -2,6 +2,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const { loadSettings } = require('../../../../services/settings.js');
+const { isCloud: _isCloud } = require('../../../kernel/runtime.cjs');
 
 module.exports = function createChatRouter(deps) {
   const router = express.Router();
@@ -108,7 +109,7 @@ module.exports = function createChatRouter(deps) {
         if (lowerContent.startsWith('/scrape ')) {
           const scrapeQuery = content.substring(8).trim();
           try {
-            const host = process.env.VERCEL && req.headers.host ? `https://${req.headers.host}` : (process.env.AEON_KERNEL_URL || `http://localhost:${process.env.PORT || 3001}`);
+            const host = _isCloud() && req.headers.host ? `https://${req.headers.host}` : (process.env.AEON_KERNEL_URL || `http://localhost:${process.env.PORT || 3001}`);
             // Was /api/orion-scrape — a route nothing has ever mounted, so
             // /scrape has always failed. The orion_search block owns this and
             // serves /api/orion/search.
@@ -170,7 +171,7 @@ module.exports = function createChatRouter(deps) {
         }
         if (isMatrixCommand || SB_RECALL_PATTERNS.some(p => p.test(lowerContent))) {
           try {
-            const host = process.env.VERCEL && req.headers.host ? `https://${req.headers.host}` : (process.env.AEON_KERNEL_URL || `http://localhost:${process.env.PORT || 3001}`);
+            const host = _isCloud() && req.headers.host ? `https://${req.headers.host}` : (process.env.AEON_KERNEL_URL || `http://localhost:${process.env.PORT || 3001}`);
             const sbRes = await fetch(`${host}/api/crn/second-brain/retrieve`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },

@@ -1,6 +1,6 @@
 {
   "name": "aeon3",
-  "description": "AEON — a local-first AI workspace built from governed blocks. Runs anywhere.",
+  "description": "AEON \u2014 a local-first AI workspace built from governed blocks. Runs anywhere.",
   "author": "Broken Gear Industries <cristian@brokengear.io>",
   "private": true,
   "license": "Apache-2.0",
@@ -31,11 +31,12 @@
     "scan:no-ollama": "node tools/scan/no-ollama.cjs",
     "scan:paths": "node tools/scan/path-authority.cjs",
     "scan:audit": "node tools/scan/audit-gate.cjs",
-    "scan:release-gate": "npm run scan:no-ollama && npm run scan:paths",
+    "scan:release-gate": "npm run scan:no-ollama && npm run scan:paths && npm run scan:cloud-surface",
     "migrate": "node tools/migrate.cjs",
     "canary": "node tools/rls-canary.cjs",
     "start": "concurrently \"npm run dev\" \"npm run server\"",
-    "prep:routes": "node scripts/gen-block-routes.cjs"
+    "prep:routes": "node scripts/gen-block-routes.cjs",
+    "scan:cloud-surface": "node scripts/scan-cloud-surface.cjs"
   },
   "devDependencies": {
     "axios": "^1.16.0",

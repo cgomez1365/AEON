@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const ffmpeg = require('fluent-ffmpeg');
 
-const isVercel = !!process.env.VERCEL;
+const isVercel = require('../src/kernel/runtime.cjs').isCloud();
 const getLocalFile = (filename) => isVercel ? path.join('/tmp', filename) : path.join(__dirname, '..', filename);
 const KERNEL_BASE = process.env.AEON_KERNEL_URL || `http://localhost:${process.env.PORT || 3001}`;
 

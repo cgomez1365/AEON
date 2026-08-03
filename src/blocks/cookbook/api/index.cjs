@@ -8,6 +8,7 @@ const crypto = require('crypto');
 const { spawn, execFile, execFileSync } = require('child_process');
 const EventEmitter = require('events');
 const os = require('os');
+const { isCloud: _isCloud } = require('../../../kernel/runtime.cjs');
 const {
   parseServeCommand, isModelInstalled, checkVramFit, estimateVram, vramErrorMessage,
 } = require('./_serveCommand.cjs');
@@ -175,7 +176,7 @@ module.exports = function createCookbookRouter(deps) {
   }
 
   router.get('/cookbook/gpus', async (req, res) => {
-    if (process.env.VERCEL) return res.json({ ok: false, gpus: [], error: 'GPU probe unavailable in cloud. Use /start from terminal to relay to desktop.', backend: 'cloud' });
+    if (_isCloud()) return res.json({ ok: false, gpus: [], error: 'GPU probe unavailable in cloud. Use /start from terminal to relay to desktop.', backend: 'cloud' });
     try {
       const result = await probeNvidiaGpus();
       if (result.gpus.length) {
@@ -330,7 +331,7 @@ module.exports = function createCookbookRouter(deps) {
   }
 
   router.get('/model/cached', (req, res) => {
-    if (process.env.VERCEL) return res.json({ models: [], host: 'cloud', note: 'Model cache unavailable in cloud. Relay via desktop bridge.' });
+    if (_isCloud()) return res.json({ models: [], host: 'cloud', note: 'Model cache unavailable in cloud. Relay via desktop bridge.' });
     const modelDirs = [];
     if (req.query.model_dir) {
       for (const d of req.query.model_dir.split(',')) {

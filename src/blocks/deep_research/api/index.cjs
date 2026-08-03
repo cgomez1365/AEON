@@ -8,6 +8,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const EventEmitter = require('events');
+const { isCloud: _isCloud } = require('../../../kernel/runtime.cjs');
 
 const SESSION_ID_RE = /^[a-zA-Z0-9-]{1,128}$/;
 
@@ -123,7 +124,7 @@ module.exports = function createResearchRouter(deps) {
   // On Vercel the repo FS is read-only and block data dirs are vercelignored —
   // an unguarded mkdir here crashed the whole factory, 404ing every /research
   // route on the web. Local disk is the source locally; Supabase on the web.
-  const isVercel = !!process.env.VERCEL;
+  const isVercel = require('../../../kernel/runtime.cjs').isCloud();
   // Was `path.join(__dirname, '../../data')` — from src/blocks/deep_research/api/,
   // '../../data' resolves to src/blocks/data/, NOT src/blocks/deep_research/data/
   // as intended. Reports had been silently landing in a stray sibling folder
@@ -751,7 +752,7 @@ Structure: # Title, ## Abstract, ## Findings (thematic, cited), ## Conclusion. D
 
   // POST /research/start — launch a new research job
   router.post('/research/start', async (req, res) => {
-    if (process.env.VERCEL) {
+    if (_isCloud()) {
       return res.status(503).json({ error: 'Deep Research requires the local AEON server (multi-round LLM pipeline exceeds cloud timeout). Run from localhost or relay via /scrape in the terminal.' });
     }
     const { query, max_rounds = 0, search_provider, max_time = 300, category } = req.body;

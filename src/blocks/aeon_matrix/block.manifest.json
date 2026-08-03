@@ -359,7 +359,7 @@
   },
   "dependencies": [],
   "deployment": {
-    "target": "any",
+    "target": "hybrid",
     "runtime": "nodejs"
   }
 }

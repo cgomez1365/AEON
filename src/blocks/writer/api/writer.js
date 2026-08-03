@@ -3,7 +3,7 @@ const path = require('path');
 
 module.exports = (app, deps) => {
   const { supabase, getBlockDataFile, kernelLLM, VAULT_ROOT } = deps;
-  const isVercel = !!process.env.VERCEL;
+  const isVercel = require('../../../kernel/runtime.cjs').isCloud();
   // On Vercel /tmp is the only writable dir — ephemeral per-invocation; Supabase
   // is the source of truth. Locally, drafts live in the PRIVATE data root
   // (data/writer/), NOT the Vault: a document editor's autosaved drafts must

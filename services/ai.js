@@ -7,6 +7,7 @@
 const fs = require('fs');
 const path = require('path');
 const { readLocalRuntime } = require('./storage.js');
+const { isCloud: _isCloud } = require('../src/kernel/runtime.cjs');
 
 // Phase 6: native local runtime (llama.cpp). Lazy require.
 // Loaded lazily so ai.js still boots on machines without the runtime installed.
@@ -669,7 +670,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     if (!opts.system) opts = { ...opts, system: AEON_SYSTEM };
     opts = { ...opts, role };
 
-    if (process.env.VERCEL) opts = { ...opts, _vercelStrict: true };
+    if (_isCloud()) opts = { ...opts, _vercelStrict: true };
 
     // ── Registry path (preferred) ──
     if (aeonEndpoints && !opts.provider && !opts.model) {

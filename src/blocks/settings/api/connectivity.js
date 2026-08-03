@@ -15,6 +15,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
+const { isCloud: _isCloud } = require('../../../kernel/runtime.cjs');
 
 const ROOT = path.join(__dirname, '..', '..', '..', '..');
 const BIN_DIR = path.join(ROOT, 'tools', 'bin');
@@ -93,7 +94,7 @@ module.exports = (app, deps) => {
         startedAt: _tunnel.startedAt,
         secured: !!process.env.AEON_MOBILE_SECRET, // tunnel traffic must Bearer-auth
       },
-      runtime: process.env.VERCEL ? 'cloud' : 'local',
+      runtime: _isCloud() ? 'cloud' : 'local',
     });
   });
 

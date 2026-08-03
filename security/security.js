@@ -9,6 +9,7 @@ const path = require('path');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
+const { isCloud: _isCloud } = require('../src/kernel/runtime.cjs');
 
 module.exports = ({ supabase, getLocalFile, WORKSPACE, AUDIT_FILE, SDI_VIOLATION_LOG }) => {
 
@@ -78,7 +79,7 @@ module.exports = ({ supabase, getLocalFile, WORKSPACE, AUDIT_FILE, SDI_VIOLATION
 
   // ── Tunnel gate: AEON_MOBILE_SECRET on non-local /api ──
   const tunnelGate = (req, res, next) => {
-    if (isLoopbackRequest(req) || process.env.VERCEL) {
+    if (isLoopbackRequest(req) || _isCloud()) {
       return next();
     }
     const authHeader = req.headers.authorization;

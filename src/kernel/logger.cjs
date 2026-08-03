@@ -14,13 +14,14 @@
  * Level via AEON_LOG_LEVEL (trace|debug|info|warn|error). Pretty locally,
  * raw JSON on Vercel/production.
  */
+const { isCloud: _isCloud } = require('./runtime.cjs');
 let logger;
 try {
   const pino = require('pino');
-  const isProd = process.env.NODE_ENV === 'production' || !!process.env.VERCEL;
+  const isProd = process.env.NODE_ENV === 'production' || !!_isCloud();
   logger = pino({
     level: process.env.AEON_LOG_LEVEL || 'info',
-    base: { service: 'aeon-kernel', runtime: process.env.VERCEL ? 'cloud' : 'local' },
+    base: { service: 'aeon-kernel', runtime: _isCloud() ? 'cloud' : 'local' },
     redact: {
       // Never log secrets even if they get passed into a log object.
       paths: [
