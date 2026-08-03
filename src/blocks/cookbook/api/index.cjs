@@ -8,6 +8,7 @@ const crypto = require('crypto');
 const { spawn, execFile, execFileSync } = require('child_process');
 const EventEmitter = require('events');
 const os = require('os');
+const { parseServeCommand, isModelInstalled } = require('./_serveCommand.cjs');
 
 const SESSION_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const REPO_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -65,6 +66,32 @@ module.exports = function createCookbookRouter(deps) {
     } catch (e) { return { error: e.message, models: [] }; }
   }
   setTimeout(writeLocalRuntime, 3000);
+
+  // Every model identifier this install can currently serve, from both naming
+  // schemes at once: the on-disk HF cache (authoritative, but a scan) and the
+  // runtime registry file (cheap, but only as fresh as the last write). Union,
+  // never intersection — /model/serve uses this to REFUSE, so a stale miss on
+  // either side would block a serve that would have worked. isModelInstalled()
+  // is permissive for the same reason.
+  function installedModelIds() {
+    const ids = new Set();
+    try {
+      for (const m of scanHfCache(defaultHfCache())) {
+        if (m?.repo_id) ids.add(m.repo_id);
+      }
+    } catch {}
+    try {
+      const legacy = legacyHfCache();
+      if (fs.existsSync(legacy) && path.resolve(legacy) !== path.resolve(defaultHfCache())) {
+        for (const m of scanHfCache(legacy)) if (m?.repo_id) ids.add(m.repo_id);
+      }
+    } catch {}
+    try {
+      const reg = JSON.parse(fs.readFileSync(RUNTIME_FILE, 'utf8'));
+      for (const m of reg?.models || []) if (m?.id) ids.add(m.id);
+    } catch {}
+    return [...ids];
+  }
 
   // GET /cookbook/runtime — the registry, refreshed on demand
   router.get('/cookbook/runtime', async (req, res) => {
@@ -527,31 +554,37 @@ module.exports = function createCookbookRouter(deps) {
     // vector is passed as an array with no shell anywhere. Shell metacharacters
     // are rejected outright rather than escaped, because nothing legitimate in a
     // model-serve command needs them.
-    const ALLOWED = new Set(['vllm', 'llama-server', 'llama_server', 'python', 'python3', 'sglang', 'node', 'npx']);
-    const cleaned = String(serveCmd).replace(/\\\n/g, ' ').trim();
-    if (/[`\n\r;&|<>$(){}]/.test(cleaned)) {
-      return res.status(400).json({
+    //
+    // The tokeniser moved into _serveCommand.cjs and became quote-aware. The
+    // version that shipped here was `cleaned.split(/\s+/)`, which is only
+    // correct for a string a shell has already processed: the UI quotes the
+    // model path, so llama-server was handed a filename with literal `"`
+    // characters in it, and any path containing a space arrived as two
+    // arguments. Quotes group; they never introduce interpretation. See that
+    // file for the grammar and the ordering argument.
+    const parsed = parseServeCommand(serveCmd);
+    if (!parsed.ok) {
+      return res.status(parsed.status || 400).json({ ok: false, error: parsed.error });
+    }
+    const { cleaned, env: envAssignments, file: execFileName, args: serveArgs } = parsed;
+
+    // Serving a model that is not on disk was previously a spawn away: the
+    // route validated the COMMAND and never the SUBJECT. On a machine with zero
+    // models the user got a red badge and no reason. Refuse here, by name.
+    // The on-disk check is the escape hatch for an explicit path argument that
+    // no registry knows about.
+    const argOnDisk = serveArgs.some(a => a.length > 3 && !a.startsWith('-') && (() => {
+      try { return fs.existsSync(a); } catch { return false; }
+    })());
+    if (!argOnDisk && !isModelInstalled(repo_id, installedModelIds())) {
+      const short = String(repo_id).split('/').pop() || repo_id;
+      return res.status(409).json({
         ok: false,
-        error: 'cmd may not contain shell metacharacters. Pass the executable and its flags only.',
+        code: 'model_not_installed',
+        repo_id,
+        error: `${short} is not installed. Install it from Local models first.`,
       });
     }
-
-    const rawTokens = cleaned.split(/\s+/).filter(Boolean);
-    // Leading VAR=value assignments are configuration, not part of the command.
-    const envAssignments = {};
-    let i = 0;
-    for (; i < rawTokens.length; i++) {
-      const m = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(rawTokens[i]);
-      if (!m) break;
-      envAssignments[m[1]] = m[2];
-    }
-    const argvTokens = rawTokens.slice(i);
-    const execFileName = argvTokens[0] || '';
-    const firstBin = path.basename(execFileName);
-    if (!ALLOWED.has(firstBin)) {
-      return res.status(400).json({ ok: false, error: `cmd binary '${firstBin}' not allowed` });
-    }
-    const serveArgs = argvTokens.slice(1);
 
     const sessionId = `serve-${crypto.randomBytes(4).toString('hex')}`;
     const logFile = path.join(LOGS_DIR, `${sessionId}.log`);

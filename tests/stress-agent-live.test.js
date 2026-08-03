@@ -11,8 +11,12 @@
  * silently passes without doing anything.
  *
  * Run live:
- *   npm run server   # in another terminal
- *   npx vitest run tests/stress-agent-live.test.js
+ *   npm run server                     # in another terminal
+ *   AEON_LIVE_STRESS=1 npx vitest run tests/stress-agent-live.test.js
+ *
+ * AEON_LIVE_STRESS is required because this file can PROVISION an operator
+ * account, which flips the auth gate on for that install. Point it at a
+ * scratch install, never at the one you log into. See the note at step 3.
  */
 import { beforeAll, describe, expect, it } from 'vitest';
 import { createRequire } from 'module';
@@ -59,10 +63,30 @@ beforeAll(async () => {
     }
   }
 
-  // 3. No account yet — /api/auth/setup only works when local_auth.json is absent.
-  //    Creates the stress-test account once; subsequent runs hit step 2 instead.
-  //    Setup requires exactly 3 recovery questions (schema enforced by the server).
-  const setupRes = await client.request('POST', '/api/auth/setup', {
+  // 3. No account yet — provision the stress-test operator. OPT-IN ONLY.
+  //
+  //    2026-08-02: this ran unconditionally against whatever server answered
+  //    :3001 — which on a developer machine is the operator's real install.
+  //    /api/auth/setup correctly refuses when an account exists (409), so it
+  //    destroyed nothing, but on a fresh clone that has not been through
+  //    first-run there IS no account, so `npm test` claimed the only operator
+  //    slot and — because setup also writes
+  //    `{ guardEnabled: true, lockEveryLaunch: true, idleMinutes: 5 }` —
+  //    switched the auth gate ON and locked the operator out of their own box.
+  //    A test may observe a live instance. It may not provision one.
+  //
+  //    Set AEON_LIVE_STRESS=1 to allow it, and point it at a scratch install:
+  //      AEON_LIVE_STRESS=1 npx vitest run tests/stress-agent-live.test.js
+  if (!sessionLive && process.env.AEON_LIVE_STRESS !== '1') {
+    console.warn(
+      '[stress-agent-live] no session and no account — SKIPPING.\n' +
+      '  Refusing to create an operator account on a server this test did not start.\n' +
+      '  Set AEON_LIVE_STRESS=1 against a scratch install to provision one.'
+    );
+    return;
+  }
+
+  const setupRes = !sessionLive ? await client.request('POST', '/api/auth/setup', {
     username: STRESS_USER,
     password: STRESS_PASS,
     displayName: 'Stress Test',
@@ -71,7 +95,7 @@ beforeAll(async () => {
       { questionId: 'q02', answer: 'stress-test-city' },
       { questionId: 'q03', answer: 'stress-test-nick' },
     ],
-  }, { timeout: 5000 });
+  }, { timeout: 5000 }) : { ok: false, status: 0 };
   if (setupRes.ok || setupRes.status === 201) {
     const token = setupRes.data?.token || setupRes.data?.session;
     if (token) { client.saveSession(token, null); sessionLive = true; }

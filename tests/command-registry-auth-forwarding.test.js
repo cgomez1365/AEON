@@ -29,6 +29,10 @@ const require = createRequire(import.meta.url);
 
 const tempVault = fs.mkdtempSync(path.join(os.tmpdir(), 'aeon-cmd-registry-'));
 process.env.VAULT_PATH = tempVault;
+// VAULT_PATH alone is NOT isolation: sessionValidator also writes the legacy
+// secrets/aeon-user.json, which follows AEON_SECRETS_DIR, not VAULT_PATH.
+// Without this line saveUser() below lands in the operator's real install.
+process.env.AEON_SECRETS_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'aeon-cmd-registry-secrets-'));
 delete process.env.VERCEL;
 
 const express = require('express');

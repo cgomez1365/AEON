@@ -30,8 +30,16 @@ function createSessionValidator(options = {}) {
   const securityDir = options.securityDir || storage.getVaultFile(path.join('blocks', 'security'));
   const policyFile = path.join(securityDir, 'policy.json');
   const authFile = path.join(securityDir, 'local_auth.json');
+  // Honors AEON_SECRETS_DIR, same as vault.cjs:22 and endpoints.cjs:27. This
+  // was the only writer into secrets/ that ignored it, and the gap was not
+  // theoretical: securityDir above follows VAULT_PATH, so a test could isolate
+  // local_auth.json and policy.json correctly and still write this file into
+  // the operator's real install — which `npm test` did on 2026-08-02, leaving
+  // the live pointer naming a different account than the credential beside it.
+  // Isolation that covers two of three write targets reads as isolation and
+  // is not.
   const legacyUserFile = options.legacyUserFile === undefined
-    ? path.join(storage.ROOT, 'secrets', 'aeon-user.json')
+    ? path.join(process.env.AEON_SECRETS_DIR || path.join(storage.ROOT, 'secrets'), 'aeon-user.json')
     : options.legacyUserFile;
   const bootTime = options.bootTime || Date.now();
   const activity = new Map();

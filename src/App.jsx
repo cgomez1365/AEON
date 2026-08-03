@@ -7,6 +7,7 @@ import MobileLayout from "./components/MobileLayout";
 import AuthGate from "./components/AuthGate";
 import CloudSetupGate from "./components/CloudSetupGate";
 import { TelemetryProvider } from "./kernel/contexts/TelemetryContext";
+import { shouldBannerResponse, describeResponseBanner, decideNetworkBanner } from "./utils/interceptorPolicy";
 
 // ── Load persisted appearance on boot (theme, accent, font) ──────────
 // Order matters: theme_builder sets the base palette first, then
@@ -138,52 +139,44 @@ export default function App() {
   }, []);
 
   // Global Fetch Interceptor for Trace IDs (Forensics)
+  // The decision table lives in src/utils/interceptorPolicy.js — it is the
+  // testable half, and it carries the incident log for every exclusion. Both
+  // the HTTP branch and the transport branch consult it; the catch branch used
+  // to be a bare `if (isApi)` that no exception could reach, which is why
+  // /api/kernel/security-availability raised [NETWORK DEAD] on every boot that
+  // beat the kernel to the port.
   useEffect(() => {
+    const raise = ({ kind, url, message, traceId }) => {
+      const label = kind === 'network' ? '[NETWORK DEAD]' : '[API FAILED]';
+      // A server that explained itself gets its own words. The trace ID is for
+      // the failure nobody can explain — printing it over a real message told
+      // the operator "PENDING_OR_UNREACHABLE" about a server that answered.
+      setToastMessage(message
+        ? <span>⚠️ {label} {url} <span style={{ marginLeft: '8px' }}>{message}</span></span>
+        : <span>⚠️ {label} {url} <span style={{ fontFamily: 'monospace', color: '#ffb4ab', marginLeft: '8px' }}>Trace ID: {traceId}</span></span>);
+      setTimeout(() => setToastMessage(''), 10000);
+    };
+
     const originalFetch = window.fetch;
     window.fetch = async function(...args) {
       const url = typeof args[0] === 'string' ? args[0] : (args[0]?.url || '');
-      const isApi = url.startsWith('/api');
-
+      // The catch covers the transport call ONLY. Wrapping the banner work in
+      // it too would let a render error report itself as [NETWORK DEAD] and
+      // reject a request the server actually answered.
+      let response;
       try {
-        const response = await originalFetch.apply(this, args);
-        // Endpoints whose failures are handled by the caller, so a banner would
-        // be noise. Each entry needs that justification — this list is not a
-        // place to quiet something that is actually broken.
-        //
-        // /api/chat used to be here, and cloud was suppressed wholesale by a
-        // hostname check. Between them, dashboard chat answered HTTP 500 on
-        // every AI message in production and no user or developer ever saw a
-        // signal. R-05 has no cloud exemption: a failure the operator cannot
-        // see is a silent failure.
-        //
-        // /api/kernel/llm — components handle their own 409 (needsLocalConfirm).
-        // /api/auth/status — 404s by design when no auth block is installed.
-        const ignoredEndpoints = ['/api/audit', '/api/search', '/api/health', '/api/canva/status', '/api/telemetry', '/api/llm-telemetry', '/api/local-status', '/api/gas/status', '/api/transcribe', '/api/kernel/llm', '/api/auth/status'];
-        // 401 on auth/security routes is EXPECTED when locked or signed out —
-        // the AuthGate handles it, so it must never raise the forensics banner.
-        const isExpectedAuth401 = response.status === 401 && (url.startsWith('/api/auth/') || url.startsWith('/api/security/'));
-        // 428 = intentional confirmation gate (dangerous commands) — not an error
-        if (isApi && !response.ok && response.status !== 428 && !isExpectedAuth401 && !ignoredEndpoints.includes(url)) {
-          // Ignore silent background checks
-          const clone = response.clone();
-          try {
-            const data = await clone.json();
-            const traceId = data.correlation_id || 'PENDING_OR_UNREACHABLE';
-            setToastMessage(<span>⚠️ [API FAILED] {url} <span style={{ fontFamily: 'monospace', color: '#ffb4ab', marginLeft: '8px' }}>Trace ID: {traceId}</span></span>);
-            setTimeout(() => setToastMessage(''), 10000);
-          } catch (e) {
-            setToastMessage(<span>⚠️ [API FAILED] {url} <span style={{ fontFamily: 'monospace', color: '#ffb4ab', marginLeft: '8px' }}>Trace ID: PENDING_OR_UNREACHABLE</span></span>);
-            setTimeout(() => setToastMessage(''), 10000);
-          }
-        }
-        return response;
+        response = await originalFetch.apply(this, args);
       } catch (err) {
-        if (isApi) {
-          setToastMessage(<span>⚠️ [NETWORK DEAD] {url} <span style={{ fontFamily: 'monospace', color: '#ffb4ab', marginLeft: '8px' }}>Trace ID: PENDING_OR_UNREACHABLE</span></span>);
-          setTimeout(() => setToastMessage(''), 10000);
-        }
+        const banner = decideNetworkBanner({ url });
+        if (banner) raise(banner);
         throw err;
       }
+      if (shouldBannerResponse({ url, ok: response.ok, status: response.status })) {
+        let body = null;
+        try { body = await response.clone().json(); } catch { /* non-JSON body — falls through to the trace ID */ }
+        raise(describeResponseBanner({ url, body }));
+      }
+      return response;
     };
     return () => {
       window.fetch = originalFetch;
