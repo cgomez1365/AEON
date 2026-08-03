@@ -3,7 +3,30 @@
 **ID:** `resume_grader`
 **Nav route:** `/resume-grader`
 **Tier:** `plugin`
-**Status:** ACTIVE
+**Status:** ACTIVE — **KEPT.** Decision made 2026-08-04 (BO-A3c).
+
+## Fate decision — closed
+
+This block was flagged "CEO may still remove entirely" on 2026-07-24 and stayed
+undecided through three build orders. BO-A3c required a decision, on the
+grounds that carrying an undecided block costs a manifest, a route, a scanner
+pass and a line in every census. **It is kept.** Reasons, so this does not
+reopen:
+
+- It is 215 lines total, one route, zero cross-block dependencies, and has
+  never produced a defect in any audit or stress round.
+- The cost of carrying it is now near zero *because of* BO-A2. The empty-shell
+  test proves a block can be added and removed cleanly at any time, so deleting
+  this later is a one-command operation with a gate behind it — not a one-way
+  door that had to be decided before release.
+- R-09, revenue-first: removal has no revenue upside. Retention keeps a
+  sellable cartridge — resume grading is exactly the paid-pack shape the
+  Bible's business layer describes (p26–27).
+- Deleting a working product surface days before a release, to save 215 lines,
+  is the wrong trade in the wrong week.
+
+If it is ever removed, apply the deletion protocol (prove dead, gate first,
+one scoped commit, drive the surface after) — not an ad-hoc `rm`.
 
 Résumé and candidate intake/grading pipeline. A recruiter pastes a job
 description, uploads a candidate's PDF résumé, and the block extracts the

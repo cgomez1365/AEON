@@ -176,8 +176,46 @@ async function main() {
     }
     return false;
   };
+  // ── Compromised-credential rotation (BO-A3b) ──────────────────────────────
+  // ensure() only fills a value that is MISSING. A credential that is present
+  // and known-exposed sails straight through, which is exactly what happened
+  // to AEON_MOBILE_SECRET: it was owed rotation across three build orders, the
+  // install was deleted and re-cloned — which would have generated a fresh one
+  // — and then the preserved .env put the exposed value back, because that
+  // .env must be restored for the vault master key.
+  //
+  // So rotation cannot be a manual step; nobody is ever blocked by it. AEON
+  // carries fingerprints of credentials it knows are burned and replaces them
+  // at launch. Only the digest is stored, never the value.
+  //
+  // Deliberately NOT applied to AEON_VAULT_MASTER_KEY: rotating that without
+  // rewrapping the keyslots is a lockout, and owner lockout is never
+  // acceptable. If a master key is ever exposed it needs its own guided
+  // re-wrap, not a silent regeneration.
+  const rotateCompromised = (key, gen) => {
+    let list = [];
+    try {
+      list = JSON.parse(fs.readFileSync(
+        path.join(ROOT, 'security', 'compromised-credentials.json'), 'utf8')).credentials || [];
+    } catch { return false; }
+
+    const m = env.match(new RegExp('^' + key + '=(.*)$', 'm'));
+    const current = (m && m[1] || '').trim();
+    if (!current) return false;
+
+    const digest = crypto.createHash('sha256').update(current).digest('hex');
+    if (!list.some(c => c.key === key && c.sha256 === digest)) return false;
+
+    env = env.replace(new RegExp('^' + key + '=.*$', 'm'), `${key}=${gen()}`);
+    return true;
+  };
+
   const madeVault = ensure('AEON_VAULT_MASTER_KEY', () => crypto.randomBytes(32).toString('hex'));
-  ensure('AEON_MOBILE_SECRET', () => crypto.randomBytes(24).toString('hex'));
+  const newMobile = () => crypto.randomBytes(24).toString('hex');
+  ensure('AEON_MOBILE_SECRET', newMobile);
+  if (rotateCompromised('AEON_MOBILE_SECRET', newMobile)) {
+    ok('AEON_MOBILE_SECRET was a known-exposed value — rotated automatically.');
+  }
   fs.writeFileSync(ENV_PATH, env);
   if (madeVault) ok('Vault created — your API keys will be encrypted on this computer.');
   else ok('Vault key present.');
