@@ -1,8 +1,27 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, describe, expect, it } from 'vitest';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
+
+// AEON_SECRETS_DIR must be set BEFORE the require. endpoints.cjs resolves
+// SECRETS_DIR at module scope and mkdirSync's it there, so requiring this
+// module with the variable unset creates `secrets/` inside the repo.
+//
+// Harmless in itself — the directory is empty — but it is the same rule that
+// was learned expensively on 2026-08-03: a test may OBSERVE a live instance,
+// it may not PROVISION one. On a developer machine the directory already
+// exists, so this was invisible; it only showed up when a bare clone was
+// checked after a full run (BO-A stress test). A clean-room gate now asserts
+// the property directly rather than relying on someone thinking to look.
+const tempSecrets = fs.mkdtempSync(path.join(os.tmpdir(), 'aeon-lmstudio-'));
+process.env.AEON_SECRETS_DIR = tempSecrets;
+
 const endpoints = require('../src/kernel/endpoints.cjs');
+
+afterAll(() => { try { fs.rmSync(tempSecrets, { recursive: true, force: true }); } catch {} });
 
 // BO7 — the LM Studio host default lives in exactly one place (endpoints.cjs)
 // and is env-overridable; Settings resolves through it rather than hardcoding.

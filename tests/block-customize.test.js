@@ -39,9 +39,27 @@ beforeAll(async () => {
   });
 });
 
+const restore = () => {
+  for (const [f, raw] of Object.entries(BACKUP)) {
+    try { fs.writeFileSync(manifestPath(f), raw); } catch { /* best effort */ }
+  }
+};
+
+// Safety net. This test drives the REAL customize router, which resolves
+// BLOCKS_DIR from the install, so it genuinely mutates two committed manifests
+// rather than copies. afterAll restores them on a normal run — but a run that
+// dies (a failing assertion elsewhere aborting the worker, Ctrl-C, a killed
+// process) would leave the working tree dirty, which is the reason block
+// manifests have intermittently shown as modified in `git status`.
+//
+// A SIGKILL still defeats this; it is a mitigation, not a fix. Recorded as
+// known debt in tests/suite-touches-nothing.test.js rather than treated as
+// acceptable.
+process.on('exit', restore);
+
 afterAll(() => {
   if (server) server.close();
-  for (const [f, raw] of Object.entries(BACKUP)) fs.writeFileSync(manifestPath(f), raw);
+  restore();
 });
 
 const get = async url => {
