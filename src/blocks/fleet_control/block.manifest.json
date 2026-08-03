@@ -75,8 +75,43 @@
   },
   "routes": [
     {
+      "method": "GET",
+      "path": "/api/fleet/mission/:id",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/fleet/missions",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/hwfit/fit",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/hwfit/models",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/hwfit/profiles",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/hwfit/system",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/local-status",
+      "auth": true
+    },
+    {
       "method": "ALL",
-      "path": "/fleet/*",
+      "path": "/api/telemetry",
       "auth": true
     }
   ],

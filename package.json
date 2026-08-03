@@ -14,7 +14,7 @@
   "scripts": {
     "aeon": "node tools/aeon-cli.cjs",
     "dev": "vite",
-    "build": "node scripts/gen-vercel-mounts.cjs && node scripts/gen-block-docs.cjs && node tools/copy-assets.mjs && vite build",
+    "build": "node scripts/gen-vercel-mounts.cjs && node scripts/gen-block-routes.cjs && node scripts/gen-block-docs.cjs && node tools/copy-assets.mjs && vite build",
     "prep:mounts": "node scripts/gen-vercel-mounts.cjs",
     "prep:docs": "node scripts/gen-block-docs.cjs",
     "preview": "vite preview",
@@ -34,7 +34,8 @@
     "scan:release-gate": "npm run scan:no-ollama && npm run scan:paths",
     "migrate": "node tools/migrate.cjs",
     "canary": "node tools/rls-canary.cjs",
-    "start": "concurrently \"npm run dev\" \"npm run server\""
+    "start": "concurrently \"npm run dev\" \"npm run server\"",
+    "prep:routes": "node scripts/gen-block-routes.cjs"
   },
   "devDependencies": {
     "axios": "^1.16.0",

@@ -16,15 +16,5 @@
       "source": "/(.*)",
       "destination": "/index.html"
     }
-  ],
-  "crons": [
-    {
-      "path": "/api/sync/gas-backup",
-      "schedule": "0 0 * * *"
-    },
-    {
-      "path": "/api/cron/sweep",
-      "schedule": "0 2 * * *"
-    }
   ]
 }

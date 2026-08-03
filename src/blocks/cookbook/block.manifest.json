@@ -100,8 +100,93 @@
   },
   "routes": [
     {
-      "method": "ALL",
-      "path": "/cookbook/*",
+      "method": "POST",
+      "path": "/api/cookbook/delete-cache",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/cookbook/gpus",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/cookbook/hf-latest",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/cookbook/kill-pid",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/cookbook/local/catalog",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/cookbook/local/install",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/cookbook/local/install-runtime",
+      "auth": true
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/cookbook/local/model/:modelId",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/cookbook/local/status",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/cookbook/runtime",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/cookbook/state",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/cookbook/state",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/cookbook/task-stop/:sessionId",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/cookbook/task-stream/:sessionId",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/cookbook/tasks/status",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/model/cached",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/model/download",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/model/serve",
       "auth": true
     }
   ],

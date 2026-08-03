@@ -150,8 +150,18 @@
   },
   "routes": [
     {
-      "method": "ALL",
-      "path": "/master/*",
+      "method": "GET",
+      "path": "/api/master/ping",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/master/registry",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/master/widget",
       "auth": true
     }
   ],

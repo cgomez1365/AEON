@@ -80,54 +80,54 @@
   },
   "routes": [
     {
-      "method": "GET",
-      "path": "/api/token-analytics/heatmap",
-      "auth": false
-    },
-    {
-      "method": "GET",
-      "path": "/api/token-analytics/summary",
-      "auth": false
-    },
-    {
-      "method": "GET",
-      "path": "/api/token-analytics/daily/:date",
-      "auth": false
-    },
-    {
-      "method": "POST",
-      "path": "/api/token-analytics/record",
-      "auth": false
-    },
-    {
       "method": "POST",
       "path": "/api/activity/search",
-      "auth": false
+      "auth": true
     },
     {
       "method": "GET",
-      "path": "/api/telemetry",
-      "auth": false
+      "path": "/api/audit",
+      "auth": true
     },
     {
-      "method": "GET",
-      "path": "/api/telemetry/live",
-      "auth": false
+      "method": "POST",
+      "path": "/api/audit",
+      "auth": true
     },
     {
       "method": "GET",
       "path": "/api/pipeline-metrics",
-      "auth": false
+      "auth": true
     },
     {
       "method": "GET",
-      "path": "/api/audit",
-      "auth": false
+      "path": "/api/telemetry",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/telemetry/live",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/token-analytics/daily/:date",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/token-analytics/heatmap",
+      "auth": true
     },
     {
       "method": "POST",
-      "path": "/api/audit",
-      "auth": false
+      "path": "/api/token-analytics/record",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/token-analytics/summary",
+      "auth": true
     }
   ],
   "env": [

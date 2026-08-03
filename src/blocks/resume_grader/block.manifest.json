@@ -86,7 +86,7 @@
   "routes": [
     {
       "method": "ALL",
-      "path": "/resume_grader/*",
+      "path": "/api/resume-grader/grade",
       "auth": true
     }
   ],

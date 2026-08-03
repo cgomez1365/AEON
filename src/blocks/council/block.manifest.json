@@ -77,8 +77,78 @@
   },
   "routes": [
     {
-      "method": "ALL",
-      "path": "/council/*",
+      "method": "DELETE",
+      "path": "/api/compare/:compId",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/compare/:compId/vote",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/compare/history",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/compare/models",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/compare/record",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/compare/scoreboard",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/compare/start",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/council/debate/:id",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/council/debate/save",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/council/debates",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/council/members",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/council/members",
+      "auth": true
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/council/members/:id",
+      "auth": true
+    },
+    {
+      "method": "PUT",
+      "path": "/api/council/members/:id",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/council/models",
       "auth": true
     }
   ],

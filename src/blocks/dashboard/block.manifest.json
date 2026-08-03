@@ -111,64 +111,59 @@
   },
   "routes": [
     {
-      "method": "GET",
-      "path": "/api/chat",
-      "auth": false
-    },
-    {
-      "method": "POST",
-      "path": "/api/chat",
-      "auth": false
+      "method": "ALL",
+      "path": "/api/audit",
+      "auth": true
     },
     {
       "method": "DELETE",
       "path": "/api/chat",
-      "auth": false
+      "auth": true
     },
     {
       "method": "GET",
-      "path": "/api/terminal-stream",
-      "auth": false
-    },
-    {
-      "method": "GET",
-      "path": "/api/terminal-history",
-      "auth": false
+      "path": "/api/chat",
+      "auth": true
     },
     {
       "method": "POST",
-      "path": "/api/terminal-history",
-      "auth": false
-    },
-    {
-      "method": "POST",
-      "path": "/api/chat/stream",
-      "auth": false
+      "path": "/api/chat",
+      "auth": true
     },
     {
       "method": "POST",
       "path": "/api/chat/stop",
-      "auth": false
-    },
-    {
-      "method": "GET",
-      "path": "/api/audit",
-      "auth": false
+      "auth": true
     },
     {
       "method": "POST",
-      "path": "/api/audit",
-      "auth": false
+      "path": "/api/chat/stream",
+      "auth": true
     },
     {
-      "method": "GET",
+      "method": "ALL",
       "path": "/api/health",
-      "auth": false
+      "auth": true
+    },
+    {
+      "method": "ALL",
+      "path": "/api/pipeline-metrics",
+      "auth": true
     },
     {
       "method": "GET",
-      "path": "/api/pipeline-metrics",
-      "auth": false
+      "path": "/api/terminal-history",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/terminal-history",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/terminal-stream",
+      "auth": true
     }
   ],
   "env": [

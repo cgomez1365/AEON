@@ -116,7 +116,15 @@ const commands = {
     const m = JSON.parse(fs.readFileSync(mPath, 'utf8'));
     m.id = arg; m.route = `/${arg}`; m.label = arg.replace(/_/g, ' ');
     m.nav.hidden = false; m.nav.label = m.label;
-    m.routes = [{ method: 'ALL', path: `/${arg}/*`, auth: true }];
+    // Left empty on purpose. This line used to stamp
+    //   [{ method: 'ALL', path: `/${arg}/*`, auth: true }]
+    // and 15 of 17 manifests still carried that placeholder untouched — a
+    // declaration that matched no real mount point, under-declared any block
+    // owning a second prefix, and claimed `auth: true` for routes that are
+    // deliberately pre-auth. scripts/gen-block-routes.cjs fills this from the
+    // block's actual code during `npm run build`. A generated declaration
+    // cannot go stale; a hand-stamped guess starts wrong and stays wrong.
+    m.routes = [];
     m.description = '';
     fs.writeFileSync(mPath, JSON.stringify(m, null, 2));
     console.log(`✓ staging/${arg} created from _template. Edit it, then: aeon lint ${arg} && aeon promote ${arg}`);

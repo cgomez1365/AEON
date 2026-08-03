@@ -112,8 +112,113 @@
   },
   "routes": [
     {
-      "method": "ALL",
-      "path": "/host_os/*",
+      "method": "GET",
+      "path": "/api/desktop-tasks",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/desktop-tasks",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/force-sync",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/fs/delete",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/fs/list",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/fs/lock",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/fs/lock",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/fs/mkdir",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/fs/read",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/fs/serve",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/fs/upload",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/fs/write",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/gas/status",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/health",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/os/action",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/os/actions",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/os/open",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/sdi/schemas",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/sdi/validate",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/sdi/violations",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/system/restart",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/system/scan",
       "auth": true
     }
   ],

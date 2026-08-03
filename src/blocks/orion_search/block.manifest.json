@@ -84,8 +84,8 @@
   },
   "routes": [
     {
-      "method": "ALL",
-      "path": "/orion/*",
+      "method": "POST",
+      "path": "/api/orion/search",
       "auth": true
     }
   ],

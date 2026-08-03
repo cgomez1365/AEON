@@ -132,8 +132,113 @@
   },
   "routes": [
     {
-      "method": "ALL",
-      "path": "/security/*",
+      "method": "POST",
+      "path": "/api/auth/2fa/disable",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/auth/2fa/setup",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/auth/2fa/status",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/auth/2fa/verify",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/auth/change-password",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/auth/login",
+      "auth": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/auth/logout",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/auth/me",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/auth/profile",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/auth/sessions",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/auth/sessions/revoke",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/auth/setup",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/auth/status",
+      "auth": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/security/flush",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/security/heartbeat",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/security/lock",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/security/policy",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/security/policy",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/security/recovery/challenge",
+      "auth": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/security/recovery/reset",
+      "auth": false
+    },
+    {
+      "method": "POST",
+      "path": "/api/security/recovery/verify",
+      "auth": false
+    },
+    {
+      "method": "GET",
+      "path": "/api/security/shield",
       "auth": true
     }
   ],

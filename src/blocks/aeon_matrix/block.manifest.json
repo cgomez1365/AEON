@@ -173,8 +173,168 @@
   },
   "routes": [
     {
-      "method": "ALL",
-      "path": "/aeon_matrix/*",
+      "method": "GET",
+      "path": "/api/crn/second-brain/document",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/crn/second-brain/extract",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/crn/second-brain/graph",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/crn/second-brain/health",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/crn/second-brain/index-status",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/crn/second-brain/ingest/chat",
+      "auth": true
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/crn/second-brain/ingest/document",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/crn/second-brain/ingest/document",
+      "auth": true
+    },
+    {
+      "method": "PUT",
+      "path": "/api/crn/second-brain/ingest/document",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/crn/second-brain/ingest/scan-docs",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/crn/second-brain/pdf",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/crn/second-brain/pdf-text",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/crn/second-brain/raw",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/crn/second-brain/retrieve",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/crn/second-brain/search",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/crn/second-brain/tree",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/crn/second-brain/vault-push",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/crn/second-brain/vault-push/status",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/crn/second-brain/vendor/:file",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/crn/second-brain/visualizer",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/logistics/entries",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/logistics/entries",
+      "auth": true
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/logistics/entries/:id",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/logistics/sign",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/logistics/status",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/narrator/state",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/narrator/state",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/search",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/sync/:block",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/sync/:block",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/sync/:block/patch",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/sync/bulk-pull",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/sync/bulk-push",
       "auth": true
     }
   ],

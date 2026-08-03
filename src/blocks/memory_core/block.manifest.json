@@ -120,8 +120,38 @@
   },
   "routes": [
     {
-      "method": "ALL",
-      "path": "/memory/*",
+      "method": "GET",
+      "path": "/api/memory",
+      "auth": true
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/memory/:id",
+      "auth": true
+    },
+    {
+      "method": "PUT",
+      "path": "/api/memory/:id",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/memory/:id/pin",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/memory/add",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/memory/context",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/memory/distill",
       "auth": true
     }
   ],

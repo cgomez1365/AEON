@@ -103,8 +103,18 @@
   },
   "routes": [
     {
+      "method": "POST",
+      "path": "/api/fs/read",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/fs/write",
+      "auth": true
+    },
+    {
       "method": "ALL",
-      "path": "/files/*",
+      "path": "/api/notes",
       "auth": true
     }
   ],

@@ -94,8 +94,83 @@
   },
   "routes": [
     {
-      "method": "ALL",
-      "path": "/writer/*",
+      "method": "POST",
+      "path": "/api/writer/ai",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/writer/cowrite",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/writer/doc",
+      "auth": true
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/writer/doc/:id",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/writer/doc/:id",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/writer/doc/:id/to-memory",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/writer/docs",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/writer/export/:id.doc",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/writer/generate",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/writer/improve",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/writer/restore/:id/:ts",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/writer/style",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/writer/style/analyze",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/writer/templates",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/writer/version/:id/:ts",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/writer/versions/:id",
       "auth": true
     }
   ],

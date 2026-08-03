@@ -58,8 +58,18 @@
   },
   "routes": [
     {
-      "method": "ALL",
-      "path": "/__BLANK__/*",
+      "method": "GET",
+      "path": "/api/crn/__BLANK__/health",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/crn/__BLANK__/items",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/crn/__BLANK__/items",
       "auth": true
     }
   ],

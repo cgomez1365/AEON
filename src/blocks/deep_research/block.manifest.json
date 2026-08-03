@@ -96,8 +96,83 @@
   },
   "routes": [
     {
-      "method": "ALL",
-      "path": "/research/*",
+      "method": "DELETE",
+      "path": "/api/research/:sessionId",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/research/:sessionId/archive",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/research/:sessionId/hide-image",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/research/:sessionId/unhide-images",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/research/active",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/research/cancel/:sessionId",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/research/detail/:sessionId",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/research/library",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/research/report/:sessionId",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/research/result-peek/:sessionId",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/research/result/:sessionId",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/research/search",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/research/search/providers",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/research/start",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/research/status/:sessionId",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/research/stream/:sessionId",
       "auth": true
     }
   ],

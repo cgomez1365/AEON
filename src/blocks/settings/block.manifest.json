@@ -121,8 +121,213 @@
   },
   "routes": [
     {
-      "method": "ALL",
-      "path": "/settings/*",
+      "method": "GET",
+      "path": "/api/connections",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/connections",
+      "auth": true
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/connections/:id",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/connections/assign-role",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/connections/detect",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/connections/discover",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/connections/resolve/:role",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/connections/scan-all",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/connections/sync",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/prefs/:key",
+      "auth": true
+    },
+    {
+      "method": "PUT",
+      "path": "/api/prefs/:key",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/settings",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/settings",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/settings/block-config",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/settings/block-config",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/settings/block-config/auto",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/settings/block-layout",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/settings/block/:id",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/settings/blocks",
+      "auth": true
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/settings/cloud-provider/:provider",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/settings/connectivity",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/settings/connectivity/firebase/save",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/settings/connectivity/firebase/test",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/settings/connectivity/supabase/save",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/settings/connectivity/supabase/setup",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/settings/connectivity/supabase/sync",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/settings/connectivity/supabase/test",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/settings/connectivity/tunnel/start",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/settings/connectivity/tunnel/stop",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/settings/env",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/settings/export-bundle",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/settings/export-credentials",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/settings/nervous-system",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/settings/nl",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/settings/provider-blocks",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/settings/provider-details",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/settings/providers",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/settings/resolve-endpoint",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/settings/restart",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/settings/secrets",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/settings/setup-status",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/settings/test-provider/:id",
       "auth": true
     }
   ],
