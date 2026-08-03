@@ -23,8 +23,11 @@ import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 
 const require = createRequire(import.meta.url);
+
+
 const client  = require('../tools/terminal/client.cjs');
 const agent   = require('../tools/terminal/agent.cjs');
 

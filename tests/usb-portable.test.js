@@ -5,6 +5,8 @@ import os from 'os';
 import path from 'path';
 
 const require = createRequire(import.meta.url);
+
+
 const endpoints = require('../src/kernel/endpoints.cjs');
 const buildUsb = require('../scripts/build-usb.js');
 
