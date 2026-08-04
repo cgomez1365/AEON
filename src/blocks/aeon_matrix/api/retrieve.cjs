@@ -1,5 +1,4 @@
 /**
-const { isInside } = require('../../../kernel/pathContainment.cjs');
  * Second Brain — Retrieval API
  * Embeds the query (native local runtime) → cosine similarity against each document's
  * cached summary embedding in vault_index.json → reads the full text of the
@@ -25,6 +24,12 @@ const { isInside } = require('../../../kernel/pathContainment.cjs');
  * Vercel, so this doesn't function there either way.
  */
 const express = require('express');
+// Was pasted INSIDE the JSDoc block above, so it never executed: every call to
+// resolveIndexedPath() threw "isInside is not defined" and retrieval returned
+// nothing for anyone. Silent because the caller catches per-document errors and
+// simply skipped every result — search looked empty rather than broken.
+// Found 2026-08-04 by driving /ask against a real Vault.
+const { isInside } = require('../../../kernel/pathContainment.cjs');
 const path    = require('path');
 const fs      = require('fs');
 const { loadExtractors, extractText, embed, cosineSimilarity, EMBED_MODEL } = require('./_lib.cjs');
@@ -131,6 +136,132 @@ module.exports = function retrieveFactory(deps) {
     } catch (err) {
       console.warn('[RETRIEVE] error:', err.message);
       res.json({ documents: [], error: err.message });
+    }
+  });
+
+  // ── POST /crn/second-brain/ask — the last hop ─────────────────────────────
+  //
+  // Retrieval already scored the Table of Contents and read the matching files.
+  // Everything up to here costs ZERO provider tokens: matching happens against
+  // cached summaries and vectors, never against whole documents. What was
+  // missing was the final step — hand those files to a model and get a written
+  // answer back.
+  //
+  // The cost control IS the architecture. The index narrows the vault to a
+  // handful of documents BEFORE any model is involved, so this is one call with
+  // a few files rather than a rate-limit problem. That is why a local 4B
+  // reading three relevant documents beats a frontier model guessing without
+  // them.
+  //
+  // CITATION DOCTRINE, enforced rather than described: the model sees ONLY the
+  // documents retrieval returned. Nothing clears the threshold → no model call
+  // at all, and we say so. An answer with no source is the failure mode this
+  // whole subsystem exists to avoid.
+  router.post('/crn/second-brain/ask', async (req, res) => {
+    const { query, k, model: modelOverride } = req.body || {};
+    if (!query || typeof query !== 'string') {
+      return res.status(400).json({ ok: false, error: 'query required' });
+    }
+
+    const kernelLLM = deps?.kernelLLM;
+    if (typeof kernelLLM !== 'function') {
+      return res.status(503).json({
+        ok: false, error: 'no_model',
+        message: 'No AI service is available to this block.',
+        remedy: 'Assign a model to the chat role in Settings → Model Assignment, or install a local model in Cookbook.',
+      });
+    }
+
+    let docs;
+    try {
+      docs = await retrieve(query, k || DEFAULT_K);
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: 'retrieval_failed', message: e.message });
+    }
+
+    // Answering costs a model call; searching does not. So /ask holds a HIGHER
+    // bar than /recall, and that bar is measured rather than guessed.
+    //
+    // Measured 2026-08-04 with nomic-embed-text-q8 against a real Vault:
+    //   real question, genuinely covered      top similarity 0.62
+    //   nonsense ("quantum tarot flamingo")   top similarity 0.41
+    // The browse threshold (0.35) admits that noise, so before this check a
+    // meaningless question still reached the model. Cheap to answer badly is
+    // still the thing this architecture exists to avoid.
+    const ASK_MIN_SIMILARITY = 0.45;
+    const best = docs.length ? Math.max(...docs.map(d => d.similarity || 0)) : 0;
+    if (docs.length && best < ASK_MIN_SIMILARITY) {
+      return res.json({
+        ok: true, answered: false, reason: 'weak_matches',
+        message: `Nothing in the index is close enough to answer that (best match ${best.toFixed(2)}, needs ${ASK_MIN_SIMILARITY}).`,
+        remedy: 'Rephrase using words closer to how you wrote it, or run /index-brain if the Vault has changed. Use search to browse the near-misses.',
+        bestSimilarity: Number(best.toFixed(3)),
+        citations: docs.map((d, i) => ({
+          n: i + 1, id: d.id, title: d.metadata?.source || d.id,
+          similarity: Number((d.similarity || 0).toFixed(3)),
+        })),
+      });
+    }
+
+    // No sources → no answer, and no tokens spent finding that out.
+    if (!docs.length) {
+      return res.json({
+        ok: true, answered: false, reason: 'no_matches',
+        message: 'Nothing in the index clears the similarity threshold for that question.',
+        remedy: 'Run /index-brain if the Vault has changed, or rephrase. Documents indexed without an embedding model are never matched.',
+        citations: [],
+      });
+    }
+
+    const sources = docs.map((d, i) => ({
+      n: i + 1,
+      id: d.id,
+      title: d.metadata?.source || d.id,
+      similarity: Number(d.similarity?.toFixed?.(3) ?? d.similarity),
+    }));
+
+    const context = docs
+      .map((d, i) => `[${i + 1}] ${d.metadata?.source || d.id}\n${d.content}`)
+      .join('\n\n---\n\n');
+
+    const prompt = [
+      'Answer the question using ONLY the numbered documents below.',
+      'Cite the documents you used as [1], [2] and so on, inline.',
+      'If the documents do not contain the answer, say exactly that — do not use outside knowledge.',
+      '',
+      `QUESTION: ${query}`,
+      '',
+      'DOCUMENTS:',
+      context,
+    ].join('\n');
+
+    try {
+      const out = await kernelLLM(prompt, { role: 'chat', ...(modelOverride ? { model: modelOverride } : {}) });
+      const answer = typeof out === 'string' ? out : (out?.text || '');
+      if (!answer.trim()) {
+        return res.status(502).json({
+          ok: false, error: 'empty_answer',
+          message: 'The model returned nothing. Check the chat model in Settings.',
+          citations: sources,
+        });
+      }
+      res.json({
+        ok: true, answered: true,
+        answer: answer.trim(),
+        citations: sources,
+        documentsUsed: docs.length,
+        // Roughly what this cost, so the operator can see the index doing its job.
+        contextChars: context.length,
+        provider: out?.provider || null,
+        model: out?.model || null,
+      });
+    } catch (e) {
+      res.status(502).json({
+        ok: false, error: 'model_failed',
+        message: e.message,
+        remedy: 'Check the chat role in Settings → Model Assignment, or install a local model in Cookbook.',
+        citations: sources,
+      });
     }
   });
 

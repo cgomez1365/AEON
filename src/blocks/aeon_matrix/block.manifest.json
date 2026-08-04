@@ -138,6 +138,16 @@
           }
         ],
         "mode": "instant"
+      },
+      {
+        "cmd": "/ask",
+        "desc": "Answer a question from your Vault documents, with citations",
+        "method": "POST",
+        "route": "/api/crn/second-brain/ask",
+        "param": "query",
+        "display": "answer",
+        "mode": "instant",
+        "category": "content"
       }
     ],
     "settings_keys": [
@@ -172,6 +182,11 @@
     ]
   },
   "routes": [
+    {
+      "method": "POST",
+      "path": "/api/crn/second-brain/ask",
+      "auth": true
+    },
     {
       "method": "GET",
       "path": "/api/crn/second-brain/document",

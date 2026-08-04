@@ -5,7 +5,70 @@
  * Server routes stay in the /crn/second-brain/* namespace (URLs ≠ names).
  */
 import React, { lazy, Suspense, useState, useCallback } from 'react';
-import { Search, Loader, Network, FileText, Brain, Wrench, FolderKanban, BookOpen, Archive } from 'lucide-react';
+import { Search, Loader, Network, FileText, Brain, Wrench, FolderKanban, BookOpen, Archive, HelpCircle } from 'lucide-react';
+
+// ── What the Matrix needs, and what it only *prefers* ──────────────────────
+//
+// Written after a real question: "is the embedding model still necessary?"
+// Nothing in the UI answered it, so the honest answer lived only in a source
+// comment. Same idea as Cookbook's guide — one short idea per card, no ML
+// background assumed, and every claim states whether the thing DEGRADES or
+// BREAKS without it. Those are different, and conflating them is how people
+// end up installing things they don't need or skipping things they do.
+const HELP_CARDS = [
+  {
+    title: 'What the Matrix actually is',
+    need: 'core',
+    body: [
+      "Your Vault is a folder of ordinary files — notes, PDFs, documents. The Matrix is the layer that reads them so the rest of AEON can find things inside them.",
+      "It keeps a Table of Contents (vault_index.json): one small entry per file with a title, a summary, and tags. That file is the whole trick — it means AEON can find the right document without ever reading your entire Vault.",
+    ],
+  },
+  {
+    title: 'Why that keeps your costs down',
+    need: 'core',
+    body: [
+      "Searching happens against those small summaries, not the full documents. A search costs you nothing — no provider is contacted, no tokens are billed.",
+      "Only once the right few files are identified does anything read them in full. So a question touches three documents, not three thousand.",
+    ],
+    callout: "This is why a small model on your own machine can answer well: it only ever has to read what matters.",
+  },
+  {
+    title: 'The embedding model — helpful, not required',
+    need: 'optional',
+    body: [
+      "An embedding model turns text into numbers that capture meaning, so \"how do I rotate credentials\" can match a note titled \"key lifecycle\" — different words, same idea.",
+      "Without it, search still works: it falls back to matching words instead of meaning. You will find things, as long as you remember roughly what you wrote.",
+    ],
+    callout: "Absent, it degrades quality. It never breaks anything. Install nomic-embed-text (0.15 GB) in Cookbook if you want meaning-based recall.",
+  },
+  {
+    title: 'Links — [[wikilinks]] and refs',
+    need: 'optional',
+    body: [
+      "Write [[Another Note]] inside a markdown file and the Matrix draws a real connection between them in the graph. Memories saved by AEON already record their own refs the same way.",
+      "Before this existed the graph only showed which folder a file lived in. Useful, but it told you nothing about how your ideas relate.",
+    ],
+    callout: "Nothing to install. Write links if you want them; the graph works either way.",
+  },
+  {
+    title: 'Asking questions instead of searching',
+    need: 'core',
+    body: [
+      "Search hands you documents. Ask reads them and answers, citing which document each part came from.",
+      "If nothing in your Vault is relevant, it says so rather than guessing — and it does not contact a model at all, so a bad question costs nothing.",
+    ],
+    callout: "Terminal: /recall finds documents. Ask goes one step further and answers from them.",
+  },
+  {
+    title: 'If recall finds nothing',
+    need: 'core',
+    body: [
+      "Most often the index is simply stale — run /index-brain after adding files.",
+      "If you added files before installing an embedding model, those entries have no vector and meaning-based search skips them. Re-indexing backfills them automatically.",
+    ],
+  },
+];
 
 const Visualizer = lazy(() =>
   import('./components/SecondBrainVisualizer').catch(() => ({
@@ -84,7 +147,7 @@ export default function AeonMatrix() {
           AGENT MEMORY LAYER
         </span>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
-          {[['search', 'Search', Search], ['graph', 'Graph', Network]].map(([id, label, Icon]) => (
+          {[['search', 'Search', Search], ['graph', 'Graph', Network], ['help', 'Help', HelpCircle]].map(([id, label, Icon]) => (
             <button key={id} onClick={() => setView(id)} style={{
               display: 'flex', alignItems: 'center', gap: 5, padding: '6px 14px', borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: 'pointer',
               border: view === id ? '1px solid var(--accent)' : '1px solid var(--border)',
@@ -98,7 +161,40 @@ export default function AeonMatrix() {
         Every skill, project, memory, and document the agents can reach — one keyword away.
       </p>
 
-      {view === 'graph' ? (
+      {view === 'help' ? (
+        <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit,minmax(300px,1fr))', paddingBottom: 24 }}>
+          {HELP_CARDS.map(card => (
+            <div key={card.title} style={{
+              border: '1px solid var(--border)', borderRadius: 8, padding: '14px 16px',
+              background: 'var(--surface-1)',
+              borderLeft: card.need === 'core' ? '3px solid var(--accent)' : '3px solid var(--border)',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                <h3 style={{ margin: 0, fontSize: 13.5, fontWeight: 700 }}>{card.title}</h3>
+                <span style={{
+                  marginLeft: 'auto', fontSize: 9, letterSpacing: '.1em', padding: '2px 7px',
+                  borderRadius: 999, fontFamily: 'var(--font-mono)',
+                  border: '1px solid var(--border)',
+                  color: card.need === 'core' ? 'var(--accent)' : 'var(--text-faint)',
+                }}>
+                  {card.need === 'core' ? 'ALWAYS ON' : 'OPTIONAL'}
+                </span>
+              </div>
+              {card.body.map((p, i) => (
+                <p key={i} style={{ margin: '0 0 8px', fontSize: 12.5, lineHeight: 1.6, color: 'var(--text-dim)' }}>{p}</p>
+              ))}
+              {card.callout && (
+                <div style={{
+                  marginTop: 4, paddingTop: 9, borderTop: '1px dashed var(--border)',
+                  fontSize: 11.5, lineHeight: 1.55, color: 'var(--text)',
+                }}>
+                  {card.callout}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      ) : view === 'graph' ? (
         <Suspense fallback={<div style={{ padding: 40, color: 'var(--text-dim)', textAlign: 'center' }}>Loading graph…</div>}>
           <Visualizer />
         </Suspense>

@@ -244,7 +244,9 @@ module.exports = function secondBrainFactory(deps) {
         color: TYPE_COLORS[ext] || TYPE_COLORS.default,
         size: item.type === 'dir' ? 3 : 1,
       });
-      if (parentId) links.push({ source: parentId, target: id });
+      // `contains` = the folder hierarchy. Kept distinct from `link` below so
+      // the graph can show structure and meaning as different things.
+      if (parentId) links.push({ source: parentId, target: id, kind: 'contains' });
       if (item.children) {
         const sub = treeToGraph(item.children, id, section);
         nodes.push(...sub.nodes);
@@ -252,6 +254,113 @@ module.exports = function secondBrainFactory(deps) {
       }
     }
     return { nodes, links };
+  }
+
+  // ── Wikilinks and refs → real graph edges ─────────────────────────────────
+  //
+  // The graph used to be built from the folder tree alone: every edge meant
+  // "lives inside", never "relates to". That renders like Obsidian's graph
+  // while encoding something quite different — containment, not knowledge.
+  //
+  // The ingredients were already on disk and unread. memory_core's mdMirror
+  // writes a `refs: [...]` array into every memory's YAML frontmatter, and
+  // markdown notes carry [[wikilinks]]. Nothing parsed either one.
+  //
+  // Text-ish files only, size-capped, and failures are skipped rather than
+  // fatal: the graph must still render if one file is unreadable.
+  const LINKABLE_EXT = new Set(['md', 'mdx', 'markdown', 'txt']);
+  const MAX_LINK_SCAN_BYTES = 512 * 1024;
+
+  const WIKILINK_RE = /\[\[([^\]|#]+)(?:[|#][^\]]*)?\]\]/g;
+
+  /** `refs: ["a", "b"]` or `refs: [a, b]` from YAML frontmatter. */
+  function parseFrontmatterRefs(text) {
+    const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
+    if (!fm) return [];
+    const line = /^refs:\s*\[(.*)\]\s*$/m.exec(fm[1]);
+    if (!line) return [];
+    return line[1].split(',')
+      .map(s => s.trim().replace(/^["']|["']$/g, ''))
+      .filter(Boolean);
+  }
+
+  /**
+   * Resolve a link target to a node id.
+   * Obsidian matches by note NAME, not path, so we do the same: compare the
+   * basename without extension, case-insensitively. Ambiguous names resolve to
+   * the first match — same as Obsidian, and better than dropping the edge.
+   */
+  /**
+   * Normalise a note name for matching.
+   *
+   * Separators are collapsed because people do not type filenames — they type
+   * titles. A note saved as `recovery-codes.md` is referred to as
+   * [[recovery codes]] or [[Recovery_Codes]], and treating those as three
+   * different notes produces a graph with no edges and no explanation. Strict
+   * filename matching found ZERO links on the first live run for exactly this
+   * reason.
+   */
+  const normaliseName = (s) => String(s)
+    .replace(/\.[^.]+$/, '')          // drop extension
+    .toLowerCase()
+    .replace(/[\s_-]+/g, ' ')         // space, underscore, hyphen are the same
+    .trim();
+
+  function buildNameIndex(nodes) {
+    const byName = new Map();
+    for (const n of nodes) {
+      if (n.type !== 'file') continue;
+      const base = normaliseName(n.name);
+      if (!byName.has(base)) byName.set(base, n.id);
+    }
+    return byName;
+  }
+
+  function addKnowledgeLinks(allNodes, allLinks, sections) {
+    const byName = buildNameIndex(allNodes);
+    const nodeIds = new Set(allNodes.map(n => n.id));
+    let added = 0, scanned = 0;
+
+    for (const node of allNodes) {
+      if (node.type !== 'file') continue;
+      if (!LINKABLE_EXT.has(node.ext)) continue;
+
+      // node.id is `<SectionId>/<relative path>` — map back to disk.
+      let full = null;
+      for (const [sectionId, dir] of Object.entries(sections)) {
+        if (node.id === sectionId || node.id.startsWith(sectionId + '/')) {
+          const rel = node.id.slice(sectionId.length).replace(/^\//, '');
+          full = path.join(dir, ...rel.split('/'));
+          break;
+        }
+      }
+      if (!full || !fs.existsSync(full)) continue;
+
+      let text;
+      try {
+        if (fs.statSync(full).size > MAX_LINK_SCAN_BYTES) continue;
+        text = fs.readFileSync(full, 'utf8');
+      } catch { continue; }
+      scanned++;
+
+      const targets = new Set();
+      let m;
+      WIKILINK_RE.lastIndex = 0;
+      while ((m = WIKILINK_RE.exec(text))) targets.add(m[1].trim());
+      for (const r of parseFrontmatterRefs(text)) targets.add(r);
+
+      for (const t of targets) {
+        if (!t) continue;
+        // A ref may already be a full node id, or a bare note name.
+        const direct = nodeIds.has(t) ? t : null;
+        const byBase = byName.get(normaliseName(t));
+        const target = direct || byBase;
+        if (!target || target === node.id) continue;
+        allLinks.push({ source: node.id, target, kind: 'link' });
+        added++;
+      }
+    }
+    return { added, scanned };
   }
 
   router.get('/crn/second-brain/graph', (_req, res) => {
@@ -316,7 +425,30 @@ module.exports = function secondBrainFactory(deps) {
         if (allNodes.some(n => n.id === sec)) allLinks.push({ source: 'Vault', target: sec });
       }
     }
-    res.json({ nodes: allNodes, links: allLinks });
+
+    // Knowledge edges last, so a parsing failure can never cost the structural
+    // graph. This is what turns a folder picture into a knowledge graph.
+    let linkStats = { added: 0, scanned: 0 };
+    try {
+      linkStats = addKnowledgeLinks(allNodes, allLinks, {
+        Vault: BRAIN_DIR,
+        'Vault/Reading_Library': LIBRARY_DIR,
+        'Vault/Saved_Artifacts': ARTIFACTS_DIR,
+      });
+    } catch (e) {
+      console.warn('[GRAPH] knowledge-link pass failed, structure still served:', e.message);
+    }
+
+    res.json({
+      nodes: allNodes,
+      links: allLinks,
+      stats: {
+        nodes: allNodes.length,
+        containsLinks: allLinks.filter(l => l.kind !== 'link').length,
+        knowledgeLinks: linkStats.added,
+        filesScannedForLinks: linkStats.scanned,
+      },
+    });
   });
 
   return router;
