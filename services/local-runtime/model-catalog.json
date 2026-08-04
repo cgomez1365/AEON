@@ -1,12 +1,12 @@
 {
-  "_comment": "Curated GGUF model catalog. All models are fetched from Hugging Face Hub using direct .gguf download URLs, from ungated repositories only — a gated repo would need an auth token we must never ship. Every sha256 below was computed from the downloaded bytes, not copied from a page. No model can reach state=ready in the registry without a verified hash.",
+  "_comment": "Curated GGUF model catalog. All models are fetched from Hugging Face Hub using direct .gguf download URLs, from ungated repositories only \u2014 a gated repo would need an auth token we must never ship. Every sha256 below was computed from the downloaded bytes, not copied from a page. No model can reach state=ready in the registry without a verified hash.",
   "schemaVersion": 1,
   "updatedAt": "2026-07-31T21:42:59.753Z",
   "models": [
     {
       "id": "qwen3-1.7b-q8",
       "displayName": "Qwen3 1.7B (Q8_0)",
-      "description": "Alibaba's Qwen3 1.7B. The starter model — runs on a laptop with no graphics card.",
+      "description": "Alibaba's Qwen3 1.7B. The starter model \u2014 runs on a laptop with no graphics card.",
       "capabilities": [
         "chat"
       ],
@@ -30,7 +30,7 @@
     {
       "id": "qwen3-4b-q4",
       "displayName": "Qwen3 4B (Q4_K_M)",
-      "description": "Qwen3 4B — better reasoning than 1.7B, still runs comfortably on 8GB RAM.",
+      "description": "Qwen3 4B \u2014 better reasoning than 1.7B, still runs comfortably on 8GB RAM.",
       "capabilities": [
         "chat"
       ],
@@ -52,7 +52,7 @@
     {
       "id": "phi4-mini-q4",
       "displayName": "Phi-4 Mini (Q4_K_M)",
-      "description": "Microsoft Phi-4 Mini — strong reasoning and math for a 3.8B model. Runs on 4GB RAM.",
+      "description": "Microsoft Phi-4 Mini \u2014 strong reasoning and math for a 3.8B model. Runs on 4GB RAM.",
       "capabilities": [
         "chat"
       ],
@@ -98,7 +98,7 @@
     {
       "id": "llama3-8b-q4",
       "displayName": "Llama 3.1 8B Instruct (Q4_K_M)",
-      "description": "Meta's Llama 3.1 8B — strong general-purpose chat model. Requires 8GB+ RAM.",
+      "description": "Meta's Llama 3.1 8B \u2014 strong general-purpose chat model. Requires 8GB+ RAM.",
       "capabilities": [
         "chat"
       ],
@@ -117,6 +117,139 @@
       ],
       "minRAMMB": 10240,
       "homepage": "https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF"
+    },
+    {
+      "id": "llama32-1b-q8",
+      "displayName": "Llama 3.2 1B Instruct (Q8_0)",
+      "description": "Meta's smallest instruct model. Fast on any machine, good for quick tasks.",
+      "capabilities": [
+        "chat"
+      ],
+      "quantization": "Q8_0",
+      "contextCeiling": 131072,
+      "bytes": 1321083008,
+      "license": "Llama-3.2",
+      "licenseUrl": "https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF",
+      "filename": "Llama-3.2-1B-Instruct-Q8_0.gguf",
+      "url": "https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q8_0.gguf",
+      "sha256": "432f310a77f4650a88d0fd59ecdd7cebed8d684bafea53cbff0473542964f0c3",
+      "relPathTemplate": "local-runtime/models/llama32-1b-q8/Llama-3.2-1B-Instruct-Q8_0.gguf",
+      "tags": [],
+      "minRAMMB": 2048
+    },
+    {
+      "id": "llama32-3b-q4",
+      "displayName": "Llama 3.2 3B Instruct (Q4_K_M)",
+      "description": "Meta's 3B instruct model \u2014 a solid general-purpose default.",
+      "capabilities": [
+        "chat"
+      ],
+      "quantization": "Q4_K_M",
+      "contextCeiling": 131072,
+      "bytes": 2019377696,
+      "license": "Llama-3.2",
+      "licenseUrl": "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF",
+      "filename": "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+      "url": "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+      "sha256": "6c1a2b41161032677be168d354123594c0e6e67d2b9227c84f296ad037c728ff",
+      "relPathTemplate": "local-runtime/models/llama32-3b-q4/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+      "tags": [],
+      "minRAMMB": 2560
+    },
+    {
+      "id": "phi35-mini-q4",
+      "displayName": "Phi-3.5 Mini Instruct (Q4_K_M)",
+      "description": "Microsoft's Phi-3.5 Mini. Strong reasoning for its size.",
+      "capabilities": [
+        "chat"
+      ],
+      "quantization": "Q4_K_M",
+      "contextCeiling": 131072,
+      "bytes": 2393232672,
+      "license": "MIT",
+      "licenseUrl": "https://huggingface.co/bartowski/Phi-3.5-mini-instruct-GGUF",
+      "filename": "Phi-3.5-mini-instruct-Q4_K_M.gguf",
+      "url": "https://huggingface.co/bartowski/Phi-3.5-mini-instruct-GGUF/resolve/main/Phi-3.5-mini-instruct-Q4_K_M.gguf",
+      "sha256": "e4165e3a71af97f1b4820da61079826d8752a2088e313af0c7d346796c38eff5",
+      "relPathTemplate": "local-runtime/models/phi35-mini-q4/Phi-3.5-mini-instruct-Q4_K_M.gguf",
+      "tags": [],
+      "minRAMMB": 3072
+    },
+    {
+      "id": "gemma2-2b-q4",
+      "displayName": "Gemma 2 2B Instruct (Q4_K_M)",
+      "description": "Google's Gemma 2 2B, instruction tuned.",
+      "capabilities": [
+        "chat"
+      ],
+      "quantization": "Q4_K_M",
+      "contextCeiling": 8192,
+      "bytes": 1708582752,
+      "license": "Gemma",
+      "licenseUrl": "https://huggingface.co/bartowski/gemma-2-2b-it-GGUF",
+      "filename": "gemma-2-2b-it-Q4_K_M.gguf",
+      "url": "https://huggingface.co/bartowski/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf",
+      "sha256": "e0aee85060f168f0f2d8473d7ea41ce2f3230c1bc1374847505ea599288a7787",
+      "relPathTemplate": "local-runtime/models/gemma2-2b-q4/gemma-2-2b-it-Q4_K_M.gguf",
+      "tags": [],
+      "minRAMMB": 2048
+    },
+    {
+      "id": "qwen25-coder-1.5b-q8",
+      "displayName": "Qwen2.5 Coder 1.5B (Q8_0)",
+      "description": "Code-specialised. Completion, explanation and refactoring.",
+      "capabilities": [
+        "chat"
+      ],
+      "quantization": "Q8_0",
+      "contextCeiling": 32768,
+      "bytes": 1646573344,
+      "license": "Apache-2.0",
+      "licenseUrl": "https://huggingface.co/bartowski/Qwen2.5-Coder-1.5B-Instruct-GGUF",
+      "filename": "Qwen2.5-Coder-1.5B-Instruct-Q8_0.gguf",
+      "url": "https://huggingface.co/bartowski/Qwen2.5-Coder-1.5B-Instruct-GGUF/resolve/main/Qwen2.5-Coder-1.5B-Instruct-Q8_0.gguf",
+      "sha256": "717ed8f7110e9ffc8a0e1a607ec131aa9ee3a8d69d5a6e11b5e15ed7b0f6af4c",
+      "relPathTemplate": "local-runtime/models/qwen25-coder-1.5b-q8/Qwen2.5-Coder-1.5B-Instruct-Q8_0.gguf",
+      "tags": [],
+      "minRAMMB": 2048
+    },
+    {
+      "id": "smollm2-1.7b-q8",
+      "displayName": "SmolLM2 1.7B Instruct (Q8_0)",
+      "description": "HuggingFace's SmolLM2 \u2014 built for on-device use.",
+      "capabilities": [
+        "chat"
+      ],
+      "quantization": "Q8_0",
+      "contextCeiling": 8192,
+      "bytes": 1820414944,
+      "license": "Apache-2.0",
+      "licenseUrl": "https://huggingface.co/bartowski/SmolLM2-1.7B-Instruct-GGUF",
+      "filename": "SmolLM2-1.7B-Instruct-Q8_0.gguf",
+      "url": "https://huggingface.co/bartowski/SmolLM2-1.7B-Instruct-GGUF/resolve/main/SmolLM2-1.7B-Instruct-Q8_0.gguf",
+      "sha256": "0c6e8955788b1253f418c354a4bdc4cf507b8cfe49c48bb10c7c58ae713cfa2a",
+      "relPathTemplate": "local-runtime/models/smollm2-1.7b-q8/SmolLM2-1.7B-Instruct-Q8_0.gguf",
+      "tags": [],
+      "minRAMMB": 2048
+    },
+    {
+      "id": "mistral-7b-v03-q4",
+      "displayName": "Mistral 7B Instruct v0.3 (Q4_K_M)",
+      "description": "A capable 7B general model. Needs more memory but answers better.",
+      "capabilities": [
+        "chat"
+      ],
+      "quantization": "Q4_K_M",
+      "contextCeiling": 32768,
+      "bytes": 4372812000,
+      "license": "Apache-2.0",
+      "licenseUrl": "https://huggingface.co/bartowski/Mistral-7B-Instruct-v0.3-GGUF",
+      "filename": "Mistral-7B-Instruct-v0.3-Q4_K_M.gguf",
+      "url": "https://huggingface.co/bartowski/Mistral-7B-Instruct-v0.3-GGUF/resolve/main/Mistral-7B-Instruct-v0.3-Q4_K_M.gguf",
+      "sha256": "1270d22c0fbb3d092fb725d4d96c457b7b687a5f5a715abe1e818da303e562b6",
+      "relPathTemplate": "local-runtime/models/mistral-7b-v03-q4/Mistral-7B-Instruct-v0.3-Q4_K_M.gguf",
+      "tags": [],
+      "minRAMMB": 4608
     }
   ]
 }

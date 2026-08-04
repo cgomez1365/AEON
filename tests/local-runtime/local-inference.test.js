@@ -94,11 +94,34 @@ describe('starter model policy', () => {
     }
   });
 
-  it('picks the recommended model on every realistic machine size', () => {
-    for (const ram of [4096, 8192, 16384, 32768]) {
+  it('picks the recommended model whenever it fits the budget', () => {
+    // The budget is RAM x 0.5 (provision.cjs) — the OS and a browser need room.
+    // The recommended model declares 3072 MB, so it fits from 8 GB upward.
+    for (const ram of [8192, 16384, 32768, 65536]) {
       const picked = pickStarterModel(CATALOG, { totalRamMB: ram });
       expect((picked.tags || []).includes('recommended'), `${ram}MB RAM → ${picked.id}`).toBe(true);
     }
+  });
+
+  it('on a 4 GB machine takes the smallest model that fits, not the recommended one', () => {
+    // This case previously asserted "recommended" and passed BY ACCIDENT.
+    // At 4 GB the budget is 2048 MB and the recommended model needs 3072, so it
+    // never fitted; with only five catalogue entries NOTHING fitted, `fits` was
+    // empty, and the fallback ("smallest overall") happened to return the
+    // recommended model. The assertion was right for the wrong reason.
+    //
+    // The catalogue now carries models that genuinely fit 2048 MB, so the
+    // picker correctly prefers one. That is better product behaviour, and the
+    // test says so rather than pinning the accident. (BO-B1 stress run,
+    // 2026-08-04.)
+    const picked = pickStarterModel(CATALOG, { totalRamMB: 4096 });
+    expect(picked.minRAMMB).toBeLessThanOrEqual(2048);
+    expect((picked.capabilities || []).includes('chat')).toBe(true);
+
+    const smallestFitting = CATALOG.models
+      .filter(m => (m.capabilities || []).includes('chat') && (m.minRAMMB || 0) <= 2048)
+      .sort((a, b) => a.minRAMMB - b.minRAMMB)[0];
+    expect(picked.id).toBe(smallestFitting.id);
   });
 
   it('still returns something on a machine too small for anything', () => {

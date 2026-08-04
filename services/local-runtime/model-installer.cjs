@@ -129,6 +129,24 @@ async function installModel({ dataRoot, modelId, onProgress, onStatus } = {}) {
 
   assertHashVerified('Model', modelId, entry.sha256, 'model-catalog.json');
 
+  // Validate the catalogue entry against the registry's contract BEFORE
+  // downloading anything.
+  //
+  // Found by the 2026-08-04 stress run: a catalogue entry declared capability
+  // "code", which is not in the registry's allow-list. The download completed —
+  // 1.65 GB — and only THEN did the registry write fail validation. The
+  // operator paid full bandwidth for an entry that could never be installed.
+  // Anything knowable up front must be checked up front.
+  const ALLOWED_CAPS = new Set(['chat', 'embed', 'vision', 'tools']);
+  const badCaps = (entry.capabilities || []).filter(c => !ALLOWED_CAPS.has(c));
+  if (badCaps.length) {
+    throw new Error(
+      `Catalogue entry "${modelId}" declares unsupported capability: ${badCaps.join(', ')}. ` +
+      `Allowed: ${[...ALLOWED_CAPS].join(', ')}. Fix model-catalog.json — refusing to download ` +
+      `${((entry.bytes || 0) / 1e9).toFixed(2)} GB for an entry that cannot be registered.`
+    );
+  }
+
   const reg = R.createRegistry(dataRoot);
 
   // Already ready?
