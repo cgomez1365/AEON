@@ -102,7 +102,34 @@ async function inferStream(prompt, opts = {}, onToken) {
  * needed to protect — so this hung forever with no error and no log.
  * See server-session.cjs.
  */
+// ── One machine, one slot ──────────────────────────────────────────────────
+//
+// llama.cpp in server mode does one inference at a time. Without a queue,
+// concurrent callers all fire at the single slot, each waits behind the others
+// inside its own request, and every one of them blows the 180 s request
+// timeout.
+//
+// Measured 2026-08-04 on a bare clone: ONE ask answered in 19 s; FOUR parallel
+// asks all failed at exactly 180.2 s with "The operation was aborted due to
+// timeout". Not a slow answer — no answer at all, for anybody.
+//
+// queue.cjs was written for exactly this, documented for exactly this, and was
+// never wired to anything. Serializing turns four timeouts into four answers,
+// and a genuine overload into an immediate honest "busy" instead of a
+// three-minute stall.
+const { InferenceQueue } = require('./queue.cjs');
+const _queue = new InferenceQueue();
+
 async function _run(prompt, opts = {}, onToken) {
+  return _queue.enqueue(() => _runNow(prompt, opts, onToken));
+}
+
+/** Queue depth/busy state, so a UI can say "waiting" rather than hang. */
+function queueState() {
+  return { depth: _queue.depth, busy: _queue.busy };
+}
+
+async function _runNow(prompt, opts = {}, onToken) {
   const t0 = Date.now();
   const { session, modelId } = await _sessionForModel(opts.model);
 
@@ -247,4 +274,4 @@ async function _sessionForModel(modelId) {
   return { session, modelId: model.id };
 }
 
-module.exports = { isAvailable, defaultModel, infer, inferStream, embed, status, shutdown, ensureLocalReady };
+module.exports = { isAvailable, defaultModel, infer, inferStream, embed, status, shutdown, ensureLocalReady, queueState };

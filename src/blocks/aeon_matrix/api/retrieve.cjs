@@ -179,21 +179,50 @@ module.exports = function retrieveFactory(deps) {
       return res.status(500).json({ ok: false, error: 'retrieval_failed', message: e.message });
     }
 
-    // Answering costs a model call; searching does not. So /ask holds a HIGHER
-    // bar than /recall, and that bar is measured rather than guessed.
+    // Answering costs a model call; searching does not. So /ask holds a higher
+    // bar — but similarity ALONE cannot be that bar, and the measurement says
+    // so plainly.
     //
-    // Measured 2026-08-04 with nomic-embed-text-q8 against a real Vault:
-    //   real question, genuinely covered      top similarity 0.62
-    //   nonsense ("quantum tarot flamingo")   top similarity 0.41
-    // The browse threshold (0.35) admits that noise, so before this check a
-    // meaningless question still reached the model. Cheap to answer badly is
-    // still the thing this architecture exists to avoid.
-    const ASK_MIN_SIMILARITY = 0.45;
+    // Measured 2026-08-04, nomic-embed-text-q8 over a real report corpus:
+    //   "asdfghjkl qwertyuiop"          (gibberish)  0.473
+    //   "what must move together to
+    //    avoid a vault lockout?"        (real)       0.471
+    //   "zxqw plorbin frimble"          (gibberish)  0.423
+    //   "what is the deletion protocol?"(real)       0.520
+    //
+    // The gibberish scored HIGHER than a genuine question. Any threshold that
+    // rejects the first rejects the second — summary embeddings compress a
+    // homogeneous corpus into a narrow band, so cosine distance is a ranking
+    // signal, not a relevance one.
+    //
+    // So the floor stays low enough not to reject real questions, and a cheap
+    // LEXICAL check does the work embeddings cannot: a question that shares no
+    // meaningful word with any retrieved document is not a question about
+    // those documents. Gibberish shares nothing; "vault lockout" shares
+    // "vault" and "lockout". Zero tokens, no model, no provider.
+    const ASK_MIN_SIMILARITY = 0.40;
+    const STOPWORDS = new Set(['the','and','for','are','but','not','you','all','any','can','her','was','one','our','out','who','get','has','him','his','how','its','new','now','old','see','two','way','why','did','does','what','when','where','with','from','this','that','they','them','then','than','have','will','your','about','into','over','some','more','most','such','only','also','been','were','said','says','make','made','like','just','know','take','than']);
+
+    const terms = (s) => new Set(
+      String(s).toLowerCase().match(/[a-z][a-z0-9]{2,}/g)?.filter(w => !STOPWORDS.has(w)) || []
+    );
+    const queryTerms = terms(query);
+    const lexicalHit = docs.some(d => {
+      const docTerms = terms(`${d.metadata?.source || ''} ${d.content || ''}`);
+      for (const t of queryTerms) if (docTerms.has(t)) return true;
+      return false;
+    });
+
     const best = docs.length ? Math.max(...docs.map(d => d.similarity || 0)) : 0;
-    if (docs.length && best < ASK_MIN_SIMILARITY) {
+    const tooWeak = docs.length && best < ASK_MIN_SIMILARITY;
+
+    if (docs.length && (tooWeak || !lexicalHit)) {
       return res.json({
-        ok: true, answered: false, reason: 'weak_matches',
-        message: `Nothing in the index is close enough to answer that (best match ${best.toFixed(2)}, needs ${ASK_MIN_SIMILARITY}).`,
+        ok: true, answered: false,
+        reason: tooWeak ? 'weak_matches' : 'no_shared_terms',
+        message: tooWeak
+          ? `Nothing in the index is close enough to answer that (best match ${best.toFixed(2)}).`
+          : 'Nothing in the index shares any meaningful word with that question.',
         remedy: 'Rephrase using words closer to how you wrote it, or run /index-brain if the Vault has changed. Use search to browse the near-misses.',
         bestSimilarity: Number(best.toFixed(3)),
         citations: docs.map((d, i) => ({

@@ -77,15 +77,42 @@ describe('/ask — answering costs a model call, so it holds a higher bar', () =
     expect(ask.route).toMatch(/second-brain\/ask/);
   });
 
-  it('refuses weak matches without calling a model', () => {
-    // Measured against a real Vault: a genuine question scored 0.62, nonsense
-    // scored 0.41. The browse threshold (0.35) admits that noise, so /ask
-    // needs its own floor or a meaningless question still reaches a provider.
-    expect(retrieveSrc).toMatch(/ASK_MIN_SIMILARITY\s*=\s*0\.45/);
-    const gate = retrieveSrc.indexOf('ASK_MIN_SIMILARITY');
+  it('refuses irrelevant questions without calling a model', () => {
+    // The first version of this gate was similarity-only at 0.45. The marathon
+    // run of 2026-08-04 measured, on a real report corpus with
+    // nomic-embed-text-q8:
+    //
+    //   "asdfghjkl qwertyuiop"                      (gibberish)  0.473
+    //   "what must move together to avoid a
+    //    vault lockout?"                            (real)       0.471
+    //
+    // The GIBBERISH scored HIGHER than a genuine question. No threshold can
+    // separate those — summary embeddings compress a homogeneous corpus into a
+    // narrow band, making cosine a ranking signal rather than a relevance one.
+    //
+    // So the floor is low enough not to reject real questions, and a cheap
+    // lexical check does the work embeddings cannot: no shared meaningful word
+    // with any retrieved document means it is not a question about them.
+    expect(retrieveSrc).toMatch(/ASK_MIN_SIMILARITY\s*=\s*0\.40/);
+    expect(retrieveSrc).toMatch(/no_shared_terms/);
+    expect(retrieveSrc).toMatch(/lexicalHit/);
+
+    // Both gates must precede the spend.
+    const simGate = retrieveSrc.indexOf('ASK_MIN_SIMILARITY');
+    const lexGate = retrieveSrc.indexOf('const lexicalHit');
     const call = retrieveSrc.indexOf('await kernelLLM(');
-    expect(gate).toBeGreaterThan(-1);
-    expect(call).toBeGreaterThan(gate);   // the gate must precede the spend
+    expect(simGate).toBeGreaterThan(-1);
+    expect(lexGate).toBeGreaterThan(-1);
+    expect(call).toBeGreaterThan(simGate);
+    expect(call).toBeGreaterThan(lexGate);
+  });
+
+  it('stopwords cannot satisfy the lexical check on their own', () => {
+    // "what is the" shares words with every document ever written.
+    expect(retrieveSrc).toMatch(/STOPWORDS/);
+    for (const w of ['the', 'what', 'this', 'from']) {
+      expect(retrieveSrc).toMatch(new RegExp(`'${w}'`));
+    }
   });
 
   it('returns nothing rather than guessing when the index is empty', () => {
