@@ -121,7 +121,17 @@
     },
     {
       "method": "GET",
+      "path": "/api/cookbook/local/capabilities",
+      "auth": true
+    },
+    {
+      "method": "GET",
       "path": "/api/cookbook/local/catalog",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/cookbook/local/convert-preflight",
       "auth": true
     },
     {

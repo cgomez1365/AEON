@@ -62,7 +62,23 @@ module.exports = function createCookbookRouter(deps) {
         updated: new Date().toISOString(),
         models_dir: modelsRoot(),
         runtimes: { huggingface: { cache: defaultHfCache() } },
-        models: hfModels.map(m => ({ id: m.repo_id, backend: 'hf', size: m.size, path: m.path, gguf: !!m.is_gguf, ready: m.status === 'ready' })),
+        // BO-B1d — `ready` must mean "the runtime can serve this", not "the
+        // download finished". This line previously read
+        //   gguf: !!m.is_gguf, ready: m.status === 'ready'
+        // recording BOTH facts and letting them contradict each other: on
+        // 2026-08-04 `Qwen/Qwen2.5-3B` sat here as gguf:false, ready:true after
+        // a 5.8 GB safetensors download that llama.cpp could never open.
+        // A cached HF repo is only ready if it actually contains GGUF weights.
+        models: hfModels.map(m => {
+          const isGguf = !!m.is_gguf;
+          return {
+            id: m.repo_id, backend: 'hf', size: m.size, path: m.path,
+            gguf: isGguf,
+            ready: isGguf && m.status === 'ready',
+            servable: isGguf,
+            reason: isGguf ? null : 'safetensors/PyTorch weights — the llama.cpp runtime reads GGUF only. Convert it in Cookbook, or install a GGUF build.',
+          };
+        }),
       };
       fs.writeFileSync(RUNTIME_FILE, JSON.stringify(registry, null, 2), 'utf8');
       return registry;
@@ -1089,12 +1105,105 @@ module.exports = function createCookbookRouter(deps) {
 
   if (modelInstaller) {
     // GET /cookbook/local/catalog — list catalog with install state
-    router.get('/cookbook/local/catalog', (req, res) => {
+    // ── BO-B1: capabilities → fit → only what can actually run ────────────
+    const lrDir = path.join(__dirname, '..', '..', '..', '..', 'services', 'local-runtime');
+    const capabilities = (() => { try { return require(path.join(lrDir, 'capabilities.cjs')); } catch { return null; } })();
+    const fitEngine    = (() => { try { return require(path.join(lrDir, 'fit.cjs')); } catch { return null; } })();
+    const converter    = (() => { try { return require(path.join(lrDir, 'model-converter.cjs')); } catch { return null; } })();
+
+    /** Shared: registry + its data root, or null. */
+    const regAndRoot = () => {
+      const { getLocalRuntimeRegistry } = deps;
+      const reg = getLocalRuntimeRegistry ? getLocalRuntimeRegistry() : null;
+      if (!reg || !reg.file) return { reg: null, dataRoot: null };
+      return { reg, dataRoot: path.resolve(reg.file, '..', '..') };
+    };
+
+    /**
+     * GET /cookbook/local/capabilities — what this machine can run.
+     *
+     * The Cookbook asks this FIRST and shows it to the operator before any
+     * model list. An unprobeable capability comes back as unknown rather than
+     * as zero — see capabilities.cjs for why that distinction is load-bearing.
+     */
+    router.get('/cookbook/local/capabilities', async (req, res) => {
+      if (!capabilities) return res.status(503).json({ ok: false, error: 'capability probe unavailable' });
       try {
-        const { getLocalRuntimeRegistry } = deps;
-        const reg = getLocalRuntimeRegistry ? getLocalRuntimeRegistry() : null;
-        const dataRoot = reg ? path.dirname(path.dirname(reg.file || '')) : null;
-        res.json({ ok: true, models: modelInstaller.listCatalog(dataRoot || '') });
+        const { reg, dataRoot } = regAndRoot();
+        const active = reg ? reg.activeRuntime() : null;
+        const caps = await capabilities.detect({ dataRoot, activeRuntime: active });
+        res.json({ ok: true, capabilities: caps });
+      } catch (e) {
+        res.status(500).json({ ok: false, error: e.message });
+      }
+    });
+
+    /**
+     * GET /cookbook/local/catalog — the catalogue, already judged.
+     *
+     * Returns `shown` (installable here) and `hidden` (with the reason each
+     * one was excluded). The UI defaults to `shown`. Hiding without a reason
+     * would be its own dishonesty, so every hidden entry carries one.
+     */
+    router.get('/cookbook/local/catalog', async (req, res) => {
+      try {
+        const { reg, dataRoot } = regAndRoot();
+        const models = modelInstaller.listCatalog(dataRoot || '')
+          .map(m => ({ ...m, format: 'gguf' }));   // catalogue is GGUF by construction
+
+        if (!capabilities || !fitEngine) {
+          return res.json({ ok: true, models, shown: models, hidden: [], capabilities: null,
+            note: 'fit engine unavailable — showing the full catalogue unfiltered' });
+        }
+
+        const active = reg ? reg.activeRuntime() : null;
+        const caps = await capabilities.detect({ dataRoot, activeRuntime: active });
+        const ctx = Number(req.query.context) || undefined;
+        const { shown, hidden, summary } = fitEngine.assessCatalog(models, caps, { contextTokens: ctx });
+        const recommended = fitEngine.recommend(models, caps, { contextTokens: ctx });
+
+        res.json({
+          ok: true,
+          models,                                   // full list, for callers that want it
+          shown, hidden, summary,
+          recommended: recommended ? recommended.id : null,
+          capabilities: caps,
+        });
+      } catch (e) {
+        res.status(500).json({ ok: false, error: e.message });
+      }
+    });
+
+    /**
+     * POST /cookbook/local/convert-preflight — Tier 3 cost disclosure.
+     * Body: { repoId, sourceBytes?, quant? }
+     *
+     * Costs nothing and downloads nothing. This is the answer the operator
+     * needed BEFORE 5.8 GB of safetensors landed in a cache the runtime cannot
+     * read.
+     */
+    router.post('/cookbook/local/convert-preflight', async (req, res) => {
+      if (!converter) return res.status(503).json({ ok: false, error: 'converter unavailable' });
+      try {
+        const { reg, dataRoot } = regAndRoot();
+        const active = reg ? reg.activeRuntime() : null;
+        const sourceBytes = Number(req.body?.sourceBytes) || 0;
+        const quant = req.body?.quant || 'Q4_K_M';
+
+        let quantizeExe = null;
+        if (active && reg) {
+          try {
+            const rtDir = path.dirname(reg.resolveEntryPath(active));
+            quantizeExe = path.join(rtDir, process.platform === 'win32' ? 'llama-quantize.exe' : 'llama-quantize');
+          } catch {}
+        }
+
+        const pf = await converter.preflight({
+          sourceBytes, dataRoot, quant,
+          runtimeTag: active ? active.version : null,
+          quantizeExe,
+        });
+        res.json({ ok: true, repoId: req.body?.repoId || null, preflight: pf });
       } catch (e) {
         res.status(500).json({ ok: false, error: e.message });
       }

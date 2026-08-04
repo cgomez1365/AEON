@@ -267,12 +267,30 @@ export default function CookbookHardware() {
   const [catalogError, setCatalogError] = useState('');
   const [installingModel, setInstallingModel] = useState(null);
 
+  // BO-B1 — the Cookbook now answers "what can THIS machine run?" before it
+  // shows a single model. `shown` is what will actually work here; `hidden`
+  // carries the reason each other entry was excluded, so the operator can open
+  // the list and read why rather than wonder what is missing.
+  const [caps, setCaps] = useState(null);
+  const [fitShown, setFitShown] = useState([]);
+  const [fitHidden, setFitHidden] = useState([]);
+  const [fitSummary, setFitSummary] = useState(null);
+  const [recommended, setRecommended] = useState(null);
+  const [showUnrunnable, setShowUnrunnable] = useState(false);
+
   const fetchCatalog = useCallback(async () => {
     try {
       const res = await fetch('/api/cookbook/local/catalog');
       const d = await res.json();
-      if (d.ok) { setCatalog(d.models || []); setCatalogError(''); }
-      else setCatalogError(d.error || 'Could not read the model catalog.');
+      if (d.ok) {
+        setCatalog(d.models || []);
+        setFitShown(d.shown || d.models || []);
+        setFitHidden(d.hidden || []);
+        setFitSummary(d.summary || null);
+        setRecommended(d.recommended || null);
+        if (d.capabilities) setCaps(d.capabilities);
+        setCatalogError('');
+      } else setCatalogError(d.error || 'Could not read the model catalog.');
     } catch (e) { setCatalogError(e.message); }
   }, []);
 
@@ -614,10 +632,53 @@ export default function CookbookHardware() {
             </div>
           )}
 
+          {/* ── What this machine can run ─────────────────────────────────
+              Shown BEFORE any model list. The operator sees the budget and the
+              reason for it, so a later "too big" verdict is something they can
+              check rather than something they have to trust. */}
+          {caps && (
+            <div style={{ ...cardStyle, marginBottom: '16px' }}>
+              <div style={{ fontSize: '13px', fontWeight: 600, marginBottom: '8px' }}>This machine</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(120px,1fr))', gap: '10px' }}>
+                <div>
+                  <div style={{ fontSize: '15px', fontWeight: 600 }}>{caps.ram?.totalGb ?? '?'} GB</div>
+                  <div style={{ fontSize: '10.5px', color: 'var(--text-dim)' }}>SYSTEM RAM</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '15px', fontWeight: 600 }}>
+                    {caps.gpu?.present ? `${caps.gpu.vramTotalGb} GB` : 'none'}
+                  </div>
+                  <div style={{ fontSize: '10.5px', color: 'var(--text-dim)' }}>GPU MEMORY</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '15px', fontWeight: 600 }}>{caps.cpu?.cores ?? '?'}</div>
+                  <div style={{ fontSize: '10.5px', color: 'var(--text-dim)' }}>CPU CORES</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '15px', fontWeight: 600 }}>
+                    {caps.disk?.known ? `${caps.disk.freeGb} GB` : 'unknown'}
+                  </div>
+                  <div style={{ fontSize: '10.5px', color: 'var(--text-dim)' }}>FREE DISK</div>
+                </div>
+              </div>
+              <div style={{ marginTop: '10px', paddingTop: '9px', borderTop: '1px solid rgba(255,255,255,0.07)',
+                            fontSize: '11.5px', color: 'var(--text-dim)', lineHeight: 1.55 }}>
+                Models are judged against <b style={{ color: 'var(--text)' }}>
+                {(caps.budget?.bytes / 1073741824).toFixed(1)} GB</b> — {caps.budget?.why}
+                {caps.gpu?.present && caps.budget?.basis === 'ram' && (
+                  <> Install a GPU build of the runtime to use the card instead.</>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Built-in model catalog — no Python, no HF CLI, nothing to install first. */}
           {lrStatus?.runtimeReady && catalog.length > 0 && (
             <div style={{ ...cardStyle, marginBottom: '16px' }}>
-              <div style={{ fontSize: '13px', fontWeight: 600, marginBottom: '4px' }}>Local models</div>
+              <div style={{ fontSize: '13px', fontWeight: 600, marginBottom: '4px' }}>
+                Models that run on this machine
+                {fitSummary && <span style={{ fontWeight: 400, color: 'var(--text-dim)' }}> · {fitShown.length} of {fitSummary.total}</span>}
+              </div>
               <div style={{ fontSize: '11.5px', color: 'var(--text-dim)', lineHeight: 1.6, marginBottom: '10px' }}>
                 Downloaded and verified by AEON itself — no Python or Hugging Face CLI required.
                 Each file's checksum is checked before it is installed.
@@ -633,18 +694,35 @@ export default function CookbookHardware() {
               )}
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                {catalog.map(m => (
+                {fitShown.map(m => (
                   <div key={m.id} style={{
                     display: 'flex', alignItems: 'center', gap: '10px',
                     padding: '7px 9px', borderRadius: '4px',
-                    background: 'rgba(255,255,255,0.02)',
+                    background: m.id === recommended ? 'rgba(0,242,255,0.06)' : 'rgba(255,255,255,0.02)',
+                    border: m.id === recommended ? '1px solid rgba(0,242,255,0.28)' : '1px solid transparent',
                   }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: '12px' }}>{m.displayName || m.id}</div>
+                      <div style={{ fontSize: '12px' }}>
+                        {m.displayName || m.id}
+                        {m.id === recommended && (
+                          <span style={{ marginLeft: 7, fontSize: '9.5px', letterSpacing: '.1em',
+                                         color: 'var(--color-primary, #00f2ff)' }}>START HERE</span>
+                        )}
+                        {m.fit?.verdict === 'tight' && (
+                          <span style={{ marginLeft: 7, fontSize: '9.5px', letterSpacing: '.08em', color: '#e0a94a' }}>TIGHT</span>
+                        )}
+                      </div>
                       <div style={{ fontSize: '10.5px', color: 'var(--text-dim)' }}>
                         {(m.capabilities || []).join(' · ') || 'model'}
                         {m.sizeMb ? ` · ${m.sizeMb} MB` : ''}
                       </div>
+                      {/* The verdict states its numbers. "Too big" with no figures
+                          is the same unhelpful failure in a nicer font. */}
+                      {m.fit?.reason && (
+                        <div style={{ fontSize: '10px', color: 'var(--text-dim)', opacity: 0.8, marginTop: 2 }}>
+                          {m.fit.reason}
+                        </div>
+                      )}
                     </div>
                     {m.installed ? (
                       <span style={{ fontSize: '11px', color: '#22d36f' }}>✓ installed</span>
@@ -665,6 +743,34 @@ export default function CookbookHardware() {
                   </div>
                 ))}
               </div>
+
+              {/* Hidden entries, and WHY. Filtering without explaining is its own
+                  dishonesty — the operator should be able to see what was left
+                  out and disagree with the reasoning. */}
+              {fitHidden.length > 0 && (
+                <div style={{ marginTop: '12px', paddingTop: '10px', borderTop: '1px solid rgba(255,255,255,0.07)' }}>
+                  <button
+                    onClick={() => setShowUnrunnable(v => !v)}
+                    style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                             fontSize: '11.5px', color: 'var(--text-dim)', textDecoration: 'underline' }}>
+                    {showUnrunnable ? 'Hide' : 'Show'} {fitHidden.length} model{fitHidden.length > 1 ? 's' : ''} that will not run here
+                  </button>
+                  {showUnrunnable && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', marginTop: '8px' }}>
+                      {fitHidden.map(m => (
+                        <div key={m.id} style={{ padding: '6px 9px', borderRadius: '4px',
+                                                 background: 'rgba(255,255,255,0.015)', opacity: 0.75 }}>
+                          <div style={{ fontSize: '11.5px' }}>{m.displayName || m.id}</div>
+                          <div style={{ fontSize: '10px', color: '#e8695a', marginTop: 2 }}>{m.fit?.reason}</div>
+                          {m.fit?.remedy && (
+                            <div style={{ fontSize: '10px', color: 'var(--text-dim)', marginTop: 1 }}>{m.fit.remedy}</div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 

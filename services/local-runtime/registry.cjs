@@ -356,15 +356,58 @@ function createRegistry(dataRoot) {
     }
   }
 
+  /**
+   * BO-B1d — the gate. A model may only reach `ready` if the runtime can
+   * actually open it.
+   *
+   * This existed as a comment and a hope. On 2026-08-04 an operator installed
+   * `Qwen/Qwen2.5-3B`, a 5.8 GB safetensors repo; the download reported success
+   * and a registry recorded `gguf: false` and `ready: true` in the same object.
+   * llama.cpp reads GGUF and nothing else, so `llama-server` never started —
+   * the serve log is zero bytes. AEON had the fact and threw it away on the way
+   * to the screen, which is precisely the defect class BO-F3 exists to remove.
+   *
+   * Enforced at the WRITE, not at the read. A guard on display leaves the wrong
+   * state on disk for every other reader to trip over.
+   */
+  function assertServable(entry, existing) {
+    if (entry.state !== 'ready') return;
+    const merged = { ...(existing || {}), ...entry };
+
+    // relPath is the weights file. Anything that is not .gguf cannot be served
+    // by the llama.cpp runtime, whatever else the entry claims.
+    const rel = String(merged.relPath || '');
+    const looksGguf = rel.toLowerCase().endsWith('.gguf');
+    const declaredFormat = merged.format ? String(merged.format).toLowerCase() : null;
+    const declaredGguf = merged.gguf;
+
+    const bad =
+      (declaredGguf === false) ||
+      (declaredFormat && declaredFormat !== 'gguf') ||
+      (rel && !looksGguf);
+
+    if (bad) {
+      const what = declaredFormat || (rel ? path.extname(rel) || 'unknown' : 'unknown');
+      const err = new Error(
+        `Refusing to mark model "${merged.id}" ready: the runtime serves GGUF, this is ${what}. ` +
+        `Convert it to GGUF first (Cookbook offers this), or install a GGUF build.`
+      );
+      err.code = 'MODEL_NOT_SERVABLE';
+      throw err;
+    }
+  }
+
   function upsertModel(entry) {
     return update(reg => {
       const i = reg.models.findIndex(m => m.id === entry.id);
       if (i === -1) {
+        assertServable(entry, null);
         reg.models.push({ installedAt: new Date().toISOString(), ...entry });
       } else {
         if (entry.state && entry.state !== reg.models[i].state) {
           assertTransition('model', reg.models[i].state, entry.state);
         }
+        assertServable(entry, reg.models[i]);
         reg.models[i] = { ...reg.models[i], ...entry };
       }
     });
