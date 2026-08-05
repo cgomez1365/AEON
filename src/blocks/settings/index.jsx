@@ -314,6 +314,17 @@ function RoleCard({ role, config, providers, liveModels, onUpdate, providerBlock
                 : `No models available from ${config?.provider || 'this provider'} — add a key under Connections, or switch to Local and install a model in Cookbook.`}
             </div>
           )}
+          {/* §08 — an assignment must name something that exists. Five roles on
+              this install pointed at local models that were never installed,
+              including chat -> "gemini-3.1-pro-preview" (a CLOUD model name on
+              the local provider). Readiness reported on the declaration, so
+              nothing said a word, and the empty dropdown above meant the
+              operator could not have corrected it even if they had noticed. */}
+          {models.length > 0 && config?.model && !models.includes(config.model) && (
+            <div style={{ fontSize: 11, color: '#ff5a6a', marginTop: 3 }}>
+              ⚠ “{config.model}” is not available from {config.provider} — pick one above, or this role will fail at call time.
+            </div>
+          )}
         </div>
       </div>
       {poweredBlocks.length > 0 && (

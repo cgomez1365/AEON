@@ -1025,8 +1025,6 @@ export default function CookbookHardware() {
               </div>
             </div>
           )}
-
-          )}
         </div>
       )}
 
