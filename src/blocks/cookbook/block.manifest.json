@@ -156,6 +156,11 @@
     },
     {
       "method": "GET",
+      "path": "/api/cookbook/models",
+      "auth": true
+    },
+    {
+      "method": "GET",
       "path": "/api/cookbook/runtime",
       "auth": true
     },

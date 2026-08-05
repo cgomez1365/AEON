@@ -6,7 +6,6 @@
  */
 const fs = require('fs');
 const path = require('path');
-const { readLocalRuntime } = require('./storage.js');
 const { isCloud: _isCloud } = require('../src/kernel/runtime.cjs');
 
 // Phase 6: native local runtime (llama.cpp). Lazy require.

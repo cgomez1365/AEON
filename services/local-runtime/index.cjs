@@ -8,6 +8,7 @@
  * Exports:
  *   isAvailable()     → boolean — runtime + at least one ready model in registry
  *   defaultModel()    → string|null — first ready chat model id
+ *   listReadyModels(cap) → array — THE model list every picker renders
  *   infer(prompt, opts) → Promise<{ text, tokens, latencyMs, provider, model }>
  *   inferStream(prompt, opts, onToken) → Promise<{ text, tokens, latencyMs, ... }>
  *   embed(text)       → Promise<number[]>   (EMBED_MODEL capability)
@@ -69,6 +70,39 @@ function defaultModel() {
     const models = _registry().modelsForCapability('chat');
     return models.length ? models[0].id : null;
   } catch { return null; }
+}
+
+/**
+ * THE read path for "which local models can serve right now".
+ *
+ * Every operator-facing surface — the Settings role picker, Council's model
+ * menu, auto-pick — calls this. None of them may index `status()` by hand.
+ *
+ * That rule exists because they did. `status()` reports under `readyModels`;
+ * three call sites read `.models`, which is `undefined`, which each turned into
+ * `[]`. The expression was copy-pasted from a site where it was correct — it
+ * read the legacy flat store, which genuinely carries `.models`. Right field
+ * name, wrong object, and every picker went blank while a verified GGUF sat
+ * ready on disk (2026-08-04).
+ *
+ * A named function removes the chance to guess. `capability` defaults to 'chat'
+ * because every current caller is choosing a conversational model; pass null to
+ * list every ready model regardless of capability.
+ *
+ * @param {string|null} capability
+ * @returns {Array<{id:string, displayName:string, capabilities:string[], quantization:string|null}>}
+ */
+function listReadyModels(capability = 'chat') {
+  try {
+    const reg = _registry();
+    const models = capability ? reg.modelsForCapability(capability) : reg.readyModels();
+    return models.map(m => ({
+      id: m.id,
+      displayName: m.displayName || m.id,
+      capabilities: Array.isArray(m.capabilities) ? m.capabilities : [],
+      quantization: m.quantization || null,
+    }));
+  } catch { return []; }
 }
 
 /**
@@ -274,4 +308,4 @@ async function _sessionForModel(modelId) {
   return { session, modelId: model.id };
 }
 
-module.exports = { isAvailable, defaultModel, infer, inferStream, embed, status, shutdown, ensureLocalReady, queueState };
+module.exports = { isAvailable, defaultModel, listReadyModels, infer, inferStream, embed, status, shutdown, ensureLocalReady, queueState };

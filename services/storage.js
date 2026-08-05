@@ -104,17 +104,17 @@ function getScopedFile(root, blockId, relPath = '') {
 const getBlockVaultFile = (blockId, relPath = '') => getScopedFile(path.join(VAULT_ROOT, 'blocks'), blockId, relPath);
 const getBlockDataFile = (blockId, relPath = '') => getScopedFile(_isCloud() ? '/tmp' : DATA_ROOT, blockId, relPath);
 
-// data/local-runtime.json — written by the Cookbook block (the owner of local
-// models): models_dir, available runtimes, and every installed local model.
-// Settings/kernel/blocks read THIS instead of probing or hardcoding Ollama.
-// LEGACY reader — the pre-Phase-2 flat shape ({ runtimes: {...}, models: [...] })
-// that ai.js, council and settings still bind against. Kept working verbatim
-// until those callers migrate in Phase 7/8; the compatibility floor recorded in
-// docs/architecture/native-local-runtime.md forbids changing it here.
-const readLocalRuntime = () => {
-  try { return JSON.parse(fs.readFileSync(getDataFile('local-runtime.json'), 'utf8')); }
-  catch { return null; }
-};
+// The legacy flat registry reader (data/local-runtime.json) was retired in BO-C,
+// 2026-08-04 — the Phase 7/8 migration this comment used to defer.
+//
+// It described a second store, written by Cookbook from a HuggingFace-cache
+// scan, that Settings read as if it were the model authority. Two writers
+// existed where docs/architecture/native-local-runtime.md §2 specifies one, and
+// the store Settings trusted was the empty one. Local models were invisible to
+// every picker for as long as both existed.
+//
+// getLocalRuntimeRegistry() below is the only local-model authority. Read ready
+// models through services/local-runtime/index.cjs listReadyModels().
 
 // ── Phase 2: the native local-runtime registry ────────────────────────────
 // Generic storage does NOT guess runtime paths or carry backend-specific
@@ -213,6 +213,6 @@ function cleanupOrphans() {
 module.exports = {
   ROOT, getLocalFile, WORKSPACE, upload, videoUpload, safeUploadName, UPLOAD_LIMITS, cleanupOrphans, logTrivial,
   LOG_FILE, AUDIT_FILE, SDI_VIOLATION_LOG, TOKEN_LEDGER_FILE, TERMINAL_HISTORY_FILE, NOTES_FILE,
-  VAULT_ROOT, DATA_ROOT, getVaultFile, getDataFile, getBlockVaultFile, getBlockDataFile, readLocalRuntime,
+  VAULT_ROOT, DATA_ROOT, getVaultFile, getDataFile, getBlockVaultFile, getBlockDataFile,
   getLocalRuntimeRegistry,
 };

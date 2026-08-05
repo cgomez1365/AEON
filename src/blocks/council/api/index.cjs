@@ -181,8 +181,9 @@ module.exports = function createCompareRouter(deps) {
     try {
       const lr = require(path.join(__dirname, '..', '..', '..', '..', 'services', 'local-runtime', 'index.cjs'));
       if (lr.isAvailable()) {
-        const st = lr.status();
-        localModels = (st.models || []).filter(m => m.ready !== false).map(m => m.id || m.name);
+        // Same defect as settings/api/settings.js — status() has no `models`
+        // key, so this filtered every local model out of the Council menu.
+        localModels = lr.listReadyModels('chat').map(m => m.id);
       }
     } catch {}
     const add = (id, name, engine) => {
@@ -228,9 +229,6 @@ module.exports = function createCompareRouter(deps) {
   }
 
   // Filter dead engines: a model only survives if its provider has a live key.
-  let readLocalRuntime;
-  try { ({ readLocalRuntime } = require(path.join(__dirname, '..', '..', '..', '..', 'services', 'storage.js'))); }
-  catch { readLocalRuntime = () => null; }
   const engineAlive = (engine) => {
     if (engine === 'local') {
       try {

@@ -341,12 +341,26 @@ export default function CookbookHardware() {
     setScanning(false);
   }, []);
 
-  // ── Cached Models ──
+  // ── The local model inventory — one route, two states ──
+  //
+  // This tab used to read /api/model/cached (the HuggingFace cache alone) while
+  // the Hardware tab read the native registry. Both were truthful about their
+  // own store and they contradicted each other on screen: "1 model ready"
+  // beside "No cached models found". One route now answers both.
   const scanCached = useCallback(async () => {
     try {
-      const res = await fetch('/api/model/cached');
+      const res = await fetch('/api/cookbook/models');
       const data = await res.json();
-      setCachedModels(data.models || []);
+      const managed = (data.managed || []).map(m => ({
+        ...m, repo_id: m.displayName || m.id, is_gguf: true,
+        status: 'ready', size: m.quantization || '', nb_files: 1,
+      }));
+      const discovered = (data.discovered || []).map(m => ({
+        ...m, repo_id: m.repo_id || m.id,
+        is_gguf: !!m.gguf,
+        status: m.servable ? 'ready' : (m.status || 'unusable'),
+      }));
+      setCachedModels([...managed, ...discovered]);
     } catch {}
   }, []);
 
@@ -893,34 +907,49 @@ export default function CookbookHardware() {
           </div>
           {filteredCached.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '32px', opacity: 0.5, fontSize: '12px' }}>
-              No cached models found. Download one from the Download tab.
+              No models installed. Install one from the Hardware tab — that path needs
+              no Python and verifies every file before use.
             </div>
           ) : (
             <div style={{ display: 'grid', gap: '8px' }}>
               {filteredCached.map(m => (
-                <div key={m.repo_id} style={cardStyle}>
+                <div key={`${m.source || 'hf'}:${m.repo_id}`} style={cardStyle}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontWeight: 600, fontSize: '13px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {m.repo_id}
+                        {/* Where it came from, and whether it can actually run.
+                            Both stated — a row that cannot serve must never
+                            look like one that can. */}
+                        {m.source === 'aeon'
+                          ? <span style={tagChip('#22d36f')}>AEON · verified</span>
+                          : <span style={tagChip('#8b9bb4')}>HF cache</span>}
                         {m.is_gguf && <span style={tagChip('#f59e0b')}>GGUF</span>}
                         {m.is_diffusion && <span style={tagChip('#ec4899')}>Diffusion</span>}
+                        {!m.servable && m.source !== 'aeon' && <span style={tagChip('#f44336')}>not servable</span>}
                       </div>
                       <div style={{ fontSize: '10px', color: 'var(--text-dim)', marginTop: '2px' }}>
-                        {m.size} &middot; {m.nb_files} files
+                        {m.size} {m.nb_files ? <>&middot; {m.nb_files} files</> : null}
                         {m.status === 'downloading' && <span style={{ color: '#f59e0b' }}> &middot; downloading</span>}
                       </div>
+                      {m.reason && (
+                        <div style={{ fontSize: '10.5px', color: '#ffb454', marginTop: '3px', lineHeight: 1.5 }}>
+                          {m.reason}
+                        </div>
+                      )}
                     </div>
                     <div style={{ display: 'flex', gap: '4px' }}>
-                      {m.status === 'ready' && (
+                      {m.status === 'ready' && m.source !== 'aeon' && (
                         <button onClick={() => quickServe(m)} style={{ ...tinyBtn, color: 'var(--color-primary, #00f2ff)' }}>
                           <Play size={11} /> Serve
                         </button>
                       )}
-                      <button onClick={() => deleteCached(m.repo_id)} style={{ ...tinyBtn, color: '#f44336' }}
-                        aria-label={`Delete ${m.repo_id} from cache`} title="Delete from cache">
-                        <Trash2 size={11} />
-                      </button>
+                      {m.source !== 'aeon' && (
+                        <button onClick={() => deleteCached(m.repo_id)} style={{ ...tinyBtn, color: '#f44336' }}
+                          aria-label={`Delete ${m.repo_id} from cache`} title="Delete from cache">
+                          <Trash2 size={11} />
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>

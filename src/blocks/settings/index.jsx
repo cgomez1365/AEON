@@ -249,7 +249,12 @@ function ProviderCard({ id, label, connected, onTest, providerRegistry }) {
 // ── Role Card ────────────────────────────────────────────────────────
 function RoleCard({ role, config, providers, liveModels, onUpdate, providerBlocks, providerRegistry }) {
   const providerReg = (providerRegistry || []).find(p => p.id === config?.provider);
-  const models = liveModels[config?.provider] || providerReg?.fallbackModels || [];
+  // `?.length ?` not `||` — an empty array is truthy, so a provider that
+  // answered with zero models short-circuited the fallback and rendered a
+  // blank <select>. That is how a ready local model stayed invisible.
+  const live = liveModels[config?.provider];
+  const models = (live?.length ? live : providerReg?.fallbackModels) || [];
+  const isLocal = config?.provider === 'local';
   const isConfigured = providers[config?.provider];
   const poweredBlocks = providerBlocks?.[config?.provider] || [];
 
@@ -298,6 +303,17 @@ function RoleCard({ role, config, providers, liveModels, onUpdate, providerBlock
             value={config?.model || ''}
             onChange={v => onUpdate(role.key, 'model', v)}
           />
+          {/* §08 — an error must name every remedy, cheapest first. A blank
+              dropdown tells the operator nothing they can act on, and it looks
+              identical whether the provider has no models, no key, or is
+              simply not installed. */}
+          {models.length === 0 && (
+            <div style={{ fontSize: 11, color: '#ffb454', marginTop: 3 }}>
+              {isLocal
+                ? 'No local model installed yet — install one in Cookbook ▸ Hardware, then reopen this page.'
+                : `No models available from ${config?.provider || 'this provider'} — add a key under Connections, or switch to Local and install a model in Cookbook.`}
+            </div>
+          )}
         </div>
       </div>
       {poweredBlocks.length > 0 && (
@@ -2499,7 +2515,11 @@ export default function SystemSettings() {
       try {
         const r = await fetch(`/api/settings/test-provider/${id}`, { method: 'POST' });
         const d = await r.json();
-        if (d.ok && d.models) setLiveModels(prev => ({ ...prev, [id]: d.models }));
+        // An empty array is not a model list. Caching it here is what pinned
+        // the picker empty even after the provider was fixed.
+        if (d.ok && Array.isArray(d.models) && d.models.length) {
+          setLiveModels(prev => ({ ...prev, [id]: d.models }));
+        }
       } catch {}
     };
     Object.entries(providers).forEach(([id, ok]) => { if (ok) fetchLive(id); });

@@ -51,14 +51,30 @@ install to a different drive letter must not invalidate the registry.
 
 ### 2. Registry ownership
 
-`data/local-runtime.json` is **generated state**, not configuration. It is
-gitignored and never shipped. One module writes it, transactionally:
+`data/local-runtime/local-runtime.json` is **generated state**, not
+configuration. It is gitignored and never shipped. One module writes it,
+transactionally:
 temp-write → flush → atomic replace, with the prior valid copy retained as
 backup. A crash at any write boundary leaves either the old valid registry or
 the new valid registry — never a partial one.
 
-Settings and the kernel read *ready* models from the registry. Neither probes
-folders nor processes to discover models.
+Settings and the kernel read *ready* models from the registry, through
+`services/local-runtime/index.cjs` `listReadyModels()` — the single named read
+path. Neither probes folders nor processes to discover models, and no consumer
+indexes `status()` by hand.
+
+> **Corrected 2026-08-04 (BO-C).** This section previously named
+> `data/local-runtime.json`. That path held a *different* file — a HuggingFace
+> cache scan written by the Cookbook block — while the real registry lived one
+> directory down. Two writers existed where this record specifies one, and
+> Settings read the wrong one, so local models were invisible to every picker.
+> The legacy file and its writer were retired; the path is now free and the
+> record names the registry that actually exists.
+
+A HuggingFace cache scan is still offered alongside the registry as
+**discovered** models, derived on read and never persisted. Discovered entries
+carry `servable` and a stated reason; they are never merged into the managed
+list, because a cached repo may hold weights the runtime cannot open.
 
 ### 3. No model HTTP transport
 

@@ -47,9 +47,20 @@ module.exports = function createCookbookRouter(deps) {
   }
 
 
-  // ── Local runtime registry — THE file Settings/kernel read ──────
-  const RUNTIME_FILE = getDataFile ? getDataFile('local-runtime.json') : path.join(COOKBOOK_DIR, '..', 'local-runtime.json');
-  async function writeLocalRuntime() {
+  // ── Discovered models — the HuggingFace cache, scanned, never persisted ──
+  //
+  // BO-C retired `writeLocalRuntime()`, which wrote this scan to
+  // data/local-runtime.json and let Settings read it as the model authority.
+  // That created two writers where the architecture record specifies one, and
+  // Settings trusted the empty one. The scan itself is legitimate — it finds
+  // models the operator downloaded before AEON — so it survives as a DERIVED
+  // list with no file behind it.
+  //
+  // Nothing here is servable by itself. A cached HF repo is only servable if it
+  // actually contains GGUF weights: on 2026-08-04 `Qwen/Qwen2.5-3B` reported
+  // ready after a 5.8 GB safetensors download the runtime could never open
+  // (Bible §17). `servable` is stated per entry, with the reason, always.
+  function scanDiscovered() {
     try {
       let hfModels = scanHfCache(defaultHfCache());
       const legacy = legacyHfCache();
@@ -58,40 +69,43 @@ module.exports = function createCookbookRouter(deps) {
           if (!hfModels.some(x => x.repo_id === m.repo_id)) hfModels.push(m);
         }
       }
-      const registry = {
-        updated: new Date().toISOString(),
-        models_dir: modelsRoot(),
-        runtimes: { huggingface: { cache: defaultHfCache() } },
-        // BO-B1d — `ready` must mean "the runtime can serve this", not "the
-        // download finished". This line previously read
-        //   gguf: !!m.is_gguf, ready: m.status === 'ready'
-        // recording BOTH facts and letting them contradict each other: on
-        // 2026-08-04 `Qwen/Qwen2.5-3B` sat here as gguf:false, ready:true after
-        // a 5.8 GB safetensors download that llama.cpp could never open.
-        // A cached HF repo is only ready if it actually contains GGUF weights.
-        models: hfModels.map(m => {
-          const isGguf = !!m.is_gguf;
-          return {
-            id: m.repo_id, backend: 'hf', size: m.size, path: m.path,
-            gguf: isGguf,
-            ready: isGguf && m.status === 'ready',
-            servable: isGguf,
-            reason: isGguf ? null : 'safetensors/PyTorch weights — the llama.cpp runtime reads GGUF only. Convert it in Cookbook, or install a GGUF build.',
-          };
-        }),
-      };
-      fs.writeFileSync(RUNTIME_FILE, JSON.stringify(registry, null, 2), 'utf8');
-      return registry;
-    } catch (e) { return { error: e.message, models: [] }; }
+      return hfModels.map(m => {
+        const isGguf = !!m.is_gguf;
+        return {
+          id: m.repo_id, repo_id: m.repo_id, source: 'hf-cache',
+          backend: 'hf', size: m.size, bytes: m.bytes || null, path: m.path,
+          gguf: isGguf,
+          servable: isGguf && m.status === 'ready',
+          reason: isGguf
+            ? (m.status === 'ready' ? null : 'download incomplete')
+            : 'safetensors/PyTorch weights — the llama.cpp runtime reads GGUF only. Convert it in Cookbook, or install a GGUF build.',
+        };
+      });
+    } catch { return []; }
   }
-  setTimeout(writeLocalRuntime, 3000);
+
+  // Models AEON installed and verified itself. The single authority.
+  function listManaged() {
+    try {
+      const lr = require(path.join(__dirname, '..', '..', '..', '..', 'services', 'local-runtime', 'index.cjs'));
+      return lr.listReadyModels(null).map(m => ({
+        id: m.id, displayName: m.displayName, source: 'aeon',
+        capabilities: m.capabilities, quantization: m.quantization,
+        servable: true, reason: null,
+      }));
+    } catch { return []; }
+  }
 
   // Every model identifier this install can currently serve, from both naming
-  // schemes at once: the on-disk HF cache (authoritative, but a scan) and the
-  // runtime registry file (cheap, but only as fresh as the last write). Union,
-  // never intersection — /model/serve uses this to REFUSE, so a stale miss on
-  // either side would block a serve that would have worked. isModelInstalled()
-  // is permissive for the same reason.
+  // schemes at once: the on-disk HF cache (a scan) and the native registry.
+  // Union, never intersection — /model/serve uses this to REFUSE, so a stale
+  // miss on either side would block a serve that would have worked.
+  // isModelInstalled() is permissive for the same reason.
+  //
+  // BO-C: the third source used to be the retired flat file, whose contents
+  // were themselves derived from the same HF scan — redundant by construction.
+  // The native registry replaces it and adds what it never had: AEON-managed
+  // models.
   function installedModelIds() {
     const ids = new Set();
     try {
@@ -106,17 +120,46 @@ module.exports = function createCookbookRouter(deps) {
       }
     } catch {}
     try {
-      const reg = JSON.parse(fs.readFileSync(RUNTIME_FILE, 'utf8'));
-      for (const m of reg?.models || []) if (m?.id) ids.add(m.id);
+      for (const m of listManaged()) if (m?.id) ids.add(m.id);
     } catch {}
     return [...ids];
   }
 
-  // GET /cookbook/runtime — the registry, refreshed on demand
-  router.get('/cookbook/runtime', async (req, res) => {
-    if (req.query.refresh === '1') return res.json(await writeLocalRuntime());
-    try { return res.json(JSON.parse(fs.readFileSync(RUNTIME_FILE, 'utf8'))); }
-    catch { return res.json(await writeLocalRuntime()); }
+  // ── GET /cookbook/models — THE local model inventory ────────────
+  //
+  // One surface, two states. Hardware's "N models ready" and the Models tab
+  // both read this, so they cannot disagree — they did, for as long as each
+  // had its own store: Hardware said "1 model ready" beside Models saying
+  // "No cached models found", and neither was lying about its own file.
+  //
+  // `managed` and `discovered` stay separate because they are not the same
+  // kind of thing. A managed model is SHA-256 verified, GGUF-probed and
+  // servable. A discovered one is a folder that may hold weights the runtime
+  // cannot open. Flattening them would recreate the exact defect §17 records.
+  router.get('/cookbook/models', (req, res) => {
+    if (_isCloud()) {
+      return res.json({ managed: [], discovered: [], host: 'cloud',
+        note: 'Local models are unavailable in cloud. Relay via the desktop bridge.' });
+    }
+    const managed = listManaged();
+    const discovered = scanDiscovered();
+    res.json({
+      managed,
+      discovered,
+      counts: { managed: managed.length, discovered: discovered.length,
+                servable: managed.length + discovered.filter(d => d.servable).length },
+      models_dir: modelsRoot(),
+    });
+  });
+
+  // GET /cookbook/runtime — retained for compatibility; now derived, not a file.
+  router.get('/cookbook/runtime', (req, res) => {
+    res.json({
+      updated: new Date().toISOString(),
+      models_dir: modelsRoot(),
+      managed: listManaged(),
+      discovered: scanDiscovered(),
+    });
   });
 
   // ── In-memory task registry ─────────────────────────────────────
@@ -219,7 +262,8 @@ module.exports = function createCookbookRouter(deps) {
         if (!target.startsWith(cacheDir)) continue; // traversal guard
         if (fs.existsSync(target)) {
           fs.rmSync(target, { recursive: true, force: true });
-          writeLocalRuntime();
+          // No registry to refresh — /cookbook/models scans on read, so a
+          // deleted model is gone from the inventory on the next request.
           return res.json({ ok: true, deleted: target });
         }
       }
@@ -539,9 +583,9 @@ module.exports = function createCookbookRouter(deps) {
           if (code === 0) logStream.write('DOWNLOAD_OK\n');
           else logStream.write('DOWNLOAD_FAILED\n');
           logStream.end();
-          // One-click contract: a finished download registers itself — Settings
-          // and the kernel read the refreshed registry with zero extra steps.
-          if (code === 0) writeLocalRuntime();
+          // One-click contract preserved without a write: /cookbook/models
+          // derives the list on read, so a finished download appears with zero
+          // extra steps and no second store to fall out of sync.
           task._emitter.emit('done', code);
         }
       });

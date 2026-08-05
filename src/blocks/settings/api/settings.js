@@ -28,15 +28,19 @@ module.exports = (app, deps) => {
   const providerCredentials = deps && Object.prototype.hasOwnProperty.call(deps, 'providerCredentials')
     ? deps.providerCredentials
     : settingsService.createProviderCredentialStore();
-  // Cookbook-owned registry of local models/runtimes (data/local-runtime.json)
-  let readLocalRuntime;
-  try { ({ readLocalRuntime } = require(path.join(APP_ROOT, 'services', 'storage.js'))); }
-  catch { readLocalRuntime = () => null; }
-  // First ready local model per the registry — null if none.
+  // First ready local model, from the native runtime registry — null if none.
+  //
+  // This read the legacy flat store (data/local-runtime.json) until BO-C. That
+  // store was written by Cookbook from an HF-cache scan and carried
+  // `models: []` on this install, so local was never auto-picked even with a
+  // verified GGUF ready. The registry under services/local-runtime is the only
+  // authority now.
   const firstLocalModel = () => {
-    const rt = readLocalRuntime();
-    const m = rt?.models?.find(x => x.ready !== false);
-    return m ? m.id : null;
+    try {
+      const lr = require(path.join(APP_ROOT, 'services', 'local-runtime', 'index.cjs'));
+      const models = lr.listReadyModels('chat');
+      return models.length ? models[0].id : null;
+    } catch { return null; }
   };
   // Coinbase CDP key lives inside the install (secrets/), not on the user's
   // Desktop — that was a hardcoded personal convention. Desktop kept as a
@@ -696,8 +700,10 @@ module.exports = (app, deps) => {
       if (id === 'local') {
         try {
           const lr = require(path.join(__dirname, '..', '..', '..', '..', 'services', 'local-runtime', 'index.cjs'));
-          const st = lr.status();
-          const models = (st.models || []).filter(m => m.ready !== false).map(m => m.id || m.name);
+          // listReadyModels(), never status().models — the latter does not
+          // exist, so this route answered {ok:true, models:[]} with a ready
+          // model installed, and the picker rendered a blank <select>.
+          const models = lr.listReadyModels('chat').map(m => m.id);
           return res.json({ ok: lr.isAvailable(), models });
         } catch (e) {
           return res.json({ ok: false, models: [], error: e.message });
