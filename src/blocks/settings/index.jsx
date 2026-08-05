@@ -85,8 +85,19 @@ function ModelPicker({ models, value, onChange, label = 'Model', id }) {
   const filtered = models.filter(m => m.toLowerCase().includes(search.toLowerCase()));
 
   if (models.length <= 5) {
+    // A <select> whose value matches no option silently displays the FIRST one.
+    // That turned a stale assignment into a convincing lie: after switching a
+    // role's provider to Local, the box read "llama3-8b-q4" while the SAVED
+    // value was still "llama-3.1-8b-instant". Nothing was selected, nothing was
+    // saved, and the role would fail at call time while the screen looked right.
+    //
+    // Render the real stored value instead of hiding it. It reads as broken
+    // because it is — and the warning beneath the picker now agrees with the
+    // box rather than contradicting it.
+    const orphaned = value && !models.includes(value);
     return (
       <select id={id} value={value} onChange={e => onChange(e.target.value)} className="settings-select" aria-label={label}>
+        {orphaned && <option value={value}>{value} — not available, pick one below</option>}
         {models.map(m => <option key={m} value={m}>{m}</option>)}
       </select>
     );
