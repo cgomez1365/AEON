@@ -2041,7 +2041,17 @@ function BlockWidget({ w }) {
     let alive = true;
     const pull = async () => {
       try {
-        const r = await fetch(w.endpoint);
+        // authFetch, not fetch — it attaches the session Bearer from
+        // localStorage and credentials:'include'. A widget pointed at a guarded
+        // route with no credentials 401s at every auth setting, so signing in
+        // would not have fixed this either.
+        //
+        // The header opts this request out of the global forensics banner: the
+        // catch below renders every failure inline, so a toast on top of it is
+        // the same failure said twice, with the less useful sentence on top.
+        const r = await authFetch(w.endpoint, {
+          headers: { 'x-aeon-self-reported': '1' },
+        });
         if (!r.ok) {
           // Name the remedy, not just the fault (BO-F3c). A widget guarding a
           // privileged surface answers 401 to an operator who simply has not
@@ -2178,7 +2188,7 @@ function BlockWidgetsPanel() {
   const [cat, setCat] = useState(null);
 
   useEffect(() => {
-    fetch('/api/blocks/widgets')
+    authFetch('/api/blocks/widgets')
       .then(r => r.json())
       .then(d => setCat(d && Array.isArray(d.widgets) ? d : { widgets: [], refused: [] }))
       .catch(() => setCat({ widgets: [], refused: [] }));

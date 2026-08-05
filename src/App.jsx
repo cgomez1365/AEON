@@ -7,7 +7,7 @@ import MobileLayout from "./components/MobileLayout";
 import AuthGate from "./components/AuthGate";
 import CloudSetupGate from "./components/CloudSetupGate";
 import { TelemetryProvider } from "./kernel/contexts/TelemetryContext";
-import { shouldBannerResponse, describeResponseBanner, decideNetworkBanner } from "./utils/interceptorPolicy";
+import { shouldBannerResponse, describeResponseBanner, decideNetworkBanner, isSelfReported } from "./utils/interceptorPolicy";
 
 // ── Load persisted appearance on boot (theme, accent, font) ──────────
 // Order matters: theme_builder sets the base palette first, then
@@ -171,7 +171,10 @@ export default function App() {
         if (banner) raise(banner);
         throw err;
       }
-      if (shouldBannerResponse({ url, ok: response.ok, status: response.status })) {
+      if (shouldBannerResponse({
+        url, ok: response.ok, status: response.status,
+        selfReported: isSelfReported(args[1]),
+      })) {
         let body = null;
         try { body = await response.clone().json(); } catch { /* non-JSON body — falls through to the trace ID */ }
         raise(describeResponseBanner({ url, body }));

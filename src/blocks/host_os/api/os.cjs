@@ -3,6 +3,7 @@ const { execFile } = require('child_process');
 const path = require('path');
 const { vaultSync } = require('../../../kernel/vaultSync.cjs');
 const { isInside } = require('../../../kernel/pathContainment.cjs');
+const { requireOperator } = require('../../../kernel/server-utils/requireOperator.cjs');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // This block used to expose six routes that ran a client-supplied string through
@@ -120,7 +121,21 @@ module.exports = function createOsRouter(deps) {
   // block's widget rather than an OS operation; the widget gate checks the
   // block's declared routes, so either would pass. Kept distinct so the
   // console surface and the execution surface are never confused.
-  router.get('/host_os/widget', requireShellAuth, (req, res) => {
+  //
+  // BO-C2 — requireOperator, NOT requireShellAuth. This route reads an audit
+  // tail. It was mounted behind the raw-EXECUTION gate, which demands a session
+  // unconditionally while the global auth gate is opt-in and off by default. On
+  // a stock install (no account, guardEnabled false) the operator is using AEON
+  // legitimately with no session, so their own control surface answered 401 on
+  // every Settings load and again every 30s.
+  //
+  // §07 principle 04: a read surface earns its own gate rather than inheriting
+  // the one written for arbitrary execution. requireOperator allows a valid
+  // session from any origin, allows the pre-account window from the machine
+  // itself (the owner must never be locked out of a fresh install), and refuses
+  // everything else. The execution routes below keep requireShellAuth exactly
+  // as it was — §13's position is untouched.
+  router.get('/host_os/widget', requireOperator({ name: 'Operator Console widget' }), (req, res) => {
     let recent = [];
     try {
       const audit = require('fs').existsSync(AUDIT_FILE)

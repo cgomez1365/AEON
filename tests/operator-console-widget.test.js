@@ -64,9 +64,15 @@ function call(app, method, url, body) {
   return new Promise((resolve) => {
     const chunks = [];
     let done = false;
+    // BO-C2: the widget route carries requireOperator now (a read gate), not the
+    // injected requireShellAuth stub, so the driver must present a realistic
+    // origin. 127.0.0.1 with no account configured is the owner at their own
+    // keyboard on a fresh install — the one case that must never be refused.
+    // The gate is exercised for real here rather than stubbed away.
     const req = {
       method, url, headers: { 'content-type': 'application/json' },
-      body: body || {}, socket: {}, connection: {},
+      body: body || {}, ip: '127.0.0.1',
+      socket: { remoteAddress: '127.0.0.1' }, connection: { remoteAddress: '127.0.0.1' },
     };
     const res = {
       statusCode: 200, headersSent: false,

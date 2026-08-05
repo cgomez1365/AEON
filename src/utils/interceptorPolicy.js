@@ -66,6 +66,35 @@ export const IGNORED_ENDPOINTS = [
 // every boot that beat the kernel to the port.
 export const NETWORK_TOLERANT_ENDPOINTS = ['/api/kernel/security-availability'];
 
+// A request header a caller sets to say "I render my own failure, inline, every
+// time." The banner then stays out of the way for that ONE request instead of a
+// whole URL pattern being quieted forever.
+//
+// This exists because widget endpoints are declared by block manifests, so they
+// cannot be listed above — and listing them would be the wrong shape anyway.
+// The justification IGNORED_ENDPOINTS demands is a property of the CALLER, not
+// of the URL: BlockWidget renders "Widget unavailable — <reason>" for every
+// non-2xx and never swallows one. Two renderings of one failure is the §08
+// defect the operator saw — a red [API FAILED] toast covering the panel's own
+// sentence, which named the remedy.
+//
+// Deliberately narrow: it suppresses the BANNER only, never the failure, and
+// only when the caller has opted in per request.
+export const SELF_REPORTED_HEADER = 'x-aeon-self-reported';
+
+/** Did this request opt out of the banner? Reads whatever fetch() was given. */
+export function isSelfReported(init) {
+  const h = init?.headers;
+  if (!h) return false;
+  try {
+    if (typeof h.get === 'function') return !!h.get(SELF_REPORTED_HEADER);
+    for (const k of Object.keys(h)) {
+      if (k.toLowerCase() === SELF_REPORTED_HEADER) return !!h[k];
+    }
+  } catch { /* exotic headers object — treat as not opted out */ }
+  return false;
+}
+
 const pathOf = (url) => String(url || '').split('#')[0].split('?')[0];
 
 export function isApiUrl(url) {
@@ -78,7 +107,7 @@ export function matchesEndpoint(url, list) {
 }
 
 /** Does a non-2xx response deserve a banner? Cheap — no body read. */
-export function shouldBannerResponse({ url, ok, status }) {
+export function shouldBannerResponse({ url, ok, status, selfReported = false }) {
   if (ok || !isApiUrl(url)) return false;
   // 428 = intentional confirmation gate (dangerous commands) — not an error.
   if (status === 428) return false;
@@ -86,6 +115,10 @@ export function shouldBannerResponse({ url, ok, status }) {
   // AuthGate handles it, so it must never raise the forensics banner.
   const p = pathOf(url);
   if (status === 401 && (p.startsWith('/api/auth/') || p.startsWith('/api/security/'))) return false;
+  // A caller that renders its own 401 inline gets one rendering, not two.
+  // Scoped to 401/403 on purpose: a self-reporting panel still deserves the
+  // banner for a 500, which is a defect rather than a permission state.
+  if (selfReported && (status === 401 || status === 403)) return false;
   return !matchesEndpoint(url, IGNORED_ENDPOINTS);
 }
 
