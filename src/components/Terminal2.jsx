@@ -25,6 +25,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Send, Loader, Cpu, Clock, Zap, ChevronRight, ChevronDown, ShieldAlert, Paperclip, Square, X as XIcon } from 'lucide-react';
 import { describeStreamFailure } from '../utils/interceptorPolicy.js';
+import { describeDispatchOutcome, describeDenial } from '../utils/commandOutcome.js';
 
 // UI-only commands — act on the terminal or app itself, never the server.
 // Block commands come from GET /api/commands (manifest-discovered); add nothing here.
@@ -40,8 +41,26 @@ const nextPid = () => String(++PID).padStart(4, '0');
 
 // ── Event chip: one execution rendered as a process line ──────────────
 function EventChip({ ev, onToggle }) {
-  const color = ev.status === 'running' ? '#00f2ff' : ev.status === 'ok' ? '#39ff14' : '#ff4455';
-  const statusText = ev.status === 'running' ? 'RUNNING' : ev.status === 'ok' ? `EXIT 0${ev.latencyMs ? ` · ${ev.latencyMs}ms` : ''}` : 'EXIT 1';
+  // D2c — five states, and only two of them carry an exit code. This used to
+  // be a binary: 'ok' was green EXIT 0 and everything else was red EXIT 1,
+  // so a command still WAITING on the operator had to be drawn as one or the
+  // other. It was drawn as EXIT 0, above the red EXIT 1 of the run that
+  // followed. EXIT 0 and EXIT 1 are claims about a finished run; a challenge
+  // and a denial are not finished runs.
+  const COLORS = {
+    running: '#00f2ff',
+    pending: '#ffb454',   // amber — waiting on a human
+    ok: '#39ff14',
+    denied: '#7d93a8',    // grey — the operator answered, nothing ran
+    fail: '#ff4455',
+  };
+  const color = COLORS[ev.status] || COLORS.fail;
+  const statusText =
+    ev.status === 'running' ? 'RUNNING'
+      : ev.status === 'pending' ? 'AWAITING APPROVAL'
+        : ev.status === 'denied' ? 'DENIED'
+          : ev.status === 'ok' ? `EXIT 0${ev.latencyMs ? ` · ${ev.latencyMs}ms` : ''}`
+            : 'EXIT 1';
   return (
     <div style={{ borderTop: `1px solid ${color}33`, borderRight: `1px solid ${color}33`, borderBottom: `1px solid ${color}33`, borderLeft: `3px solid ${color}`, borderRadius: 3, margin: '4px 0', background: 'rgba(10,16,26,0.6)' }}>
       <div onClick={onToggle} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 10px', cursor: 'pointer', fontSize: 11 }}>
@@ -49,7 +68,7 @@ function EventChip({ ev, onToggle }) {
         <span style={{ color: '#4a5568' }}>[{ev.pid}]</span>
         <span style={{ color, letterSpacing: '0.08em' }}>{ev.kind}</span>
         <span style={{ color: '#c8d6e8', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ev.label}</span>
-        {ev.status === 'running' && <Loader size={11} color={color} className="spin" />}
+        {(ev.status === 'running' || ev.status === 'pending') && <Loader size={11} color={color} className="spin" />}
         <span style={{ color, fontSize: 10 }}>{statusText}</span>
       </div>
       {ev.expanded && (
@@ -337,7 +356,7 @@ const Terminal2 = ({ onUsageUpdate }) => {
   }, []);
 
   // ── Verb 2: registry command ──
-  const runCommand = async (text, confirmed = false) => {
+  const runCommand = async (text, confirmed = false, resumeChipId = null) => {
     const [cmdToken, ...rest] = text.split(/\s+/);
     const arg = rest.join(' ');
 
@@ -368,26 +387,39 @@ const Terminal2 = ({ onUsageUpdate }) => {
     }
 
     // Everything else → command bus (manifest-discovered, block-owned).
-    const pid = nextPid();
+    //
+    // D2c — `resumeChipId` lets an approved challenge finish the SAME process
+    // line it started on. Without it, approving opened a second chip and one
+    // action produced two outcomes on screen.
     const t0 = Date.now();
-    const chipId = push({ type: 'chip', pid, kind: 'CMD', label: text, status: 'running', expanded: false });
+    const chipId = resumeChipId ?? push({
+      type: 'chip', pid: nextPid(), kind: 'CMD', label: text, status: 'running', expanded: false,
+    });
+    if (resumeChipId) patch(chipId, { status: 'running', label: text });
     try {
       const res = await fetch('/api/commands/dispatch', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ cmd: cmdToken, arg, confirmed }),
       });
       const data = await res.json().catch(() => ({}));
+      const outcome = describeDispatchOutcome({ status: res.status, data });
 
-      // Central confirmation gate → firewall intercept card
-      if (res.status === 428 && data.requiresConfirmation) {
-        patch(chipId, { status: 'ok', label: `${text} (awaiting approval)` });
-        push({ type: 'intercept', prompt: data.prompt, command: text });
+      // Central confirmation gate → the run PAUSES here. It is not finished,
+      // so it is not given an exit code.
+      if (outcome.kind === 'challenge') {
+        patch(chipId, { status: outcome.chipStatus, label: text });
+        push({ type: 'intercept', prompt: outcome.prompt, command: text, chipId });
         return;
       }
 
       const output = data.text || (data.data ? '```json\n' + JSON.stringify(data.data, null, 2) + '\n```' : data.error || '(empty)');
-      patch(chipId, { status: data.ok ? 'ok' : 'fail', output, latencyMs: Date.now() - t0, expanded: !data.ok });
-      if (data.ok && data.text) push({ type: 'msg', role: 'assistant', content: data.text, meta: { model: data.meta?.block, provider: 'Block Command', latencyMs: Date.now() - t0 } });
+      patch(chipId, {
+        status: outcome.chipStatus, output,
+        latencyMs: Date.now() - t0, expanded: outcome.expand,
+      });
+      if (outcome.kind === 'ok' && outcome.text) {
+        push({ type: 'msg', role: 'assistant', content: outcome.text, meta: { model: data.meta?.block, provider: 'Block Command', latencyMs: Date.now() - t0 } });
+      }
     } catch (e) {
       patch(chipId, { status: 'fail', output: e.message, expanded: true });
     }
@@ -437,13 +469,22 @@ const Terminal2 = ({ onUsageUpdate }) => {
     }
   };
 
+  // D2c — approving resumes the run on its ORIGINAL process line. It used to
+  // start a fresh one, so a single action left a green "awaiting approval"
+  // chip above the red chip of the run that actually happened.
   const approveIntercept = (entry) => {
     setFeed(prev => prev.filter(e => e.id !== entry.id));
     setIsLoading(true);
-    runCommand(entry.command, true).finally(() => setIsLoading(false));
+    runCommand(entry.command, true, entry.chipId).finally(() => setIsLoading(false));
   };
+
+  // Denial is an outcome the operator chose, not an error the system hit —
+  // and it must resolve the waiting chip, which previously sat on "awaiting
+  // approval" for the rest of the session.
   const denyIntercept = (entry) => {
-    patch(entry.id, { type: 'msg', role: 'system', content: `Denied: ${entry.command}` });
+    setFeed(prev => prev.filter(e => e.id !== entry.id));
+    const d = describeDenial(entry.command);
+    if (entry.chipId != null) patch(entry.chipId, { status: d.chipStatus, output: d.output, expanded: d.expand });
   };
 
   // ── Render ──
