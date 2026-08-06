@@ -25,7 +25,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Send, Loader, Cpu, Clock, Zap, ChevronRight, ChevronDown, ShieldAlert, Paperclip, Square, X as XIcon } from 'lucide-react';
 import { describeStreamFailure } from '../utils/interceptorPolicy.js';
-import { describeDispatchOutcome, describeDenial } from '../utils/commandOutcome.js';
+import { describeDispatchOutcome, describeDenial, describeCommandOutput } from '../utils/commandOutcome.js';
 
 // UI-only commands — act on the terminal or app itself, never the server.
 // Block commands come from GET /api/commands (manifest-discovered); add nothing here.
@@ -412,7 +412,10 @@ const Terminal2 = ({ onUsageUpdate }) => {
         return;
       }
 
-      const output = data.text || (data.data ? '```json\n' + JSON.stringify(data.data, null, 2) + '\n```' : data.error || '(empty)');
+      // D2d — empty is a legitimate answer and reads as one. This used to be
+      // an inline expression that rendered [] as an empty code block and
+      // silence as the literal string "(empty)".
+      const output = describeCommandOutput(data);
       patch(chipId, {
         status: outcome.chipStatus, output,
         latencyMs: Date.now() - t0, expanded: outcome.expand,

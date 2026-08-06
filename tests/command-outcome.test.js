@@ -18,6 +18,7 @@ import {
   CHIP_STATUS,
   describeDispatchOutcome,
   describeDenial,
+  describeCommandOutput,
   isTerminalStatus,
 } from '../src/utils/commandOutcome.js';
 
@@ -84,6 +85,60 @@ describe('a real result reports what actually happened', () => {
   it('does not treat whitespace as output worth announcing', () => {
     const o = describeDispatchOutcome({ status: 200, data: { ok: true, text: '   ' } });
     expect(o.text).toBeNull();
+  });
+});
+
+describe('BO-D2d — empty is a legitimate answer and must read as one', () => {
+  it('an empty list is a sentence, not an empty code block', () => {
+    // /docs returned [] and the terminal drew ```json\n[]\n``` — the
+    // machine's internal shape pasted onto the screen.
+    const out = describeCommandOutput({ ok: true, data: [] });
+    expect(out).not.toMatch(/```/);
+    expect(out).toMatch(/no entries/i);
+  });
+
+  it('{empty:true} is a sentence, not the word "empty" as JSON', () => {
+    const out = describeCommandOutput({ ok: true, data: { empty: true } });
+    expect(out).not.toMatch(/```/);
+    expect(out).toMatch(/no entries/i);
+  });
+
+  it('log lines the command wrote for a human are shown as prose', () => {
+    // /scan answers {ok:true, text:null, data:{logs:[…]}} — verified live.
+    const out = describeCommandOutput({
+      ok: true, text: null,
+      data: { success: true, logs: ['✔ Supabase notes merged.', 'ℹ Matrix indexing skipped.'] },
+    });
+    expect(out).toBe('✔ Supabase notes merged.\nℹ Matrix indexing skipped.');
+    expect(out).not.toMatch(/```/);
+  });
+
+  it('real structured data is still shown', () => {
+    const out = describeCommandOutput({ ok: true, data: { models: ['a', 'b'] } });
+    expect(out).toMatch(/```json/);
+    expect(out).toMatch(/models/);
+  });
+
+  it('a non-empty list is still shown', () => {
+    expect(describeCommandOutput({ ok: true, data: [{ id: 1 }] })).toMatch(/```json/);
+  });
+
+  it('text wins over everything', () => {
+    expect(describeCommandOutput({ ok: true, text: 'the answer', data: [] })).toBe('the answer');
+  });
+
+  it('an error is shown when there is no data', () => {
+    expect(describeCommandOutput({ ok: false, error: 'Invalid repo_id' })).toBe('Invalid repo_id');
+  });
+
+  it('silence is described, never rendered as "(empty)"', () => {
+    // "(empty)" reads like a value the command returned.
+    const ok = describeCommandOutput({ ok: true });
+    const bad = describeCommandOutput({ ok: false });
+    expect(ok).not.toMatch(/\(empty\)/);
+    expect(bad).not.toMatch(/\(empty\)/);
+    expect(ok).toMatch(/success/i);
+    expect(bad).toMatch(/did not say why/i);
   });
 });
 

@@ -87,6 +87,65 @@ export function describeDispatchOutcome({ status, data } = {}) {
 }
 
 /**
+ * What should the chip actually SHOW?
+ *
+ * BO-D2d. The old expression was:
+ *
+ *   data.text || (data.data ? '```json…```' : data.error || '(empty)')
+ *
+ * which produced, on real commands:
+ *
+ *   /docs    → ```json\n[]\n```          a code block containing nothing
+ *   /upload  → ```json\n{"empty":true}``` the word "empty" as JSON
+ *   /scan    → (empty)                    while data.logs held the real answer
+ *
+ * Empty is a legitimate answer and should read as one. A raw JSON dump of an
+ * empty container is the machine's internal state pasted onto the screen, and
+ * "(empty)" for a command that returned several log lines is simply wrong —
+ * /scan answers {ok:true, text:null, data:{logs:[…]}}, and the old expression
+ * checked `data.text` first, found null, then rendered `data` as JSON only if
+ * truthy… which it was, so /scan actually printed its logs as JSON. The
+ * commands that printed "(empty)" were the ones with no `data` at all.
+ *
+ * Either way the operator got machine shape instead of an answer.
+ */
+export function describeCommandOutput(data) {
+  const body = data || {};
+
+  if (typeof body.text === 'string' && body.text.trim()) return body.text;
+
+  // A logs array is prose the command already wrote for a human.
+  const logs = body.data?.logs ?? body.logs;
+  if (Array.isArray(logs) && logs.length) return logs.join('\n');
+
+  const payload = body.data;
+
+  if (Array.isArray(payload)) {
+    return payload.length
+      ? '```json\n' + JSON.stringify(payload, null, 2) + '\n```'
+      : 'Nothing to show — the command ran and found no entries.';
+  }
+
+  if (payload && typeof payload === 'object') {
+    // {empty:true} and {} are both "it worked, there is nothing here".
+    const keys = Object.keys(payload);
+    const onlyEmptyFlag = keys.length === 1 && keys[0] === 'empty' && payload.empty === true;
+    if (!keys.length || onlyEmptyFlag) {
+      return 'Nothing to show — the command ran and found no entries.';
+    }
+    return '```json\n' + JSON.stringify(payload, null, 2) + '\n```';
+  }
+
+  if (typeof body.error === 'string' && body.error.trim()) return body.error;
+
+  // Nothing at all came back. Say that, rather than "(empty)", which reads
+  // like a value the command returned.
+  return body.ok
+    ? 'Done — the command reported success and returned no output.'
+    : 'The command returned no output and did not say why.';
+}
+
+/**
  * The operator answered the challenge with "no".
  *
  * Denial is an outcome the operator chose, not an error the system hit. It
