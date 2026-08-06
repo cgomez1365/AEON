@@ -36,11 +36,31 @@ const fs = require('fs');
 const net = require('net');
 const os = require('os');
 const path = require('path');
+const budget = require('./budget.cjs');
 
 const READY_TIMEOUT_MS = 90_000;   // cold load of a multi-GB model off disk
 const HEALTH_POLL_MS = 250;
-const REQUEST_TIMEOUT_MS = 180_000;
 const STDERR_KEEP = 40;            // lines retained for diagnostics
+
+/**
+ * BO-D1b — the timeout measures SILENCE, not duration.
+ *
+ * This was `REQUEST_TIMEOUT_MS = 180_000`, a wall clock on the whole request.
+ * It is the reason every long answer stopped near 750 tokens: the model was
+ * still generating correctly and the clock ran out. The operator saw 701,
+ * 730, 743 tokens and no setting they could reach changed it, because the
+ * ceiling was not a token setting at all.
+ *
+ * Wall-clock is the wrong measurement. A healthy 40-minute generation emits
+ * tokens the entire time; a wedged one stops emitting. So we bound the gap
+ * BETWEEN tokens instead. That is simultaneously far more permissive for
+ * real work and strictly harsher on an actually-hung model — a server that
+ * dies silently is now caught in 60s rather than 180.
+ */
+const IDLE_TIMEOUT_MS = 60_000;
+
+/** Non-streaming calls still need an upper bound; generous, not a ceiling. */
+const NONSTREAM_TIMEOUT_MS = 900_000;
 
 /** Ask the OS for a free loopback port, then release it for the child. */
 function reserveLoopbackPort() {
@@ -67,13 +87,22 @@ class ServerSession {
    *   b10216 removed the standalone llama-embedding binary — embeddings are a
    *   llama-server mode now, which is why one session class covers both.
    */
-  constructor({ entryAbsPath, modelAbsPath, contextSize = 4096, ngl = 0, logPath = null, embeddings = false }) {
+  constructor({ entryAbsPath, modelAbsPath, contextSize = 4096, ngl = 0, logPath = null, embeddings = false,
+                cacheType = null, idleTimeoutMs = IDLE_TIMEOUT_MS }) {
     this.entryAbsPath = entryAbsPath;
     this.modelAbsPath = modelAbsPath;
     this.contextSize = contextSize;
     this.ngl = ngl;
     this.logPath = logPath;
     this.embeddings = embeddings;
+    // D1e — 'q8_0' halves the KV cache, which is the lever that puts 32k in
+    // reach on a machine that could otherwise only serve 8k.
+    this.cacheType = cacheType;
+    this.idleTimeoutMs = idleTimeoutMs;
+
+    // D1c — in-flight generations, so a stop request can reach them.
+    this._active = new Set();
+    this._idleAborted = new WeakSet();
 
     this.child = null;
     this.port = null;
@@ -135,6 +164,9 @@ class ServerSession {
       '--port', String(this.port),
       '--ctx-size', String(this.contextSize),
       '--n-gpu-layers', String(this.ngl),
+      // Quantising K and V halves the cache. Applied only when the fit engine
+      // asked for it, so the default path keeps f16 precision.
+      ...(this.cacheType ? ['--cache-type-k', this.cacheType, '--cache-type-v', this.cacheType] : []),
       '--no-webui',                   // we are the UI; don't serve another one
       ...(this.embeddings
         // Embedding mode: pooling must be set or /v1/embeddings 500s, and
@@ -223,12 +255,29 @@ class ServerSession {
    * Chat completion. Returns { text, tokens, model }.
    * onToken, when supplied, receives each token as it streams.
    */
-  async chat(messages, { maxTokens = 512, temperature = 0.7, stop, onToken } = {}) {
+  async chat(messages, { maxTokens, temperature = 0.7, stop, onToken, signal, long = false } = {}) {
     if (this.state !== 'ready') await this.start();
+
+    // D1a — the budget is arithmetic against THIS session's window, not a
+    // constant. `maxTokens` remains overridable, but the default is now
+    // derived rather than guessed at 512.
+    const promptTokens = budget.estimateMessageTokens(messages);
+    const plan = budget.outputBudget({
+      contextTokens: this.contextSize,
+      promptTokens,
+      long,
+      requested: maxTokens,
+    });
+    if (!plan.fits) {
+      const e = new Error(plan.reason);
+      e.code = 'CONTEXT_EXHAUSTED';
+      e.budget = plan;
+      throw e;
+    }
 
     const body = {
       messages,
-      max_tokens: maxTokens,
+      max_tokens: plan.maxTokens,
       temperature,
       stream: !!onToken,
       ...(stop && stop.length ? { stop } : {}),
@@ -241,50 +290,161 @@ class ServerSession {
       chat_template_kwargs: { enable_thinking: false },
     };
 
-    const res = await fetch(`${this.baseUrl}/v1/chat/completions`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
-
-    if (!res.ok) {
-      const detail = await res.text().catch(() => '');
-      throw new Error(`llama-server returned ${res.status}: ${detail.slice(0, 300)}`);
+    // D1c — the caller's abort signal reaches the upstream fetch. Aborting
+    // this request is what makes llama-server cancel generation; without it
+    // /chat/stop could only ever lie. At the old 512-token cap a fake stop
+    // was a two-minute annoyance. At D1a's budget it is ~43 minutes of
+    // unstoppable CPU while the UI says "cancelled".
+    const controller = new AbortController();
+    const abortUpstream = () => { try { controller.abort(); } catch { /* already gone */ } };
+    if (signal) {
+      if (signal.aborted) abortUpstream();
+      else signal.addEventListener('abort', abortUpstream, { once: true });
     }
+    this._active.add(controller);
 
-    if (!onToken) {
-      const json = await res.json();
-      const msg = json?.choices?.[0]?.message || {};
-      // Belt and braces for the same problem: if a model reasoned its way
-      // through the entire budget anyway, show that rather than nothing. A
-      // wall of thinking is a bad answer; an empty bubble is not an answer.
-      const text = msg.content || msg.reasoning_content || '';
-      return { text, tokens: json?.usage?.total_tokens || 0, model: json?.model || null };
-    }
+    try {
+      const res = await fetch(`${this.baseUrl}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+        // Non-streaming has no token events to measure silence against, so it
+        // keeps a bound — generous enough not to be the ceiling D1b removed.
+        signal: onToken
+          ? controller.signal
+          : AbortSignal.any([controller.signal, AbortSignal.timeout(NONSTREAM_TIMEOUT_MS)]),
+      });
 
-    // SSE stream: "data: {json}\n\n", terminated by "data: [DONE]".
-    let text = '';
-    let model = null;
-    const decoder = new TextDecoder();
-    let buffer = '';
-    for await (const chunk of res.body) {
-      buffer += decoder.decode(chunk, { stream: true });
-      const parts = buffer.split('\n');
-      buffer = parts.pop();
-      for (const line of parts) {
-        const s = line.trim();
-        if (!s.startsWith('data:')) continue;
-        const payload = s.slice(5).trim();
-        if (payload === '[DONE]') continue;
-        let evt;
-        try { evt = JSON.parse(payload); } catch { continue; }
-        model = model || evt.model || null;
-        const delta = evt?.choices?.[0]?.delta?.content;
-        if (delta) { text += delta; onToken(delta); }
+      if (!res.ok) {
+        const detail = await res.text().catch(() => '');
+        throw new Error(`llama-server returned ${res.status}: ${detail.slice(0, 300)}`);
       }
+
+      if (!onToken) {
+        const json = await res.json();
+        const choice = json?.choices?.[0] || {};
+        const msg = choice.message || {};
+        // Belt and braces for the same problem: if a model reasoned its way
+        // through the entire budget anyway, show that rather than nothing. A
+        // wall of thinking is a bad answer; an empty bubble is not an answer.
+        const text = msg.content || msg.reasoning_content || '';
+        return {
+          text,
+          tokens: json?.usage?.total_tokens || 0,
+          model: json?.model || null,
+          ...this._completion(choice.finish_reason, plan),
+        };
+      }
+
+      // SSE stream: "data: {json}\n\n", terminated by "data: [DONE]".
+      let text = '';
+      let model = null;
+      let finishReason = null;
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      // D1b — bound the gap between tokens, not the life of the request.
+      let idleTimer = null;
+      const armIdle = () => {
+        clearTimeout(idleTimer);
+        idleTimer = setTimeout(() => {
+          this._idleAborted.add(controller);
+          abortUpstream();
+        }, this.idleTimeoutMs);
+      };
+      armIdle();
+
+      try {
+        for await (const chunk of res.body) {
+          armIdle();                       // a token arrived: the model is alive
+          buffer += decoder.decode(chunk, { stream: true });
+          const parts = buffer.split('\n');
+          buffer = parts.pop();
+          for (const line of parts) {
+            const s = line.trim();
+            if (!s.startsWith('data:')) continue;
+            const payload = s.slice(5).trim();
+            if (payload === '[DONE]') continue;
+            let evt;
+            try { evt = JSON.parse(payload); } catch { continue; }
+            model = model || evt.model || null;
+            const choice = evt?.choices?.[0];
+            if (choice?.finish_reason) finishReason = choice.finish_reason;
+            const delta = choice?.delta?.content;
+            if (delta) { text += delta; onToken(delta); }
+          }
+        }
+      } catch (e) {
+        if (e?.name === 'AbortError') {
+          if (this._idleAborted.has(controller)) {
+            const stalled = new Error(
+              `The model stopped producing output for ${Math.round(this.idleTimeoutMs / 1000)}s and was cancelled. `
+              + `${text.length ? 'The partial answer above is what it produced.' : 'It produced nothing.'} `
+              + `${this.stderrTail(3)}`.trim()
+            );
+            stalled.code = 'MODEL_STALLED';
+            stalled.partialText = text;
+            throw stalled;
+          }
+          // A deliberate stop is not a failure. Return what was generated.
+          return {
+            text, model,
+            tokens: budget.estimateTokens(text),
+            complete: false,
+            finishReason: 'cancelled',
+            truncated: false,
+            cancelled: true,
+            budget: plan,
+          };
+        }
+        throw e;
+      } finally {
+        clearTimeout(idleTimer);
+      }
+
+      return {
+        text, model,
+        tokens: budget.estimateTokens(text),
+        ...this._completion(finishReason, plan),
+      };
+    } finally {
+      this._active.delete(controller);
+      this._idleAborted.delete(controller);
+      if (signal) signal.removeEventListener?.('abort', abortUpstream);
     }
-    return { text, tokens: Math.ceil(text.length / 4), model };
+  }
+
+  /**
+   * D1d — say whether the answer actually finished.
+   *
+   * `finish_reason` was read and discarded, so a reply cut off at the budget
+   * was indistinguishable on screen from one the model chose to end. That is
+   * §08 exactly: AEON held the fact and dropped it on the way to the display.
+   * With this surfaced, a caller can offer Continue — and once turns stitch,
+   * output length stops being bounded by the window at all.
+   */
+  _completion(finishReason, plan) {
+    const truncated = finishReason === 'length';
+    return {
+      finishReason: finishReason || null,
+      complete: !truncated,
+      truncated,
+      budget: plan,
+      ...(truncated ? {
+        truncationReason:
+          `The answer reached its ${plan.maxTokens.toLocaleString()}-token budget and stopped mid-thought. `
+          + (plan.limitedBy === 'cap'
+            ? 'Continue to carry on, or use long mode to release the rest of the window.'
+            : 'Continue to carry on in a fresh turn.'),
+      } : {}),
+    };
+  }
+
+  /** D1c — cancel every generation in flight on this session. */
+  cancelActive() {
+    let n = 0;
+    for (const c of this._active) { try { c.abort(); n++; } catch { /* already gone */ } }
+    return n;
   }
 
   /**
@@ -299,7 +459,9 @@ class ServerSession {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ input: String(text) }),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      // An embedding is a single short forward pass — a wall clock is the
+      // right measurement here, unlike generation (D1b).
+      signal: AbortSignal.timeout(120_000),
     });
     if (!res.ok) {
       const detail = await res.text().catch(() => '');
@@ -317,6 +479,9 @@ class ServerSession {
   stop() {
     this.state = 'stopped';
     this._startPromise = null;
+    // Killing the child would strand any awaiting generation; abort them
+    // first so callers get a cancellation rather than a socket error.
+    this.cancelActive();
     if (this.child && !this.child.killed) {
       try { this.child.kill(); } catch { /* already gone */ }
     }
@@ -325,4 +490,4 @@ class ServerSession {
   }
 }
 
-module.exports = { ServerSession, reserveLoopbackPort, serverBinaryFor, READY_TIMEOUT_MS };
+module.exports = { ServerSession, reserveLoopbackPort, serverBinaryFor, READY_TIMEOUT_MS, IDLE_TIMEOUT_MS };

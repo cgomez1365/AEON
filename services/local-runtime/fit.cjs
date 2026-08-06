@@ -26,17 +26,68 @@ const GB = 1024 * 1024 * 1024;
 const SERVABLE_FORMATS = new Set(['gguf']);
 
 /**
+ * KV cache size, in bytes.
+ *
+ * BO-D1e. This used to be `(modelBytes/GB) * (ctx/1024) * 0.5 MB` — a flat
+ * coefficient keyed off FILE SIZE, under a comment claiming it deliberately
+ * over-estimated. For Llama-3.1-8B at its 131,072 ceiling it predicted
+ * 0.29 GB against a real cache of 16.00 GB. Fifty-six times under, in the
+ * one direction the comment promised it would never err (Bible §08).
+ *
+ * The cache is not a function of file size at all. Quantisation shrinks the
+ * weights and leaves the KV element width alone, so a Q4 build and an f16
+ * build of the same architecture carry an identical cache. It is:
+ *
+ *     layers x kv_heads x head_dim x 2 (K and V) x bytes_per_element x ctx
+ *
+ * `bytesPerElement` is 2 for the default f16 cache and 1 for q8_0 — that
+ * flag is the lever that halves the cost and makes 32k reachable.
+ *
+ * @param {object|null} spec  { layers, kvHeads, headDim } — from the catalogue
+ * @param {number} contextTokens
+ * @param {object} [opts] { bytesPerElement = 2, modelBytes }
+ */
+function estimateKvBytes(spec, contextTokens, opts = {}) {
+  const ctx = Math.max(512, Math.min(contextTokens || 4096, 131072));
+  const b = opts.bytesPerElement || 2;
+
+  if (spec && spec.layers && spec.kvHeads && spec.headDim) {
+    return spec.layers * spec.kvHeads * spec.headDim * 2 * b * ctx;
+  }
+
+  // Architecture unknown — a discovered model with no catalogue entry.
+  //
+  // Now we honour what the old comment only claimed. Grouped-query attention
+  // is what makes a modern cache small; a model we cannot inspect might be
+  // full multi-head, which costs up to 8x more for the same parameter count.
+  // So: derive a GQA reference from the parameter count, then assume the
+  // worst-case MHA shape. Guessing high means "it will be tight" on a model
+  // that turns out to be fine. Guessing low means an OOM the operator was
+  // told would not happen — and that is the failure this module exists to
+  // prevent.
+  const params = (opts.modelBytes || 0) * 2;        // ~0.5 bytes/param, generous
+  const gqaBytesPerTokenPerParam = 8.2e-6;          // measured on Llama-3.1-8B
+  const perToken = params * gqaBytesPerTokenPerParam * (b / 2) * KV_UNKNOWN_MHA_FACTOR;
+  return Math.round(perToken * ctx);
+}
+
+// Worst-case multi-head vs grouped-query ratio, applied when we cannot see
+// the architecture. Llama-3.1-8B is 32 heads to 8 KV heads — a factor of 4;
+// 8 leaves room for the wider ratios in circulation.
+const KV_UNKNOWN_MHA_FACTOR = 8;
+
+/**
  * Working-set estimate for a GGUF model.
  *
  * weights + KV cache + runtime overhead. The KV term is what people forget:
  * it scales with context length, which is why a model that "just fits" at 2k
- * fails at 32k. Deliberately an over-estimate — telling someone a model fits
- * when it does not is far worse than telling them it is tight.
+ * fails at 32k.
  */
-function estimateWorkingSet(modelBytes, contextTokens) {
-  const ctx = Math.max(512, Math.min(contextTokens || 4096, 131072));
-  // ~0.5 MB per 1k tokens per GB of weights. Empirical, deliberately generous.
-  const kv = (modelBytes / GB) * (ctx / 1024) * 0.5 * 1024 * 1024;
+function estimateWorkingSet(modelBytes, contextTokens, opts = {}) {
+  const kv = estimateKvBytes(opts.kv || null, contextTokens, {
+    bytesPerElement: opts.bytesPerElement || 2,
+    modelBytes,
+  });
   const overhead = 300 * 1024 * 1024;   // allocator, graph, tokenizer
   return Math.round(modelBytes + kv + overhead);
 }
@@ -117,7 +168,10 @@ function assess(model, caps, opts = {}) {
     };
   }
 
-  const required = estimateWorkingSet(bytes, ctx);
+  const required = estimateWorkingSet(bytes, ctx, {
+    kv: model.kv || null,
+    bytesPerElement: opts.bytesPerElement || 2,
+  });
   const ratio = required / budget;
 
   if (ratio <= 0.70) {
@@ -171,10 +225,74 @@ function assessCatalog(models, caps, opts = {}) {
   };
 }
 
+/**
+ * Largest context this machine can actually serve for this model.
+ *
+ * BO-D1e, second half. Context was hardcoded to `min(contextCeiling, 8192)`
+ * in local-runtime/index.cjs — the same 8,192 on a 4 GB laptop and on a
+ * 32 GB workstation, against models declaring a 131,072 ceiling. One number
+ * standing in for a measurement.
+ *
+ * Walks the standard context steps downward and returns the largest that
+ * fits the measured budget with headroom, never exceeding the model's own
+ * ceiling. Returns the numbers behind the choice so a UI can explain it
+ * rather than assert it (§08).
+ *
+ * `target` caps the search: there is no point serving 131k to a chat box,
+ * and the cache is charged whether or not the window is filled.
+ */
+const CONTEXT_STEPS = [131072, 65536, 32768, 16384, 8192, 4096, 2048];
+
+function largestFittingContext(model, caps, opts = {}) {
+  const target = opts.target || 32768;
+  const ceiling = Number(model.contextCeiling) || 4096;
+  const budget = caps?.budget?.bytes;
+  const bytesPerElement = opts.bytesPerElement || 2;
+  const headroom = opts.headroom ?? 0.70;   // same "runnable" bar as assess()
+
+  if (!budget) {
+    // No measurement, no promise. Fall back to the old floor and say why.
+    return {
+      contextTokens: Math.min(ceiling, 4096),
+      limitedBy: 'unknown-budget',
+      reason: 'Could not determine available memory; using a conservative window.',
+    };
+  }
+
+  const candidates = CONTEXT_STEPS.filter(c => c <= Math.min(ceiling, target));
+  for (const ctx of candidates) {
+    const required = estimateWorkingSet(Number(model.bytes) || 0, ctx, {
+      kv: model.kv || null,
+      bytesPerElement,
+    });
+    if (required <= budget * headroom) {
+      return {
+        contextTokens: ctx,
+        limitedBy: ctx === Math.min(ceiling, target) ? (ceiling <= target ? 'model-ceiling' : 'target') : 'memory',
+        requiredBytes: required,
+        budgetBytes: budget,
+        kvBytes: estimateKvBytes(model.kv || null, ctx, { bytesPerElement, modelBytes: model.bytes }),
+        bytesPerElement,
+        reason: `${ctx.toLocaleString()} tokens needs about ${fmtGb(required)} of ${fmtGb(budget)}.`,
+      };
+    }
+  }
+
+  const smallest = candidates[candidates.length - 1] || 2048;
+  return {
+    contextTokens: smallest,
+    limitedBy: 'memory',
+    requiredBytes: estimateWorkingSet(Number(model.bytes) || 0, smallest, { kv: model.kv || null, bytesPerElement }),
+    budgetBytes: budget,
+    reason: `Even ${smallest.toLocaleString()} tokens is tight on ${fmtGb(budget)}.`,
+    remedy: 'Use a heavier quantisation, or quantise the KV cache to q8_0 to halve it.',
+  };
+}
+
 /** Largest catalogue entry that runs comfortably — the "start here" pick. */
 function recommend(models, caps, opts = {}) {
   const { shown } = assessCatalog(models, caps, opts);
   return shown.find(m => m.fit.verdict === 'runnable') || shown[0] || null;
 }
 
-module.exports = { assess, assessCatalog, recommend, estimateWorkingSet, SERVABLE_FORMATS, GB };
+module.exports = { assess, assessCatalog, recommend, estimateWorkingSet, estimateKvBytes, largestFittingContext, SERVABLE_FORMATS, GB };

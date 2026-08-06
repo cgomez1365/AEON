@@ -21,6 +21,8 @@ const storage = require('../storage.js');
 const P = require('./paths.cjs');
 const R = require('./registry.cjs');
 const { ServerSession } = require('./server-session.cjs');
+const fit = require('./fit.cjs');
+const capabilities = require('./capabilities.cjs');
 const { ensureLocalReady: _ensureLocalReady } = require('./provision.cjs');
 
 // ── Registry accessor ─────────────────────────────────────────────────────────
@@ -163,6 +165,55 @@ function queueState() {
   return { depth: _queue.depth, busy: _queue.busy };
 }
 
+/**
+ * D1e — decide this model's context window from measured memory.
+ *
+ * Tries the f16 cache first. If the machine cannot hold the target window
+ * that way, retries with a q8_0 cache, which halves the KV cost — the lever
+ * that turns "8k is all you get" into 32k on the same hardware. Only if both
+ * fail does the window come down.
+ *
+ * Capabilities detection spawns probe processes, so it is resolved once per
+ * process rather than on every session start.
+ */
+let _capsPromise = null;
+function _caps() {
+  if (!_capsPromise) {
+    _capsPromise = capabilities.detect().catch(() => null);
+  }
+  return _capsPromise;
+}
+
+async function _contextFor(model, opts = {}) {
+  const target = opts.target || 32768;
+  const caps = await _caps();
+
+  if (!caps?.budget?.bytes) {
+    // No measurement, no promise (§08). Keep the historical floor and say so.
+    return {
+      contextTokens: Math.min(Number(model.contextCeiling) || 4096, 8192),
+      cacheType: null,
+      limitedBy: 'unknown-budget',
+      reason: 'Available memory could not be measured; using a conservative 8,192-token window.',
+    };
+  }
+
+  const f16 = fit.largestFittingContext(model, caps, { target, bytesPerElement: 2 });
+  if (f16.contextTokens >= Math.min(target, Number(model.contextCeiling) || target)) {
+    return { ...f16, cacheType: null };
+  }
+
+  const q8 = fit.largestFittingContext(model, caps, { target, bytesPerElement: 1 });
+  if (q8.contextTokens > f16.contextTokens) {
+    return {
+      ...q8,
+      cacheType: 'q8_0',
+      reason: `${q8.reason} KV cache quantised to q8_0 to reach this window.`,
+    };
+  }
+  return { ...f16, cacheType: null };
+}
+
 async function _runNow(prompt, opts = {}, onToken) {
   const t0 = Date.now();
   const { session, modelId } = await _sessionForModel(opts.model);
@@ -176,9 +227,14 @@ async function _runNow(prompt, opts = {}, onToken) {
       ];
 
   const r = await session.chat(messages, {
-    maxTokens: opts.maxTokens ?? opts.max_tokens ?? 512,
+    // D1a — no default of 512 here. Undefined means "derive it from the
+    // window", which is the only number that can be correct for every prompt
+    // size. An explicit caller value still wins, as a ceiling.
+    maxTokens: opts.maxTokens ?? opts.max_tokens,
     temperature: opts.temperature ?? 0.7,
     stop: opts.stop,
+    long: opts.long === true,
+    signal: opts.signal,
     onToken: onToken || undefined,
   });
 
@@ -188,6 +244,15 @@ async function _runNow(prompt, opts = {}, onToken) {
     latencyMs: Date.now() - t0,
     provider: 'local',
     model: modelId,
+    // D1d — carried all the way out. A truncated answer must be
+    // distinguishable from a complete one by every consumer, not just here.
+    complete: r.complete,
+    truncated: r.truncated,
+    finishReason: r.finishReason,
+    ...(r.truncationReason ? { truncationReason: r.truncationReason } : {}),
+    ...(r.cancelled ? { cancelled: true } : {}),
+    contextTokens: session.contextSize,
+    budget: r.budget,
   };
 }
 
@@ -298,14 +363,54 @@ async function _sessionForModel(modelId) {
     return { session: existing, modelId: model.id };
   }
 
+  // D1e — context is measured, not assumed. This was
+  // `Math.min(contextCeiling, 8192)`: the same 8,192 on a 4 GB laptop and a
+  // 32 GB workstation, against models declaring 131,072. The fit engine now
+  // picks the largest window this machine can actually hold, and says why.
+  const sizing = await _contextFor(model);
   const session = new ServerSession({
     entryAbsPath: reg.resolveEntryPath(runtime),
     modelAbsPath: reg.resolveEntryPath(model),
-    contextSize: Math.min(Number(model.contextCeiling) || 4096, 8192),
+    contextSize: sizing.contextTokens,
+    cacheType: sizing.cacheType,
   });
+  session.sizing = sizing;
   _sessions.set(model.id, session);
   await session.start();
   return { session, modelId: model.id };
 }
 
-module.exports = { isAvailable, defaultModel, listReadyModels, infer, inferStream, embed, status, shutdown, ensureLocalReady, queueState };
+/**
+ * D1c — cancel every generation in flight, across every loaded model.
+ *
+ * The backstop for a stop request that names no stream: a generation started
+ * by something other than the chat route (an agent loop, Writer, a command)
+ * is still burning CPU the operator asked to reclaim.
+ */
+function cancelAll() {
+  let n = 0;
+  for (const s of _sessions.values()) n += s.cancelActive?.() || 0;
+  return n;
+}
+
+/**
+ * The context window this model would be served at, without starting it.
+ *
+ * D1f needs the live window to denominate the memory and skill budgets in
+ * tokens. Callers must not have to boot a model to find out how much room
+ * they are spending from.
+ */
+async function plannedContext(modelId) {
+  try {
+    const reg = _registry();
+    const model = modelId
+      ? reg.readyModels().find(m => m.id === modelId)
+      : reg.modelsForCapability('chat')[0];
+    if (!model) return null;
+    const existing = _sessions.get(model.id);
+    if (existing?.sizing) return existing.sizing;
+    return await _contextFor(model);
+  } catch { return null; }
+}
+
+module.exports = { isAvailable, defaultModel, listReadyModels, infer, inferStream, embed, status, shutdown, ensureLocalReady, queueState, plannedContext, cancelAll };

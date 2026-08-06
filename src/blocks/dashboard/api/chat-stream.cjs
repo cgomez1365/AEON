@@ -14,6 +14,7 @@ const router = express.Router();
 const fs = require('fs');
 const path = require('path');
 const settingsAuthority = require('../../../../services/settings.js');
+const budget = require('../../../../services/local-runtime/budget.cjs');
 
 module.exports = function ({ getLocalFile, GEMINI_KEY_POOL, _trackLLM, writeOSAudit, VAULT_ROOT, DEFAULT_LOCAL_MODEL, defaultLocalModel }) {
   const localModel = (defaultLocalModel ? defaultLocalModel() : null) || DEFAULT_LOCAL_MODEL || null;
@@ -42,7 +43,7 @@ module.exports = function ({ getLocalFile, GEMINI_KEY_POOL, _trackLLM, writeOSAu
   const MEMORY_FILE = path.join(VAULT_ROOT || path.join(__dirname, '..', '..', 'aeon_matrix', 'data', 'Vault'), 'Agents', 'vp', 'memory', 'memories.json');
   const WAKE_RE = /\bvp[,!]?\s+(?:come\s+)?online\b/i;
 
-  function buildMemoryContext(message, settings) {
+  function buildMemoryContext(message, settings, contextTokens = 8192) {
     const prefs = settings.prefs?.brain_settings || {};
     if (prefs.memory_in_context === false) return { text: '', wake: false, count: 0 };
     let all = [];
@@ -58,14 +59,20 @@ module.exports = function ({ getLocalFile, GEMINI_KEY_POOL, _trackLLM, writeOSAu
     const maxN = wake ? all.length : Math.max(prefs.memory_max_context || 25, pinned.length);
     const chosen = [...pinned, ...rest].slice(0, maxN);
 
-    const CHAR_BUDGET = wake ? 10000 : 4500; // context-window guard
+    // D1f — budgeted in TOKENS against the live window, not in characters
+    // against nothing. The old CHAR_BUDGET (4500 / 10000 on wake) was the
+    // same on an 8k window and a 32k one, and a 4,500-character block is
+    // 1,100 tokens of prose or 1,800 of code — a spread nothing reconciled.
+    const budgets = budget.inputBudgets(contextTokens, { wake });
     const lines = [];
-    let used = 0;
+    let usedTokens = 0;
+    let dropped = 0;
     for (const m of chosen) {
       const line = `- [${m.category || 'fact'}] ${m.text}`;
-      if (used + line.length > CHAR_BUDGET) break;
+      const cost = budget.estimateTokens(line);
+      if (usedTokens + cost > budgets.memoryTokens) { dropped++; continue; }
       lines.push(line);
-      used += line.length + 1;
+      usedTokens += cost;
     }
 
     // Approved skills (brain_skills prefs), capped by count and budget
@@ -73,19 +80,23 @@ module.exports = function ({ getLocalFile, GEMINI_KEY_POOL, _trackLLM, writeOSAu
       .filter(s => s.status === 'approved' && s.body)
       .slice(0, prefs.skill_max_injected || 30);
     let skillText = '';
-    let skillBudget = wake ? 5000 : 2500;
+    let skillBudget = budgets.skillTokens;
+    let skillsDropped = 0;
     for (const s of skills) {
       const block = `\n### ${s.title}\n${String(s.body).slice(0, 1500)}`;
-      if (block.length > skillBudget) break;
+      const cost = budget.estimateTokens(block);
+      if (cost > skillBudget) { skillsDropped++; continue; }
       skillText += block;
-      skillBudget -= block.length;
+      skillBudget -= cost;
     }
 
     let text = '';
     if (lines.length) text += `\n\n## MEMORY (long-term store — ground truth about the operator and this system)\n${lines.join('\n')}`;
     if (skillText) text += `\n\n## SKILLS (standing procedures — follow these)${skillText}`;
     if (wake) text += `\n\n## WAKE\nThe operator just said the wake phrase. You are VP, AEON's operations agent. All ${all.length} memories are loaded above. Confirm you are online, state the memory count, restate the prime directive, and ask for the mission. Do not ask what "VP" means.`;
-    return { text, wake, count: lines.length };
+    // `dropped` is returned so a caller can report what the budget discarded
+    // rather than discarding it silently. Surfacing it in the UI is D2a.
+    return { text, wake, count: lines.length, considered: chosen.length, dropped, skillsDropped, budgets };
   }
 
   // Resolve a provider's key from .env OR the vault (added via "Add connection"),
@@ -142,14 +153,16 @@ module.exports = function ({ getLocalFile, GEMINI_KEY_POOL, _trackLLM, writeOSAu
     }
   }
 
-  async function* streamLocal(prompt, model) {
+  async function* streamLocal(prompt, model, signal) {
     const lr = (() => { try { return require('../../../../services/local-runtime/index.cjs'); } catch { return null; } })();
     if (!lr || !lr.isAvailable()) throw new Error('Native local runtime not ready');
     let resolve, reject;
     const done = new Promise((res, rej) => { resolve = res; reject = rej; });
     const tokens = [];
     let ended = false;
-    lr.inferStream(prompt, { model: model || undefined }, (token) => {
+    // D1c — the signal has to reach llama-server. Without it, "stop" could
+    // only ever stop the display.
+    lr.inferStream(prompt, { model: model || undefined, signal }, (token) => {
       tokens.push(token);
       if (resolve) { const r = resolve; resolve = null; r(); }
     }).then(() => { ended = true; if (resolve) resolve(); }).catch(e => { ended = true; if (reject) reject(e); });
@@ -188,10 +201,22 @@ module.exports = function ({ getLocalFile, GEMINI_KEY_POOL, _trackLLM, writeOSAu
     }
   }
 
+  // D1c — streams in flight, so /chat/stop can reach one. Keyed by the id
+  // the client sends (or one we mint and hand back in the opening meta
+  // event), because "stop" has to name WHICH generation to stop.
+  const activeStreams = new Map();
+
   // ── POST /chat/stream — the main SSE endpoint ─────────────────────
   router.post('/chat/stream', async (req, res) => {
-    const { message, role = 'chat', history = [] } = req.body || {};
+    const { message, role = 'chat', history = [], streamId: clientStreamId } = req.body || {};
     if (!message) return res.status(400).json({ error: 'message required' });
+
+    const streamId = String(clientStreamId || `s_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
+    const abort = new AbortController();
+    activeStreams.set(streamId, abort);
+    // A client that closes the tab is a stop too — the old code left the
+    // model generating into a socket nobody was reading.
+    res.on('close', () => { try { abort.abort(); } catch {} activeStreams.delete(streamId); });
 
     const settings = loadSettings();
     const roleConfig = settings.models[role] || settings.models.chat;
@@ -206,7 +231,7 @@ module.exports = function ({ getLocalFile, GEMINI_KEY_POOL, _trackLLM, writeOSAu
       'X-Accel-Buffering': 'no',
     });
 
-    sseWrite(res, 'meta', { provider, model, role });
+    sseWrite(res, 'meta', { provider, model, role, streamId });
 
     const t0 = Date.now();
     let fullText = '';
@@ -214,7 +239,20 @@ module.exports = function ({ getLocalFile, GEMINI_KEY_POOL, _trackLLM, writeOSAu
 
     try {
       // Build messages array (OpenAI-format providers)
-      const mem = buildMemoryContext(message, settings);
+      //
+      // D1f — the memory and skill budgets are fractions of the window we are
+      // actually about to spend from. Local models know their real window;
+      // cloud providers are far larger than anything we inject, so the 8k
+      // floor is a safe assumption there rather than a guess that matters.
+      const contextTokens = provider === 'local'
+        ? ((await (async () => {
+            try {
+              const lr = require('../../../../services/local-runtime/index.cjs');
+              return (await lr.plannedContext(model))?.contextTokens;
+            } catch { return null; }
+          })()) || 8192)
+        : 8192;
+      const mem = buildMemoryContext(message, settings, contextTokens);
       const messages = [
         // AEON is a tool, not a staff member. This prompt used to cast the
         // assistant as "VP (VP of Operations), the operator's autonomous
@@ -233,7 +271,7 @@ module.exports = function ({ getLocalFile, GEMINI_KEY_POOL, _trackLLM, writeOSAu
           if (!apiKey) throw new Error('No Groq key (set GROQ_API_KEY or add a connection)');
           return streamGroq(messages, model, apiKey);
         }
-        if (provider === 'local') return streamLocal(promptFlat, model);
+        if (provider === 'local') return streamLocal(promptFlat, model, abort.signal);
         if (provider === 'gemini') {
           const apiKey = await resolveKey('gemini', 'GEMINI_PAID_KEY', 'GEMINI_FREE_KEY_1');
           if (!apiKey) throw new Error('No Gemini key');
@@ -368,10 +406,41 @@ Assistant replied: ${fullText.slice(0, 1000)}`;
     res.end();
   });
 
-  // ── POST /chat/stop — cancel an active stream (future: track active) ─
+  // ── POST /chat/stop — cancel an active stream ─────────────────────
+  //
+  // D1c. This returned {ok:true} and cancelled nothing: the UI said
+  // "cancelled" while the model kept generating. At the old 512-token cap
+  // that was a two-minute annoyance. With D1a's derived budget it is up to
+  // ~43 minutes of unstoppable CPU behind a screen claiming it stopped —
+  // §08 again, and the reason a fake stop could not survive D1a.
   router.post('/chat/stop', (req, res) => {
-    // Placeholder — full implementation tracks active streams by session ID
-    res.json({ ok: true, note: 'Stream cancelled (client-side abort)' });
+    const { streamId } = req.body || {};
+
+    if (streamId) {
+      const abort = activeStreams.get(String(streamId));
+      if (!abort) {
+        // Say so. "Nothing to stop" and "stopped" are different outcomes and
+        // must not both render as success.
+        return res.status(404).json({ ok: false, stopped: 0, error: `No active stream ${streamId}. It may have already finished.` });
+      }
+      abort.abort();
+      activeStreams.delete(String(streamId));
+      return res.json({ ok: true, stopped: 1, streamId });
+    }
+
+    // No id: stop everything this process is generating.
+    let stopped = 0;
+    for (const [id, abort] of activeStreams) {
+      try { abort.abort(); stopped++; } catch {}
+      activeStreams.delete(id);
+    }
+    // Local generations may also be held by the runtime itself.
+    try {
+      const lr = require('../../../../services/local-runtime/index.cjs');
+      stopped += lr.cancelAll?.() || 0;
+    } catch {}
+
+    res.json({ ok: true, stopped, note: stopped ? `Cancelled ${stopped} generation(s).` : 'Nothing was generating.' });
   });
 
   return router;
