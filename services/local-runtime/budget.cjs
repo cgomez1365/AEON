@@ -26,10 +26,12 @@
  * just quietly gets worse. The margin buys the one thing we must not lose.
  */
 
-// Characters per token. Prose averages ~4; code is denser in punctuation and
-// identifiers and runs closer to 2.5. The same 4,500-character block is 1,100
-// tokens of prose or 1,800 of code, and nothing reconciled that before.
-const CHARS_PER_TOKEN = { prose: 4, code: 2.5, mixed: 3.2 };
+// The unit itself lives in the kernel (src/kernel/tokens.cjs), because blocks
+// need it too and a block may only require the kernel — not services/. One
+// estimator, one answer: two of them disagreeing is how a budget silently
+// overruns and evicts the system prompt.
+const tokens = require('../../src/kernel/tokens.cjs');
+const { CHARS_PER_TOKEN } = tokens;
 
 // Reserved at the front of the window for the system prompt and the MEMORY
 // block — the region llama.cpp evicts first.
@@ -39,37 +41,7 @@ const DEFAULT_MARGIN_TOKENS = 512;
 // `long: true` releases the remainder for the cases that genuinely need it.
 const DEFAULT_OUTPUT_CAP = 10_000;
 
-/**
- * Estimate tokens in a string. Deliberately an over-estimate: budgeting is
- * the one place where guessing low costs you the system prompt.
- *
- * @param {string} text
- * @param {object} [opts] { kind: 'prose'|'code'|'mixed' }
- */
-function estimateTokens(text, opts = {}) {
-  const s = typeof text === 'string' ? text : String(text ?? '');
-  if (!s) return 0;
-  const kind = opts.kind || detectKind(s);
-  return Math.ceil(s.length / CHARS_PER_TOKEN[kind]);
-}
-
-/** Cheap heuristic — code is punctuation-dense and line-broken. */
-function detectKind(s) {
-  const sample = s.slice(0, 4000);
-  const symbols = (sample.match(/[{}()[\];=<>|&/\\_$#]/g) || []).length;
-  const ratio = symbols / Math.max(1, sample.length);
-  if (ratio > 0.06) return 'code';
-  if (ratio > 0.03) return 'mixed';
-  return 'prose';
-}
-
-/** Tokens in a chat `messages` array, including per-message framing overhead. */
-function estimateMessageTokens(messages) {
-  if (!Array.isArray(messages)) return 0;
-  // ~4 tokens per message of role/delimiter framing, per the OpenAI-format
-  // convention llama-server's /v1/chat/completions follows.
-  return messages.reduce((n, m) => n + estimateTokens(m?.content || '') + 4, 0);
-}
+const { estimateTokens, estimateMessageTokens, detectKind, inputBudgets } = tokens;
 
 /**
  * How many output tokens may this turn have?
@@ -139,23 +111,6 @@ function outputBudget(opts = {}) {
   };
 }
 
-/**
- * Split the INPUT side of the window between memory and skills, in tokens.
- *
- * D1f. These were fixed character counts that knew nothing about the window
- * they were spending from — identical on an 8k window and a 32k one.
- * Expressed as fractions, they scale with whatever the machine can serve.
- */
-function inputBudgets(contextTokens, opts = {}) {
-  const ctx = Math.max(512, Number(contextTokens) || 4096);
-  const memoryFraction = opts.memoryFraction ?? (opts.wake ? 0.25 : 0.12);
-  const skillFraction = opts.skillFraction ?? (opts.wake ? 0.12 : 0.06);
-  return {
-    contextTokens: ctx,
-    memoryTokens: Math.floor(ctx * memoryFraction),
-    skillTokens: Math.floor(ctx * skillFraction),
-  };
-}
 
 module.exports = {
   estimateTokens,

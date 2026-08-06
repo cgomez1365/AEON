@@ -14,7 +14,8 @@ const router = express.Router();
 const fs = require('fs');
 const path = require('path');
 const settingsAuthority = require('../../../../services/settings.js');
-const budget = require('../../../../services/local-runtime/budget.cjs');
+const tokens = require('../../../kernel/tokens.cjs');
+const memoryPolicy = require('../../../kernel/memory-policy.cjs');
 
 module.exports = function ({ getLocalFile, GEMINI_KEY_POOL, _trackLLM, writeOSAudit, VAULT_ROOT, DEFAULT_LOCAL_MODEL, defaultLocalModel }) {
   const localModel = (defaultLocalModel ? defaultLocalModel() : null) || DEFAULT_LOCAL_MODEL || null;
@@ -50,30 +51,26 @@ module.exports = function ({ getLocalFile, GEMINI_KEY_POOL, _trackLLM, writeOSAu
     try { all = JSON.parse(fs.readFileSync(MEMORY_FILE, 'utf8')); } catch {}
     const wake = WAKE_RE.test(message || '');
     const pinned = all.filter(m => m.pinned);
-    // Continuity > recency: operator-authored entries and settled decisions
-    // outrank milestones/drive-by facts regardless of age (same doctrine as
-    // memory_core's /memory/context). Recency only breaks ties.
-    const TYPE_W = { decision: 400, algorithm: 300, outline: 300, milestone: 50 };
-    const rank = m => (m.source === 'operator' ? 500 : 0) + (TYPE_W[m.type] !== undefined ? TYPE_W[m.type] : 150);
-    const rest = all.filter(m => !m.pinned).sort((a, b) => (rank(b) - rank(a)) || ((b.timestamp || 0) - (a.timestamp || 0)));
     const maxN = wake ? all.length : Math.max(prefs.memory_max_context || 25, pinned.length);
-    const chosen = [...pinned, ...rest].slice(0, maxN);
 
     // D1f — budgeted in TOKENS against the live window, not in characters
     // against nothing. The old CHAR_BUDGET (4500 / 10000 on wake) was the
     // same on an 8k window and a 32k one, and a 4,500-character block is
     // 1,100 tokens of prose or 1,800 of code — a spread nothing reconciled.
-    const budgets = budget.inputBudgets(contextTokens, { wake });
-    const lines = [];
-    let usedTokens = 0;
-    let dropped = 0;
-    for (const m of chosen) {
-      const line = `- [${m.category || 'fact'}] ${m.text}`;
-      const cost = budget.estimateTokens(line);
-      if (usedTokens + cost > budgets.memoryTokens) { dropped++; continue; }
-      lines.push(line);
-      usedTokens += cost;
-    }
+    const budgets = tokens.inputBudgets(contextTokens, { wake });
+
+    // D2a — ranking, precedence and eviction accounting all live in
+    // src/kernel/memory-policy.cjs, which memory_core's /memory/context also
+    // consumes. Two inline copies of this had already drifted apart, and
+    // neither could be tested without standing up an HTTP route.
+    const selection = memoryPolicy.selectForInjection({
+      memories: all,
+      budgetTokens: budgets.memoryTokens,
+      wake,
+      query: message || '',
+      maxCount: maxN,
+    });
+    const dropped = selection.dropped;
 
     // Approved skills (brain_skills prefs), capped by count and budget
     const skills = (settings.prefs?.brain_skills || [])
@@ -84,19 +81,32 @@ module.exports = function ({ getLocalFile, GEMINI_KEY_POOL, _trackLLM, writeOSAu
     let skillsDropped = 0;
     for (const s of skills) {
       const block = `\n### ${s.title}\n${String(s.body).slice(0, 1500)}`;
-      const cost = budget.estimateTokens(block);
+      const cost = tokens.estimateTokens(block);
       if (cost > skillBudget) { skillsDropped++; continue; }
       skillText += block;
       skillBudget -= cost;
     }
 
-    let text = '';
-    if (lines.length) text += `\n\n## MEMORY (long-term store — ground truth about the operator and this system)\n${lines.join('\n')}`;
+    let text = selection.text;
     if (skillText) text += `\n\n## SKILLS (standing procedures — follow these)${skillText}`;
     if (wake) text += `\n\n## WAKE\nThe operator just said the wake phrase. You are VP, AEON's operations agent. All ${all.length} memories are loaded above. Confirm you are online, state the memory count, restate the prime directive, and ask for the mission. Do not ask what "VP" means.`;
-    // `dropped` is returned so a caller can report what the budget discarded
-    // rather than discarding it silently. Surfacing it in the UI is D2a.
-    return { text, wake, count: lines.length, considered: chosen.length, dropped, skillsDropped, budgets };
+
+    // D2a #8 — the model is told what memory can actually do this turn, so
+    // the honest answer is also the easy one. Without this it filled the
+    // silence with "User data saved" while Memory Core read 0 MEMORIES.
+    text += `\n\n## MEMORY RULES\n${memoryPolicy.describeMemoryState({
+      autoMemoryEnabled: !!prefs.auto_memory,
+      injected: selection.injected,
+      dropped,
+    })}`;
+
+    return {
+      text, wake,
+      count: selection.injected,
+      considered: selection.considered,
+      dropped, skillsDropped, budgets,
+      autoMemoryEnabled: !!prefs.auto_memory,
+    };
   }
 
   // Resolve a provider's key from .env OR the vault (added via "Add connection"),
@@ -263,7 +273,19 @@ module.exports = function ({ getLocalFile, GEMINI_KEY_POOL, _trackLLM, writeOSAu
         { role: 'user', content: message },
       ];
       const promptFlat = messages.map(m => m.content).join('\n');
-      if (mem.count) sseWrite(res, 'meta', { memory: mem.count, wake: mem.wake });
+      // D2a #11 — eviction is reported, not silent. "22 of 34 injected,
+      // 12 dropped for space" is the operator's answer to "do you have all
+      // my memories?", and previously nothing could answer it. Emitted even
+      // when count is 0, because "no memories were injected" is itself an
+      // answer the operator is entitled to (§08).
+      sseWrite(res, 'meta', {
+        memory: mem.count,
+        memoryConsidered: mem.considered,
+        memoryDropped: mem.dropped,
+        skillsDropped: mem.skillsDropped,
+        autoMemory: mem.autoMemoryEnabled,
+        wake: mem.wake,
+      });
 
       const buildGenerator = async (provider, model) => {
         if (provider === 'groq') {
@@ -372,7 +394,21 @@ module.exports = function ({ getLocalFile, GEMINI_KEY_POOL, _trackLLM, writeOSAu
         if (brainPrefs?.auto_memory && message && fullText) {
           setImmediate(async () => {
             try {
-              const extractPrompt = `Extract any important facts, preferences, or context from this conversation that should be remembered long-term. Return ONLY a JSON array of objects like [{"text":"fact","category":"fact|identity|preference|contact|project|goal"}]. If nothing worth remembering, return [].
+              // D2a #10 — the extractor is told whose voice to write in.
+              // It was producing "your name is Cristian", which reads as the
+              // MODEL's name once injected into a system prompt. Asking for
+              // third person here is cheaper and more accurate than
+              // rewriting prose afterwards; /memory/add still normalises as
+              // a backstop for anything that slips through.
+              const extractPrompt = `Extract any important facts, preferences, or context from this conversation that should be remembered long-term.
+
+Write every fact in the THIRD PERSON, about the operator. Never use "you", "your", or "I".
+  Good: "The operator's name is Cristian"
+  Good: "The operator prefers terse output"
+  Bad:  "your name is Cristian"
+  Bad:  "I am Nanaki"
+
+Return ONLY a JSON array of objects like [{"text":"fact","category":"fact|identity|preference|contact|project|goal"}]. If nothing worth remembering, return [].
 
 User said: ${message.slice(0, 500)}
 Assistant replied: ${fullText.slice(0, 1000)}`;
@@ -382,17 +418,33 @@ Assistant replied: ${fullText.slice(0, 1000)}`;
                 body: JSON.stringify({ prompt: extractPrompt, role: 'chat', background: true }),
               }).then(r => r.json());
               if (extractResult.text) {
+                // R-05 — this whole block used to end in a bare `catch {}`.
+                // Extraction could fail on every single turn and the only
+                // evidence would be Memory Core reading 0 MEMORIES, which is
+                // exactly what the operator saw and could not explain.
+                let facts = [];
                 try {
-                  const facts = JSON.parse(extractResult.text.match(/\[[\s\S]*\]/)?.[0] || '[]');
-                  for (const fact of facts.slice(0, 3)) {
-                    if (fact.text && fact.text.length > 5) {
-                      await fetch(`${kernelBase}/api/memory/add`, {
-                        method: 'POST', headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ text: fact.text, category: fact.category || 'fact' }),
-                      });
-                    }
+                  facts = JSON.parse(extractResult.text.match(/\[[\s\S]*\]/)?.[0] || '[]');
+                } catch (pe) {
+                  console.warn('[AUTO-MEMORY] model did not return parseable JSON:', pe.message);
+                }
+                let saved = 0;
+                for (const fact of facts.slice(0, 3)) {
+                  if (!fact?.text || fact.text.length <= 5) continue;
+                  try {
+                    const r = await fetch(`${kernelBase}/api/memory/add`, {
+                      method: 'POST', headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ text: fact.text, category: fact.category || 'fact', source: 'auto-extract' }),
+                    });
+                    if (r.ok) saved++;
+                    else console.warn('[AUTO-MEMORY] /memory/add refused:', r.status, (await r.text()).slice(0, 160));
+                  } catch (ae) {
+                    console.warn('[AUTO-MEMORY] /memory/add unreachable:', ae.message);
                   }
-                } catch {}
+                }
+                if (facts.length && !saved) {
+                  console.warn(`[AUTO-MEMORY] extracted ${facts.length} fact(s) and saved none.`);
+                }
               }
             } catch (e) { console.warn('[AUTO-MEMORY] extraction failed:', e.message); }
           });
