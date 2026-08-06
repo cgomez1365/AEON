@@ -134,6 +134,10 @@ tools/bin/cloudflared.exe
 secrets/
 data/
 db/host-runtime.json
+# BO-D2g — the per-call LLM ledger. Operator telemetry: what was asked of
+# which model, when, and how long it took. Never committed.
+db/llm_calls.jsonl
+token_ledger.json
 src/aeon-settings.json
 src/blocks/*/data/
 src/blocks/*/.aeon.runtime.json

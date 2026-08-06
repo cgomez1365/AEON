@@ -17,6 +17,8 @@
  * runtime, because that is the boundary the defect hid behind.
  */
 import { afterEach, describe, expect, it } from 'vitest';
+import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
@@ -57,7 +59,12 @@ function aiWithRecordedRuntime() {
   const ai = require(AI_PATH)({
     supabase: null,
     writeOSAudit: () => {},
-    TOKEN_LEDGER_FILE: path.join(ROOT, 'db', 'token_ledger.json'),
+    // An isolated data root. §18: a test may observe a live instance, it may
+    // not provision one — and since BO-D2g the call ledger is written beside
+    // this path, so pointing it at the repo's db/ made the suite write real
+    // telemetry into the operator's install. Caught by running the suite and
+    // then reading db/llm_calls.jsonl.
+    TOKEN_LEDGER_FILE: path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'aeon-ai-ledger-')), 'token_ledger.json'),
     loadSettings: () => ({ models: { chat: { provider: 'local', model: 'stub-model' } }, prefs: {} }),
     aeonTerminalStream: null,
   });
