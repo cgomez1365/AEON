@@ -76,12 +76,18 @@
     "commands": [
       {
         "cmd": "/memory",
-        "desc": "List or search saved memories",
+        "desc": "Search saved memories — /memory <text> searches, it does not save",
         "method": "GET",
         "route": "/api/memory",
         "param": "q",
         "mode": "instant",
-        "category": "content"
+        "category": "content",
+        "argHint": "<search text>",
+        "rejectArg": {
+          "pattern": "^\\s*(my |i am |i\\'m |remember |call me )",
+          "error": "/memory SEARCHES your saved memories, it does not save. Nothing was saved.",
+          "hint": "To save a memory, use /remember <text>."
+        }
       },
       {
         "cmd": "/remember",

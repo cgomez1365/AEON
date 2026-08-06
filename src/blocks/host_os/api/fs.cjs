@@ -53,14 +53,55 @@ module.exports = function createFsRouter(deps) {
   });
 
   // POST /api/fs/read
+  //
+  // BO-D2e #16/#17. Two defects, both from the same missing step: this took
+  // `filePath` and handed it straight to readFileSync.
+  //
+  //   /read              → "ENOENT ... open ''"  — a raw Node error, empty
+  //                        path, naming neither the command nor a remedy.
+  //                        The dispatcher's argument contract now refuses
+  //                        this first; the check here is the backstop for a
+  //                        direct API caller.
+  //   /read VP_CONTEXT.md → looked in Desktop\AEON\ and reported not-found,
+  //                        while the file sat in Desktop\Reports\. A relative
+  //                        path resolved against process.cwd() — the repo the
+  //                        server happened to be started from — even though
+  //                        this command's own description says "from the
+  //                        workspace".
+  //
+  // Relative paths now resolve against the workspace, which makes that
+  // description true. Absolute paths are untouched: the File Manager
+  // deliberately browses the whole disk (see /fs/list).
   router.post('/fs/read', (req, res) => {
     if (isVercel) return res.status(403).json({ error: 'Desktop Only feature' });
-    const { filePath } = req.body;
+    const { filePath } = req.body || {};
+    const requested = typeof filePath === 'string' ? filePath.trim() : '';
+    if (!requested) {
+      return res.status(400).json({
+        correlation_id: req.correlationId || 'AEON-SYS',
+        error: 'filePath is required. Usage: /read <filePath> — relative paths resolve against the workspace.',
+      });
+    }
+
+    const root = WORKSPACE || VAULT_ROOT || process.cwd();
+    const resolved = path.isAbsolute(requested) ? requested : path.resolve(root, requested);
+
     try {
-      const content = fs.readFileSync(filePath, 'utf8');
-      res.json({ success: true, path: filePath, content, lines: content.split('\n').length });
+      const content = fs.readFileSync(resolved, 'utf8');
+      res.json({ success: true, path: resolved, content, lines: content.split('\n').length });
     } catch (error) {
-      res.status(500).json({ correlation_id: req.correlationId || 'AEON-SYS', error: error.message });
+      // §08 — say WHERE it looked. "Not found" without the path it tried is
+      // what sent the operator hunting for a file that was never missing.
+      const notFound = error.code === 'ENOENT';
+      res.status(notFound ? 404 : 500).json({
+        correlation_id: req.correlationId || 'AEON-SYS',
+        error: notFound
+          ? `Not found: ${resolved}`
+          : error.message,
+        ...(notFound && !path.isAbsolute(requested)
+          ? { searchedIn: root, hint: `Relative paths resolve against the workspace (${root}). Pass an absolute path to read outside it.` }
+          : {}),
+      });
     }
   });
 

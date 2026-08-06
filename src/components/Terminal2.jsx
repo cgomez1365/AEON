@@ -368,7 +368,19 @@ const Terminal2 = ({ onUsageUpdate }) => {
     }
 
     // UI-only commands — handled client-side, no server round-trip.
-    if (cmdToken === '/model') { setShowModelPicker(v => !v); return; }
+    // D2e #22 — /model rendered NOTHING: the user's line was logged and no
+    // output appeared beneath it, which is indistinguishable from a command
+    // that does not exist. It is client-side, so it never reaches the
+    // registry and cannot answer for itself. It says what it did.
+    if (cmdToken === '/model') {
+      const opening = !showModelPicker;
+      setShowModelPicker(opening);
+      push({
+        type: 'msg', role: 'system',
+        content: opening ? 'Model picker opened.' : 'Model picker closed.',
+      });
+      return;
+    }
     if (cmdToken === '/open') {
       try {
         const d = await fetch('/api/console/blocks').then(r => r.json());
