@@ -84,6 +84,19 @@ describe('output budget arithmetic', () => {
     expect(b.limitedBy).toBe('requested');
   });
 
+  it('never hands back MORE than an explicit request', () => {
+    // Found double-checking D1a. The floor was being applied on top of an
+    // explicit ceiling, so a caller asking for 30 tokens got 256. There is a
+    // real one: tools/autopilot-daemon.cjs asks for 30. A budget that
+    // silently grants 8x what was asked for is the same class of defect as
+    // one that silently caps it — the caller's number stopped meaning
+    // anything either way.
+    for (const req of [1, 30, 100, 255, 256, 512]) {
+      const b = budget.outputBudget({ contextTokens: 32768, promptTokens: 500, requested: req });
+      expect(b.maxTokens).toBeLessThanOrEqual(req);
+    }
+  });
+
   it('the 750-token ceiling is gone at a realistic window', () => {
     // The headline. An 8B at the 32,768 this machine can now serve, with a
     // typical loaded prompt, must permit far more than 750 tokens out.

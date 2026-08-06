@@ -29,7 +29,17 @@ const require = createRequire(import.meta.url);
 const { ServerSession } = require('../../services/local-runtime/server-session.cjs');
 
 const servers = [];
-afterEach(() => { while (servers.length) { try { servers.pop().close(); } catch {} } });
+afterEach(() => {
+  while (servers.length) {
+    const srv = servers.pop();
+    // close() alone leaves established sockets open, and this suite
+    // deliberately aborts mid-stream — so every test would hand the worker a
+    // live handle it never reclaims. One vitest worker died that way during
+    // verification. Kill the connections, then the listener.
+    try { srv.closeAllConnections?.(); } catch {}
+    try { srv.close(); } catch {}
+  }
+});
 
 /** A stub speaking llama-server's /health and /v1/chat/completions. */
 async function stubServer(handler) {

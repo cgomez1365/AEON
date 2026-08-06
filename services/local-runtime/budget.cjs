@@ -119,7 +119,12 @@ function outputBudget(opts = {}) {
     limitedBy = 'cap';
   }
   if (opts.requested && opts.requested < maxTokens) {
-    maxTokens = Math.max(floor, Number(opts.requested));
+    // An explicit request is a CEILING and is honoured exactly. This used to
+    // read `Math.max(floor, requested)`, which handed a caller asking for 30
+    // tokens 256 of them — the floor is there to stop the derived remainder
+    // collapsing to nothing, and has no business overriding a number the
+    // caller chose deliberately. tools/autopilot-daemon.cjs asks for 30.
+    maxTokens = Number(opts.requested);
     limitedBy = 'requested';
   }
 

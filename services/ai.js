@@ -304,7 +304,19 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     }
     const _t0 = Date.now();
     const flatPrompt = typeof prompt === 'string' ? prompt : (Array.isArray(prompt) ? prompt.map(m => m.content || '').join('\n') : String(prompt));
-    const result = await lr.infer(flatPrompt, { model: modelId || undefined, maxTokens: opts.max_tokens || 512, temperature: opts.temperature ?? 0.7 });
+    // D1a — no default here. `|| 512` made this the real ceiling on /api/ai:
+    // an explicit value is treated as a caller ceiling downstream, and a
+    // ceiling beats a derived budget, so every answer on the kernel route
+    // capped at 512 no matter how large a window the model was serving.
+    // Undefined means "derive it from the window", which is the only value
+    // that can be right for every prompt size.
+    const result = await lr.infer(flatPrompt, {
+      model: modelId || undefined,
+      maxTokens: opts.max_tokens,
+      temperature: opts.temperature ?? 0.7,
+      long: opts.long === true,
+      signal: opts.signal,
+    });
     _trackLLM('local', result.model, result.tokens, Date.now() - _t0, true);
     return opts.returnMeta
       ? { text: result.text, provider: 'local', model: result.model }
