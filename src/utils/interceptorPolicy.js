@@ -128,10 +128,64 @@ export function shouldBannerResponse({ url, ok, status, selfReported = false }) 
  * failure nobody can explain.
  */
 export function describeResponseBanner({ url, body }) {
-  const message = typeof body?.error === 'string' && body.error.trim() ? body.error.trim() : null;
-  const traceId = typeof body?.correlation_id === 'string' ? body.correlation_id : null;
+  // The command bus answers in an envelope that carries its explanation one
+  // level down: { ok:false, text, data:{ error, correlation_id }, meta }.
+  // Reading only the top level found neither, so a route that HAD explained
+  // itself was labelled PENDING_OR_UNREACHABLE — the placeholder reserved for
+  // a failure nobody can explain. The operator read that as an unreachable
+  // dispatcher three separate times (BO-D finding #21) and it was never down.
+  //
+  // Top level still wins; `data` is a fallback for the envelope shape, never
+  // an override.
+  const env = (body && typeof body.data === 'object' && body.data !== null) ? body.data : null;
+  const pick = (k) => {
+    const top = body?.[k];
+    if (typeof top === 'string' && top.trim()) return top.trim();
+    const nested = env?.[k];
+    return (typeof nested === 'string' && nested.trim()) ? nested.trim() : null;
+  };
+
+  const message = pick('error');
+  const traceId = pick('correlation_id');
   if (message) return { kind: 'api', url, message, traceId };
   return { kind: 'api', url, message: null, traceId: traceId || 'PENDING_OR_UNREACHABLE' };
+}
+
+/**
+ * How a streaming chat turn should render its failure.
+ *
+ * BO-D2f. Terminal2 rendered every failure as `[NEURAL LINK] <message>` — a
+ * label that asserts the link is dead. The backend's honest, specific
+ * "Native local runtime not ready" therefore reached the operator as a
+ * network fault, and they went looking for one that did not exist. Three
+ * different things were wearing one label:
+ *
+ *   server    an `event: error` frame — the server answered and explained
+ *             itself, so it gets its own words and no diagnosis bolted on
+ *   api       a non-2xx before the stream opened
+ *   network   fetch itself threw — the only case where the link IS dead
+ *
+ * Extracted here, rather than left inline, for the reason this whole module
+ * exists: a decision table inside a component cannot be tested without
+ * standing up a DOM, so it silently rots. The labels match the ones App.jsx
+ * uses so both surfaces speak one vocabulary (§05).
+ *
+ * `cancelled` is not a failure and returns null — a deliberate stop must
+ * never render as an error (D1c).
+ */
+export function describeStreamFailure(error) {
+  if (!error) return null;
+  if (error.name === 'AbortError') return null;
+
+  const message = String(error.message || '').trim() || 'Unknown failure';
+  switch (error.aeonKind) {
+    case 'server':
+      return { kind: 'server', text: message };
+    case 'api':
+      return { kind: 'api', text: `[API FAILED] ${message}` };
+    default:
+      return { kind: 'network', text: `[NETWORK DEAD] ${message}` };
+  }
 }
 
 /** Transport-level failure (fetch threw). Null = stay silent. */
