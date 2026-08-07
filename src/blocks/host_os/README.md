@@ -38,7 +38,7 @@ gating that makes it safe to hold that power lives in several layers:
 2. **Shell-tier gate** (`requireShellAuth` in `security/security.js`) —
    fails **closed**: if `AEON_MOBILE_SECRET` isn't configured, every route
    guarded by it (`/os/execute`, `/exec`, `/os/open`, `/os-bridge`,
-   `/desktop-tasks` POST, `/system/restart`, `/system/scan`) returns 503
+   `/desktop-tasks` POST, `/system/restart`) returns 503
    rather than silently allowing localhost. When the secret *is* set,
    localhost is trusted and remote/tunnel callers need a matching
    `Authorization: Bearer <AEON_MOBILE_SECRET>` header.
@@ -82,6 +82,11 @@ bare `/api/<path>` (the form used everywhere else in the app and below).
 | `/api/os/execute` | POST | `requireShellAuth` | Raw exec, no allowlist, for the operator. |
 | `/api/exec` | POST | `requireShellAuth` | Allowlisted exec (`SAFE_EXEC_PREFIXES`), rejects shell metacharacters. |
 | `/api/os/open` | POST | `requireShellAuth` | Launches a file/app (`vscode`/`notepad`/`explorer`/`chrome`/default `start`) if the path is under `ALLOWED_ROOTS`. |
+| `/api/os/action` | POST | `requireShellAuth` | The single execution entry point (`execFile`, fixed action table). Safe mode is enforced here, not in the UI. |
+| `/api/host_os/safe-mode` | POST | `requireShellAuth` | Toggles the refusal that guards `/os/action`. Keeps the execution gate deliberately: turning it off is a step toward running something. |
+| `/api/os/actions` | GET | `requireOperator` (BO-D2b) | Lists the action ids this install supports. Names capabilities, runs none of them. |
+| `/api/host_os/audit` | GET | `requireOperator` (BO-D2b) | Reads the audit log. Same kind as the widget BO-C2 moved — and the route an operator most needs when something has gone wrong. |
+| `/api/host_os/widget` | GET | `requireOperator` (BO-C2) | Operator Console widget payload. |
 | `/api/os-bridge` | POST | `requireShellAuth` | Legacy smart command router from Terminal 1.0. Not called by the current frontend (Terminal 2.0 uses `/api/exec` + `/api/commands/dispatch` instead) — kept for any external caller, matches patterns in `INSTANT_PATTERNS`. Its old `research:` keyword branch shelled out to a Python script (`tools/research_agent.py`) that no longer exists in this repo; it now returns a redirect message pointing at the `deep_research` block (`POST /api/research/start`) instead of failing. |
 
 ### `api/system.cjs` — SDI, health, restart, scan/sync
@@ -97,7 +102,7 @@ bare `/api/<path>` (the form used everywhere else in the app and below).
 | `/api/desktop-tasks` | POST | `requireShellAuth` | Enqueues a command for the queue. |
 | `/api/force-sync` | POST | none (no-ops without Supabase/local) | Pushes recent chat + audit logs to Supabase. |
 | `/api/system/restart` | POST | `requireShellAuth` | Spawns `scripts/restart.bat` and exits the process 500ms later. |
-| `/api/system/scan` | POST | `requireShellAuth` | Pulls Supabase notes/terminal-history down to local files, then (local only) triggers a same-process bulk-push of all blocks to Supabase via `POST /api/sync/bulk-push` (owned by `aeon_matrix`). Second Brain/matrix indexing is **not** done here — see note below. |
+| `/api/system/scan` | POST | `requireOperator` (BO-D2b — sync, not execution) | Pulls Supabase notes/terminal-history down to local files, then (local only) triggers a same-process bulk-push of all blocks to Supabase via `POST /api/sync/bulk-push` (owned by `aeon_matrix`). Second Brain/matrix indexing is **not** done here — see note below. |
 
 Second Brain indexing note: `/system/scan` used to shell out to a
 `tools/index-brain.js` script directly. That script was archived when Second

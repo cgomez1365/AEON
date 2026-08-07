@@ -354,9 +354,24 @@ app.use('/api/blocks', blocksRouter);
 
 // Token Heatmap — daily activity for the dashboard heatmap/activity charts
 try {
+  // BO-D2g — `getDataFile` MUST be passed.
+  //
+  // The activity block declares these same four routes in its manifest, so
+  // the block loader mounts its own instance with getDataFile and reads
+  // data/activity/activity_heatmap.json. This instance omitted it, fell back
+  // to src/blocks/activity/db/, and its _recordActivity is the one wired to
+  // _trackLLM below. So the WRITER wrote to the block folder while the
+  // READER serving HTTP read the data root — two instances of one router
+  // with two roots, and every panel correctly reported zero.
+  //
+  // Same defect class as BO-C's two model registries: not a missing feature,
+  // a second copy nobody knew was there. Writing operator data into
+  // src/blocks/ was wrong regardless — that is source, and portable mode
+  // relocates the data root out from under it.
   const tokenAnalyticsRouter = require('../src/blocks/activity/api/token-analytics.cjs')({
     getLocalFile: storage.getLocalFile, AUDIT_FILE: storage.AUDIT_FILE,
     LOG_FILE: storage.LOG_FILE, TOKEN_LEDGER_FILE: storage.TOKEN_LEDGER_FILE,
+    getDataFile: storage.getDataFile,
   });
   app.use('/api', tokenAnalyticsRouter);
   if (tokenAnalyticsRouter._recordActivity) ai.setActivityRecorder(tokenAnalyticsRouter._recordActivity);

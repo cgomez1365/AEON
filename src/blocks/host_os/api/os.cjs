@@ -92,7 +92,12 @@ module.exports = function createOsRouter(deps) {
   });
 
   // GET /api/os/actions — what this install can actually do. Feeds capability badges.
-  router.get('/os/actions', requireShellAuth, (req, res) => {
+  //
+  // BO-D2b — requireOperator, not requireShellAuth. This route LISTS the
+  // action ids and their descriptions; it runs none of them. Naming a
+  // capability is not exercising it, and the execution gate below is what
+  // actually stands between a caller and `execFile`.
+  router.get('/os/actions', requireOperator({ name: 'Operator Console capabilities' }), (req, res) => {
     res.json({
       ok: true,
       actions: Object.entries(ACTIONS).map(([id, s]) => ({ id, description: s.describe({}) })),
@@ -184,7 +189,13 @@ module.exports = function createOsRouter(deps) {
   });
 
   // GET /api/host_os/audit — the audit screen's data.
-  router.get('/host_os/audit', requireShellAuth, (req, res) => {
+  //
+  // BO-D2b — requireOperator, for the same reason BO-C2 moved the widget: a
+  // read of the audit log is a read. Worse, it is the one route an operator
+  // most needs when something has gone wrong, and it was gated on a session
+  // the global guard does not create by default — so the record of what the
+  // machine did was unreachable exactly when it mattered.
+  router.get('/host_os/audit', requireOperator({ name: 'Operator Console audit' }), (req, res) => {
     try {
       const fsMod = require('fs');
       const audit = fsMod.existsSync(AUDIT_FILE)

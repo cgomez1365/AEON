@@ -78,6 +78,9 @@ const SecondBrainVisualizer = () => {
   const [mounted, setMounted] = useState(false);
   const [selectedFile, setSelectedFile] = useState(null);
   const [fileContent, setFileContent] = useState('');
+  // BO-D2d — which of the three sources answered: 'disk' | 'cloud' | 'notes'
+  // | 'none'. Only 'disk' has a file that Edit can write back to.
+  const [contentSource, setContentSource] = useState(null);
   const [isLoadingFile, setIsLoadingFile] = useState(false);
   const [viewMode, setViewMode] = useState('READ');
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
@@ -128,6 +131,9 @@ const SecondBrainVisualizer = () => {
         setSelectedFile(nodeId);
         setIsLoadingFile(true);
         setFileContent('');
+        // D2d — provenance is per-document; a stale 'disk' from the previous
+        // selection would re-offer Edit on a document that has no local file.
+        setContentSource(null);
         setViewMode('READ');
         setActiveTab('read');
         setQaAnswer(''); setQaScope(''); setSummary(''); setSummaryProgress(''); setChapterSel('all'); setSearchResults([]); setSearchQuery('');
@@ -137,6 +143,8 @@ const SecondBrainVisualizer = () => {
           if (nodeId.startsWith('folder_') || event.data.nodeType === 'folder' || event.data.nodeType === 'dir') {
             const folderName = event.data.nodeName || nodeId.split(/[\\/]/).pop();
             setFileContent(`📁 TOPIC HUB: ${folderName}\n\nThis is an organic cluster hub generated to group all related files within this directory.`);
+            // A hub is generated, not read from anywhere — nothing to edit.
+            setContentSource('none');
             setIsLoadingFile(false);
             return;
           }
@@ -197,14 +205,27 @@ const SecondBrainVisualizer = () => {
             return;
           }
 
+          // BO-D2d — WHERE the content came from is part of the content.
+          //
+          // Three sources answer in sequence and the UI used to record none of
+          // them. If the cloud index or the notes store answered, the document
+          // rendered while no file existed on disk — so Edit → Save PUT the
+          // path and got back "File not found", and the operator saw their
+          // document and "File not found" on one screen. Both statements were
+          // true; they were about different things.
+          //
+          // An action is only offered when the source can support it.
           let fetched = false;
+          const tried = [];
+
           try {
             const response = await fetch(`/api/crn/second-brain/document?path=${encodeURIComponent(nodeId)}`);
             if (response.ok) {
               const data = await response.json();
-              if (data.content) { setFileContent(data.content); fetched = true; }
-            }
-          } catch {}
+              if (data.content) { setFileContent(data.content); setContentSource('disk'); fetched = true; }
+              else tried.push('local file: no content returned');
+            } else tried.push(`local file: HTTP ${response.status}`);
+          } catch (e) { tried.push(`local file: ${e.message}`); }
 
           if (!fetched) {
             try {
@@ -216,8 +237,9 @@ const SecondBrainVisualizer = () => {
                 { headers: { apikey: sbKey, Authorization: `Bearer ${sbKey}` } }
               );
               const rows = await sbRes.json();
-              if (rows?.[0]?.content) { setFileContent(rows[0].content); fetched = true; }
-            } catch {}
+              if (rows?.[0]?.content) { setFileContent(rows[0].content); setContentSource('cloud'); fetched = true; }
+              else tried.push('cloud index: no matching document');
+            } catch (e) { tried.push(`cloud index: ${e.message}`); }
           }
 
           if (!fetched) {
@@ -229,13 +251,23 @@ const SecondBrainVisualizer = () => {
                   n.title === nodeId || n.filename === nodeId ||
                   (n.filepath && n.filepath.endsWith(nodeId))
                 );
-                if (foundNote) { setFileContent(foundNote.content || foundNote.body || "File is empty."); fetched = true; }
-              }
-            } catch {}
+                if (foundNote) {
+                  setFileContent(foundNote.content || foundNote.body || 'File is empty.');
+                  setContentSource('notes');
+                  fetched = true;
+                } else tried.push('notes store: no note with this title');
+              } else tried.push('notes store: no notes returned');
+            } catch (e) { tried.push(`notes store: ${e.message}`); }
           }
 
           if (!fetched) {
-            setFileContent(`File content not available remotely.\n\nNode: ${nodeId}\n\nView this file from the local AEON Command Center.`);
+            setContentSource('none');
+            // R-05 — every source used to fail into a bare catch, so a total
+            // failure could not say what it had tried. Now it can.
+            setFileContent(
+              `Could not load this document.\n\nNode: ${nodeId}\n\nSources tried:\n`
+              + tried.map(t => `  • ${t}`).join('\n')
+            );
           }
         } catch (error) {
           setFileContent(`Error fetching file: ${error.message}`);
@@ -587,11 +619,27 @@ const SecondBrainVisualizer = () => {
               📄 {selectedFile.split(/[/\\]/).pop()}
             </h3>
             <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              {/* D2d — Edit is offered only when there is a local file to
+                  write back to. Content served from the cloud index or the
+                  notes store has no path on disk, and offering Edit there
+                  produced a save that failed with "File not found" AFTER the
+                  operator had typed. The label says which case this is
+                  instead of the button silently disappearing. */}
               {isTextContent && (selectedFile.endsWith('.md') || selectedFile.endsWith('.txt')) && viewMode === 'READ' && (
-                <button onClick={() => setViewMode('EDIT')}
-                  style={{ background: '#333', color: '#fff', border: '1px solid #555', padding: '4px 10px', borderRadius: '4px', cursor: 'pointer', fontSize: '11px' }}>
-                  ✏️ Edit
-                </button>
+                contentSource === 'disk' ? (
+                  <button onClick={() => setViewMode('EDIT')}
+                    style={{ background: '#333', color: '#fff', border: '1px solid #555', padding: '4px 10px', borderRadius: '4px', cursor: 'pointer', fontSize: '11px' }}>
+                    ✏️ Edit
+                  </button>
+                ) : (contentSource === 'cloud' || contentSource === 'notes') && (
+                  <span
+                    title={contentSource === 'cloud'
+                      ? 'This came from the cloud index, not a file on this machine. Run a scan to bring it local before editing.'
+                      : 'This came from the notes store, not a file on this machine.'}
+                    style={{ color: '#8aa0b8', fontSize: '11px', border: '1px solid #333', padding: '4px 10px', borderRadius: '4px' }}>
+                    ✏️ Edit — no local file ({contentSource})
+                  </span>
+                )
               )}
               {viewMode === 'READ' && (
                 <button onClick={() => setViewMode('LISTEN')}

@@ -119,20 +119,48 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   const GEMINI_PRICE_PER_TOKEN = 0.00000015;
   const GROQ_PRICE_PER_TOKEN = 0.00000060;
 
-  const getDailyCost = () => {
-    if (!fs.existsSync(TOKEN_LEDGER_FILE)) return 0;
+  // ── BO-D2g: the call ledger ────────────────────────────────────────────
+  //
+  // Recording used to hang off addRunCost(), a COST calculation called from
+  // exactly one route — the legacy non-streaming /api/chat that nothing
+  // uses. db/token_ledger.json was therefore never created, and every
+  // consumer (heatmap, Activity, Fleet Control, token-analytics, analytics)
+  // correctly reported zero while live telemetry showed calls on screen.
+  //
+  // The ledger now sits beside TOKEN_LEDGER_FILE as per-call JSONL and is
+  // written from _trackLLM — the one seam every provider crosses.
+  const callLedger = (() => {
     try {
-      const data = JSON.parse(fs.readFileSync(TOKEN_LEDGER_FILE, 'utf8'));
-      if (data.date !== new Date().toDateString()) return 0;
-      return data.cost || 0;
-    } catch (e) { return 0; }
+      const { createLedger } = require('../src/kernel/llm-ledger.cjs');
+      const dir = path.dirname(TOKEN_LEDGER_FILE);
+      return createLedger({ file: path.join(dir, 'llm_calls.jsonl') });
+    } catch { return null; }
+  })();
+
+  const PRICE_PER_TOKEN = {
+    gemini: GEMINI_PRICE_PER_TOKEN,
+    groq: GROQ_PRICE_PER_TOKEN,
+    // Local inference costs nothing and is most of the traffic. That is a
+    // real zero, not a missing price.
+    local: 0,
   };
 
+  // Derived, not stored. The old {date, cost} file was one day's total,
+  // overwritten — it could not answer a single question its readers asked.
+  const getDailyCost = () => {
+    if (!callLedger) return 0;
+    try { return callLedger.dailyCost({ pricePerToken: PRICE_PER_TOKEN }); }
+    catch { return 0; }
+  };
+
+  // Kept for the legacy /api/chat caller and any external one. It no longer
+  // OWNS the number — it records a call so the same derivation covers it.
   const addRunCost = (cost) => {
-    const currentCost = getDailyCost();
-    const newData = { date: new Date().toDateString(), cost: currentCost + cost };
-    fs.writeFileSync(TOKEN_LEDGER_FILE, JSON.stringify(newData, null, 2));
-    return newData.cost;
+    if (callLedger && cost > 0) {
+      // A cost with no call behind it still belongs in the history.
+      callLedger.record({ provider: 'legacy-cost', model: 'unknown', tokens: 0, latencyMs: 0, success: true, cost });
+    }
+    return getDailyCost() + (cost || 0);
   };
 
   // ── Gemini multi-key failover pool ──
@@ -180,7 +208,12 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     _llmTelemetry.totalCalls++;
     _llmTelemetry.totalTokens += tokens;
     writeOSAudit(`LLM_${engine.toUpperCase()}`, `${model} | ${tokens} tok | ${latencyMs}ms${success ? '' : ' | FAILED'}`, success ? 200 : 500, tokens);
-    try { if (_recordActivity) _recordActivity(tokens, model, engine); } catch {}
+    try { if (_recordActivity) _recordActivity(tokens, model, engine, { success, latencyMs }); } catch {}
+    // D2g — the durable record. Everything above this line is in memory and
+    // dies on restart, which is why the panels showed live calls and the
+    // persistent surfaces showed nothing. Failures included: a day of failed
+    // calls must not look like a day nobody worked.
+    try { if (callLedger) callLedger.record({ provider: engine, model, tokens, latencyMs, success }); } catch {}
   }
 
   // ── Normalize input: callers can pass a string OR a messages array ──
@@ -304,7 +337,19 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     }
     const _t0 = Date.now();
     const flatPrompt = typeof prompt === 'string' ? prompt : (Array.isArray(prompt) ? prompt.map(m => m.content || '').join('\n') : String(prompt));
-    const result = await lr.infer(flatPrompt, { model: modelId || undefined, maxTokens: opts.max_tokens || 512, temperature: opts.temperature ?? 0.7 });
+    // D1a — no default here. `|| 512` made this the real ceiling on /api/ai:
+    // an explicit value is treated as a caller ceiling downstream, and a
+    // ceiling beats a derived budget, so every answer on the kernel route
+    // capped at 512 no matter how large a window the model was serving.
+    // Undefined means "derive it from the window", which is the only value
+    // that can be right for every prompt size.
+    const result = await lr.infer(flatPrompt, {
+      model: modelId || undefined,
+      maxTokens: opts.max_tokens,
+      temperature: opts.temperature ?? 0.7,
+      long: opts.long === true,
+      signal: opts.signal,
+    });
     _trackLLM('local', result.model, result.tokens, Date.now() - _t0, true);
     return opts.returnMeta
       ? { text: result.text, provider: 'local', model: result.model }

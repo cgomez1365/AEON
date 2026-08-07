@@ -66,7 +66,7 @@ below.
 | GET | `/api/terminal-stream` | `api/chat.cjs` | SSE bridge for `aeonTerminalStream` log events. |
 | GET/POST | `/api/terminal-history` | `api/chat.cjs` | Read/save Neural Terminal conversation history. |
 | POST | `/api/chat/stream` | `api/chat-stream.cjs` | SSE token-by-token chat completion with provider fallback. |
-| POST | `/api/chat/stop` | `api/chat-stream.cjs` | Client-side stream cancel signal (placeholder — no server-side tracking yet). |
+| POST | `/api/chat/stop` | `api/chat-stream.cjs` | Cancels a generation server-side. `{streamId}` stops that stream; no body stops every stream this process is running. Aborts the upstream request, so llama-server actually stops generating. |
 | GET/POST | `/api/audit` | `api/audit.js` | Read/append the Supabase-backed audit log. |
 | GET | `/api/health` | `api/health.js` | Liveness probe. |
 | GET | `/api/pipeline-metrics` | `api/pipeline-metrics.js` | Client pipeline $ by status — **orphaned, no frontend caller** (see below). |

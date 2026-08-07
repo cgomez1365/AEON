@@ -117,7 +117,9 @@
         "route": "/api/fs/read",
         "param": "filePath",
         "mode": "instant",
-        "category": "content"
+        "category": "content",
+        "argRequired": true,
+        "argHint": "<filePath>"
       },
       {
         "cmd": "/write",

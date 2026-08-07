@@ -1,6 +1,7 @@
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+const { requireOperator } = require('../../../kernel/server-utils/requireOperator.cjs');
 
 module.exports = function createSystemRouter(deps) {
   const router = express.Router();
@@ -109,7 +110,14 @@ module.exports = function createSystemRouter(deps) {
   });
 
   // System scan & sync
-  router.post('/system/scan', requireShellAuth, async (req, res) => {
+  //
+  // BO-D2b — requireOperator, not requireShellAuth. This is the route the
+  // finding was written about: the operator typed /scan and was told
+  // "OS endpoints disabled: sign in". It pulls Supabase notes and terminal
+  // history down to disk and pushes blocks back up. There is no shell here,
+  // and never was — it inherited the execution gate from the block it lives
+  // in rather than from anything it does.
+  router.post('/system/scan', requireOperator({ name: 'System scan' }), async (req, res) => {
     try {
       let logs = [];
       if (supabase) {

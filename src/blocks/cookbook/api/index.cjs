@@ -465,13 +465,49 @@ module.exports = function createCookbookRouter(deps) {
 
   // ── Model Download ─────────────────────────────────────────────
 
-  router.post('/model/download', async (req, res) => {
-    const { repo_id, backend, include, hf_token, local_dir } = req.body;
-    if (!repo_id) return res.status(400).json({ ok: false, error: 'repo_id is required' });
-
-    if (!REPO_ID_RE.test(repo_id)) {
-      return res.status(400).json({ ok: false, error: 'Invalid repo_id' });
+  // BO-D2e — identifier resolution, loaded the same guarded way this file
+  // already loads its other local-runtime helpers, so a missing module
+  // degrades to the strict org/repo behaviour rather than breaking the route.
+  const identifierResolver = (() => {
+    try { return require(path.join(__dirname, '..', '..', '..', '..', 'services', 'local-runtime', 'catalog-ids.cjs')); }
+    catch { return null; }
+  })();
+  const modelCatalog = (() => {
+    try { return require(path.join(__dirname, '..', '..', '..', '..', 'services', 'local-runtime', 'model-catalog.json')); }
+    catch { return []; }
+  })();
+  const resolveIdentifier = (input) => {
+    if (identifierResolver) {
+      const list = Array.isArray(modelCatalog) ? modelCatalog : (modelCatalog.models || []);
+      return identifierResolver.resolveModelIdentifier(input, list);
     }
+    return REPO_ID_RE.test(String(input || '').trim())
+      ? { ok: true, repoId: String(input).trim(), via: 'repo-id' }
+      : { ok: false, error: `"${input}" is not a HuggingFace repository (org/repo).`, suggestions: [] };
+  };
+
+  router.post('/model/download', async (req, res) => {
+    const { repo_id: requested, backend, include, hf_token, local_dir } = req.body;
+    if (!requested) return res.status(400).json({ ok: false, error: 'repo_id is required' });
+
+    // BO-D2e — accept every identifier the operator is actually shown.
+    //
+    // This validated `requested` against a strict org/repo regex and answered
+    // "Invalid repo_id" to anything else — including Cookbook's own display
+    // names and the catalogue ids /model-pull's own description advertises.
+    // "Invalid" also blamed the input for a vocabulary mismatch the product
+    // created.
+    const resolution = resolveIdentifier(requested);
+    if (!resolution.ok) {
+      return res.status(400).json({
+        ok: false,
+        error: resolution.error,
+        // §08 — name the remedy. Both accepted forms, plus anything close.
+        accepts: ['a catalogue model (id or the name shown in Cookbook)', 'a HuggingFace repository as org/repo'],
+        ...(resolution.suggestions?.length ? { didYouMean: resolution.suggestions } : {}),
+      });
+    }
+    const repo_id = resolution.repoId;
 
     const sessionId = `cookbook-${crypto.randomBytes(4).toString('hex')}`;
     const logFile = path.join(LOGS_DIR, `${sessionId}.log`);

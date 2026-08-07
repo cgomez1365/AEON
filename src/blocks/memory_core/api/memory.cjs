@@ -23,6 +23,7 @@
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+const memoryPolicy = require('../../../kernel/memory-policy.cjs');
 const crypto = require('crypto');
 
 module.exports = function createMemoryRouter(deps) {
@@ -73,19 +74,41 @@ module.exports = function createMemoryRouter(deps) {
   router.post('/memory/add', (req, res) => {
     const { text, category, type, title, tags, pinned, source, refs } = req.body || {};
     if (!text || String(text).trim().length < 6) return res.status(400).json({ error: 'text required (6+ chars)' });
+
+    // D2a #10 — store facts in third person, about the operator.
+    //
+    // These are injected into a SYSTEM prompt, where "you" addresses the
+    // MODEL. So "[fact] your name is Cristian" told the model its own name
+    // was Cristian, and "[fact] I am Nanaki" sitting beside it is very
+    // likely that same confusion coming back out again.
+    //
+    // The original is kept whenever this changes anything. Rewriting an
+    // operator's own words and discarding what they actually wrote would be
+    // its own §08 defect — the record has to show both.
+    const normalized = memoryPolicy.normalizeFactPerson(text);
+
     const all = load();
     // Dedupe: identical text is a no-op, not a second copy
-    const dupe = all.find(m => m.text.trim().toLowerCase() === String(text).trim().toLowerCase());
+    const dupe = all.find(m => m.text.trim().toLowerCase() === normalized.text.toLowerCase());
     if (dupe) return res.json({ ok: true, memory: dupe, deduped: true });
     const m = {
-      id: newId(), text: String(text).trim(),
+      id: newId(), text: normalized.text,
+      ...(normalized.changed ? { originalText: String(text).trim() } : {}),
       category: category || 'fact', type: type || null, title: title || null,
       tags: Array.isArray(tags) ? tags : [], pinned: !!pinned,
       timestamp: Date.now(), source: source || 'api',
       refs: Array.isArray(refs) ? refs.slice(0, 5) : [],
     };
     all.push(m); save(all); mdMirror(m);
-    res.json({ ok: true, memory: m });
+    res.json({
+      ok: true, memory: m, normalized: normalized.changed,
+      // Reported, never silently corrected: a fact still carrying "I" or
+      // "your" mid-sentence will read as being about the MODEL once injected.
+      ...(normalized.residualPerson ? {
+        warning: 'This memory still contains first- or second-person wording that could not be rewritten safely. '
+          + 'Injected into a system prompt, "I" and "you" refer to the model, not the operator. Consider editing it.',
+      } : {}),
+    });
   });
 
   // ── PUT /memory/:id — edit ──────────────────────────────────────────
@@ -124,31 +147,40 @@ module.exports = function createMemoryRouter(deps) {
   // Operator-authored entries and settled decisions must outrank milestones
   // and drive-by facts no matter how old they are — re-litigating a decision
   // costs more than missing a recent event. Recency only breaks ties.
-  const TYPE_WEIGHT = { decision: 400, algorithm: 300, outline: 300, milestone: 50 };
-  const continuityRank = (m) =>
-    (m.source === 'operator' ? 500 : 0) + (TYPE_WEIGHT[m.type] !== undefined ? TYPE_WEIGHT[m.type] : 150);
+  //
+  // The doctrine now lives in src/kernel/memory-policy.cjs as continuityRank(),
+  // because it was written twice — here and in dashboard's chat-stream — and
+  // two copies of a ranking rule are two rankings waiting to disagree.
 
   // ── GET /memory/context?q=&budget= — injection payload ──────────────
   // Pinned first, then continuity rank + keyword relevance, recency last.
   router.get('/memory/context', (req, res) => {
-    const budget = Math.min(Number(req.query.budget) || 4500, 20000);
-    const q = String(req.query.q || '').toLowerCase();
-    const words = q.replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(w => w.length > 3);
-    const scored = load().map(m => {
-      let score = (m.pinned ? 100000 : 0) + continuityRank(m);
-      const t = (m.text + ' ' + (m.title || '')).toLowerCase();
-      for (const w of words) score += (t.split(w).length - 1) * 10;
-      score += Math.max(0, 5 - (Date.now() - m.timestamp) / 86400000 / 30); // tie-break recency
-      return { m, score };
-    }).sort((a, b) => b.score - a.score);
-    const lines = [];
-    let used = 0;
-    for (const { m } of scored) {
-      const line = `- [${m.type || m.category || 'fact'}] ${m.text}`;
-      if (used + line.length > budget) break;
-      lines.push(line); used += line.length + 1;
-    }
-    res.json({ text: lines.join('\n'), count: lines.length, budget });
+    // D2a. This was a second, independently-written copy of the injection
+    // policy: character budget, bare `break`, no stated precedence. Both
+    // copies had the same two defects (#9, #11) and drifted apart anyway.
+    // One module now, consumed here and by dashboard's chat-stream.
+    //
+    // `budget` stays a TOKEN count. The old query parameter was characters,
+    // and the default 4500 characters is roughly 1,100 tokens of prose, so
+    // that is the default carried over — the unit is now stated rather than
+    // assumed (D1f).
+    const budgetTokens = Math.min(Number(req.query.budget) || 1100, 6000);
+    const selection = memoryPolicy.selectForInjection({
+      memories: load(),
+      budgetTokens,
+      query: String(req.query.q || ''),
+    });
+    res.json({
+      text: selection.text,
+      count: selection.injected,
+      // What did not make it in, and why there is a number at all: a silent
+      // eviction and a store with nothing in it looked identical from here.
+      considered: selection.considered,
+      dropped: selection.dropped,
+      tokensUsed: selection.tokensUsed,
+      budget: budgetTokens,
+      budgetUnit: 'tokens',
+    });
   });
 
   // ── POST /memory/distill — transcript → typed candidate memories ────

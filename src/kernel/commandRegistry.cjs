@@ -26,6 +26,25 @@ const path = require('path');
 
 const BLOCKS_DIR = path.join(__dirname, '..', 'blocks');
 
+/**
+ * The usage line for a command, derived from what it already declares.
+ *
+ * BO-D2e. Every command in the registry can state how to call it without a
+ * block author writing anything new: a `param` names the single argument,
+ * `params` names the structured fields, and neither means the command takes
+ * nothing. `argHint` overrides the derived name where a friendlier one helps
+ * ("<path>" rather than "<filePath>").
+ */
+function buildUsage(c) {
+  const cmd = c.cmd;
+  if (c.argHint) return `${cmd} ${c.argHint}`;
+  if (c.param) return `${cmd} <${c.param}>`;
+  if (Array.isArray(c.params) && c.params.length) {
+    return `${cmd} ${c.params.map(p => `<${typeof p === 'string' ? p : p.name}>`).join(' ')}`;
+  }
+  return cmd;
+}
+
 function scanCommands(readiness = {}) {
   const registry = new Map(); // "/cmd" → spec
   let folders = [];
@@ -64,6 +83,25 @@ function scanCommands(readiness = {}) {
         dangerous: !!c.dangerous,
         when: c.when || null,
         template: c.template || null,
+        // ── BO-D2e: the argument contract ──────────────────────────────
+        // Declared once, here, and enforced by the dispatcher before a
+        // command ever reaches its block. Nine of BO-D's findings came from
+        // its absence: /read with no argument reached fs.open('') and
+        // returned "ENOENT ... open ''", and text typed after a command that
+        // takes none simply vanished.
+        //
+        // `argRequired` defaults to false so no existing command changes
+        // behaviour by being scanned. A block opts in.
+        argRequired: !!c.argRequired,
+        argHint: c.argHint || null,
+        // An input shape this command cannot serve, with the remedy. Used
+        // where a command's argument is valid syntax but the wrong INTENT —
+        // /memory searching for a sentence the operator meant to save.
+        rejectArg: (c.rejectArg && c.rejectArg.pattern && c.rejectArg.error) ? c.rejectArg : null,
+        // What the operator should have typed. Derivable for every command
+        // in the registry, which is why /help and the palette get usage
+        // strings for free rather than each command inventing one.
+        usage: buildUsage(c),
       };
       // First declaration wins on a cmd collision; both remain reachable by id.
       if (!registry.has(c.cmd)) registry.set(c.cmd, spec);
@@ -126,6 +164,46 @@ module.exports = function ({ blockReadiness = {}, isVercel = false, writeOSAudit
     const ready = blockReadiness[spec.blockId]?.ready !== false;
     if (!evalWhen(spec.when, { ready, runtime: isVercel ? 'cloud' : 'local' })) {
       return res.status(409).json({ ok: false, id: spec.id, error: `${spec.cmd} unavailable (when: ${spec.when})` });
+    }
+
+    // ── BO-D2e — the argument contract, enforced before the block sees it ──
+    //
+    // Deliberately here and not in each command. A command that validates
+    // its own arguments fails in its own vocabulary, deep inside its own
+    // implementation: /read reached fs.open('') and answered "ENOENT ...
+    // open ''", a raw Node error naming no remedy and not even the command.
+    const argText = typeof arg === 'string' ? arg.trim() : '';
+    const takesArg = !!(spec.param || (spec.params && spec.params.length));
+
+    if (spec.argRequired && !argText && !structured) {
+      return res.status(400).json({
+        ok: false, id: spec.id, usage: spec.usage,
+        error: `${spec.cmd} requires an argument. Usage: ${spec.usage}`,
+      });
+    }
+
+    // Silent argument loss — the worst of the nine. Text typed after a
+    // command that cannot use it must never simply disappear into a
+    // successful-looking run.
+    if (argText && !takesArg && !structured) {
+      return res.status(400).json({
+        ok: false, id: spec.id, usage: spec.usage,
+        error: `${spec.cmd} takes no arguments, but "${argText.slice(0, 60)}" was supplied. Usage: ${spec.usage}`,
+      });
+    }
+
+    // A command may declare that some inputs are not questions it can answer.
+    // /memory searches; an operator typing a fact at it meant to SAVE one,
+    // and got an empty search reported as success.
+    if (argText && spec.rejectArg) {
+      const rx = new RegExp(spec.rejectArg.pattern, 'i');
+      if (rx.test(argText)) {
+        return res.status(400).json({
+          ok: false, id: spec.id, usage: spec.usage,
+          error: spec.rejectArg.error,
+          hint: spec.rejectArg.hint || null,
+        });
+      }
     }
 
     // Central confirmation gate — the dispatcher asks, never the block.

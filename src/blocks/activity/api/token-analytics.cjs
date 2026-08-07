@@ -41,12 +41,16 @@ module.exports = function createTokenAnalyticsRouter(deps) {
     return getLocalDateString();
   }
 
-  function recordActivity(tokens = 0, model = '', engine = '') {
+  // D2g — `meta` carries the outcome. Without it a day of failed calls was
+  // indistinguishable from a day nobody worked, because only the request
+  // count and token total were ever kept.
+  function recordActivity(tokens = 0, model = '', engine = '', meta = {}) {
     const day = today();
     const data = readActivity();
     if (!data[day]) data[day] = { requests: 0, tokens: 0, models: {} };
     data[day].requests++;
     data[day].tokens += tokens;
+    if (meta.success === false) data[day].errors = (data[day].errors || 0) + 1;
     if (model) {
       if (!data[day].models[model]) data[day].models[model] = { requests: 0, tokens: 0 };
       data[day].models[model].requests++;
@@ -174,11 +178,17 @@ module.exports = function createTokenAnalyticsRouter(deps) {
       }
     } catch {}
 
+    // D2g — read the per-call ledger, not the {date, cost} file that the
+    // live code paths never created. Cost is derived from the same records
+    // every other aggregate comes from, so the panels cannot disagree.
     let tokenLedgerCost = 0;
     try {
-      if (TOKEN_LEDGER_FILE && fs.existsSync(TOKEN_LEDGER_FILE)) {
-        const ledger = JSON.parse(fs.readFileSync(TOKEN_LEDGER_FILE, 'utf8'));
-        tokenLedgerCost = ledger.cost || 0;
+      if (TOKEN_LEDGER_FILE) {
+        const { createLedger } = require('../../../kernel/llm-ledger.cjs');
+        const led = createLedger({ file: path.join(path.dirname(TOKEN_LEDGER_FILE), 'llm_calls.jsonl') });
+        tokenLedgerCost = led.dailyCost({
+          pricePerToken: { gemini: 0.00000015, groq: 0.00000060, local: 0 },
+        });
       }
     } catch {}
 

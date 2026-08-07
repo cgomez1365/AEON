@@ -23,7 +23,9 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Send, Loader, Cpu, Clock, Zap, ChevronRight, ChevronDown, ShieldAlert, Paperclip, X as XIcon } from 'lucide-react';
+import { Send, Loader, Cpu, Clock, Zap, ChevronRight, ChevronDown, ShieldAlert, Paperclip, Square, X as XIcon } from 'lucide-react';
+import { describeStreamFailure } from '../utils/interceptorPolicy.js';
+import { describeDispatchOutcome, describeDenial, describeCommandOutput } from '../utils/commandOutcome.js';
 
 // UI-only commands — act on the terminal or app itself, never the server.
 // Block commands come from GET /api/commands (manifest-discovered); add nothing here.
@@ -39,8 +41,26 @@ const nextPid = () => String(++PID).padStart(4, '0');
 
 // ── Event chip: one execution rendered as a process line ──────────────
 function EventChip({ ev, onToggle }) {
-  const color = ev.status === 'running' ? '#00f2ff' : ev.status === 'ok' ? '#39ff14' : '#ff4455';
-  const statusText = ev.status === 'running' ? 'RUNNING' : ev.status === 'ok' ? `EXIT 0${ev.latencyMs ? ` · ${ev.latencyMs}ms` : ''}` : 'EXIT 1';
+  // D2c — five states, and only two of them carry an exit code. This used to
+  // be a binary: 'ok' was green EXIT 0 and everything else was red EXIT 1,
+  // so a command still WAITING on the operator had to be drawn as one or the
+  // other. It was drawn as EXIT 0, above the red EXIT 1 of the run that
+  // followed. EXIT 0 and EXIT 1 are claims about a finished run; a challenge
+  // and a denial are not finished runs.
+  const COLORS = {
+    running: '#00f2ff',
+    pending: '#ffb454',   // amber — waiting on a human
+    ok: '#39ff14',
+    denied: '#7d93a8',    // grey — the operator answered, nothing ran
+    fail: '#ff4455',
+  };
+  const color = COLORS[ev.status] || COLORS.fail;
+  const statusText =
+    ev.status === 'running' ? 'RUNNING'
+      : ev.status === 'pending' ? 'AWAITING APPROVAL'
+        : ev.status === 'denied' ? 'DENIED'
+          : ev.status === 'ok' ? `EXIT 0${ev.latencyMs ? ` · ${ev.latencyMs}ms` : ''}`
+            : 'EXIT 1';
   return (
     <div style={{ borderTop: `1px solid ${color}33`, borderRight: `1px solid ${color}33`, borderBottom: `1px solid ${color}33`, borderLeft: `3px solid ${color}`, borderRadius: 3, margin: '4px 0', background: 'rgba(10,16,26,0.6)' }}>
       <div onClick={onToggle} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 10px', cursor: 'pointer', fontSize: 11 }}>
@@ -48,7 +68,7 @@ function EventChip({ ev, onToggle }) {
         <span style={{ color: '#4a5568' }}>[{ev.pid}]</span>
         <span style={{ color, letterSpacing: '0.08em' }}>{ev.kind}</span>
         <span style={{ color: '#c8d6e8', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ev.label}</span>
-        {ev.status === 'running' && <Loader size={11} color={color} className="spin" />}
+        {(ev.status === 'running' || ev.status === 'pending') && <Loader size={11} color={color} className="spin" />}
         <span style={{ color, fontSize: 10 }}>{statusText}</span>
       </div>
       {ev.expanded && (
@@ -87,6 +107,8 @@ const Terminal2 = ({ onUsageUpdate }) => {
   const [paletteFilter, setPaletteFilter] = useState('');
   const scrollRef = useRef();
   const feedId = useRef(1);
+  // D1c — the generation currently in flight: { controller, streamId, msgId }.
+  const activeChatRef = useRef(null);
 
   const push = useCallback((entry) => {
     const id = feedId.current++;
@@ -218,16 +240,37 @@ const Terminal2 = ({ onUsageUpdate }) => {
   };
 
   // ── Verb 1: chat (SSE stream) ──
+  //
+  // D2f. Every failure in here used to render as `[NEURAL LINK] <message>`,
+  // a label that means the link is dead. So when the server answered
+  // correctly and said "Native local runtime not ready" — a precise,
+  // actionable sentence naming an install step — the operator read it as an
+  // unreachable server and went looking for a network fault that did not
+  // exist. AEON had the true answer and mislabelled it on the way to the
+  // screen (§08). A server that explained itself gets its own words; only a
+  // genuine transport failure gets a transport label, and the words are the
+  // ones App.jsx already uses so both surfaces speak one vocabulary (§05).
   const runChat = async (text) => {
     const msgId = push({ type: 'msg', role: 'assistant', content: '', streaming: true });
     let streamed = '';
     let meta = {};
+
+    // D1c — the operator's handle on their own machine's work. The backend
+    // can cancel a generation; without this nothing ever asked it to.
+    const controller = new AbortController();
+    activeChatRef.current = { controller, streamId: null, msgId };
+
     try {
       const res = await fetch('/api/chat/stream', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
         body: JSON.stringify({ message: text, role: 'chat', history: feed.filter(e => e.type === 'msg' && (e.role === 'user' || e.role === 'assistant')).slice(-20).map(e => ({ role: e.role, content: e.content })) }),
       });
-      if (!res.ok || !res.body) throw new Error(`chat/stream ${res.status}`);
+      if (!res.ok || !res.body) {
+        const err = new Error(`chat/stream ${res.status}`);
+        err.aeonKind = 'api';
+        throw err;
+      }
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
@@ -242,31 +285,78 @@ const Terminal2 = ({ onUsageUpdate }) => {
           const eventType = lines[i].slice(7).trim();
           const dataLine = lines[i + 1];
           if (!dataLine?.startsWith('data: ')) continue;
-          try {
-            const payload = JSON.parse(dataLine.slice(6));
-            if (eventType === 'token') { streamed += payload.t; patch(msgId, { content: streamed }); }
-            else if (eventType === 'meta') {
-              // Fallback narrative: show degradation inline, strikethrough style
-              if (payload.fallbackFrom && meta.provider) {
-                push({ type: 'msg', role: 'system', content: `~~${meta.provider}~~ → ${payload.provider} (${payload.fallbackFrom})` });
-              }
-              meta = { ...meta, ...payload };
+
+          // Parse and handle are separate steps on purpose. They used to
+          // share one try/catch that swallowed anything whose message
+          // contained "JSON" — so a server error mentioning JSON vanished and
+          // the turn ended blank, which is R-05's silent failure exactly.
+          // Only a genuine parse failure on a partial frame is ignorable.
+          let payload;
+          try { payload = JSON.parse(dataLine.slice(6)); } catch { continue; }
+
+          if (eventType === 'token') { streamed += payload.t; patch(msgId, { content: streamed }); }
+          else if (eventType === 'meta') {
+            if (payload.streamId) activeChatRef.current = { ...activeChatRef.current, streamId: payload.streamId };
+            // Fallback narrative: show degradation inline, strikethrough style
+            if (payload.fallbackFrom && meta.provider) {
+              push({ type: 'msg', role: 'system', content: `~~${meta.provider}~~ → ${payload.provider} (${payload.fallbackFrom})` });
             }
-            else if (eventType === 'warning') push({ type: 'msg', role: 'warning', content: payload.message });
-            else if (eventType === 'done') { streamed = payload.text || streamed; meta = { ...meta, ...payload }; }
-            else if (eventType === 'error') throw new Error(payload.error);
-          } catch (pe) { if (pe.message && !pe.message.includes('JSON')) throw pe; }
+            meta = { ...meta, ...payload };
+          }
+          else if (eventType === 'warning') push({ type: 'msg', role: 'warning', content: payload.message });
+          else if (eventType === 'done') { streamed = payload.text || streamed; meta = { ...meta, ...payload }; }
+          else if (eventType === 'error') {
+            // The server spoke. Carry its words, not a link diagnosis.
+            const err = new Error(payload.error);
+            err.aeonKind = 'server';
+            throw err;
+          }
         }
+      }
+
+      // D1d — a truncated answer must not read as a finished one.
+      if (meta.truncated) {
+        push({ type: 'msg', role: 'warning', content: meta.truncationReason || 'The answer reached its token budget and stopped early.' });
       }
       patch(msgId, { content: streamed, streaming: false, meta });
       onUsageUpdate?.({ tokens: meta.tokens || 0, latencyMs: meta.latencyMs || 0 });
     } catch (e) {
-      patch(msgId, { role: 'error', content: `[NEURAL LINK] ${e.message}`, streaming: false });
+      const failure = describeStreamFailure(e);
+      if (!failure) {
+        // A deliberate stop is not a failure. Keep what was generated.
+        patch(msgId, { content: streamed, streaming: false, meta: { ...meta, cancelled: true } });
+        push({ type: 'msg', role: 'system', content: 'Generation stopped.' });
+      } else {
+        patch(msgId, { role: 'error', content: failure.text, streaming: false });
+      }
+    } finally {
+      activeChatRef.current = null;
     }
   };
 
+  /**
+   * D1c — stop the generation in flight.
+   *
+   * Tells the server first, by id, so it can abort the upstream llama-server
+   * request and actually free the CPU; then aborts our own fetch. Closing the
+   * socket alone would also register as a stop server-side, but naming the
+   * stream is the honest instruction rather than a side effect.
+   */
+  const stopChat = useCallback(async () => {
+    const active = activeChatRef.current;
+    if (!active) return;
+    try {
+      await fetch('/api/chat/stop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(active.streamId ? { streamId: active.streamId } : {}),
+      });
+    } catch { /* aborting locally below is the backstop */ }
+    try { active.controller.abort(); } catch { /* already gone */ }
+  }, []);
+
   // ── Verb 2: registry command ──
-  const runCommand = async (text, confirmed = false) => {
+  const runCommand = async (text, confirmed = false, resumeChipId = null) => {
     const [cmdToken, ...rest] = text.split(/\s+/);
     const arg = rest.join(' ');
 
@@ -278,7 +368,19 @@ const Terminal2 = ({ onUsageUpdate }) => {
     }
 
     // UI-only commands — handled client-side, no server round-trip.
-    if (cmdToken === '/model') { setShowModelPicker(v => !v); return; }
+    // D2e #22 — /model rendered NOTHING: the user's line was logged and no
+    // output appeared beneath it, which is indistinguishable from a command
+    // that does not exist. It is client-side, so it never reaches the
+    // registry and cannot answer for itself. It says what it did.
+    if (cmdToken === '/model') {
+      const opening = !showModelPicker;
+      setShowModelPicker(opening);
+      push({
+        type: 'msg', role: 'system',
+        content: opening ? 'Model picker opened.' : 'Model picker closed.',
+      });
+      return;
+    }
     if (cmdToken === '/open') {
       try {
         const d = await fetch('/api/console/blocks').then(r => r.json());
@@ -297,26 +399,42 @@ const Terminal2 = ({ onUsageUpdate }) => {
     }
 
     // Everything else → command bus (manifest-discovered, block-owned).
-    const pid = nextPid();
+    //
+    // D2c — `resumeChipId` lets an approved challenge finish the SAME process
+    // line it started on. Without it, approving opened a second chip and one
+    // action produced two outcomes on screen.
     const t0 = Date.now();
-    const chipId = push({ type: 'chip', pid, kind: 'CMD', label: text, status: 'running', expanded: false });
+    const chipId = resumeChipId ?? push({
+      type: 'chip', pid: nextPid(), kind: 'CMD', label: text, status: 'running', expanded: false,
+    });
+    if (resumeChipId) patch(chipId, { status: 'running', label: text });
     try {
       const res = await fetch('/api/commands/dispatch', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ cmd: cmdToken, arg, confirmed }),
       });
       const data = await res.json().catch(() => ({}));
+      const outcome = describeDispatchOutcome({ status: res.status, data });
 
-      // Central confirmation gate → firewall intercept card
-      if (res.status === 428 && data.requiresConfirmation) {
-        patch(chipId, { status: 'ok', label: `${text} (awaiting approval)` });
-        push({ type: 'intercept', prompt: data.prompt, command: text });
+      // Central confirmation gate → the run PAUSES here. It is not finished,
+      // so it is not given an exit code.
+      if (outcome.kind === 'challenge') {
+        patch(chipId, { status: outcome.chipStatus, label: text });
+        push({ type: 'intercept', prompt: outcome.prompt, command: text, chipId });
         return;
       }
 
-      const output = data.text || (data.data ? '```json\n' + JSON.stringify(data.data, null, 2) + '\n```' : data.error || '(empty)');
-      patch(chipId, { status: data.ok ? 'ok' : 'fail', output, latencyMs: Date.now() - t0, expanded: !data.ok });
-      if (data.ok && data.text) push({ type: 'msg', role: 'assistant', content: data.text, meta: { model: data.meta?.block, provider: 'Block Command', latencyMs: Date.now() - t0 } });
+      // D2d — empty is a legitimate answer and reads as one. This used to be
+      // an inline expression that rendered [] as an empty code block and
+      // silence as the literal string "(empty)".
+      const output = describeCommandOutput(data);
+      patch(chipId, {
+        status: outcome.chipStatus, output,
+        latencyMs: Date.now() - t0, expanded: outcome.expand,
+      });
+      if (outcome.kind === 'ok' && outcome.text) {
+        push({ type: 'msg', role: 'assistant', content: outcome.text, meta: { model: data.meta?.block, provider: 'Block Command', latencyMs: Date.now() - t0 } });
+      }
     } catch (e) {
       patch(chipId, { status: 'fail', output: e.message, expanded: true });
     }
@@ -366,13 +484,22 @@ const Terminal2 = ({ onUsageUpdate }) => {
     }
   };
 
+  // D2c — approving resumes the run on its ORIGINAL process line. It used to
+  // start a fresh one, so a single action left a green "awaiting approval"
+  // chip above the red chip of the run that actually happened.
   const approveIntercept = (entry) => {
     setFeed(prev => prev.filter(e => e.id !== entry.id));
     setIsLoading(true);
-    runCommand(entry.command, true).finally(() => setIsLoading(false));
+    runCommand(entry.command, true, entry.chipId).finally(() => setIsLoading(false));
   };
+
+  // Denial is an outcome the operator chose, not an error the system hit —
+  // and it must resolve the waiting chip, which previously sat on "awaiting
+  // approval" for the rest of the session.
   const denyIntercept = (entry) => {
-    patch(entry.id, { type: 'msg', role: 'system', content: `Denied: ${entry.command}` });
+    setFeed(prev => prev.filter(e => e.id !== entry.id));
+    const d = describeDenial(entry.command);
+    if (entry.chipId != null) patch(entry.chipId, { status: d.chipStatus, output: d.output, expanded: d.expand });
   };
 
   // ── Render ──
@@ -496,9 +623,16 @@ const Terminal2 = ({ onUsageUpdate }) => {
           placeholder="Ask, /command, or > shell…"
           style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', color: '#e8f0fa', fontFamily: 'inherit', fontSize: 13 }}
         />
-        <button onClick={() => !isLoading && dispatch(input)} disabled={isLoading}
-          style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: sigilColor }}>
-          {isLoading ? <Loader size={15} className="spin" /> : <Send size={15} />}
+        {/* D1c — while a generation runs this is a STOP control, not a dead
+            spinner. The backend can cancel; the operator had no way to ask.
+            At D1a's budget an unwanted answer is minutes of CPU on the
+            operator's own machine, which is theirs to reclaim (§03). */}
+        <button
+          onClick={() => (isLoading ? stopChat() : dispatch(input))}
+          title={isLoading ? 'Stop generating' : 'Send'}
+          aria-label={isLoading ? 'Stop generating' : 'Send'}
+          style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: isLoading ? '#ff4455' : sigilColor }}>
+          {isLoading ? <Square size={13} fill="#ff4455" /> : <Send size={15} />}
         </button>
       </div>
     </div>
