@@ -44,15 +44,38 @@ const BLOCKS = path.join(ROOT, 'src', 'blocks');
  * Never add one.
  */
 const BASELINE = new Set([
+  // Literal requires — the form that took memory_core's mount down.
   'aeon_matrix/api/_lib.cjs',
   'council/api/index.cjs',
   'dashboard/api/chat-stream.cjs',
   'dashboard/api/chat.cjs',
   'fleet_control/api/local-status.js',
+  // Computed requires — found 2026-08-07 when this gate was widened to see
+  // them. All three wrap the call in try/catch and degrade to null, so they
+  // do not kill a mount the way a literal require does. Still outside the
+  // shell contract, still on the list until they move into src/kernel/.
+  'cookbook/api/index.cjs',
+  'settings/api/connectivity.js',
+  'settings/api/settings.js',
 ]);
 
-/** require('...services/...') anywhere in the file. */
+/**
+ * require('...services/...') anywhere in the file.
+ *
+ * Two forms, because the first draft of this gate only caught the first and
+ * Cookbook slipped straight past it:
+ *
+ *   require('../../../../services/x.cjs')                    literal
+ *   require(path.join(__dirname,'..','..','services','x'))   computed
+ *
+ * The computed form is what src/blocks/cookbook/api/index.cjs uses. Those
+ * calls are wrapped in try/catch and degrade to null rather than killing the
+ * mount, so they are less dangerous than the literal form that took
+ * memory_core down — but a gate that cannot see half the cases is a gate
+ * that will be walked around without anyone noticing.
+ */
 const SERVICES_REQUIRE = /require\((['"])([^'"]*services\/[^'"]*)\1\)/g;
+const SERVICES_COMPUTED = /require\(\s*path\.join\([^)]*['"]services['"][^)]*\)/g;
 
 function blockFilesRequiringServices() {
   const out = [];
@@ -62,10 +85,11 @@ function blockFilesRequiringServices() {
       if (e.isDirectory()) { walk(p); continue; }
       if (!/\.(cjs|js|jsx)$/.test(e.name)) continue;
       const src = fs.readFileSync(p, 'utf8');
-      if (SERVICES_REQUIRE.test(src)) {
+      if (SERVICES_REQUIRE.test(src) || SERVICES_COMPUTED.test(src)) {
         out.push(path.relative(BLOCKS, p).split(path.sep).join('/'));
       }
       SERVICES_REQUIRE.lastIndex = 0;
+      SERVICES_COMPUTED.lastIndex = 0;
     }
   };
   walk(BLOCKS);

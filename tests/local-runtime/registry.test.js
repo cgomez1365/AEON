@@ -350,7 +350,18 @@ describe('typed accessors', () => {
 });
 
 describe('concurrent readers', () => {
-  it('readers never observe a partial file during repeated writes', async () => {
+  // 40 atomic writes (each: temp file + fsync + rename) interleaved with 80
+  // reads is genuinely I/O-bound, and fsync on Windows under a fully parallel
+  // suite is slow enough to cross the 10s default. It failed there — at
+  // 10069ms and 10222ms, i.e. ON the timeout, never on the assertion — and
+  // passed 40/40 whenever it ran alone. That is a slow test, not a race:
+  // registry.cjs writes through a temp file and renames, which is atomic on
+  // one filesystem.
+  //
+  // The timeout is raised rather than the work reduced, because the point of
+  // this test is sustained interleaving. Cutting the iterations to make the
+  // clock happy would quietly weaken the only gate that covers torn reads.
+  it('readers never observe a partial file during repeated writes', { timeout: 45_000 }, async () => {
     reg.upsertModel(model());
     const reader = R.createRegistry(dataRoot);
 
