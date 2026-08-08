@@ -205,18 +205,24 @@ describe('D1d — truncation is reported, not hidden', () => {
     expect(r.truncationReason).toBeUndefined();
   });
 
-  it('the non-streaming path reports it too', async () => {
-    const port = await stubServer((req, res) => {
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({
-        model: 'stub',
-        choices: [{ message: { content: 'cut off' }, finish_reason: 'length' }],
-        usage: { total_tokens: 42 },
-      }));
+  it('a caller that wants one string still learns it was truncated', async () => {
+    // BO-E3 — there is no separate non-streaming request path any more. A
+    // caller passing no onToken still gets a single string back; the transport
+    // underneath streams so undici's 300s bodyTimeout cannot cap a slow model.
+    let sawStreamFlag = null;
+    const port = await stubServer((req, res, body) => {
+      sawStreamFlag = body.stream;
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write(sseChunk('cut off'));
+      res.write(sseChunk('', 'length'));
+      res.write('data: [DONE]\n\n');
+      res.end();
     });
 
     const s = sessionAt(port);
-    const r = await s.chat([{ role: 'user', content: 'hi' }]);
+    const r = await s.chat([{ role: 'user', content: 'hi' }]);   // no onToken
+    expect(sawStreamFlag).toBe(true);          // always streams on the wire
+    expect(r.text).toBe('cut off');            // caller still gets one string
     expect(r.truncated).toBe(true);
     expect(r.finishReason).toBe('length');
   });
@@ -227,8 +233,11 @@ describe('D1a — the request carries a derived budget, not 512', () => {
     let sent = null;
     const port = await stubServer((req, res, body) => {
       sent = body;
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }] }));
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write(sseChunk('ok'));
+      res.write(sseChunk('', 'stop'));
+      res.write('data: [DONE]\n\n');
+      res.end();
     });
 
     const s = sessionAt(port, { contextSize: 32768 });
@@ -240,8 +249,9 @@ describe('D1a — the request carries a derived budget, not 512', () => {
 
   it('refuses honestly when the prompt has consumed the window', async () => {
     const port = await stubServer((req, res) => {
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end('{}');
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write('data: [DONE]\n\n');
+      res.end();
     });
     const s = sessionAt(port, { contextSize: 2048 });
     await expect(

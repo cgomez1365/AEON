@@ -1,6 +1,6 @@
 {
   "name": "aeon3",
-  "description": "AEON — a local-first AI workspace built from governed blocks. Runs anywhere.",
+  "description": "AEON \u2014 a local-first AI workspace built from governed blocks. Runs anywhere.",
   "author": "Broken Gear Industries <cristian@brokengear.io>",
   "private": true,
   "license": "Apache-2.0",
@@ -109,5 +109,8 @@
   },
   "homepage": "https://github.com/cgomez1365/AEON#readme",
   "keywords": [],
-  "type": "commonjs"
+  "type": "commonjs",
+  "overrides": {
+    "nanoid": "^3.3.17"
+  }
 }

@@ -19,6 +19,22 @@ const path = require('path');
 const PROBE_TIMEOUT_MS = 15_000;
 
 /**
+ * Named remedies for host libraries llama.cpp needs but does not ship.
+ *
+ * §08 — an error must name every remedy, cheapest first. "libgomp.so.1 not
+ * found" is a true statement that leaves an operator nowhere to go; the
+ * package name is the part they can act on.
+ */
+const MISSING_LIB_REMEDIES = {
+  'libgomp.so.1':
+    'install the OpenMP runtime — Debian/Ubuntu: sudo apt-get install -y libgomp1 · '
+    + 'Fedora/RHEL: sudo dnf install -y libgomp · Arch: sudo pacman -S gcc-libs',
+  'libstdc++.so.6':
+    'install the C++ standard library — Debian/Ubuntu: sudo apt-get install -y libstdc++6 · '
+    + 'Fedora/RHEL: sudo dnf install -y libstdc++',
+};
+
+/**
  * @param {string} entryAbsPath  Absolute path to llama-cli (or llama-cli.exe)
  * @param {string[]} probeArgs   From runtime-assets.json (usually ["--version"])
  * @returns {{ reportedVersion: string, cpuFeatures: string[], gpuBackend: string|null, probedAt: string }}
@@ -65,6 +81,29 @@ function probe(entryAbsPath, probeArgs = ['--version']) {
   const raw = `${res.stdout || ''}\n${res.stderr || ''}`;
   if (!raw.trim()) {
     throw new Error(`probe: binary produced no output on ${probeArgs.join(' ')}: ${entryAbsPath}`);
+  }
+
+  // BO-E2 — a binary that cannot load its shared libraries must FAIL the probe.
+  //
+  // Found on a clean Ubuntu 24.04: llama.cpp's Linux build links against
+  // libgomp (GCC's OpenMP runtime), which is absent from a minimal install and
+  // present on every developer machine — build-essential pulls it in. So this
+  // has never been seen, and it is precisely what a clean-machine test is for.
+  //
+  // Without this check the failure was WORSE than a crash. The loader writes
+  // "error while loading shared libraries: libgomp.so.1" to stderr, so `raw` is
+  // non-empty, parseVersion() finds no version and returns "unknown", and the
+  // probe RETURNS SUCCESS — recording a runtime as ready when it cannot execute
+  // a single token. §08: readiness must reflect ability, not declaration.
+  const loaderError = /error while loading shared libraries:\s*([^\s:]+)/i.exec(raw);
+  if (loaderError) {
+    const lib = loaderError[1];
+    const remedy = MISSING_LIB_REMEDIES[lib] || `install the system package providing ${lib}`;
+    throw new Error(
+      `probe: the runtime binary cannot start — the system library ${lib} is missing. `
+      + `Remedy: ${remedy}. `
+      + `This is a host dependency of llama.cpp, not a fault in the download (${entryAbsPath}).`
+    );
   }
 
   const reportedVersion = parseVersion(raw);

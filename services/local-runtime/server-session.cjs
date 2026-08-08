@@ -59,8 +59,10 @@ const STDERR_KEEP = 40;            // lines retained for diagnostics
  */
 const IDLE_TIMEOUT_MS = 60_000;
 
-/** Non-streaming calls still need an upper bound; generous, not a ceiling. */
-const NONSTREAM_TIMEOUT_MS = 900_000;
+// BO-E3 removed the non-streaming request path entirely — every call to
+// llama-server streams now, so the idle timeout above is the only generation
+// bound and undici's 300s bodyTimeout can no longer cap a slow model.
+// (The former NONSTREAM_TIMEOUT_MS lived here.)
 
 /** Ask the OS for a free loopback port, then release it for the child. */
 function reserveLoopbackPort() {
@@ -275,11 +277,34 @@ class ServerSession {
       throw e;
     }
 
+    // BO-E3 — ALWAYS stream from llama-server, even when the caller wants one
+    // string back.
+    //
+    // Found by running real inference on a clean machine (2026-08-08): a
+    // generation that took longer than five minutes failed with a bare
+    // "fetch failed", after exactly 300.0 seconds.
+    //
+    // That is undici's `bodyTimeout`, which Node's built-in fetch applies
+    // independently of any AbortSignal. On a non-streamed request llama-server
+    // sends headers immediately and then computes the WHOLE answer before
+    // writing a body — so a slow model trips a five-minute cap that nothing in
+    // AEON declared and no setting could reach.
+    //
+    // It is the same defect D1b removed, one layer down and quieter: the
+    // ceiling did not disappear, it moved from 180s to 300s. Streaming resets
+    // undici's timer on every chunk, which makes D1b's inter-token idle
+    // timeout the single governing limit for both paths — which is what D1b
+    // argued for in the first place.
+    //
+    // The cost is `usage.total_tokens`; tokens are estimated from the text
+    // instead. A slightly soft token count is a fair trade for output that is
+    // not silently truncated at five minutes.
+    const wantsCallback = typeof onToken === 'function';
     const body = {
       messages,
       max_tokens: plan.maxTokens,
       temperature,
-      stream: !!onToken,
+      stream: true,
       ...(stop && stop.length ? { stop } : {}),
       // Reasoning models (Qwen3 and friends) emit a long internal monologue
       // before their answer, and llama-server reports it separately as
@@ -308,32 +333,15 @@ class ServerSession {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
-        // Non-streaming has no token events to measure silence against, so it
-        // keeps a bound — generous enough not to be the ceiling D1b removed.
-        signal: onToken
-          ? controller.signal
-          : AbortSignal.any([controller.signal, AbortSignal.timeout(NONSTREAM_TIMEOUT_MS)]),
+        // Every request streams now (BO-E3), so the inter-token idle timeout
+        // below is the ONLY generation bound. No wall clock, and nothing
+        // undici can cap behind our back.
+        signal: controller.signal,
       });
 
       if (!res.ok) {
         const detail = await res.text().catch(() => '');
         throw new Error(`llama-server returned ${res.status}: ${detail.slice(0, 300)}`);
-      }
-
-      if (!onToken) {
-        const json = await res.json();
-        const choice = json?.choices?.[0] || {};
-        const msg = choice.message || {};
-        // Belt and braces for the same problem: if a model reasoned its way
-        // through the entire budget anyway, show that rather than nothing. A
-        // wall of thinking is a bad answer; an empty bubble is not an answer.
-        const text = msg.content || msg.reasoning_content || '';
-        return {
-          text,
-          tokens: json?.usage?.total_tokens || 0,
-          model: json?.model || null,
-          ...this._completion(choice.finish_reason, plan),
-        };
       }
 
       // SSE stream: "data: {json}\n\n", terminated by "data: [DONE]".
@@ -371,7 +379,9 @@ class ServerSession {
             const choice = evt?.choices?.[0];
             if (choice?.finish_reason) finishReason = choice.finish_reason;
             const delta = choice?.delta?.content;
-            if (delta) { text += delta; onToken(delta); }
+            // A caller that wanted one string still gets one; it simply is not
+            // told about each token on the way (BO-E3).
+            if (delta) { text += delta; if (wantsCallback) onToken(delta); }
           }
         }
       } catch (e) {

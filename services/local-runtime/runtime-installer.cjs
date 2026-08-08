@@ -141,6 +141,9 @@ async function extractArchive(archivePath, destDir, kind = 'zip', stripComponent
       // component normalises both to the same on-disk layout, so requiredFiles
       // and the entrypoint path are platform-independent.
       await tar.x({ file: archivePath, cwd: destDir, strip: stripComponents });
+      // BO-E1 — node-tar silently DROPS some symlinks. See the function below:
+      // without this, local models cannot install on Linux at all.
+      await restoreDroppedSymlinks(archivePath, destDir, stripComponents);
       return;
     }
     const AdmZip = require('adm-zip');
@@ -162,6 +165,78 @@ async function extractArchive(archivePath, destDir, kind = 'zip', stripComponent
 }
 
 /**
+ * Re-create symlinks that node-tar dropped.
+ *
+ * BO-E1, found on a clean Ubuntu 24.04 that had never had AEON — which is the
+ * only way it could have been found, and is exactly what Definition of Done
+ * §20 #1 exists to surface.
+ *
+ * node-tar 7.5.22 extracts 58 of the 62 entries in llama.cpp's
+ * `llama-b10216-bin-ubuntu-x64.tar.gz`. GNU tar extracts all of them. The four
+ * it drops are every symlink whose target is ITSELF a symlink:
+ *
+ *     libllama.so       -> libllama.so.0       -> libllama.so.0.0.10216
+ *     libggml-base.so   -> libggml-base.so.0   -> …
+ *     libllama-common.so, libmtmd.so           (same two-hop shape)
+ *
+ * Single-hop links like `libggml.so -> libggml.so.0` survive, which is why
+ * verifyLayout reported only `libllama.so` missing and nothing else looked
+ * wrong. The consequence was total: the runtime never installed on Linux, so
+ * `local first` — principle 01 — did not hold on the platform at all.
+ *
+ * The repair is deliberate rather than a switch to system `tar`. This file's
+ * own header explains why the shell-out was removed: "nothing to inject into,
+ * nothing to be missing, and identical behaviour on every platform." Shelling
+ * out again to fix a library bug would trade a known defect for the class of
+ * defect that was already paid for once.
+ *
+ * Instead: read the archive's link entries, and create any that are absent.
+ * Containment is re-checked here because a symlink is precisely the thing that
+ * can escape an extract directory — both the link's own path and its target
+ * must resolve inside destDir, or it is skipped.
+ *
+ * @returns {Promise<string[]>} relative paths restored
+ */
+async function restoreDroppedSymlinks(archivePath, destDir, stripComponents = 1) {
+  // Windows tar.gz assets do not exist (llama.cpp ships zips there), and
+  // creating symlinks on Windows needs a privilege AEON must never ask for.
+  if (os.platform() === 'win32') return [];
+
+  const tar = require('tar');
+  const root = path.resolve(destDir);
+  const links = [];
+
+  await tar.t({
+    file: archivePath,
+    onentry: (entry) => {
+      if (entry.type !== 'SymbolicLink') return;
+      const rel = String(entry.path).split('/').filter(Boolean).slice(stripComponents).join('/');
+      if (rel && entry.linkpath) links.push({ rel, target: String(entry.linkpath) });
+    },
+  });
+
+  const restored = [];
+  for (const { rel, target } of links) {
+    const abs = path.resolve(root, rel);
+    if (abs !== root && !abs.startsWith(root + path.sep)) continue;          // link escapes
+    const resolvedTarget = path.resolve(path.dirname(abs), target);
+    if (resolvedTarget !== root && !resolvedTarget.startsWith(root + path.sep)) continue; // target escapes
+
+    // lstat, not existsSync: existsSync follows the link and reports false for
+    // one whose target has not been written yet, which would make this restore
+    // a link that is already there.
+    try { fs.lstatSync(abs); continue; } catch { /* genuinely absent */ }
+
+    try {
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.symlinkSync(target, abs);
+      restored.push(rel);
+    } catch { /* best effort — verifyLayout is the gate that matters */ }
+  }
+  return restored;
+}
+
+/**
  * Verify all required files for this platform are present in extractDir.
  */
 function verifyLayout(extractDir, asset) {
@@ -169,7 +244,16 @@ function verifyLayout(extractDir, asset) {
   const required = ASSETS.requiredFiles[key] || [];
   const missing = required.filter(f => !fs.existsSync(path.join(extractDir, f)));
   if (missing.length) {
-    throw new Error(`Missing required files after extraction: ${missing.join(', ')}`);
+    // §08 — name what actually happened. This used to report only the missing
+    // filename, which sent the reader looking for a corrupt download when the
+    // archive was intact and the extractor had dropped the entry.
+    const dangling = missing.filter((f) => {
+      try { return fs.lstatSync(path.join(extractDir, f)).isSymbolicLink(); } catch { return false; }
+    });
+    const detail = dangling.length
+      ? ` (${dangling.join(', ')} exist as symlinks whose target was not extracted)`
+      : ' (absent from the extract directory — the archive was verified by hash, so this is an extraction fault, not a bad download)';
+    throw new Error(`Missing required files after extraction: ${missing.join(', ')}${detail}`);
   }
 }
 
@@ -349,4 +433,11 @@ async function removeRuntime(dataRoot, runtimeId) {
   // No removeRuntime in registry (runtimes are superseded, not deleted), so just quarantine.
 }
 
-module.exports = { installRuntime, removeRuntime, selectAsset, sha256File, download, assertHashVerified };
+// extractArchive and restoreDroppedSymlinks are exported so BO-E1 can be gated
+// directly. The alternative is a test that downloads a 16 MB release asset to
+// prove a symlink was written, which would make the gate depend on GitHub being
+// up — §19 gates run on every PR and must not.
+module.exports = {
+  installRuntime, removeRuntime, selectAsset, sha256File, download, assertHashVerified,
+  extractArchive, restoreDroppedSymlinks,
+};
