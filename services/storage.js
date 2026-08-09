@@ -162,10 +162,23 @@ const UPLOAD_LIMITS = {
 // Drag-and-drop uploads (50MB cap, basename-sanitized, bounded parts)
 const upload = multer({
   storage: multer.diskStorage({
+    // BO-H8a — this ran unguarded. mkdirSync throws synchronously (EPERM,
+    // ENOTDIR, a path past Windows' 260-char limit, a target that is a file),
+    // and multer calls this from inside a busboy stream event — so the throw
+    // never reaches Express's error middleware, becomes an uncaughtException,
+    // and server.js exits the process. One bad upload path could take the
+    // whole kernel down and drop every in-flight session with it.
+    //
+    // Same class as F1 (2026-07-30), fixed in cookbook's download path and
+    // never carried here. Hand the error to multer via cb instead.
     destination: (req, file, cb) => {
-      const dest = req.body.targetDir || WORKSPACE;
-      if (!fs.existsSync(dest)) fs.mkdirSync(dest, { recursive: true });
-      cb(null, dest);
+      try {
+        const dest = req.body.targetDir || WORKSPACE;
+        if (!fs.existsSync(dest)) fs.mkdirSync(dest, { recursive: true });
+        cb(null, dest);
+      } catch (e) {
+        cb(new Error(`cannot write to upload target: ${e.message}`));
+      }
     },
     filename: (req, file, cb) => cb(null, safeUploadName(file.originalname))
   }),

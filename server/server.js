@@ -532,12 +532,37 @@ process.on('unhandledRejection', (reason) => {
     global.broadcastTerminalEvent('CRIT', `Unhandled rejection: ${reason && reason.message ? reason.message : reason}`);
   }
 });
+// BO-H8d — this exited on ANY uncaught exception. Right for a corrupt kernel,
+// wrong for one bad request: an unguarded throw inside a stream callback (the
+// upload path did exactly this) killed the process and dropped every in-flight
+// session over a single malformed filename.
+//
+// Request-scoped faults are logged and survived. Anything that indicates the
+// process itself is unsound still exits, because continuing on a corrupt heap
+// or a broken module graph would be worse than restarting.
+const FATAL_ERROR_TYPES = [RangeError, ReferenceError, SyntaxError];
+const isProcessFatal = (err) =>
+  FATAL_ERROR_TYPES.some((T) => err instanceof T)
+  || err?.code === 'ERR_WORKER_OUT_OF_MEMORY'
+  || /heap out of memory|Cannot find module/i.test(err?.message || '');
+
 process.on('uncaughtException', (err) => {
-  console.error('[FATAL] Uncaught Exception:', err);
+  const fatal = isProcessFatal(err);
+  console.error(`[${fatal ? 'FATAL' : 'CAUGHT'}] Uncaught Exception:`, err);
   if (typeof global.broadcastTerminalEvent === 'function') {
-    global.broadcastTerminalEvent('CRIT', `Uncaught exception: ${err.message}`);
+    global.broadcastTerminalEvent('CRIT', `Uncaught exception${fatal ? '' : ' (survived)'}: ${err.message}`);
   }
-  process.exit(1);
+  // R-05 — never silent. A survived crash is still a defect and must be
+  // findable afterwards, not just a log line that scrolls away.
+  try {
+    const logDir = path.join(__dirname, '..', 'data', 'logs');
+    fs.mkdirSync(logDir, { recursive: true });
+    fs.appendFileSync(
+      path.join(logDir, 'uncaught.log'),
+      `[${new Date().toISOString()}] ${fatal ? 'FATAL' : 'SURVIVED'} ${err?.stack || err}\n`
+    );
+  } catch {}
+  if (fatal) process.exit(1);
 });
 
 // Graceful shutdown hooks
