@@ -20,7 +20,7 @@ const path = require('path');
 const fs = require('fs');
 const { normalize } = require('./buildEnvelope.cjs');
 const { gate } = require('./complexityGate.cjs');
-const { lintBlock, promoteBlock, ensureStagingDir, STAGING_DIR, BLOCKS_DIR } = require('./staging.cjs');
+const { lintBlock, promoteBlock, ensureStagingDir, validateManifest, scanSources, detectCircularImports, STAGING_DIR, BLOCKS_DIR } = require('./staging.cjs');
 const approvals = require('./approvals.cjs');
 const ideMode = require('./ideMode.cjs');
 const runState = require('./runState.cjs');
@@ -46,6 +46,76 @@ function stageEnvelope(envelope) {
 }
 
 function createBuildPipeline({ getVaultSecrets = async () => [], rescan = () => ({ ok: false, error: 'no rescan hook' }) } = {}) {
+
+  /**
+   * Master M2 — run every gate against an in-memory envelope and write nothing.
+   *
+   * submitBuild() stages before it lints, and stageEnvelope() refuses an id
+   * that already exists in staging/ or src/blocks/ (deliberately — no silent
+   * overwrite). That is correct for a submit and useless for a check: an
+   * operator who wants to know whether their block passes should not have to
+   * create a staging directory, then remove it by hand, to find out.
+   *
+   * Same functions, same verdicts, no disk. If this says clean, submitBuild
+   * reaches at least the staging step; the checks it cannot run without files
+   * on disk are named in `notChecked` rather than silently skipped.
+   */
+  async function validateBuild(source, payload) {
+    let envelope;
+    try { envelope = normalize(source, payload); }
+    catch (e) { return { ok: false, stage: 'envelope', error: e.message }; }
+
+    const manifest = envelope.manifest || {};
+    const id = manifest.id;
+
+    const errors = [...validateManifest(manifest)];
+
+    // lintBlock() checks these against a directory; do the same against the
+    // envelope so a check and a submit cannot disagree about the same block.
+    if (id && !envelope.files.some((f) => f.path === 'index.jsx')) errors.push('missing index.jsx');
+    if (id && manifest.api_routes && !envelope.files.some((f) => /^api\//.test(f.path))) {
+      errors.push('api_routes is true but no api/ file is present');
+    }
+
+    const declaredShell = manifest.contract?.permissions?.shell === true;
+    const findings = [...scanSources(envelope.files, { declaredShell })];
+    for (const cycle of detectCircularImports(envelope.files)) {
+      findings.push({ check: 'circular-import', sev: 'HIGH', file: cycle.split(' → ')[0], why: `circular import: ${cycle}` });
+    }
+
+    // Collisions are a refusal at submit time, so report them at check time.
+    const collisions = [];
+    if (id) {
+      if (fs.existsSync(path.join(STAGING_DIR, id))) {
+        collisions.push(`staging/${id} already exists — decide or remove the previous attempt first`);
+      }
+      if (fs.existsSync(path.join(BLOCKS_DIR, id))) {
+        collisions.push(`src/blocks/${id} is already live — bump version and use the update flow`);
+      }
+    }
+
+    let vaultSecrets = [];
+    try { vaultSecrets = await getVaultSecrets(); } catch {}
+    const verdict = gate(envelope, { vaultSecrets });
+
+    const hasHigh = findings.some((f) => f.sev === 'HIGH');
+    const hasMed = findings.some((f) => f.sev === 'MEDIUM');
+    const score = errors.length || hasHigh ? 'HIGH' : hasMed ? 'MEDIUM' : 'LOW';
+
+    return {
+      ok: true,
+      wouldPass: errors.length === 0 && !hasHigh && collisions.length === 0,
+      score,
+      errors,
+      findings,
+      collisions,
+      verdict,
+      blockId: id || null,
+      // §08 — a check that quietly covers less than the real gate is worse than
+      // no check. Name what only exists once files are on disk.
+      notChecked: ['staged boot', 'route collision against the live registry'],
+    };
+  }
 
   /** The single entry point for all four build sources. */
   async function submitBuild(source, payload, { operator = 'operator' } = {}) {
@@ -132,7 +202,7 @@ function createBuildPipeline({ getVaultSecrets = async () => [], rescan = () => 
     return { ok: true, blockId: decision.item.blockId, approval: decision.item, note: 'block left in staging/ for inspection or manual removal' };
   }
 
-  return { submitBuild, approveBuild, rejectBuild };
+  return { submitBuild, validateBuild, approveBuild, rejectBuild };
 }
 
 module.exports = { createBuildPipeline, stageEnvelope };

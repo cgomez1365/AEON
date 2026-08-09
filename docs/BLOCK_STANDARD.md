@@ -35,7 +35,12 @@ src/blocks/<block_id>/
 }
 ```
 
-Full JSON Schema: [block.schema.json](../block.schema.json)
+Full JSON Schema: [src/kernel/schema.json](../src/kernel/schema.json) — the one
+the kernel actually enforces, via `validateManifest()` in `src/kernel/staging.cjs`.
+A second, stale copy lived at `db/block.schema.json` until 2026-08-09; it was
+referenced only by docs, enforced by nothing, and contradicted this one
+(`deployment` as a string vs an object, a different `tier` enum). It was deleted
+rather than fixed — two schemas is the defect, not their disagreement.
 
 ## Rules
 
