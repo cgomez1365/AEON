@@ -2346,8 +2346,13 @@ function sciFor(b, models, health, supabaseOk) {
   if (cfg && cfg.model) score += 40;
   if (cfg) {
     const p = cfg.provider;
-    const alive = p === 'local' ? (health?.localConfirmed !== false)
-      : !!(health?.providers?.[p]?.healthy);
+    // BO-H1a — this special-cased local onto `localConfirmed`, which
+    // services/ai.js hardcodes to () => true (vestige of the gate removed in
+    // BO-2). So the local branch could never fail: a block scored 40/40 for
+    // liveness whatever the runtime was doing, while `providers.local.healthy`
+    // sat in the same payload saying otherwise. §08 — readiness must reflect
+    // ability, not declaration. Judge local exactly like every other provider.
+    const alive = !!(health?.providers?.[p]?.healthy);
     if (alive) score += 40;
   }
   const needsSupabase = (b.requires?.apis || []).includes('supabase');
@@ -2405,9 +2410,8 @@ function BlocksNeedsPanel({ onManageModels }) {
           const cfg = models[role];
           const needsSupabase = (b.requires?.apis || []).includes('supabase');
           const supabaseMissing = needsSupabase && !supabaseOk;
-          const providerAlive = cfg && (cfg.provider === 'local'
-            ? (health?.localConfirmed !== false)
-            : !!(health?.providers?.[cfg.provider]?.healthy));
+          // BO-H1b — same defect as sciFor above; see the note there.
+          const providerAlive = !!(cfg && health?.providers?.[cfg.provider]?.healthy);
           const providerMissing = !!cfg && !providerAlive;
           const score = sciFor(b, models, health, supabaseOk);
           return (
@@ -2425,7 +2429,17 @@ function BlocksNeedsPanel({ onManageModels }) {
                   <SciBadge score={score} title={score >= 80 ? 'Ready' : score >= 50 ? 'Partly configured' : 'Not ready — set a model or connect its service'} />
                 </div>
                 <div style={{ fontSize: 11, color: 'var(--text-dim, #4a6a8a)' }}>{b.contract.ai.blurb || b.description}</div>
-                {providerMissing && <div style={{ fontSize: 11, color: '#ffb454', marginTop: 3 }}>⚠ {cfg.provider} not reachable — no key configured, or enable local models</div>}
+                {/* BO-H2a — this read "no key configured, or enable local models":
+                    a disjunction AEON can already resolve (`configured` is in the
+                    same payload), and a remedy that no longer exists — the local
+                    gate was removed in BO-2. Name one cause, and a live one. §08 */}
+                {providerMissing && (
+                  <div style={{ fontSize: 11, color: '#ffb454', marginTop: 3 }}>
+                    ⚠ {cfg.provider} {health?.providers?.[cfg.provider]?.configured
+                      ? 'is configured but not responding — check Settings → Connections'
+                      : 'has no key configured — add one in Settings → Connections'}
+                  </div>
+                )}
                 {supabaseMissing && <div style={{ fontSize: 11, color: '#ffb454', marginTop: 3 }}>⚠ needs Supabase — connect it under Services</div>}
               </div>
               <div style={{ textAlign: 'right', flexShrink: 0 }}>

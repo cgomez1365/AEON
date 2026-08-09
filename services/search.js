@@ -197,16 +197,30 @@ module.exports = ({ writeOSAudit, kernelLLM }) => {
   router.get('/search-web', async (req, res) => {
     const q = (req.query.q || '').trim();
     if (!q) return res.status(400).json({ ok: false, error: 'q (query) required' });
+    // BO-H4a — synthesis is the only slow leg here. Measured on 2026-08-08 with
+    // no cloud key configured: DDG returned in ~1s, kernelLLM took 80-219s on a
+    // local CPU model. Orion parses `results` and discards `answer` entirely, so
+    // it was waiting minutes for prose it threw away — then aborting at its own
+    // 15s budget and reporting zero web hits. Let a caller decline the half it
+    // does not want instead of paying for it and timing out.
+    const synthesize = req.query.synthesize !== '0';
     try {
       const results = await fetchWebSearch(q, req.correlationId);
       if (!results) return res.json({ ok: false, query: q, results: '', answer: 'No web results found.' });
+      if (!synthesize) return res.json({ ok: true, query: q, results, answer: null });
       let answer = results;
       try {
-        answer = await kernelLLM(
-          `Live web search results for "${q}":\n\n${results}\n\nUsing ONLY these results, give a concise, accurate answer to the query. Cite sources inline as [title](url). If the results don't answer it, say so.`,
-          { role: 'chat' }
-        );
-      } catch (e) { /* fall back to raw results if synthesis fails */ }
+        // BO-H4b — the catch below only fires on an error; a hang walks straight
+        // past it, which is how this route blocked for 219s with a fallback
+        // sitting right here. Bound it so the fallback is actually reachable.
+        answer = await Promise.race([
+          kernelLLM(
+            `Live web search results for "${q}":\n\n${results}\n\nUsing ONLY these results, give a concise, accurate answer to the query. Cite sources inline as [title](url). If the results don't answer it, say so.`,
+            { role: 'chat' }
+          ),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('synthesis timed out')), 30000)),
+        ]);
+      } catch (e) { answer = results; /* raw results still ship — a complete answer with links beats nothing */ }
       res.json({ ok: true, query: q, results, answer });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message });
