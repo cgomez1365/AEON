@@ -2,7 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback } fr
 import { collection, onSnapshot, doc, setDoc, deleteDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from './AuthContext';
-import { supabase } from '../supabase';
+import { getSupabase } from '../supabase';
 
 const AeonContext = createContext();
 
@@ -32,7 +32,10 @@ const syncToFirestore = async (key, data) => {
 };
 
 /** Mirror block data to Supabase aeon_blocks table (non-blocking). */
-const mirrorToSupabase = (blockTag, payload) => {
+const mirrorToSupabase = async (blockTag, payload) => {
+  // BO-K — the client is resolved at runtime now. Still non-blocking: callers
+  // fire and forget, and an unconfigured install returns null exactly as before.
+  const supabase = await getSupabase();
   if (!supabase) return;
   supabase
     .from('aeon_blocks')

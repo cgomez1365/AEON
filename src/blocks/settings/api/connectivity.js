@@ -111,6 +111,80 @@ module.exports = (app, deps) => {
     } catch (e) { res.status(400).json({ error: e.message }); }
   });
 
+  // ── First run — BO-K ────────────────────────────────────────────────
+  //
+  // The cloud wizard used to appear whenever Supabase was unconfigured, which
+  // is not the same question as "has this operator been through setup". So it
+  // returned on EVERY launch, despite promising "you do this once".
+  //
+  // Worse, the two buttons were backwards: "Enter AEON" (success) only flipped
+  // a React variable and persisted nothing, while "Skip" wrote a localStorage
+  // flag — and on success the wizard DELETED that flag. Completing setup made
+  // the wizard more likely to return than giving up did.
+  //
+  // The flag belongs in kernel state, beside the operator account: it is a
+  // property of the install, not of one browser profile, and clearing site
+  // data should not resurrect a setup the operator already finished.
+  app.get('/api/settings/first-run', (_req, res) => {
+    try {
+      const s = settingsService.loadSettings() || {};
+      res.json({ ok: true, complete: s.firstRunComplete === true });
+    } catch {
+      // Unreadable settings must not trap someone in a setup loop. Treating
+      // unknown as "done" is the safe direction: the wizard is reachable from
+      // Settings, an inescapable modal on every boot is not.
+      res.json({ ok: true, complete: true, degraded: true });
+    }
+  });
+
+  app.post('/api/settings/first-run/complete', (_req, res) => {
+    try {
+      const s = settingsService.loadSettings() || {};
+      s.firstRunComplete = true;
+      s.firstRunCompletedAt = new Date().toISOString();
+      settingsService.saveSettings(s);
+      res.json({ ok: true, complete: true });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  // ── Public browser config — BO-K ────────────────────────────────────
+  //
+  // The browser used to read Supabase config from import.meta.env, which Vite
+  // INLINES AT BUILD TIME. A value saved through Settings goes to the vault at
+  // runtime and could never reach a bundle that was compiled before it existed,
+  // so the Supabase form was a control that could not do what it offered — and
+  // then showed a green "configured" badge over it.
+  //
+  // Serving it here closes that: one source (the vault), read live.
+  //
+  // ANON KEY ONLY. It is publishable by design — it is what ships in every
+  // Supabase browser app, and row-level security, not secrecy, is what protects
+  // the data. The service-role key is a full-access credential and must never
+  // be sent to a browser; it is not read here at all, so it cannot leak by
+  // someone later widening a spread.
+  app.get('/api/settings/connectivity/public-config', (_req, res) => {
+    let url = null;
+    let anonKey = null;
+    try {
+      const saved = cloudCredentials.credentials('supabase');
+      if (saved) { url = saved.url || null; anonKey = saved.anonKey || null; }
+    } catch { /* vault locked or empty — fall through to env */ }
+
+    // Installs that configure Supabase through .env keep working unchanged.
+    if (!url) url = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || null;
+    if (!anonKey) anonKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || null;
+
+    const configured = !!(url && anonKey);
+    res.json({
+      ok: true,
+      configured,
+      supabaseUrl: configured ? url : null,
+      supabaseAnonKey: configured ? anonKey : null,
+    });
+  });
+
   // ── Supabase: save to encrypted Vault (test first) ─────────────────
   app.post('/api/settings/connectivity/supabase/save', async (req, res) => {
     try {

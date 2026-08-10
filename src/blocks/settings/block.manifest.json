@@ -236,6 +236,11 @@
       "auth": true
     },
     {
+      "method": "GET",
+      "path": "/api/settings/connectivity/public-config",
+      "auth": true
+    },
+    {
       "method": "POST",
       "path": "/api/settings/connectivity/supabase/save",
       "auth": true
@@ -278,6 +283,16 @@
     {
       "method": "GET",
       "path": "/api/settings/export-credentials",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/settings/first-run",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/settings/first-run/complete",
       "auth": true
     },
     {

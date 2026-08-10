@@ -12,6 +12,7 @@
  */
 import React, { useState } from 'react';
 import ModalPortal from '../../../components/ModalPortal.jsx';
+import { resetSupabase } from '../../../kernel/supabase';
 
 const S = {
   overlay: { minHeight: '100%', display: 'grid', placeItems: 'center', padding: 24, background: 'rgba(5,9,18,0.92)', color: '#dce8f5' },
@@ -111,6 +112,10 @@ export default function SetupWizard({ onComplete, onSkip }) {
     const log = [];
     try {
       await post('/api/settings/connectivity/supabase/save', supabase);
+      // BO-K — drop the cached browser client so the credentials just saved
+      // take effect now. Without this the operator would have to reload to
+      // use what they just entered — a milder version of the same defect.
+      resetSupabase();
       log.push('✓ Supabase saved to encrypted Vault.');
       setApplyLog([...log]);
 
@@ -132,7 +137,11 @@ export default function SetupWizard({ onComplete, onSkip }) {
         setApplyLog([...log]);
       }
 
-      try { localStorage.removeItem('aeon_setup_wizard_skipped'); } catch {}
+      // BO-K — this used to REMOVE the skip flag on success and replace it
+      // with nothing, so finishing setup made the wizard more likely to return
+      // than skipping it. Completion is now recorded server-side by the gate's
+      // onComplete; the legacy flag is left alone rather than deleted.
+      try { await fetch('/api/settings/first-run/complete', { method: 'POST' }); } catch {}
       say('ok', 'Setup complete. AEON now owns your cloud connection — you will not need to open Supabase or Firebase again.');
       setStep(5);
     } catch (e) {
