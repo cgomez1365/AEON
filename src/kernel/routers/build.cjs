@@ -1,6 +1,8 @@
 /**
  * /api/build — Track B pipeline + Track W approval routing + B7 IDE mode.
  *
+ *   POST /api/build/scaffold              { id, label, api, widget, storage, memory, ... } → envelope payload
+ *   POST /api/build/validate              { source?, manifest, files } — every gate, writes nothing
  *   POST /api/build/submit                { source, spec, manifest, files, estimatedDailyCost, meta }
  *   GET  /api/build/queue[?status=pending]
  *   GET  /api/build/queue/:id
@@ -14,6 +16,7 @@
  *   POST /api/build/rescan                            — manual kernel rescan (B6)
  */
 const express = require('express');
+const { scaffold } = require('../blockScaffold.cjs');
 
 module.exports = function createBuildRouter(deps) {
   const router = express.Router();
@@ -25,6 +28,24 @@ module.exports = function createBuildRouter(deps) {
     if (!source) return res.status(400).json({ error: 'source required (kernelLLM|userKey|local|paste)' });
     const result = await pipeline.submitBuild(source, payload, { operator: operator(req) });
     res.status(result.ok ? 200 : 422).json(result);
+  });
+
+  // Master M1 — turn scaffold options into an envelope payload. Emits files,
+  // writes none. The response feeds /validate and /submit unchanged.
+  router.post('/scaffold', (req, res) => {
+    const result = scaffold(req.body || {});
+    if (!result.ok) return res.status(400).json(result);
+    res.json(result);
+  });
+
+  // Master M2 — every gate, no disk. 200 even when the block would fail: the
+  // check ran successfully and its answer is "no". Reserve non-2xx for a
+  // check that could not be performed, so "your block is bad" and "the
+  // checker is broken" never wear the same status code.
+  router.post('/validate', async (req, res) => {
+    const { source = 'local', ...payload } = req.body || {};
+    const result = await pipeline.validateBuild(source, payload);
+    res.status(result.ok ? 200 : 400).json(result);
   });
 
   router.get('/queue', (req, res) => {

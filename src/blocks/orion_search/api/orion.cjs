@@ -37,7 +37,11 @@ module.exports = function (deps) {
 
     const [web, brain, blocks] = await Promise.all([
       // Web: existing provider chain (Tavily → Serper → Brave → DDG)
-      jfetch(`${base}/api/search-web?q=${encodeURIComponent(q)}`),
+      // BO-H4d — synthesize=0: this leg parses `results` and never reads
+      // `answer`, so asking for prose cost 80-219s and guaranteed the 15s
+      // budget below would abort. The budget stays at 15s deliberately —
+      // raising it would have hidden the defect instead of removing it.
+      jfetch(`${base}/api/search-web?q=${encodeURIComponent(q)}&synthesize=0`),
       // Second Brain: RAG retrieve (returns passages with doc refs)
       jfetch(`${base}/api/crn/second-brain/retrieve`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -58,6 +62,11 @@ module.exports = function (deps) {
 
     // /api/search-web returns markdown blocks: "- **Title**\n  snippet\n  Source: [url](url)"
     // Parse them back into structured results so every web hit carries its link.
+    // BO-H4c — jfetch returns { error } on abort/failure. This read only ever
+    // looked at `results`, so a hard failure became an empty string and the
+    // response still said ok:true — "no results found" for a query a working
+    // engine answered in one second. R-05: no silent failures.
+    const webError = web?.error || null;
     const webRaw = typeof web?.results === 'string' ? web.results : '';
     const webBlocks = webRaw.split(/\n\n+/).filter(b => b.trim().startsWith('- **'));
     for (const block of webBlocks.slice(0, k)) {
@@ -89,7 +98,12 @@ module.exports = function (deps) {
       });
     }
 
-    res.json({ ok: true, query: q, counts: { web: webBlocks.length, brain: brainDocs.length, block: (blocks || []).length }, results });
+    res.json({
+      ok: true, query: q,
+      counts: { web: webBlocks.length, brain: brainDocs.length, block: (blocks || []).length },
+      results,
+      ...(webError ? { degraded: { web: webError } } : {}),
+    });
   });
 
   return router;

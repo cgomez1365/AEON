@@ -162,6 +162,16 @@ function FilePane({ mode, onPreview, onEdit }) {
           uploaded++;
         }
       } else {
+        // BO-H8c — the 50 MB check above lived only in the cloud branch, so a
+        // local upload sent the whole file and learned the limit from the
+        // server after the bytes were already on the wire. Same rule, checked
+        // before the request starts.
+        for (let i = 0; i < files.length; i++) {
+          if (files[i].size > 50 * 1024 * 1024) {
+            setUploadStatus(`❌ ${files[i].name} exceeds the 50 MB limit.`);
+            return;
+          }
+        }
         const formData = new FormData();
         const uploadPath = currentFolder || WORKSPACE;
         formData.append('targetDir', uploadPath);

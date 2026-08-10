@@ -460,7 +460,13 @@ export default function CookbookHardware() {
       const res = await fetch('/api/model/download', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ repo_id: repoId }),
+        // BO-H3c — the server has accepted `include` since it was written and
+        // interpolates it into allow_patterns; nothing ever sent it. Fetching
+        // only GGUF turns a 5.8 GB safetensors mistake into near-zero bytes.
+        // The server still preflights the repo, so an all-safetensors repo is
+        // refused with a reason rather than downloading nothing and calling it
+        // a success.
+        body: JSON.stringify({ repo_id: repoId, include: '*.gguf' }),
       });
       const data = await res.json();
       if (data.ok) {

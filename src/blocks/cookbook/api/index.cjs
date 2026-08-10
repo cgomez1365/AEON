@@ -9,6 +9,7 @@ const { spawn, execFile, execFileSync } = require('child_process');
 const EventEmitter = require('events');
 const os = require('os');
 const { isCloud: _isCloud } = require('../../../kernel/runtime.cjs');
+const { ggufProbe } = require('./_ggufProbe.cjs');
 const {
   parseServeCommand, isModelInstalled, checkVramFit, estimateVram, vramErrorMessage,
 } = require('./_serveCommand.cjs');
@@ -487,7 +488,7 @@ module.exports = function createCookbookRouter(deps) {
   };
 
   router.post('/model/download', async (req, res) => {
-    const { repo_id: requested, backend, include, hf_token, local_dir } = req.body;
+    const { repo_id: requested, backend, include, hf_token, local_dir, allowNonGguf } = req.body;
     if (!requested) return res.status(400).json({ ok: false, error: 'repo_id is required' });
 
     // BO-D2e — accept every identifier the operator is actually shown.
@@ -508,6 +509,35 @@ module.exports = function createCookbookRouter(deps) {
       });
     }
     const repo_id = resolution.repoId;
+
+    // BO-H3a — a repo the runtime cannot open is a format problem, not a
+    // download problem. Say so before gigabytes move, not after. The same
+    // judgement already runs post-install (see `servable` above); it just ran
+    // too late to save anyone a 5.8 GB fetch.
+    //
+    // Runs even when `include` is set. An earlier draft skipped it whenever the
+    // caller narrowed the fetch — which was wrong, and would have rebuilt the
+    // exact defect this guards: `allow_patterns=['*.gguf']` against an
+    // all-safetensors repo matches nothing, downloads zero bytes, and exits 0.
+    // A silent success is worse than the loud failure it replaced.
+    //
+    // The one legitimate reason to fetch non-GGUF weights is the Tier-3
+    // converter, so that path opts out explicitly rather than by side effect.
+    if (!allowNonGguf) {
+      const probe = await ggufProbe(repo_id, hf_token);
+      // ok:false means the probe could not answer — proceed. A network blip
+      // must not become a refusal.
+      if (probe.ok && !probe.hasGguf) {
+        return res.status(400).json({
+          ok: false,
+          error: `${repo_id} publishes safetensors/PyTorch weights. The llama.cpp runtime reads GGUF only, so this download cannot produce a usable model.`,
+          ...(probe.suggestion ? { didYouMean: [probe.suggestion] } : {}),
+          hint: probe.suggestion
+            ? `Try ${probe.suggestion} — same model, GGUF build.`
+            : 'Install a GGUF build of this model, convert it in Cookbook (Tier 3), or pick from Local models, which are GGUF, hash-pinned and verified.',
+        });
+      }
+    }
 
     const sessionId = `cookbook-${crypto.randomBytes(4).toString('hex')}`;
     const logFile = path.join(LOGS_DIR, `${sessionId}.log`);

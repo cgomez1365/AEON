@@ -114,7 +114,7 @@ Every block that needs cloud sync follows the pattern: try local API → Supabas
 | `.env` | All API keys and configuration (never committed) |
 | `.env.example` | Template for new installations |
 | `aeon-settings.json` | Runtime settings (model assignments, roulette toggle) |
-| `block.schema.json` | JSON Schema for block.manifest.json validation |
+| `src/kernel/schema.json` | JSON Schema for block.manifest.json — enforced by `staging.cjs validateManifest()` |
 | `launch-brain.bat` | Windows boot script (index → sync → start) |
 
 ## Security Model

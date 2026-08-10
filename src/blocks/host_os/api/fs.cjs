@@ -160,7 +160,25 @@ module.exports = function createFsRouter(deps) {
   router.post('/fs/upload', (req, res, next) => {
     console.log('--- Incoming upload request ---');
     next();
-  }, upload.array('files', 20), (req, res) => {
+  }, (req, res, next) => {
+    // BO-H8b — multer had no error handler. LIMIT_FILE_SIZE against the 50 MB
+    // cap, and any error the storage engine passes to cb(), had nowhere to
+    // land: it fell through to the global handler as an opaque 500, or worse.
+    // Wrapping it here keeps the failure attached to the route that caused it
+    // and gives the size limit the 413 it has always deserved.
+    upload.array('files', 20)(req, res, (err) => {
+      if (!err) return next();
+      const tooBig = err.code === 'LIMIT_FILE_SIZE';
+      const tooMany = err.code === 'LIMIT_FILE_COUNT';
+      res.status(tooBig ? 413 : 400).json({
+        correlation_id: req.correlationId || 'AEON-SYS',
+        error: tooBig ? 'File exceeds the 50 MB upload limit.'
+          : tooMany ? 'Too many files — 20 per upload.'
+          : err.message,
+        code: err.code || 'UPLOAD_FAILED',
+      });
+    });
+  }, (req, res) => {
     console.log('Upload parsed successfully. Files:', req.files?.length);
     try {
       const uploaded = (req.files || []).map(f => ({
