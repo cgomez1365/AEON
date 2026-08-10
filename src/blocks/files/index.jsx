@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Folder, FileText, Upload, FolderPlus, ChevronRight, Home, ArrowLeft, X, RefreshCw, Trash2, Download, Cloud, Monitor, Save, Columns } from 'lucide-react';
-import { supabase } from '../../kernel/supabase';
+import { getSupabase } from '../../kernel/supabase';
 import { WORKSPACE } from '../../config.js';
 import ModalPortal from '../../components/ModalPortal.jsx';
 
@@ -75,6 +75,7 @@ function FilePane({ mode, onPreview, onEdit }) {
     setUploadStatus('');
     try {
       if (mode === 'cloud') {
+        const supabase = await getSupabase();
         if (!supabase) throw new Error('Cloud storage not configured — add Supabase keys in Settings.');
         const prefix = folderPrefix(folder);
         const { data, error } = await supabase.storage
@@ -136,6 +137,7 @@ function FilePane({ mode, onPreview, onEdit }) {
     if (!newFolderName.trim()) return;
     try {
       if (mode === 'cloud') {
+        const supabase = await getSupabase();
         if (!supabase) throw new Error('Cloud storage not configured — add Supabase keys in Settings.');
         const path = folderPrefix(currentFolder) + newFolderName.trim() + '/.keep';
         const { error } = await supabase.storage.from(BUCKET).upload(path, new Blob(['']), { upsert: true });
@@ -151,6 +153,7 @@ function FilePane({ mode, onPreview, onEdit }) {
     let uploaded = 0;
     try {
       if (mode === 'cloud') {
+        const supabase = await getSupabase();
         if (!supabase) throw new Error('Cloud storage not configured — add Supabase keys in Settings.');
         for (let i = 0; i < files.length; i++) {
           const file = files[i];
@@ -207,6 +210,7 @@ function FilePane({ mode, onPreview, onEdit }) {
     if (!window.confirm(`Delete "${entry.name}"?`)) return;
     try {
       if (mode === 'cloud') {
+        const supabase = await getSupabase();
         if (!supabase) throw new Error('Cloud storage not configured — add Supabase keys in Settings.');
         const { error } = await supabase.storage.from(BUCKET).remove([entry.storagePath]);
         if (error) throw error;
@@ -227,6 +231,7 @@ function FilePane({ mode, onPreview, onEdit }) {
     const editable = ['.txt', '.md', '.json', '.js', '.jsx', '.html', '.css', '.py', '.bat'];
 
     if (mode === 'cloud') {
+      const supabase = await getSupabase();
       if (!supabase) { alert('Cloud storage not configured — add Supabase keys in Settings.'); return; }
       const { data } = await supabase.storage.from(BUCKET).createSignedUrl(entry.storagePath, 300);
       if (!data?.signedUrl) return;
@@ -250,6 +255,7 @@ function FilePane({ mode, onPreview, onEdit }) {
   const handleDownload = async (e, entry) => {
     e.stopPropagation();
     if (mode === 'cloud') {
+      const supabase = await getSupabase();
       if (!supabase) { alert('Cloud storage not configured — add Supabase keys in Settings.'); return; }
       const { data } = await supabase.storage.from(BUCKET).createSignedUrl(entry.storagePath, 60);
       if (data?.signedUrl) {
