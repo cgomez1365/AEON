@@ -38,18 +38,18 @@
     "outputs": [],
     "events": [],
     "permissions": {
-      "filesystem": "write",
+      "filesystem": "none",
       "network": "external",
       "secrets": true,
       "shell": false,
       "ai": true
     },
     "storage": {
-      "type": "json",
+      "type": "none",
       "scope": "block",
       "local": {
         "indexed": false,
-        "retention": "operational"
+        "retention": "ephemeral"
       },
       "access": "compatibility"
     },

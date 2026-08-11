@@ -13,7 +13,7 @@ const fs = require('fs');
 const path = require('path');
 const { isCloud: _isCloud } = require('./runtime.cjs');
 
-const BLOCKS_DIR = path.join(__dirname, '..', 'blocks');
+const { BLOCKS_DIR } = require('./blocksDir.cjs');
 
 // ── Icon asset base paths — one declaration, every consumer derives ────
 // Mirror of ICON_BASE in blockRegistry.js (ESM/CJS boundary prevents a shared

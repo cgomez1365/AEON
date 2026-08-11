@@ -9,6 +9,13 @@ import CloudSetupGate from "./components/CloudSetupGate";
 import { TelemetryProvider } from "./kernel/contexts/TelemetryContext";
 import { shouldBannerResponse, describeResponseBanner, decideNetworkBanner, isSelfReported } from "./utils/interceptorPolicy";
 
+// One place that answers "is anyone signed in?". Read fresh on every call —
+// a captured boolean would keep the interceptor and the IDE-mode poll acting
+// on the state at mount, which is exactly how a stale answer survives a login.
+function hasSessionToken() {
+  try { return !!localStorage.getItem('aeon_session_token'); } catch { return false; }
+}
+
 // ── Load persisted appearance on boot (theme, accent, font) ──────────
 // Order matters: theme_builder sets the base palette first, then
 // appearance overlays accent + font on top so the user's simple color
@@ -52,12 +59,25 @@ export default function App() {
   const [toastMessage, setToastMessage] = useState('');
 
   // B7 — IDE mode banner: "kernel is now editable" must be visible, not subtle.
+  //
+  // BO-H7a — this polled unconditionally every 15s, including on the login
+  // screen where an authenticated session cannot exist by definition. The 401
+  // was correct; asking the question was not. Poll only once a session exists,
+  // and keep checking for one so the banner appears right after sign-in
+  // without a reload.
   const [ideMode, setIdeMode] = useState({ active: false, banner: null });
   useEffect(() => {
-    const poll = () => fetch('/api/build/ide-mode').then(r => r.json()).then(setIdeMode).catch(() => {});
+    let stopped = false;
+    const poll = () => {
+      if (stopped || !hasSessionToken()) return;
+      fetch('/api/build/ide-mode')
+        .then(r => (r.ok ? r.json() : null))
+        .then(d => { if (d && !stopped) setIdeMode(d); })
+        .catch(() => {});
+    };
     poll();
     const id = setInterval(poll, 15000);
-    return () => clearInterval(id);
+    return () => { stopped = true; clearInterval(id); };
   }, []);
 
   // Clean cache interceptor
@@ -174,6 +194,9 @@ export default function App() {
       if (shouldBannerResponse({
         url, ok: response.ok, status: response.status,
         selfReported: isSelfReported(args[1]),
+        // Read at call time, not captured: a login mid-session must change the
+        // answer without reinstalling the interceptor.
+        hasSession: hasSessionToken(),
       })) {
         let body = null;
         try { body = await response.clone().json(); } catch { /* non-JSON body — falls through to the trace ID */ }

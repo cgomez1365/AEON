@@ -267,7 +267,7 @@ const _routerDeps = {
   getDailyCost: ai.getDailyCost, isVercel, fs, path,
   kernelLLM: ai.kernelLLM, kernelVision: ai.kernelVision, _trackLLM: ai._trackLLM,
   _skippedRoutes, getLocalFile: storage.getLocalFile, aeonTerminalStream,
-  getProviderHealth: ai.getProviderHealth, confirmLocal: ai.confirmLocal, isLocalConfirmed: ai.isLocalConfirmed,
+  getProviderHealth: ai.getProviderHealth,
   getKeyPoolInfo: ai.getKeyPoolInfo, VAULT_ROOT: storage.VAULT_ROOT,
 };
 
@@ -280,6 +280,13 @@ try {
   const _pipeline = createBuildPipeline({
     getVaultSecrets: async () => { try { return await _vault.listRefs(supabase); } catch { return []; } },
     rescan: (reason) => loader.rescan(reason),
+    // M3 — what is already served, so a staged block colliding with it is
+    // refused BEFORE promotion rather than discovered after.
+    getLiveRoutes: () => {
+      try {
+        return loader.blockRegistry.flatMap((b) => (b.routes || []).map((r) => r.path).filter(Boolean));
+      } catch { return []; }
+    },
   });
   const buildRouter = require('../src/kernel/routers/build.cjs')({
     pipeline: _pipeline, approvals: _approvals, ideMode: _ideMode,

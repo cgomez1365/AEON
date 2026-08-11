@@ -26,7 +26,7 @@ const KERNEL_COMMANDS = [
   { cmd: '/pull', desc: 'Pull all blocks from Supabase cloud' },
   { cmd: '/web', desc: 'Force a live internet search' },
   { cmd: '/treasury', desc: 'Show live deficit & bleed rate' },
-  { cmd: '/allow-local', desc: 'Allow AI to fall back to your local runtime model for 15 min when cloud providers are rate-limited' },
+  { cmd: '/allow-local', desc: 'No-op — local models are always available and need no confirmation (kept for older scripts)' },
   { cmd: '>', desc: 'Execute a raw OS command' },
 ];
 

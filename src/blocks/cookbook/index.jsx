@@ -1019,6 +1019,15 @@ export default function CookbookHardware() {
                           {m.needed_vram_gb && ` · ~${m.needed_vram_gb} GB`}
                           {m.downloads && ` · ${m.downloads.toLocaleString()} downloads`}
                         </div>
+                        {/* BO-H3b — the row is ranked on hardware fit; this is
+                            the other half of the question. Shown rather than
+                            hidden: an entry that exists and cannot run is
+                            information, an entry silently dropped is not. */}
+                        {m.runnable_reason && (
+                          <div style={{ fontSize: '9.5px', color: '#ffb454', marginTop: '2px' }}>
+                            safetensors — not runnable · {m.runnable_reason}
+                          </div>
+                        )}
                       </div>
                       <a href={`https://huggingface.co/${m.repo_id}`} target="_blank" rel="noopener"
                         onClick={e => e.stopPropagation()}

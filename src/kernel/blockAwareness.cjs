@@ -13,7 +13,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const BLOCKS_DIR = path.join(__dirname, '..', 'blocks');
+const { BLOCKS_DIR } = require('./blocksDir.cjs');
 
 function composeBrief(m) {
   if (m.vp) return m.vp; // hand-written override wins

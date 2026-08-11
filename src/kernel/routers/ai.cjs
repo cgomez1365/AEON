@@ -11,13 +11,14 @@ module.exports = function createAIRouter(deps) {
       const text = await kernelLLM(prompt, { role, provider, model, background, advisorModel });
       res.json({ text, role: role || 'chat' });
     } catch (err) {
-      // 409 = local needs confirming. 503 = nothing is configured to answer
-      // (no API key, no local chat model) — a state the user can fix, so it
-      // must not read as an internal error. 500 stays for real faults.
-      const status = err.needsLocalConfirm ? 409 : err.noProviderAvailable ? 503 : 500;
+      // 503 = nothing is configured to answer (no API key, no local chat
+      // model) — a state the user can fix, so it must not read as an internal
+      // error. 500 stays for real faults. The 409 "local needs confirming"
+      // branch is gone with the gate it served (BO-H1c): nothing has set
+      // needsLocalConfirm since BO-2 removed it.
+      const status = err.noProviderAvailable ? 503 : 500;
       res.status(status).json({
         error: err.message,
-        needsLocalConfirm: !!err.needsLocalConfirm,
         noProviderAvailable: !!err.noProviderAvailable,
       });
     }

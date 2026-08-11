@@ -94,8 +94,16 @@ jobs:
             if (missing > 0) process.exit(1);
           '
 
+      # BO-J2 — snapshot before, compare after: the assertion is the DELTA
+      # across the test run, so it holds whether or not the tree started clean.
+      - name: Tree integrity — snapshot
+        run: node tools/scan/tree-integrity.cjs --snapshot
+
       - name: Run tests
         run: npm test
+
+      - name: Tree integrity — tests must not write to the checkout
+        run: npm run scan:tree
 
       # Hard release gate: zero Ollama assumptions, no unauthorized machine-root
       # access. Ran only by hand until now, which is how a launch.js require() of

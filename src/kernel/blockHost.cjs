@@ -198,8 +198,23 @@ function createBlockHost({ blocksDir, baseDeps, createScopedDeps, registry, read
     let synced = [];
     try {
       const blockStandard = require('./blockStandard.cjs');
-      const ctx = typeof getSyncCtx === 'function' ? getSyncCtx() : {};
-      synced = blockStandard.syncAllBlocks(ctx);
+      // syncAllBlocks() writes manifests to blockStandard's OWN module-level
+      // BLOCKS_DIR — it does not take a directory. A host pointed anywhere
+      // else (the M3 boot proof mounts from staging/) would therefore rewrite
+      // the CANONICAL tree as a side effect of mounting a different one.
+      //
+      // That is how the settings manifest was corrupted on 2026-08-10: several
+      // boot proofs ran in parallel test workers, each triggering a sync of
+      // src/blocks, and one read a manifest another was mid-write on. It got
+      // normalizeManifest's defaults — description '', category 'system',
+      // permissions downgraded — and wrote them back.
+      //
+      // Sync only when this host actually manages the canonical directory.
+      const { BLOCKS_DIR } = require('./blocksDir.cjs');
+      if (path.resolve(blocksDir) === path.resolve(BLOCKS_DIR)) {
+        const ctx = typeof getSyncCtx === 'function' ? getSyncCtx() : {};
+        synced = blockStandard.syncAllBlocks(ctx);
+      }
     } catch (e) { log.warn(`[BLOCK HOST] block standard sync failed: ${e.message}`); }
 
     const fresh = express.Router();
@@ -236,6 +251,17 @@ function createBlockHost({ blocksDir, baseDeps, createScopedDeps, registry, read
   return {
     router: trampoline,
     rescan,
+    /**
+     * Tear down every mounted block without remounting — the same teardown
+     * rescan() performs, exposed so a caller that is FINISHED with a host can
+     * stop its timers and listeners. Used by the M3 boot proof: a proof that
+     * leaks an interval into the parent process has changed the thing it was
+     * measuring.
+     */
+    dispose() {
+      for (const id of [...lifecycles.keys()]) teardownBlock(id);
+      inner = express.Router();
+    },
     getGeneration: () => generation,
     getSkipped: () => lastSkipped.slice(),
     _lifecycles: lifecycles, // exposed for tests (test-hotreload.cjs)

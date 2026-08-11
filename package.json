@@ -36,7 +36,9 @@
     "canary": "node tools/rls-canary.cjs",
     "start": "concurrently \"npm run dev\" \"npm run server\"",
     "prep:routes": "node scripts/gen-block-routes.cjs",
-    "scan:cloud-surface": "node scripts/scan-cloud-surface.cjs"
+    "scan:cloud-surface": "node scripts/scan-cloud-surface.cjs",
+    "scan:tree": "node tools/scan/tree-integrity.cjs",
+    "test:verified": "node tools/scan/tree-integrity.cjs --snapshot && npm test && npm run scan:tree"
   },
   "devDependencies": {
     "axios": "^1.16.0",

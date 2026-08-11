@@ -143,7 +143,17 @@ function FilePane({ mode, onPreview, onEdit }) {
         const { error } = await supabase.storage.from(BUCKET).upload(path, new Blob(['']), { upsert: true });
         if (error) throw error;
       } else {
-        setUploadStatus('❌ Local folder creation via API not yet implemented.'); return;
+        // BO-H8e — this printed "not yet implemented" while POST /api/fs/mkdir
+        // had been mounted all along (host_os/api/fs.cjs). A control that
+        // reports its own absence, over a capability that exists. §08.
+        const dirPath = `${currentFolder || WORKSPACE}/${newFolderName.trim()}`;
+        const res = await fetch(`${LOCAL_API}/mkdir`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ dirPath }),
+        });
+        if (res.status === 423) { setFsLocked(true); throw new Error('Locked — unlock the hub to create folders.'); }
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `mkdir failed (${res.status})`);
       }
       setNewFolderName(''); setShowNewFolder(false); loadDir(currentFolder);
     } catch (error) { setUploadStatus(`❌ Folder error: ${error.message}`); }

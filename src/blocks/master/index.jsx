@@ -376,6 +376,34 @@ function SubmitResult({ result }) {
           {result.lint.errors.map((e, i) => <Finding key={i} sev="HIGH" why={e} />)}
         </Section>
       )}
+
+      {/* M3 — the only gate that runs the block. Show what actually answered,
+          not that a check "passed": a status code is evidence, a green tick is
+          a claim. */}
+      {result.boot && (
+        <Section title={`Boot proof — ${result.boot.ok ? 'booted' : 'did not boot'}`}>
+          {result.boot.environmentError && (
+            <Finding sev="MEDIUM" why={`${result.boot.environmentError}`} />
+          )}
+          <p style={{ fontSize: 12.5, margin: '4px 0', color: 'var(--dim, #9aa3b2)' }}>
+            {result.boot.mounted} API module{result.boot.mounted === 1 ? '' : 's'} mounted
+          </p>
+          {result.boot.probes?.length > 0 && (
+            <ul role="list" style={{ listStyle: 'none', padding: 0, margin: '6px 0 0' }}>
+              {result.boot.probes.map((p, i) => (
+                <li key={i} style={{ fontSize: 12, fontFamily: 'var(--mono, monospace)',
+                  color: p.skipped ? 'var(--dim, #9aa3b2)' : p.ok ? 'var(--ok, #3fb950)' : 'var(--bad, #f85149)' }}>
+                  {p.method} {p.path} — {p.skipped || p.status || p.error}
+                </li>
+              ))}
+            </ul>
+          )}
+          {result.boot.skipped?.map((sk, i) => <Finding key={`s${i}`} sev="HIGH" file={sk.file} why={sk.why} />)}
+          {result.boot.collisions?.map((c, i) => <Finding key={`c${i}`} sev="HIGH" why={c} />)}
+          {result.boot.errors?.filter((e) => e !== result.boot.environmentError)
+            .map((e, i) => <Finding key={`e${i}`} sev="HIGH" why={e} />)}
+        </Section>
+      )}
     </Card>
   );
 }

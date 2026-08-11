@@ -59,7 +59,7 @@ module.exports = (app, deps) => {
 
   // One shape for every AI failure, so the UI can always say something true.
   function aiError(res, e) {
-    const status = e.needsLocalConfirm ? 409 : (e.noProviderAvailable || e.aiUnavailable) ? 503 : 502;
+    const status = (e.noProviderAvailable || e.aiUnavailable) ? 503 : 502;
     return res.status(status).json({
       error: e.message || 'AI request failed',
       aiUnavailable: !!(e.aiUnavailable || e.noProviderAvailable),

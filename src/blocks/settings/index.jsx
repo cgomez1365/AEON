@@ -2375,11 +2375,46 @@ function BlocksNeedsPanel({ onManageModels }) {
   const [models, setModels] = useState({});
   const [supabaseOk, setSupabaseOk] = useState(true);
   const [health, setHealth] = useState(null);
+  const [loadError, setLoadError] = useState(null);
+
+  // BO-H2b — this was four fetches in a mount-once effect, each ending
+  // `.catch(() => {})`. Two consequences, both §08:
+  //
+  //   1. A failure rendered as absent data. Every block read "not configured"
+  //      with nothing on screen saying the panel never got an answer.
+  //   2. hydrateEnvFromVault() is async and un-awaited (endpoints.cjs:186-196),
+  //      so a mount landing in that window sees a configured provider reported
+  //      as unconfigured — and the one-shot read pinned that wrong answer until
+  //      the operator reloaded the page.
+  //
+  // One deliberate re-read after hydration, not a polling loop: polling would
+  // hide the race rather than pass through it, and this panel is not live data.
   useEffect(() => {
-    fetch('/api/settings/blocks').then(r => r.json()).then(b => setBlocks(Array.isArray(b) ? b : [])).catch(() => {});
-    fetch('/api/settings').then(r => r.json()).then(s => setModels(s.settings?.models || {})).catch(() => {});
-    fetch('/api/settings/connectivity').then(r => r.json()).then(c => setSupabaseOk(!!c?.supabase?.attached)).catch(() => {});
-    fetch('/core/provider-health').then(r => r.json()).then(setHealth).catch(() => {});
+    let cancelled = false;
+    const load = async () => {
+      const get = async (url, pick) => {
+        const r = await fetch(url);
+        if (!r.ok) throw new Error(`${url} → ${r.status}`);
+        return pick(await r.json());
+      };
+      try {
+        const [b, s, c, h] = await Promise.all([
+          get('/api/settings/blocks', d => (Array.isArray(d) ? d : [])),
+          get('/api/settings', d => d.settings?.models || {}),
+          get('/api/settings/connectivity', d => !!d?.supabase?.attached),
+          get('/core/provider-health', d => d),
+        ]);
+        if (cancelled) return;
+        setBlocks(b); setModels(s); setSupabaseOk(c); setHealth(h); setLoadError(null);
+      } catch (e) {
+        if (!cancelled) setLoadError(e.message);
+      }
+    };
+    load();
+    // Second pass once vault hydration has had a chance to land. Cheap, and it
+    // is the difference between a correct answer and a permanently wrong one.
+    const retry = setTimeout(load, 2500);
+    return () => { cancelled = true; clearTimeout(retry); };
   }, []);
   const aiBlocks = blocks.filter(b => b.contract?.ai?.role);
   const agg = aiBlocks.length ? Math.round(aiBlocks.reduce((s, b) => s + sciFor(b, models, health, supabaseOk), 0) / aiBlocks.length) : 0;
@@ -2404,7 +2439,12 @@ function BlocksNeedsPanel({ onManageModels }) {
         )}
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10 }}>
-        {aiBlocks.length === 0 && <div style={{ fontSize: 12, color: 'var(--text-dim, #4a6a8a)' }}>No AI blocks installed.</div>}
+        {loadError && (
+          <div style={{ fontSize: 11.5, color: '#ffb454', marginBottom: 8 }}>
+            ⚠ Could not read block status — {loadError}. The scores below are incomplete.
+          </div>
+        )}
+        {!loadError && aiBlocks.length === 0 && <div style={{ fontSize: 12, color: 'var(--text-dim, #4a6a8a)' }}>No AI blocks installed.</div>}
         {aiBlocks.map(b => {
           const role = b.contract.ai.role;
           const cfg = models[role];
@@ -2784,14 +2824,6 @@ export default function SystemSettings() {
               </div>
             </div>
             <div className="admin-card prefs-card">
-              <PrefToggle
-                label="Always allow local models"
-                desc="Treat local runtime as a first-class provider — no /allow-local confirmation needed. Recommended when cloud keys are dead or you want zero-cost operation."
-                prefKey="allow_local_llm"
-                defaultVal={false}
-                onMsg="Local models always allowed — workhorse mode"
-                offMsg="Local models require /allow-local confirmation again"
-              />
               <PrefToggle
                 label="Agent step review"
                 desc="Before accepting a subtask as done, the heavy tier checks the worker's claim against the actual tool-execution ledger and can send it back. Doubles heavy-tier calls per subtask — off by default."
