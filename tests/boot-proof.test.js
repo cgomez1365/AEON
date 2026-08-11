@@ -143,6 +143,27 @@ describe('a block that does not boot is refused', () => {
   });
 });
 
+describe('the proof leaves the canonical tree alone', () => {
+  it('mounting from staging does not sync or rewrite src/blocks', async () => {
+    // createBlockHost.rescan() calls blockStandard.syncAllBlocks(), which
+    // writes manifests to its OWN module-level BLOCKS_DIR regardless of the
+    // host's blocksDir. Before this was fixed, every boot proof rewrote the
+    // canonical tree as a side effect, and parallel proofs raced each other
+    // into a torn read — that is how the settings manifest was corrupted on
+    // 2026-08-10 (description '', category 'system', permissions downgraded).
+    const { execFileSync } = require('child_process');
+    const before = execFileSync('git', ['status', '--porcelain', 'src/blocks'], { encoding: 'utf8' });
+
+    stage(withRoutes(scaffold({ id: ID, api: true, widget: true }).payload, [
+      { method: 'GET', path: `/api/${ID}/status` },
+    ]));
+    await bootProof(STAGING_DIR, ID);
+
+    const after = execFileSync('git', ['status', '--porcelain', 'src/blocks'], { encoding: 'utf8' });
+    expect(after).toBe(before);
+  });
+});
+
 describe('the proof does not lie about its own failures', () => {
   it('names an unresolvable staging root as an ENVIRONMENT error, not a block defect', async () => {
     // A staging dir outside the repo cannot resolve node_modules, so every
