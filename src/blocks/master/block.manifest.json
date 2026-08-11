@@ -49,11 +49,11 @@
       "ai": false
     },
     "storage": {
-      "type": "json",
+      "type": "none",
       "scope": "block",
       "local": {
         "indexed": false,
-        "retention": "operational"
+        "retention": "ephemeral"
       },
       "access": "compatibility"
     },

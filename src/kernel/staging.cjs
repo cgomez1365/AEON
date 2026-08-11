@@ -16,7 +16,26 @@ const STAGING_DIR = path.join(ROOT, 'staging');
 const SCHEMA      = JSON.parse(fs.readFileSync(path.join(__dirname, 'schema.json'), 'utf8'));
 
 // ── Minimal schema validation (required fields + enums + types we care about) ──
-function validateManifest(m) {
+/**
+ * BO-L (item 8) — `existing: true` validates an ALREADY-LIVE block.
+ *
+ * Principle 04 says "NEW blocks receive scoped storage and permissions", and
+ * this function's own message says "new v1.1 blocks must use ... scoped" — but
+ * it applied the rule to every manifest it was handed. blockStandard.cjs
+ * normalises live blocks to access:'compatibility' by design (that is what the
+ * value exists for), so the normaliser assigned a value the validator refused.
+ * Two code paths disagreeing about one field, which Principle 04 names as the
+ * thing to avoid.
+ *
+ * In production this never bit: every caller is the build path, and new blocks
+ * must be scoped. It bites the moment tooling validates the installed tree —
+ * 18 of 19 shipped blocks fail — which is precisely what a staged boot-proof
+ * does. Grandfathering is expressed here rather than discovered there.
+ *
+ * The default stays STRICT. A caller must opt into leniency, so the build path
+ * cannot become permissive by accident.
+ */
+function validateManifest(m, { existing = false } = {}) {
   const errors = [];
   if (!m || typeof m !== 'object') return ['manifest is not an object'];
   for (const f of SCHEMA.required) if (m[f] === undefined) errors.push(`missing required field: ${f}`);
@@ -33,7 +52,11 @@ function validateManifest(m) {
     const memory = m.contract?.memory;
     if (!storage?.local || storage.local.indexed !== false) errors.push('v1.1 requires contract.storage.local.indexed=false');
     if (!['operational', 'ephemeral'].includes(storage?.local?.retention)) errors.push('v1.1 requires operational or ephemeral local retention');
-    if (storage?.access !== 'scoped') errors.push('new v1.1 blocks must use contract.storage.access=scoped');
+    // 'compatibility' is the grandfather value for blocks that predate the
+    // storage contract. Accepted only when validating something already live.
+    if (storage?.access !== 'scoped' && !(existing && storage?.access === 'compatibility')) {
+      errors.push('new v1.1 blocks must use contract.storage.access=scoped');
+    }
     if (!memory || !['none', 'summary', 'document'].includes(memory.mode)) errors.push('v1.1 requires contract.memory.mode');
     if (memory && memory.indexed !== (memory.mode !== 'none')) errors.push('contract.memory.indexed must match whether memory.mode is enabled');
     if ((storage?.type !== 'none' || memory?.mode !== 'none') && perms?.filesystem !== 'write') {

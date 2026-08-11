@@ -132,7 +132,7 @@ receives only what it declares.
 - **Route:** `/resume-grader`
 - **Targets:** desktop + cloud
 - **Memory mode:** `none`
-- **Declared capabilities:** `ai`, `filesystem:write`, `network:external`, `secrets`
+- **Declared capabilities:** `ai`, `network:external`, `secrets`
 - **API files:** `grade-resume.js`
 
 ### Security

@@ -100,16 +100,16 @@ describe('no test provisions state in the install it runs from', () => {
     // writeFileSync/mkdirSync against a path built from the repo root rather
     // than a temp dir.
     //
-    // KNOWN EXCEPTION, listed rather than hidden — the same discipline the
-    // audit gate uses for reviewed advisories. block-customize.test.js drives
-    // the REAL customize router, which resolves BLOCKS_DIR from the install,
-    // so it mutates two committed manifests and restores them afterwards. It
-    // is the reason block manifests have intermittently shown as modified in
-    // `git status`. It backs up, restores in afterAll, and registers a
-    // process-exit safety net — but a SIGKILL mid-run still leaves the tree
-    // dirty, which is why it is written down here as debt rather than treated
-    // as fine.
-    const KNOWN = new Set(['block-customize.test.js']);
+    // The exception that used to live here — block-customize.test.js —
+    // was closed by BO-J1 (2026-08-10). It drove the REAL customize router
+    // against the REAL src/blocks/, because BLOCKS_DIR was the one path root
+    // with no override, and mutated two committed manifests. It now copies
+    // the tree to a temp fixture and points AEON_BLOCKS_DIR at it, so it
+    // still drives the real router without touching the checkout.
+    //
+    // The list stays (empty) rather than being deleted: the next exception
+    // should have to be written down, not assumed.
+    const KNOWN = new Set([]);
 
     const offenders = [];
     for (const f of testFiles) {

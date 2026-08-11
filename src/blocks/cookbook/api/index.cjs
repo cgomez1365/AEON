@@ -998,6 +998,13 @@ module.exports = function createCookbookRouter(deps) {
 
         if (vramGb > 0 && neededVram && neededVram > vramGb) continue;
 
+        // BO-H3b — the fit engine ranked on hardware and was silent on
+        // format, so it offered repos it could rank but the runtime could
+        // never open (Qwen/Qwen3-14B, 2026-08-08). The HF tag is a free
+        // signal; probing 50 repos individually is not, and the download
+        // preflight remains the authority. Annotate, do not hide the row —
+        // a ranking that silently drops entries is not honest about what
+        // exists.
         models.push({
           repo_id: repoId,
           downloads: entry.downloads || 0,
@@ -1007,9 +1014,17 @@ module.exports = function createCookbookRouter(deps) {
           pipeline_tag: entry.pipeline_tag || '',
           est_vram_gb: estVram ? Math.round(estVram * 10) / 10 : null,
           needed_vram_gb: neededVram ? Math.round(neededVram * 10) / 10 : null,
+          gguf: tagText.includes('gguf') || nameText.includes('gguf'),
+          runnable_reason: (tagText.includes('gguf') || nameText.includes('gguf'))
+            ? null
+            : 'no GGUF build listed — the llama.cpp runtime reads GGUF only',
         });
         if (models.length >= 50) break;
       }
+
+      // Runnable first, then by fit. Both orderings are visible to the
+      // operator; only the reason for the split is new.
+      models.sort((a, b) => (b.gguf === true) - (a.gguf === true) || (b.downloads || 0) - (a.downloads || 0));
 
       hfLatestCache = { models, ts: Date.now() };
       res.json({ models: models.slice(0, limit) });
