@@ -24,7 +24,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 
-const BLOCKS_DIR = path.join(__dirname, '..', 'blocks');
+const { BLOCKS_DIR } = require('./blocksDir.cjs');
 
 /**
  * The usage line for a command, derived from what it already declares.

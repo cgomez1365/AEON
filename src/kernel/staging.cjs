@@ -11,7 +11,7 @@ const path = require('path');
 const fs   = require('fs');
 
 const ROOT        = path.join(__dirname, '..', '..');
-const BLOCKS_DIR  = path.join(ROOT, 'src', 'blocks');
+const { BLOCKS_DIR } = require('./blocksDir.cjs');
 const STAGING_DIR = path.join(ROOT, 'staging');
 const SCHEMA      = JSON.parse(fs.readFileSync(path.join(__dirname, 'schema.json'), 'utf8'));
 

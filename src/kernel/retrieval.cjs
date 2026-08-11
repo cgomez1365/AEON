@@ -23,7 +23,7 @@ const ROOT = path.join(__dirname, '..', '..');
 const DB_DIR = process.env.AEON_DB_DIR || path.join(ROOT, 'db');
 const STORE_DIR = path.join(DB_DIR, 'retrieval');
 const SCOPES_FILE = path.join(STORE_DIR, '_scopes.json');
-const BLOCKS_DIR = path.join(ROOT, 'src', 'blocks');
+const { BLOCKS_DIR } = require('./blocksDir.cjs');
 
 const CHUNK_CHARS = 800;
 const RESERVED_SCOPES = ['global', 'all', '*', '_scopes'];

@@ -12,7 +12,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const BLOCKS_DIR = path.join(__dirname, '..', 'blocks');
+const { BLOCKS_DIR } = require('./blocksDir.cjs');
 
 // Returns flat array of all agent_tools across all ready blocks.
 function collectTools() {

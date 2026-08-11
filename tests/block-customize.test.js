@@ -10,9 +10,29 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createRequire } from 'module';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
+import { fileURLToPath } from 'url';
 
 const require = createRequire(import.meta.url);
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// BO-J1 — drive the REAL router against a COPY of src/blocks/.
+//
+// This file previously mutated two committed manifests (council, writer) in the
+// live checkout and restored them in afterAll. That was the only option: the
+// blocks root was a module-scope constant with no override, unlike DATA_PATH,
+// VAULT_PATH and AEON_SECRETS_DIR. It raced any reader that parsed a manifest
+// while a write was in flight — observed on 2026-08-10 failing
+// block-manifest-routes and vercel-mount-parity (JSON.parse on a half-written
+// file), roughly one run in three.
+//
+// AEON_BLOCKS_DIR must be set BEFORE the require below: blocksDir.cjs resolves
+// once at module load, the same hazard AEON_SECRETS_DIR already documents.
+const FIXTURE = fs.mkdtempSync(path.join(os.tmpdir(), 'aeon-blocks-'));
+fs.cpSync(path.join(__dirname, '..', 'src', 'blocks'), FIXTURE, { recursive: true });
+process.env.AEON_BLOCKS_DIR = FIXTURE;
+
 const express = require('express');
 const {
   BLOCKS_DIR, ICON_BASE, ICON_DIR,
@@ -20,8 +40,9 @@ const {
 } = require('../src/kernel/blockStandard.cjs');
 const customizeRouter = require('../server/routes/customize.cjs');
 
-// Blocks these tests mutate. Their manifests are restored in afterAll so the
-// suite never leaves the working tree dirty.
+// Blocks these tests mutate — now inside the temp fixture, not the checkout.
+// The backup/restore below is retained as belt-and-braces; with the fixture in
+// place it can no longer touch committed source even if a run dies.
 const TOUCHED = ['council', 'writer'];
 const BACKUP = {};
 const manifestPath = f => path.join(BLOCKS_DIR, f, 'block.manifest.json');

@@ -42,7 +42,7 @@ module.exports = function ({ storage, kernelLLM, _blockRegistry, _blockReadiness
   const BASE = `http://127.0.0.1:${PORT}`;
   const VAULT_ROOT = storage.VAULT_ROOT || (storage.getVaultFile ? storage.getVaultFile('') : null);
   const DATA_ROOT = storage.DATA_ROOT || (storage.getDataFile ? storage.getDataFile('') : null);
-  const BLOCKS_DIR = path.join(__dirname, '..', '..', 'blocks');
+  const { BLOCKS_DIR } = require('../blocksDir.cjs');
 
   // Containment via path.relative, not a string prefix. This guards an
   // arbitrary-filename vault WRITE (/file-save), so a sibling-directory escape
