@@ -102,8 +102,16 @@ export default function Master() {
       </header>
 
       <div aria-live="polite" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 12, marginBottom: 18 }}>
-        <StatCard icon={LayoutGrid} label="Installed blocks" value={registry ? registry.length : '—'} sub="live from /blocks/registry" />
-        <StatCard icon={Radio} label="Kernel" value={kernel === 'online' ? 'ONLINE' : 'CHECK'} sub={kernel === 'online' ? window.location.host : kernel} />
+        {/* StatCard renders `icon` directly as a child, so it takes an ELEMENT.
+            Passing the bare lucide component here handed React a forwardRef
+            object ({$$typeof, render, displayName}) and crashed the page with
+            minified error #31 — "objects are not valid as a React child".
+            The build compiled it happily: JSX cannot tell the difference. */}
+        <StatCard icon={<LayoutGrid size={14} aria-hidden="true" />} label="Installed blocks"
+          value={registry ? registry.length : '—'} sub="live from /blocks/registry" />
+        <StatCard icon={<Radio size={14} aria-hidden="true" />} label="Kernel"
+          value={kernel === 'online' ? 'ONLINE' : 'CHECK'}
+          sub={kernel === 'online' ? window.location.host : kernel} />
       </div>
 
       <nav style={{ display: 'flex', gap: 6, marginBottom: 16, borderBottom: '1px solid var(--line, #272d39)' }}>
