@@ -284,6 +284,40 @@ function BuildPanel({ onPromoted }) {
   );
 }
 
+/**
+ * A titled group of findings, and one finding line.
+ *
+ * These were used four times each in CheckResult/SubmitResult and never
+ * defined — the page rendered until the operator pressed Check, then died
+ * with "Section is not defined". A bare identifier reference is resolved at
+ * RUNTIME, so neither the bundler nor the test suite had anything to complain
+ * about; only mounting the component does.
+ */
+function Section({ title, children }) {
+  return (
+    <div style={{ marginTop: 14 }}>
+      <h4 style={{ margin: '0 0 6px', fontSize: 12, letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--dim, #9aa3b2)' }}>
+        {title}
+      </h4>
+      {children}
+    </div>
+  );
+}
+
+function Finding({ sev = 'HIGH', check, file, why }) {
+  const color = SEV_COLOR[sev] || SEV_COLOR.HIGH;
+  return (
+    <div style={{ borderLeft: `2px solid ${color}`, padding: '5px 0 5px 10px', margin: '6px 0' }}>
+      <div style={{ fontSize: 11, fontFamily: 'var(--mono, monospace)', color }}>
+        {sev}{check ? ` · ${check}` : ''}{file ? ` · ${file}` : ''}
+      </div>
+      {/* The gate's own words. Rewording them here would create a second
+          vocabulary for one verdict — the thing Master exists not to do. */}
+      <div style={{ fontSize: 12.5, color: 'var(--ink, #e6e9ef)' }}>{why}</div>
+    </div>
+  );
+}
+
 function Toggle({ label, note, checked, onChange, disabled }) {
   return (
     <li>
