@@ -32,7 +32,7 @@
 // production and no user or developer ever saw a signal. R-05 has no cloud
 // exemption: a failure the operator cannot see is a silent failure.
 //
-// /api/kernel/llm — components handle their own 409 (needsLocalConfirm).
+// /api/kernel/llm — components handle their own error rendering.
 // /api/auth/status — 404s by design when no auth block is installed.
 //
 // The four /api/writer AI routes below all funnel their failure through the
@@ -107,10 +107,17 @@ export function matchesEndpoint(url, list) {
 }
 
 /** Does a non-2xx response deserve a banner? Cheap — no body read. */
-export function shouldBannerResponse({ url, ok, status, selfReported = false }) {
+export function shouldBannerResponse({ url, ok, status, selfReported = false, hasSession = true }) {
   if (ok || !isApiUrl(url)) return false;
   // 428 = intentional confirmation gate (dangerous commands) — not an error.
   if (status === 428) return false;
+  // BO-H7b — a 401 with NO session is the gate working. The operator is on the
+  // login screen; telling them "[API FAILED] UNAUTHORIZED_SESSION" describes a
+  // correct state as a fault and teaches them to distrust true signals (§08).
+  //
+  // A 401 that arrives WITH a session is the one worth interrupting for: it
+  // means a session that should work does not. That still banners.
+  if (status === 401 && !hasSession) return false;
   // 401 on auth/security routes is EXPECTED when locked or signed out — the
   // AuthGate handles it, so it must never raise the forensics banner.
   const p = pathOf(url);

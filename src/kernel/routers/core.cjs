@@ -6,7 +6,7 @@ module.exports = function createCoreRouter(deps) {
     _blockRegistry, _blockReadiness, _loadSettings, _llmTelemetry,
     getDailyCost, isVercel, fs, path, kernelLLM,
     _skippedRoutes, getLocalFile,
-    getProviderHealth, confirmLocal, isLocalConfirmed, getKeyPoolInfo,
+    getProviderHealth, getKeyPoolInfo,
   } = deps;
 
   // Coinbase CDP key: inside the install (secrets/) first, Desktop only as legacy.
@@ -20,17 +20,16 @@ module.exports = function createCoreRouter(deps) {
   router.get('/provider-health', (_req, res) => {
     res.json({
       providers: getProviderHealth ? getProviderHealth() : {},
-      localConfirmed: isLocalConfirmed ? isLocalConfirmed() : false,
       keyPools: getKeyPoolInfo ? getKeyPoolInfo() : {},
     });
   });
 
-  // POST /api/system/allow-local — kept for compatibility; local is always
-  // allowed (gate removed in BO-2). Returns ok:true so existing callers and
-  // stress tests pass without changes.
+  // POST /api/system/allow-local — the gate this approved was removed in
+  // BO-2. Kept because stress tools and the terminal still call it, but it is
+  // now honest about being a no-op instead of returning a fabricated approval
+  // window. `until: null` is what the old Infinity already serialised to.
   router.post('/allow-local', (_req, res) => {
-    const r = confirmLocal ? confirmLocal() : { until: Infinity };
-    res.json({ ok: true, ...r });
+    res.json({ ok: true, until: null, noop: true, reason: 'local models need no confirmation' });
   });
 
   // System context — full environment snapshot for terminal AI

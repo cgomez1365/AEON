@@ -267,7 +267,7 @@ const _routerDeps = {
   getDailyCost: ai.getDailyCost, isVercel, fs, path,
   kernelLLM: ai.kernelLLM, kernelVision: ai.kernelVision, _trackLLM: ai._trackLLM,
   _skippedRoutes, getLocalFile: storage.getLocalFile, aeonTerminalStream,
-  getProviderHealth: ai.getProviderHealth, confirmLocal: ai.confirmLocal, isLocalConfirmed: ai.isLocalConfirmed,
+  getProviderHealth: ai.getProviderHealth,
   getKeyPoolInfo: ai.getKeyPoolInfo, VAULT_ROOT: storage.VAULT_ROOT,
 };
 

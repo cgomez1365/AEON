@@ -109,10 +109,12 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   // type /allow-local to open a time-boxed window. Autonomous background
   // missions are exempt (autonomous.cjs has its own always-on local rung —
   // that's the whole point of a mission you can walk away from).
-  // Local model always allowed — no gate, no /allow-local ceremony.
-  // User controls fallback order via Settings → prefs.provider_priority.
-  const isLocalConfirmed = () => true;
-  const confirmLocal = () => ({ until: Infinity });
+  // BO-H1c — the local-confirmation gate was removed in BO-2. What survived
+  // was isLocalConfirmed() hardcoded to true and confirmLocal() returning a
+  // fake window: a check that could not fail, feeding a UI that told the
+  // operator local models "require /allow-local confirmation". §08 — a claim
+  // in the product must be true of the product. Both are gone; local is a
+  // first-class provider and the fallback order is prefs.provider_priority.
 
   // ── Token governor ──
   const KILL_SWITCH_THRESHOLD = 15.00;
@@ -818,7 +820,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     GEMINI_KEY_POOL, _trackLLM, _llmTelemetry, setActivityRecorder,
     getDailyCost, addRunCost,
     KILL_SWITCH_THRESHOLD, GEMINI_PRICE_PER_TOKEN, GROQ_PRICE_PER_TOKEN,
-    getProviderHealth, confirmLocal, isLocalConfirmed, getKeyPoolInfo, dehydrateProvider,
+    getProviderHealth, getKeyPoolInfo, dehydrateProvider,
     defaultLocalModel, localRuntimePresent,
   };
 };
