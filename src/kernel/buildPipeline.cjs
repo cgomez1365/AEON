@@ -20,6 +20,7 @@ const path = require('path');
 const fs = require('fs');
 const { normalize } = require('./buildEnvelope.cjs');
 const { gate } = require('./complexityGate.cjs');
+const { bootProof } = require('./bootProof.cjs');
 const { lintBlock, promoteBlock, ensureStagingDir, validateManifest, scanSources, detectCircularImports, STAGING_DIR, BLOCKS_DIR } = require('./staging.cjs');
 const approvals = require('./approvals.cjs');
 const ideMode = require('./ideMode.cjs');
@@ -45,7 +46,13 @@ function stageEnvelope(envelope) {
   return { ok: true, dir, id };
 }
 
-function createBuildPipeline({ getVaultSecrets = async () => [], rescan = () => ({ ok: false, error: 'no rescan hook' }) } = {}) {
+function createBuildPipeline({
+  getVaultSecrets = async () => [],
+  rescan = () => ({ ok: false, error: 'no rescan hook' }),
+  // Master M3 — the live route surface, so a staged block can be refused for
+  // colliding before it is promoted rather than after.
+  getLiveRoutes = () => [],
+} = {}) {
 
   /**
    * Master M2 — run every gate against an in-memory envelope and write nothing.
@@ -140,6 +147,32 @@ function createBuildPipeline({ getVaultSecrets = async () => [], rescan = () => 
       return { ok: false, stage: 'lint', error: 'lint failed — block stays in staging/', lint, verdict, blockId: staged.id };
     }
 
+    // Master M3 — every gate above this line READS. This one runs the block:
+    // mounts it through the real block host, calls the routes its manifest
+    // declares, and reports what answered. It is sequenced after lint and the
+    // complexity gate on purpose — those refuse shell, eval, path traversal
+    // and secret reads, so what executes here has already been judged on what
+    // it may do.
+    //
+    // A block that cannot boot never reaches the approval queue. Approving
+    // something that has never run is how "checked for manifest shape but not
+    // for booting" became true of 24 store packs.
+    let boot;
+    try {
+      boot = await bootProof(STAGING_DIR, staged.id, { liveRoutes: getLiveRoutes() });
+    } catch (e) {
+      boot = { ok: false, errors: [`boot proof could not run: ${e.message}`] };
+    }
+    if (!boot.ok) {
+      return {
+        ok: false, stage: 'boot',
+        error: boot.environmentError
+          ? 'boot proof could not run — the block was not judged'
+          : 'staged block did not boot — it stays in staging/',
+        boot, lint, verdict, blockId: staged.id,
+      };
+    }
+
     if (verdict.score === 'LOW') {
       const promo = promoteBlock(staged.id);
       if (!promo.ok) return { ok: false, stage: 'promote', error: promo.error, lint: promo.lint, verdict, blockId: staged.id };
@@ -147,7 +180,7 @@ function createBuildPipeline({ getVaultSecrets = async () => [], rescan = () => 
       // Mounted code the operator hasn't started never handles a request.
       runState.registerManual(staged.id, { by: `pipeline:${envelope.source}` });
       const scan = rescan(`build:${staged.id}`);
-      return { ok: true, stage: 'live', blockId: staged.id, verdict, promoted: true, rescan: scan, adminProvisioned: provisioned,
+      return { ok: true, stage: 'live', blockId: staged.id, verdict, boot, promoted: true, rescan: scan, adminProvisioned: provisioned,
                runState: 'stopped', note: `manual-start block — POST /api/build/blocks/${staged.id}/start to begin serving` };
     }
 
@@ -163,7 +196,7 @@ function createBuildPipeline({ getVaultSecrets = async () => [], rescan = () => 
       files: envelope.files,
       manifest: envelope.manifest,
     });
-    return { ok: true, stage: 'queued', blockId: staged.id, verdict, approval: item, adminProvisioned: provisioned };
+    return { ok: true, stage: 'queued', blockId: staged.id, verdict, boot, approval: item, adminProvisioned: provisioned };
   }
 
   /** Explicit human click. Approve = promote → rescan → live. */

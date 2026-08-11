@@ -280,6 +280,13 @@ try {
   const _pipeline = createBuildPipeline({
     getVaultSecrets: async () => { try { return await _vault.listRefs(supabase); } catch { return []; } },
     rescan: (reason) => loader.rescan(reason),
+    // M3 — what is already served, so a staged block colliding with it is
+    // refused BEFORE promotion rather than discovered after.
+    getLiveRoutes: () => {
+      try {
+        return loader.blockRegistry.flatMap((b) => (b.routes || []).map((r) => r.path).filter(Boolean));
+      } catch { return []; }
+    },
   });
   const buildRouter = require('../src/kernel/routers/build.cjs')({
     pipeline: _pipeline, approvals: _approvals, ideMode: _ideMode,

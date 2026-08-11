@@ -236,6 +236,17 @@ function createBlockHost({ blocksDir, baseDeps, createScopedDeps, registry, read
   return {
     router: trampoline,
     rescan,
+    /**
+     * Tear down every mounted block without remounting — the same teardown
+     * rescan() performs, exposed so a caller that is FINISHED with a host can
+     * stop its timers and listeners. Used by the M3 boot proof: a proof that
+     * leaks an interval into the parent process has changed the thing it was
+     * measuring.
+     */
+    dispose() {
+      for (const id of [...lifecycles.keys()]) teardownBlock(id);
+      inner = express.Router();
+    },
     getGeneration: () => generation,
     getSkipped: () => lastSkipped.slice(),
     _lifecycles: lifecycles, // exposed for tests (test-hotreload.cjs)
