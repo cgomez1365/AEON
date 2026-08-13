@@ -23,20 +23,46 @@ const ROOT = path.join(__dirname, '..');
 // generate one, persist it to .env, and inject it into the live process.
 // Local/desktop only — on Vercel the filesystem is read-only and keys come from env.
 if (!isVercel && !process.env.AEON_VAULT_MASTER_KEY) {
+  // BO-SHIP P1.1 — this guard must not fire on an EXISTING vault.
+  //
+  // Audit 2026-08-11 P0-01: when keyslots already exist, the DEK is wrapped
+  // under a protector derived from the .env key. Minting a fresh key here does
+  // not create a usable vault — it writes a key that unwraps nothing, and
+  // ensureKeyslots() then returns 'exists' and changes nothing. The operator
+  // saw "[FIRST RUN] Vault master key generated" at the exact moment their
+  // vault stopped opening.
+  //
+  // The recovery slot is what actually restores access, so we must NOT exit:
+  // the server has to stay up for the operator to use it. We refuse to mint,
+  // say so loudly, and leave the vault sealed. R-05: no silent failure.
+  const { decideKeyGuard, sealedMessage, REFUSE } = require('../src/kernel/vaultBootGuard.cjs');
+  let hasKeyslots = false;
   try {
-    const crypto = require('crypto');
-    const envFile = path.join(ROOT, '.env');
-    const key = crypto.randomBytes(32).toString('hex');
-    let env = fs.existsSync(envFile) ? fs.readFileSync(envFile, 'utf8') : '';
-    if (/^AEON_VAULT_MASTER_KEY=\s*$/m.test(env)) {
-      env = env.replace(/^AEON_VAULT_MASTER_KEY=\s*$/m, `AEON_VAULT_MASTER_KEY=${key}`);
-    } else {
-      env += `${env.endsWith('\n') || !env ? '' : '\n'}AEON_VAULT_MASTER_KEY=${key}\n`;
-    }
-    fs.writeFileSync(envFile, env);
-    process.env.AEON_VAULT_MASTER_KEY = key;
-    console.log('[FIRST RUN] Vault master key generated and saved to .env');
-  } catch (e) { console.warn('[FIRST RUN] vault key guard failed:', e.message); }
+    // Ask the vault, rather than recomputing the secrets path here — a second
+    // path authority is how this class of defect starts.
+    hasKeyslots = require('../src/kernel/vault.cjs').getRecoveryStatus().hasKeyslots;
+  } catch (e) {
+    console.warn('[VAULT] could not read keyslot state:', e.message);
+  }
+
+  if (decideKeyGuard({ isCloud: false, hasEnvKey: false, hasKeyslots }) === REFUSE) {
+    console.error(sealedMessage());
+  } else {
+    try {
+      const crypto = require('crypto');
+      const envFile = path.join(ROOT, '.env');
+      const key = crypto.randomBytes(32).toString('hex');
+      let env = fs.existsSync(envFile) ? fs.readFileSync(envFile, 'utf8') : '';
+      if (/^AEON_VAULT_MASTER_KEY=\s*$/m.test(env)) {
+        env = env.replace(/^AEON_VAULT_MASTER_KEY=\s*$/m, `AEON_VAULT_MASTER_KEY=${key}`);
+      } else {
+        env += `${env.endsWith('\n') || !env ? '' : '\n'}AEON_VAULT_MASTER_KEY=${key}\n`;
+      }
+      fs.writeFileSync(envFile, env);
+      process.env.AEON_VAULT_MASTER_KEY = key;
+      console.log('[FIRST RUN] Vault master key generated and saved to .env');
+    } catch (e) { console.warn('[FIRST RUN] vault key guard failed:', e.message); }
+  }
 }
 
 // ── Envelope keyslots — wrap the DEK under the .env protector PLUS a recovery
