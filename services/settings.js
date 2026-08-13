@@ -4,8 +4,29 @@
  */
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const storage = require('./storage.js');
 const vault = require('../src/kernel/vault.cjs');
+
+/**
+ * Atomic write with a per-writer temp name.
+ *
+ * BO-SHIP P1.2 — this file had three copies of `const tmp = \`${file}.tmp\``.
+ * A fixed temp name is shared scratch: two concurrent writers truncate each
+ * other and the rename publishes whichever half-written file happens to be
+ * there. Unique naming makes rename the only shared step, and rename is
+ * atomic. One helper, so the next site cannot get it wrong independently.
+ */
+function writeFileAtomic(file, contents) {
+  const tmp = `${file}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+  try {
+    fs.writeFileSync(tmp, contents, { mode: 0o600 });
+    fs.renameSync(tmp, file);
+  } catch (e) {
+    try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {}
+    throw e;
+  }
+}
 
 const ROOT = path.join(__dirname, '..');
 // The settings block API and the first-run guard both use src/aeon-settings.json.
@@ -53,9 +74,7 @@ const loadSettings = () => {
 };
 
 function saveSettings(settings) {
-  const tmp = `${SETTINGS_FILE}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(settings, null, 2), { mode: 0o600 });
-  fs.renameSync(tmp, SETTINGS_FILE);
+  writeFileAtomic(SETTINGS_FILE, JSON.stringify(settings, null, 2));
 }
 
 function sanitizeSettings(value) {
@@ -184,9 +203,7 @@ function createCloudCredentialStore(options = {}) {
       throw Object.assign(new Error('Encrypted Vault is locked; configure the Vault master key before saving credentials'), { statusCode: 503 });
     }
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    const tmp = `${file}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(vault.seal(data), null, 2), { mode: 0o600 });
-    fs.renameSync(tmp, file);
+    writeFileAtomic(file, JSON.stringify(vault.seal(data), null, 2));
   }
 
   function save(provider, payload) {
@@ -276,9 +293,7 @@ function createProviderCredentialStore(options = {}) {
       throw Object.assign(new Error('Encrypted Vault is locked; configure the Vault master key before saving credentials'), { statusCode: 503 });
     }
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    const tmp = `${file}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(vault.seal(data), null, 2), { mode: 0o600 });
-    fs.renameSync(tmp, file);
+    writeFileAtomic(file, JSON.stringify(vault.seal(data), null, 2));
   }
 
   function save(vars) {

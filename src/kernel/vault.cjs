@@ -202,9 +202,96 @@ function readLocalBlob() {
 }
 function writeLocalBlob(blob) {
   // Atomic write: tmp → rename, so a crash mid-save never corrupts the vault.
-  const tmp = VAULT_FILE + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(blob, null, 2), { mode: 0o600 });
-  fs.renameSync(tmp, VAULT_FILE);
+  //
+  // BO-SHIP P1.2 — the temp name must be unique per writer. It was a fixed
+  // VAULT_FILE + '.tmp', so two concurrent writers used the SAME scratch file:
+  // one truncated it while the other was mid-write, and the rename published
+  // whatever was there. Uniqueness makes the rename the only shared step, and
+  // rename is atomic.
+  const tmp = `${VAULT_FILE}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(blob, null, 2), { mode: 0o600 });
+    fs.renameSync(tmp, VAULT_FILE);
+  } catch (e) {
+    try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {}
+    throw e;
+  }
+}
+
+// ── Cross-process write lock ─────────────────────────────────────────
+// BO-SHIP P1.2. setSecret/removeSecret are read-modify-write against one file.
+// Without a lock, concurrent callers each read the same starting state and the
+// last write wins: 40 concurrent setSecret() calls retained 14 of 40.
+//
+// open(..., 'wx') is atomic — it fails if the file exists — which is the whole
+// primitive. A stale lock (crashed writer) is broken after LOCK_STALE_MS so a
+// crash cannot brick the vault; that is the same "never lock the owner out"
+// rule that governs the key guard.
+const LOCK_FILE = () => `${VAULT_FILE}.lock`;
+const LOCK_STALE_MS = 10_000;
+const LOCK_TIMEOUT_MS = 15_000;
+
+function tryAcquireLock() {
+  const lock = LOCK_FILE();
+  try {
+    const fd = fs.openSync(lock, 'wx');
+    fs.writeSync(fd, String(process.pid));
+    fs.closeSync(fd);
+    return true;
+  } catch (e) {
+    if (e.code !== 'EEXIST') throw e;
+    try {
+      const age = Date.now() - fs.statSync(lock).mtimeMs;
+      if (age > LOCK_STALE_MS) {
+        fs.unlinkSync(lock); // stale writer died holding it
+        return tryAcquireLock();
+      }
+    } catch { /* lock vanished between calls — next attempt will get it */ }
+    return false;
+  }
+}
+
+function releaseLock() {
+  try { fs.unlinkSync(LOCK_FILE()); } catch {}
+}
+
+/**
+ * Run `fn` with exclusive access to the vault file.
+ *
+ * Deliberately NOT branched on isVercel. The cloud-surface ratchet counts
+ * cloud conditionals and they may only fall, so a new `if (isVercel)` here
+ * would have raised the baseline 95 → 96 to accommodate this fix. The real
+ * constraint is not "is this cloud" but "is this filesystem writable", which
+ * is what we test — and testing the actual constraint is the better check
+ * anyway. A read-only FS degrades to no lock, and says so rather than
+ * pretending it locked (R-05).
+ */
+async function withVaultLock(fn) {
+  const deadline = Date.now() + LOCK_TIMEOUT_MS;
+  let delay = 4;
+  let held = false;
+
+  while (!held) {
+    try {
+      held = tryAcquireLock();
+    } catch (e) {
+      // Not contention — the lock cannot be created here at all (read-only FS).
+      console.warn(`[VAULT] write lock unavailable (${e.code || e.message}); proceeding unserialized`);
+      return fn();
+    }
+    if (held) break;
+    if (Date.now() > deadline) {
+      throw new Error('[VAULT] timed out waiting for the write lock');
+    }
+    await new Promise((r) => setTimeout(r, delay));
+    delay = Math.min(delay * 2, 100); // backoff, capped so we stay responsive
+  }
+
+  try {
+    return await fn();
+  } finally {
+    releaseLock();
+  }
 }
 
 async function readCloudBlob(supabase) {
@@ -239,22 +326,28 @@ async function getSecret(ref, supabase) {
 
 /** Set/replace a secret. Writes local (if not Vercel) AND mirrors to cloud. */
 async function setSecret(ref, value, supabase) {
-  const all = await loadSecrets(supabase);
-  all[ref] = value;
-  const blob = encrypt(all);
-  if (!isVercel) writeLocalBlob(blob);
-  await writeCloudBlob(supabase, blob);
-  return true;
+  // The read and the write are one critical section — see withVaultLock.
+  return withVaultLock(async () => {
+    const all = await loadSecrets(supabase);
+    all[ref] = value;
+    const blob = encrypt(all);
+    if (!isVercel) writeLocalBlob(blob);
+    await writeCloudBlob(supabase, blob);
+    return true;
+  });
 }
 
 /** Remove a secret. */
 async function removeSecret(ref, supabase) {
-  const all = await loadSecrets(supabase);
-  delete all[ref];
-  const blob = encrypt(all);
-  if (!isVercel) writeLocalBlob(blob);
-  await writeCloudBlob(supabase, blob);
-  return true;
+  // Same read-modify-write critical section as setSecret.
+  return withVaultLock(async () => {
+    const all = await loadSecrets(supabase);
+    delete all[ref];
+    const blob = encrypt(all);
+    if (!isVercel) writeLocalBlob(blob);
+    await writeCloudBlob(supabase, blob);
+    return true;
+  });
 }
 
 /** List ref ids only — never values. Safe for UI. */
