@@ -12,6 +12,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createRequire } from 'module';
 import { EventEmitter } from 'events';
+import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -144,12 +146,23 @@ describe('BO-H8 — a bad upload must not kill the kernel', () => {
   });
 
   it('still resolves a valid destination', () => {
+    // BO-SHIP P5.1 — audit P0-03. This passed path.join(__dirname,'..','data'):
+    // the REAL checkout data root. The destination callback mkdirSync's its
+    // target, so an ordinary `npm test` created operational state inside the
+    // install it was running from. On a clone pointed at a live install, the
+    // suite had write authority over the product's data. A scratch dir proves
+    // exactly the same property and touches nothing.
     const engine = storage.upload.storage;
-    const req = { body: { targetDir: path.join(__dirname, '..', 'data') } };
-    let dest = null; let err = 'NOT_CALLED';
-    engine.getDestination(req, { originalname: 'x.txt' }, (e, d) => { err = e; dest = d; });
-    expect(err).toBeNull();
-    expect(dest).toBeTruthy();
+    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'aeon-upload-dest-'));
+    try {
+      const req = { body: { targetDir: scratch } };
+      let dest = null; let err = 'NOT_CALLED';
+      engine.getDestination(req, { originalname: 'x.txt' }, (e, d) => { err = e; dest = d; });
+      expect(err).toBeNull();
+      expect(dest).toBeTruthy();
+    } finally {
+      fs.rmSync(scratch, { recursive: true, force: true });
+    }
   });
 
   it('keeps the 50 MB / 20 file limits the error handler reports on', () => {

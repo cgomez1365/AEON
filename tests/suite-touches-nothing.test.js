@@ -30,9 +30,30 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
 const TESTS = __dirname;
 
-const testFiles = fs.readdirSync(TESTS)
-  .filter(f => /\.test\.js$/.test(f))
-  .map(f => ({ name: f, src: fs.readFileSync(path.join(TESTS, f), 'utf8') }));
+/**
+ * Every test file, recursively.
+ *
+ * BO-SHIP P5.2 — audit P1-06. This was a flat readdirSync, so it enumerated 65
+ * top-level files while the suite actually has 82 across subdirectories:
+ * everything under tests/local-runtime/ was exempt from the clean-room rules
+ * without anyone deciding that. A gate that silently covers 79% of its surface
+ * is worse than no gate, because the green is read as coverage.
+ */
+function walkTests(dir) {
+  const out = [];
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) out.push(...walkTests(p));
+    else if (/\.test\.js$/.test(e.name)) out.push(p);
+  }
+  return out;
+}
+
+const testFiles = walkTests(TESTS)
+  .map(p => ({
+    name: path.relative(TESTS, p).split(path.sep).join('/'),
+    src: fs.readFileSync(p, 'utf8'),
+  }));
 
 /** Strip comments — a rule described in prose is not a rule being broken. */
 const code = (s) => s
@@ -42,6 +63,21 @@ const code = (s) => s
 describe('the suite scans a meaningful number of its own files', () => {
   it('found the test files', () => {
     expect(testFiles.length).toBeGreaterThan(40);
+  });
+
+  // The regression that made this gate cover 79% of its surface was invisible:
+  // a flat readdirSync returns a plausible number, and nothing compared it to
+  // the real one. Measured at the fix: 72 flat, 89 recursive — 17 files exempt
+  // from every rule below without anyone deciding that.
+  it('scans nested test directories, not just the top level', () => {
+    const flat = fs.readdirSync(TESTS, { withFileTypes: true })
+      .filter((e) => e.isFile() && /\.test\.js$/.test(e.name)).length;
+
+    expect(testFiles.length).toBeGreaterThanOrEqual(flat);
+    expect(
+      testFiles.some((f) => f.name.includes('/')),
+      'no nested test file was scanned — the walk has stopped recursing',
+    ).toBe(true);
   });
 });
 
