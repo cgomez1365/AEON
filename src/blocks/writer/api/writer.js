@@ -9,9 +9,30 @@ module.exports = (app, deps) => {
   // (data/writer/), NOT the Vault: a document editor's autosaved drafts must
   // never be auto-indexed into the Matrix / Second Brain. Use the explicit
   // "Push to Memory" action to deliberately promote a finished piece into recall.
-  const DOCS_DIR = isVercel
+  // Operator finding F-04, 2026-08-12 — `/write a draft to the it guy saying
+  // thank you` returned EXIT 1 with a raw Node error:
+  //     The "path" argument must be of type string. Received undefined
+  //
+  // `getBlockDataFile` was truthy but returned undefined, so path.join() below
+  // threw with a message that names no cause, no remedy and no next step. The
+  // operator sees an internal argument error on the first thing they typed.
+  //
+  // Resolve deliberately, and if the root cannot be determined say which dep
+  // failed rather than letting path.join speak for us. R-05.
+  const resolvedRoot = isVercel
     ? '/tmp/aeon_writer'
-    : (getBlockDataFile ? getBlockDataFile('writer') : path.join(__dirname, '..', '..', '..', '..', 'data', 'writer'));
+    : (typeof getBlockDataFile === 'function' ? getBlockDataFile('writer') : null)
+      || path.join(__dirname, '..', '..', '..', '..', 'data', 'writer');
+
+  if (typeof resolvedRoot !== 'string' || !resolvedRoot) {
+    throw new Error(
+      'Writer could not determine its storage directory: the host supplied no usable '
+      + 'getBlockDataFile("writer") and the fallback path could not be built. '
+      + 'Writer cannot save or read drafts until block storage is available.'
+    );
+  }
+
+  const DOCS_DIR = resolvedRoot;
   const STYLE_FILE = path.join(DOCS_DIR, '_style-profile.json');
   try { fs.mkdirSync(DOCS_DIR, { recursive: true }); } catch {}
 

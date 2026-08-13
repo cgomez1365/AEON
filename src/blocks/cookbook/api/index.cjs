@@ -191,9 +191,33 @@ module.exports = function createCookbookRouter(deps) {
   }
 
   // NVIDIA GPU probe via nvidia-smi
+  //
+  // Operator finding F-02, 2026-08-12 — the absence of nvidia-smi is not an
+  // error on a machine that cannot have it. A MacBook Pro showed a red
+  // "nvidia-smi not found" card on the Hardware screen, which is a correct
+  // state dressed as a failure: the inverse false-green, on the exact screen
+  // where a first-time operator decides whether to trust the product.
+  //
+  // Three-valued, so the UI can tell the cases apart:
+  //   gpus.length            NVIDIA hardware found
+  //   notApplicable          this platform does not have nvidia-smi — expected
+  //   error                  the tool IS present and failed — worth a red card
   async function probeNvidiaGpus() {
     const result = await runCmd('nvidia-smi', ['--query-gpu=index,name,memory.free,memory.total,memory.used,utilization.gpu,uuid', '--format=csv,noheader,nounits']);
-    if (!result.ok || !result.stdout) return { gpus: [], error: result.stderr || 'nvidia-smi not found' };
+    if (!result.ok || !result.stdout) {
+      // ENOENT (and Windows' 127) mean the binary is not installed at all.
+      const missing = result.code === 'ENOENT' || result.code === 127 || !result.stderr;
+      if (missing) {
+        return {
+          gpus: [],
+          notApplicable: true,
+          reason: process.platform === 'darwin'
+            ? 'No NVIDIA GPU tooling on macOS — models are ranked against system memory.'
+            : 'No NVIDIA GPU detected — models are ranked against system memory.',
+        };
+      }
+      return { gpus: [], error: result.stderr };
+    }
 
     const gpus = [];
     for (const line of result.stdout.split('\n')) {

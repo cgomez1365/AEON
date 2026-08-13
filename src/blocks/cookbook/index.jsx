@@ -203,6 +203,10 @@ export default function CookbookHardware() {
   const [tab, setTab] = useState('gpus');
   const [gpus, setGpus] = useState(null);
   const [gpuError, setGpuError] = useState('');
+  // F-02 — an expected absence (no NVIDIA tooling on this platform) is a note,
+  // never the red error box. A correct state dressed as a failure is the
+  // inverse false-green, and it lands on the first screen a buyer reads.
+  const [gpuNote, setGpuNote] = useState('');
   const [cachedModels, setCachedModels] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [dlRepo, setDlRepo] = useState('');
@@ -334,7 +338,10 @@ export default function CookbookHardware() {
       const res = await fetch('/api/cookbook/gpus');
       const data = await res.json();
       setGpus(data);
-      if (!data.ok) setGpuError(data.error || 'Probe failed');
+      // F-02: an expected absence is a note, not a failure. Only a probe that
+      // genuinely failed gets the error treatment.
+      setGpuNote(data.notApplicable ? (data.reason || '') : '');
+      if (!data.ok && !data.notApplicable) setGpuError(data.error || 'Probe failed');
     } catch (e) {
       setGpuError(e.message);
     }
@@ -627,6 +634,9 @@ export default function CookbookHardware() {
           </div>
 
           {gpuError && <div style={errorBox}>{gpuError}</div>}
+          {!gpuError && gpuNote && (
+            <div style={{ fontSize: '11.5px', color: 'var(--text-dim)', margin: '0 0 12px' }}>{gpuNote}</div>
+          )}
 
           {/* Native local runtime status panel */}
           {lrStatus && !lrStatus.runtimeReady && (
