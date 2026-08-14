@@ -148,6 +148,22 @@
         "display": "answer",
         "mode": "instant",
         "category": "content"
+      },
+      {
+        "cmd": "/push",
+        "desc": "Push all blocks to Supabase cloud",
+        "method": "POST",
+        "route": "/api/sync/bulk-push",
+        "mode": "instant",
+        "dangerous": true
+      },
+      {
+        "cmd": "/pull",
+        "desc": "Pull all blocks from Supabase cloud",
+        "method": "POST",
+        "route": "/api/sync/bulk-pull",
+        "mode": "instant",
+        "dangerous": true
       }
     ],
     "settings_keys": [

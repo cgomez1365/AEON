@@ -120,6 +120,74 @@ describe('slash command namespace', () => {
 });
 
 /**
+ * A block may not advertise a command another block implements.
+ *
+ * BO-SHIP P9b. dashboard declared /note, /push and /pull and implemented NONE
+ * of them: /api/notes lives in files/api/notes.js, and /sync/bulk-push and
+ * /sync/bulk-pull live in aeon_matrix/api/sync.cjs.
+ *
+ * That is not cosmetic. The dispatcher gates a command on the readiness of the
+ * block that DECLARES it, so all three were gated on dashboard's requirements
+ * — supabase, groq, gemini AND local — while their handlers needed only
+ * supabase. /note was unavailable for want of an AI provider it never calls.
+ *
+ * §12: a block is a product boundary. A command is part of that boundary, so
+ * it belongs to whoever serves it.
+ *
+ * This check is deliberately narrow. A broader "is this route mounted at all"
+ * gate was attempted and NOT shipped — routes mounted behind a router prefix
+ * (/api/autopilot/*, /api/console/*, /api/build/*) are invisible to a scanner
+ * and it produced seven false positives against commands that demonstrably
+ * work. §19: a gate that cries wolf gets skipped. Routes served by the KERNEL
+ * are therefore accepted here; only a route implemented inside a DIFFERENT
+ * block's api/ directory is a violation, and that is unambiguous.
+ */
+describe('a command belongs to the block that serves it', () => {
+  function apiSources(block) {
+    const dir = path.join(BLOCKS, block, 'api');
+    const out = [];
+    const walk = (d) => {
+      let entries = [];
+      try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+      for (const e of entries) {
+        const p = path.join(d, e.name);
+        if (e.isDirectory()) walk(p);
+        else if (/\.(cjs|js)$/.test(e.name)) out.push(fs.readFileSync(p, 'utf8'));
+      }
+    };
+    walk(dir);
+    return out;
+  }
+
+  it('no block declares a command another block implements', () => {
+    const blocks = fs.readdirSync(BLOCKS).filter((b) => !b.startsWith('_')
+      && fs.existsSync(path.join(BLOCKS, b, 'block.manifest.json')));
+    const cache = {};
+    const sourcesOf = (b) => (cache[b] ||= apiSources(b));
+
+    const foreign = [];
+    for (const b of blocks) {
+      const m = JSON.parse(fs.readFileSync(path.join(BLOCKS, b, 'block.manifest.json'), 'utf8'));
+      for (const c of (m.contract?.commands || [])) {
+        if (!c.route) continue;
+        const tail = c.route.replace(/^\/api/, '');
+        const serves = (s) => s.includes(tail) || s.includes(c.route);
+        if (sourcesOf(b).some(serves)) continue;               // own block serves it
+        const owner = blocks.find((o) => o !== b && sourcesOf(o).some(serves));
+        if (owner) foreign.push(`${b} declares ${c.cmd} but ${owner} implements ${c.route}`);
+        // else: kernel-served. Accepted — see the note above.
+      }
+    }
+
+    expect(
+      foreign,
+      'the dispatcher gates a command on the DECLARING block\'s readiness, so a '
+      + 'misplaced command is gated on requirements its handler does not have',
+    ).toEqual([]);
+  });
+});
+
+/**
  * The lifecycle the CEO described, asserted rather than assumed:
  * a block declares a command, the terminal discovers it, and removing the
  * block takes the command with it.
