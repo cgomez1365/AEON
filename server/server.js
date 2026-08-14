@@ -339,6 +339,10 @@ try {
 try {
   const commandRegistry = require('../src/kernel/commandRegistry.cjs')({
     blockReadiness: loader.blockReadiness, isVercel, writeOSAudit: security.writeOSAudit,
+    // BO-SHIP P7 — narration reads a command's own payload back as a sentence.
+    // Injected rather than required inside the registry so a test can drive it
+    // without a provider, and so the registry stays usable when AI is absent.
+    kernelLLM: ai.kernelLLM,
   });
   app.use('/api', commandRegistry.router);
   _routerDeps.commandRescan = commandRegistry.rescan;

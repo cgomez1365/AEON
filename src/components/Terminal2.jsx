@@ -432,9 +432,46 @@ const Terminal2 = ({ onUsageUpdate }) => {
         status: outcome.chipStatus, output,
         latencyMs: Date.now() - t0, expanded: outcome.expand,
       });
-      if (outcome.kind === 'ok' && outcome.text) {
-        push({ type: 'msg', role: 'assistant', content: outcome.text, meta: { model: data.meta?.block, provider: 'Block Command', latencyMs: Date.now() - t0 } });
-      }
+      // ── BO-SHIP P7 — read the result back as a sentence ──
+      //
+      // The chip above still holds the raw payload and stays expandable, so
+      // nothing is hidden and nothing is replaced: this is a rendering on top
+      // of the truth, not instead of it (R-05).
+      //
+      // Deliberately fire-and-forget. A slow or rate-limited model must never
+      // delay a result that already arrived, and a narration failure must
+      // never fail a command that succeeded — the narrator falls back to a
+      // deterministic sentence rather than inventing one, and a narration that
+      // contradicts the outcome is discarded server-side.
+      (async () => {
+        try {
+          const nres = await fetch('/api/commands/narrate', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              cmd: cmdToken, ok: outcome.kind === 'ok',
+              text: data.text ?? null, data: data.data ?? null,
+              error: data.error ?? null, title: data.meta?.block ?? null,
+            }),
+          });
+          const n = await nres.json().catch(() => null);
+          if (n?.narration) {
+            push({
+              type: 'msg', role: 'assistant', content: n.narration,
+              meta: {
+                model: n.source === 'model' ? undefined : n.source,
+                provider: n.source === 'model' ? 'AI summary' : 'Block Command',
+                latencyMs: Date.now() - t0,
+              },
+            });
+          }
+        } catch {
+          // The chip already carries the full result; a missing sentence is a
+          // rendering gap, not a lost outcome.
+          if (outcome.kind === 'ok' && outcome.text) {
+            push({ type: 'msg', role: 'assistant', content: outcome.text, meta: { model: data.meta?.block, provider: 'Block Command', latencyMs: Date.now() - t0 } });
+          }
+        }
+      })();
     } catch (e) {
       patch(chipId, { status: 'fail', output: e.message, expanded: true });
     }
