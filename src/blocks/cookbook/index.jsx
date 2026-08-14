@@ -1104,7 +1104,17 @@ function SystemInfoCard() {
           <MemoryStick size={14} style={{ color: '#8b5cf6', flexShrink: 0 }} />
           <div>
             <div style={{ fontWeight: 600, fontSize: '11px' }}>{info.total_ram_gb} GB RAM</div>
-            <div style={{ fontSize: '10px', color: 'var(--text-dim)' }}>{info.available_ram_gb} GB available</div>
+            {/* F-03 — "0.2 GB available" beside "judged against 32.0 GB" read as
+                a contradiction. os.freemem() is what is free at this instant;
+                macOS spends nearly all of it on reclaimable cache. Say which
+                number the recommender uses, and label the other honestly. */}
+            <div style={{ fontSize: '10px', color: 'var(--text-dim)' }}>
+              models ranked against {info.total_ram_gb} GB
+            </div>
+            <div style={{ fontSize: '10px', color: 'var(--text-dim)', opacity: 0.75 }}
+                 title={info.free_now_note || undefined}>
+              {info.free_now_gb ?? info.available_ram_gb} GB free right now
+            </div>
           </div>
         </div>
         {info.has_gpu && (

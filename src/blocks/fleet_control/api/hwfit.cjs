@@ -45,9 +45,34 @@ module.exports = function createHwfitRouter(deps) {
   function detectRam() {
     const totalBytes = os.totalmem();
     const freeBytes = os.freemem();
+    const gb = (b) => Math.round(b / (1024 ** 3) * 10) / 10;
+
+    // Operator finding F-03, 2026-08-12 — a MacBook Pro showed "32 GB RAM ·
+    // 0.2 GB available" beside "Models are judged against 32.0 GB". Two
+    // contradictory readings, inches apart, on the screen where the operator
+    // decides which model to install.
+    //
+    // Both numbers were true and one was meaningless. os.freemem() reports
+    // pages that are free RIGHT NOW; macOS deliberately spends almost all of
+    // them on cache and reclaims on demand, so a perfectly healthy 32 GB Mac
+    // reports a fraction of a gigabyte. Labelling that "available" invites the
+    // reading "this machine has no room", which is false.
+    //
+    // The recommender ranks against TOTAL, so total is named as the basis and
+    // the instantaneous figure is labelled for what it is. Nothing here changes
+    // what fits — it changes what the operator is told, which is the defect.
+    const misleadingFree = process.platform === 'darwin';
+
     return {
-      total_gb: Math.round(totalBytes / (1024 ** 3) * 10) / 10,
-      available_gb: Math.round(freeBytes / (1024 ** 3) * 10) / 10,
+      total_gb: gb(totalBytes),
+      free_now_gb: gb(freeBytes),
+      // The figure the fit calculation actually uses. Stated, not implied.
+      ranking_basis_gb: gb(totalBytes),
+      free_now_note: misleadingFree
+        ? 'macOS keeps free pages in cache and reclaims them on demand, so this reads far lower than the memory actually available to a model.'
+        : null,
+      // Retained for existing consumers; it has always been os.freemem().
+      available_gb: gb(freeBytes),
     };
   }
 
@@ -119,6 +144,11 @@ module.exports = function createHwfitRouter(deps) {
       cpu_arch: cpu.arch,
       total_ram_gb: ram.total_gb,
       available_ram_gb: ram.available_gb,
+      // F-03 — carried through so the UI can label the instantaneous figure
+      // honestly and name the basis the recommender actually ranks against.
+      free_now_gb: ram.free_now_gb,
+      free_now_note: ram.free_now_note,
+      ranking_basis_gb: ram.ranking_basis_gb,
       has_gpu: gpus.length > 0,
       gpu_name: gpus.length > 0 ? gpus[0].name : null,
       gpu_vram_gb: Math.round(totalVram * 10) / 10,
