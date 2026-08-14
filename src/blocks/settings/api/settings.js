@@ -218,9 +218,27 @@ module.exports = (app, deps) => {
     const phrase = String(req.body?.phrase || '').trim();
     const settings = loadSettings();
     const roles = Object.keys(settings.models || {});
-    // "set <role> [to] [provider] <model>"
-    const m = phrase.match(/set\s+([a-z_]+)\s+(?:to\s+|=\s*)?(.+)$/i);
-    if (!m) return res.status(400).json({ error: 'Try: set <role> to <provider> <model>', roles });
+    // "[set] <role> [to] [provider] <model>"
+    //
+    // BO-SHIP P8 — the leading "set" is OPTIONAL, and that is the whole fix.
+    //
+    // This route was written for a caller that passes a whole sentence
+    // ("set grading to local qwen3.5:4b"). The /set slash command strips the
+    // command and forwards only the ARGUMENT — "grading to local qwen3.5:4b" —
+    // so the old regex, which required the literal word "set" first, never
+    // matched. /set answered 400 for every input, including the exact phrasing
+    // its own error message told the operator to type.
+    //
+    // Found by dispatching all 39 commands against a live server: it was the
+    // only command that refused all three varied arguments AND kept refusing
+    // after the arguments were corrected to match its documented usage.
+    const m = phrase.match(/^(?:set\s+)?([a-z_]+)\s+(?:to\s+|=\s*)?(.+)$/i);
+    if (!m) {
+      return res.status(400).json({
+        error: 'Try: <role> to <provider> <model>  —  e.g. chat to gemini gemini-2.0-flash',
+        roles,
+      });
+    }
     const role = m[1].toLowerCase();
     if (!roles.includes(role)) return res.status(400).json({ error: `Unknown role "${role}".`, roles });
     let rest = m[2].trim().split(/\s+/);
