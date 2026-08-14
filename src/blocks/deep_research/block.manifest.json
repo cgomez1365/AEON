@@ -81,16 +81,7 @@
       "vercel": true,
       "cloudflare": true
     },
-    "commands": [
-      {
-        "cmd": "/scrape",
-        "desc": "Scrape a URL via Orion",
-        "method": "POST",
-        "route": "/api/orion-scrape",
-        "param": "url",
-        "mode": "instant"
-      }
-    ],
+    "commands": [],
     "settings_keys": [],
     "settings": []
   },

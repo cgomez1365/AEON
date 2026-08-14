@@ -231,7 +231,19 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     return typeof prompt === 'string' ? prompt : JSON.stringify(prompt);
   };
 
-  const geminiRequest = async (prompt, modelName = 'gemini-2.0-flash', retries = 0, opts = {}) => {
+  // BO-SHIP P9 — default to the alias, not a version number.
+  //
+  // This defaulted to 'gemini-flash-latest', which Google has RETIRED: every
+  // request answers HTTP 404 "This model is no longer available". The keys
+  // authenticate fine — 404, not 401 — so the failure reads as a broken
+  // provider rather than a stale model name, and the fallback chain then
+  // reports whatever the next provider says.
+  //
+  // A pinned Gemini version is the opposite trade-off from the llama.cpp
+  // converter (P4), and deliberately so. There, pinning prevents executing
+  // code nobody reviewed. Here, a pinned version simply ROTS — Google removes
+  // it on a schedule — and the alias is the only value that keeps working.
+  const geminiRequest = async (prompt, modelName = 'gemini-flash-latest', retries = 0, opts = {}) => {
     if (GEMINI_KEY_POOL.length === 0) throw new Error('No Gemini API keys configured in .env');
     if (retries >= GEMINI_KEY_POOL.length) {
       markUnhealthy('gemini', 429, 'key pool exhausted');
@@ -757,8 +769,8 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
         try {
           let text;
           if (pick === 'groq') text = await groqRequest(prompt, 'llama-3.3-70b-versatile', 0, opts);
-          if (pick === 'gemini') text = await geminiRequest(prompt, 'gemini-2.0-flash', 0, opts);
-          if (text !== undefined) return opts.returnMeta ? { text, provider: pick, model: pick === 'groq' ? 'llama-3.3-70b-versatile' : 'gemini-2.0-flash' } : text;
+          if (pick === 'gemini') text = await geminiRequest(prompt, 'gemini-flash-latest', 0, opts);
+          if (text !== undefined) return opts.returnMeta ? { text, provider: pick, model: pick === 'groq' ? 'llama-3.3-70b-versatile' : 'gemini-flash-latest' } : text;
         } catch (e) {
           const status = /error (\d{3})/i.exec(e.message)?.[1];
           if (status) markUnhealthy(pick, Number(status), e.message);
@@ -788,7 +800,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
           usedModel = p === provider ? model : 'llama-3.3-70b-versatile';
           text = await groqRequest(prompt, usedModel, 0, opts);
         } else if (p === 'gemini' && GEMINI_KEY_POOL.length > 0) {
-          usedModel = p === provider ? model : 'gemini-2.0-flash';
+          usedModel = p === provider ? model : 'gemini-flash-latest';
           text = await geminiRequest(prompt, usedModel, 0, opts);
         } else if (p === 'openrouter' && process.env.OPENROUTER_API_KEY) {
           usedModel = p === provider ? model : 'openai/gpt-4o-mini';
