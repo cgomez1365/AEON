@@ -74,17 +74,7 @@
       "vercel": true,
       "cloudflare": true
     },
-    "commands": [
-      {
-        "cmd": "/note",
-        "desc": "Save a quick note",
-        "method": "POST",
-        "route": "/api/notes",
-        "param": "body",
-        "mode": "instant",
-        "argHint": "<note text>"
-      }
-    ],
+    "commands": [],
     "settings_keys": [],
     "settings": []
   },
