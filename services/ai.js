@@ -776,6 +776,9 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       : availableProviders;
     const chain = [provider, ...fallbacks].filter((p, i, a) => a.indexOf(p) === i);
     let lastErr = null;
+    // Every failure in the chain, so the thrown error can name the real cause
+    // rather than whichever provider happened to be tried last. See P8c below.
+    const attempts = [];
     for (const p of chain) {
       if (!isHealthy(p)) continue;
       try {
@@ -802,9 +805,44 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
         lastErr = e;
         const status = /error (\d{3})/i.exec(e.message)?.[1] || (/429/.test(e.message) ? '429' : /402/.test(e.message) ? '402' : null);
         if (status) markUnhealthy(p, Number(status), e.message);
+        attempts.push({ provider: p, status: status ? Number(status) : null, message: e.message });
         console.warn(`[KERNEL] ${p} failed (${e.message.slice(0, 120)}), trying next provider`);
       }
     }
+
+    // BO-SHIP P8c — say which provider failed and why.
+    //
+    // This used to throw `lastErr`: the error from the LAST provider in the
+    // chain, which is `local`. So a configured, working Groq key that had
+    // simply hit its per-minute token limit produced
+    //
+    //     "No local model is installed and no cloud provider is configured.
+    //      Install a local model in Cookbook, or add a provider key."
+    //
+    // — a permanent-sounding configuration error, telling the operator to add a
+    // key they already had, for a condition that clears in seconds. Found by
+    // driving /write three times against a live server on a Groq free tier:
+    // call one succeeded, calls two and three "had no provider".
+    //
+    // A transient throttle and an unconfigured install are different states
+    // with different remedies. The old comment asserted this was always "a
+    // configuration state, not an internal fault"; that is only true when
+    // nothing was actually configured.
+    const throttled = attempts.find((a) => a.status === 429);
+    if (throttled) {
+      const err = new Error(
+        `${throttled.provider} is rate-limited right now (HTTP 429). This is temporary — `
+        + `retry in a few seconds. Other providers in the chain could not serve either: `
+        + attempts.filter((a) => a !== throttled).map((a) => a.provider).join(', ') || 'none configured'
+      );
+      err.rateLimited = true;
+      err.provider = throttled.provider;
+      err.retryable = true;
+      // Deliberately NOT noProviderAvailable: a provider IS available, and
+      // sending the operator to Settings would be sending them nowhere.
+      throw err;
+    }
+
     // Every candidate provider was tried and none could serve. That is a
     // configuration state, not an internal fault — a clean install with no API
     // keys and no local chat model lands here on the very first request. The
@@ -812,6 +850,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     // "nothing is configured" instead of a bare 500.
     const exhausted = lastErr || new Error('No LLM provider available (check API keys in Settings)');
     exhausted.noProviderAvailable = true;
+    exhausted.attempts = attempts;
     throw exhausted;
   };
 
