@@ -222,6 +222,49 @@ module.exports = function ({ blockReadiness = {}, isVercel = false, writeOSAudit
       });
     }
 
+    // ── BO-SHIP P8d — multi-field commands, typed as one line ──────────
+    //
+    // A command declaring `params` (plural) could not be invoked from the
+    // terminal at all. The payload below falls through to `{ arg }` when
+    // `spec.param` (singular) is absent, so /writefile — params
+    // ["filePath","content"] — reached POST /api/fs/write with BOTH fields
+    // undefined and answered:
+    //
+    //     The "path" argument must be of type string. Received undefined
+    //
+    // That is the operator's F-04 error, reproduced exactly. `params` was
+    // documented as "descriptive only — the caller must supply the fields via
+    // the dispatch body", but the terminal has no way to build a body: it
+    // sends what was typed. So every multi-field command was terminal-dead.
+    //
+    // Split positionally, with the LAST field absorbing the remainder — which
+    // is how a person types it: `/writefile notes.txt some longer content`.
+    // An explicit `body` still wins, so structured callers are unaffected.
+    let fields = structured;
+    if (!fields && Array.isArray(spec.params) && spec.params.length && argText) {
+      const names = spec.params
+        .map((p) => (typeof p === 'string' ? p : p?.name))
+        .filter(Boolean);
+      const parts = argText.split(/\s+/);
+      if (names.length) {
+        fields = {};
+        names.forEach((n, i) => {
+          fields[n] = i === names.length - 1 ? parts.slice(i).join(' ') : (parts[i] ?? '');
+        });
+        const missing = names.filter((n) => !String(fields[n] || '').trim());
+        if (missing.length) {
+          // Name the fields. The block would otherwise fail in its own
+          // vocabulary, deep inside its own implementation — the exact defect
+          // the argument contract exists to prevent.
+          return res.status(400).json({
+            ok: false, id: spec.id, usage: spec.usage,
+            error: `${spec.cmd} needs ${names.length} values (${names.join(', ')}); `
+              + `missing: ${missing.join(', ')}. Usage: ${spec.usage}`,
+          });
+        }
+      }
+    }
+
     const port = Number(process.env.PORT) || 3001;
     const base = `http://127.0.0.1:${port}`;
     let url = spec.route.startsWith('http') ? spec.route : base + spec.route;
@@ -237,13 +280,13 @@ module.exports = function ({ blockReadiness = {}, isVercel = false, writeOSAudit
     if (req.headers.authorization) init.headers.Authorization = req.headers.authorization;
     if (req.headers.cookie) init.headers.Cookie = req.headers.cookie;
     if (spec.method === 'GET') {
-      const qs = structured
-        ? Object.entries(structured).filter(([, v]) => v !== undefined && v !== null)
+      const qs = fields
+        ? Object.entries(fields).filter(([, v]) => v !== undefined && v !== null)
         : (spec.param && arg ? [[spec.param, arg]] : []);
       for (const [k, v] of qs) url += `${url.includes('?') ? '&' : '?'}${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`;
     } else {
       init.body = JSON.stringify(
-        structured || (spec.param ? { [spec.param]: arg } : (arg ? { arg } : {})),
+        fields || (spec.param ? { [spec.param]: arg } : (arg ? { arg } : {})),
       );
     }
 
