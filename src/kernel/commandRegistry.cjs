@@ -132,8 +132,9 @@ function renderTemplate(tpl, data) {
   });
 }
 
-module.exports = function ({ blockReadiness = {}, isVercel = false, writeOSAudit } = {}) {
+module.exports = function ({ blockReadiness = {}, isVercel = false, writeOSAudit, kernelLLM = null } = {}) {
   const router = express.Router();
+  const narrator = require('./commandNarrator.cjs');
   let registry = scanCommands(blockReadiness);
   const rescan = () => { registry = scanCommands(blockReadiness); return registry.size; };
 
@@ -150,6 +151,34 @@ module.exports = function ({ blockReadiness = {}, isVercel = false, writeOSAudit
     res.json({ ok: true, count: list.length, commands: list });
   });
 
+  // ── POST /commands/narrate — read a command result back as a sentence ──
+  //
+  // BO-SHIP P7. Separate from dispatch, and opt-in, for three reasons:
+  //   - narrating every command would spend tokens the operator did not ask
+  //     for, on a free tier that throttles after a few calls;
+  //   - a slow model must never delay the result itself. The payload arrives
+  //     first and the sentence catches up;
+  //   - a narration failure must not be able to fail a command that succeeded.
+  //
+  // The raw payload is returned alongside the prose so the UI can reveal it.
+  // R-05: the payload stays the source of truth; the sentence is a rendering.
+  router.post('/commands/narrate', async (req, res) => {
+    const { cmd = '/command', ok = false, text = null, data = null, error = null, title = null } = req.body || {};
+    try {
+      const out = await narrator.narrate({ cmd, ok, text, data, error, title }, kernelLLM);
+      res.json({ ok: true, ...out });
+    } catch (e) {
+      // Even the narrator failing is narrated honestly rather than 500ing.
+      res.json({
+        ok: true,
+        narration: narrator.deterministicNarration({ cmd, ok, text, data, error }),
+        source: 'deterministic',
+        raw: { ok, text, data, error },
+        narratorError: e.message,
+      });
+    }
+  });
+
   // ── POST /commands/dispatch — { cmd | id, arg, body?, confirmed } ──
   // `arg` is the single-string form every command has always used. `body` is
   // the structured form for commands whose route needs more than one field
@@ -161,9 +190,33 @@ module.exports = function ({ blockReadiness = {}, isVercel = false, writeOSAudit
     const spec = registry.get(id) || registry.get(cmd);
     if (!spec) return res.status(404).json({ ok: false, error: `Unknown command: ${id || cmd}` });
 
-    const ready = blockReadiness[spec.blockId]?.ready !== false;
+    const readinessInfo = blockReadiness[spec.blockId] || {};
+    const ready = readinessInfo.ready !== false;
     if (!evalWhen(spec.when, { ready, runtime: isVercel ? 'cloud' : 'local' })) {
-      return res.status(409).json({ ok: false, id: spec.id, error: `${spec.cmd} unavailable (when: ${spec.when})` });
+      // BO-SHIP P8e — this answered `"/push unavailable (when: null)"`: an
+      // internal expression, printed at the operator, naming no cause and no
+      // remedy. `when` is null for most commands, so the one thing the message
+      // showed was the one thing that meant nothing.
+      //
+      // checkReadiness() already computes exactly what is missing
+      // (missingApis, localMissing) and the dispatcher already had it in hand.
+      const missing = [
+        ...(readinessInfo.missingApis || []),
+        ...(readinessInfo.localMissing || []),
+      ];
+      const why = !ready && missing.length
+        ? `${spec.blockLabel} needs: ${missing.join(', ')}. Add them in Settings → Connections.`
+        : !ready
+          ? `${spec.blockLabel} is not ready.`
+          : `${spec.cmd} is unavailable in this runtime (requires: ${spec.when}).`;
+
+      return res.status(409).json({
+        ok: false,
+        id: spec.id,
+        error: `${spec.cmd} unavailable — ${why}`,
+        blockId: spec.blockId,
+        missing,
+      });
     }
 
     // ── BO-D2e — the argument contract, enforced before the block sees it ──
