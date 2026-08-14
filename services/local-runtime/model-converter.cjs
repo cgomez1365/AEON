@@ -24,12 +24,37 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 const { execFile, spawn } = require('child_process');
 
 const GB = 1024 * 1024 * 1024;
 
-/** llama.cpp pins its converter to a release; use the same tag as the runtime. */
+/**
+ * llama.cpp pins its converter to a release; use the same tag as the runtime.
+ *
+ * BO-SHIP P4 — audit P0-05. This returned a URL on `master` by default: a
+ * MUTABLE branch ref, fetched and then executed with operator privileges. An
+ * independent harness replaced fetch() with an arbitrary Python payload and
+ * ensureConverter()/convert() ran it, returning convertOk:true. There was no
+ * hash, signature, or immutable ref — only a loose content regex, which any
+ * payload containing the word "gguf" satisfies.
+ *
+ * A mutable ref is now refused outright. Immutable means a llama.cpp release
+ * tag (b12345) or a full 40-hex commit SHA.
+ */
+const IMMUTABLE_REF = /^(b\d+|[0-9a-f]{40})$/;
+
+function isImmutableRef(tag) {
+  return IMMUTABLE_REF.test(String(tag || ''));
+}
+
 function converterUrl(tag) {
+  if (!isImmutableRef(tag)) {
+    throw new Error(
+      `[CONVERTER] refusing a mutable ref "${tag}". The converter is executed with `
+      + `operator privileges, so it must be pinned to a release tag (b12345) or a full commit SHA.`
+    );
+  }
   return `https://raw.githubusercontent.com/ggml-org/llama.cpp/${tag}/convert_hf_to_gguf.py`;
 }
 
@@ -184,17 +209,52 @@ async function preflight(o = {}) {
 /** Fetch the converter script matching the installed runtime release. */
 async function ensureConverter(o = {}) {
   const dest = path.join(o.workDir, 'convert_hf_to_gguf.py');
-  if (fs.existsSync(dest) && fs.statSync(dest).size > 1000) return { ok: true, path: dest, cached: true };
+
+  // The pin travels with the runtime manifest, where the binaries are already
+  // pinned and hash-verified. One place, one mechanism.
+  let pin = null;
+  try { pin = require('./runtime-assets.json').converter || null; } catch {}
+  if (!pin || !pin.sha256 || !pin.tag) {
+    return { ok: false, error: 'converter is not pinned in runtime-assets.json — refusing to fetch executable code without a hash' };
+  }
+
+  const sha = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
+
+  // A cached copy is verified too. Otherwise the check is a one-time formality
+  // that anything with write access to workDir can step around afterwards.
+  if (fs.existsSync(dest)) {
+    const onDisk = sha(fs.readFileSync(dest));
+    if (onDisk === pin.sha256) return { ok: true, path: dest, cached: true, sha256: onDisk, tag: pin.tag };
+    try { fs.unlinkSync(dest); } catch {}
+    // R-05: say it, do not silently re-fetch over a file that failed its hash.
+    console.warn(`[CONVERTER] cached converter failed hash check (${onDisk.slice(0, 12)}… != ${pin.sha256.slice(0, 12)}…); discarded`);
+  }
+
   try {
     fs.mkdirSync(o.workDir, { recursive: true });
-    const res = await fetch(converterUrl(o.runtimeTag || 'master'));
-    if (!res.ok) return { ok: false, error: `converter fetch failed: HTTP ${res.status}` };
-    const text = await res.text();
-    if (!/convert_hf_to_gguf|Model|gguf/.test(text) || text.length < 1000) {
-      return { ok: false, error: 'converter download did not look like the expected script' };
+
+    // An explicit runtimeTag must agree with the pin — a caller cannot redirect
+    // this fetch at a different revision.
+    const tag = o.runtimeTag || pin.tag;
+    if (tag !== pin.tag) {
+      return { ok: false, error: `converter tag "${tag}" does not match the pinned tag "${pin.tag}"` };
     }
-    fs.writeFileSync(dest, text);
-    return { ok: true, path: dest, cached: false };
+
+    const res = await fetch(converterUrl(tag));
+    if (!res.ok) return { ok: false, error: `converter fetch failed: HTTP ${res.status}` };
+
+    const buf = Buffer.from(await res.arrayBuffer());
+    const got = sha(buf);
+    if (got !== pin.sha256) {
+      // Fail closed. This is the whole point: unverified code is not executed.
+      return {
+        ok: false,
+        error: `converter hash mismatch — expected ${pin.sha256}, got ${got}. Refusing to execute unverified code.`,
+      };
+    }
+
+    fs.writeFileSync(dest, buf);
+    return { ok: true, path: dest, cached: false, sha256: got, tag };
   } catch (e) {
     return { ok: false, error: e.message };
   }

@@ -50,7 +50,19 @@ module.exports = ({ app, ROOT, isVercel, loadSettings, baseDeps }) => {
     const perms = manifest?.contract?.permissions || {};
     const usesScopedStorage = manifest?.contract?.storage?.access === 'scoped';
 
-    if (usesScopedStorage && perms.filesystem !== 'none') {
+    // BO-SHIP P2.2 — blockStorage is offered to EVERY block, not only to ones
+    // already declaring scoped access.
+    //
+    // Before this, the surface a block was supposed to migrate to did not exist
+    // until after it had migrated. That circularity is why all 17 shipped
+    // blocks were still 'compatibility' and why every one of them reached for
+    // require('fs') instead: the sanctioned path was unavailable at the moment
+    // anyone would have taken it.
+    //
+    // Handing it out unconditionally costs nothing — it grants no capability a
+    // block does not already have via the broad resolvers — and it lets a block
+    // port in one commit and flip its manifest in the next.
+    if (perms.filesystem !== 'none') {
       scoped.blockStorage = createBlockStorage({
         blockId,
         contract: manifest.contract,
@@ -59,7 +71,10 @@ module.exports = ({ app, ROOT, isVercel, loadSettings, baseDeps }) => {
         vaultSync: base.vaultSync,
         requestIndex: base.requestIndex,
       });
-      // v1.1 blocks must use their declared, block-scoped storage surface.
+    }
+
+    if (usesScopedStorage && perms.filesystem !== 'none') {
+      // A scoped block must use its declared surface, so the broad resolvers go.
       delete scoped.VAULT_ROOT;
       delete scoped.DATA_ROOT;
       delete scoped.getVaultFile;

@@ -154,3 +154,20 @@ data/local-runtime/
 
 # BO-A2c empty-shell test tree (created and removed per run)
 .aeon-empty-shell-test/
+
+# ── BO-SHIP P3 — private operational roots (§07 Principle 04, §12/§15) ──
+# Audit 2026-08-11 P0-04: none of these matched `git check-ignore`, so a locally
+# created model or Vault credential could be staged by an ordinary `git add`.
+# Both casings are listed deliberately: gitignore matching is case-sensitive on
+# Linux and insensitive on Windows/macOS, and AEON claims all three.
+models/
+Models/
+vault/
+Vault/
+
+# Runtime state written into db/, which otherwise holds tracked schema files.
+# These are what a real first install creates; the tracked .sql and
+# db/retrieval/_scopes.json are unaffected (this pattern matches direct
+# children only).
+db/*.json
+!db/retrieval/_scopes.json

@@ -218,9 +218,27 @@ module.exports = (app, deps) => {
     const phrase = String(req.body?.phrase || '').trim();
     const settings = loadSettings();
     const roles = Object.keys(settings.models || {});
-    // "set <role> [to] [provider] <model>"
-    const m = phrase.match(/set\s+([a-z_]+)\s+(?:to\s+|=\s*)?(.+)$/i);
-    if (!m) return res.status(400).json({ error: 'Try: set <role> to <provider> <model>', roles });
+    // "[set] <role> [to] [provider] <model>"
+    //
+    // BO-SHIP P8 — the leading "set" is OPTIONAL, and that is the whole fix.
+    //
+    // This route was written for a caller that passes a whole sentence
+    // ("set grading to local qwen3.5:4b"). The /set slash command strips the
+    // command and forwards only the ARGUMENT — "grading to local qwen3.5:4b" —
+    // so the old regex, which required the literal word "set" first, never
+    // matched. /set answered 400 for every input, including the exact phrasing
+    // its own error message told the operator to type.
+    //
+    // Found by dispatching all 39 commands against a live server: it was the
+    // only command that refused all three varied arguments AND kept refusing
+    // after the arguments were corrected to match its documented usage.
+    const m = phrase.match(/^(?:set\s+)?([a-z_]+)\s+(?:to\s+|=\s*)?(.+)$/i);
+    if (!m) {
+      return res.status(400).json({
+        error: 'Try: <role> to <provider> <model>  —  e.g. chat to gemini gemini-2.0-flash',
+        roles,
+      });
+    }
     const role = m[1].toLowerCase();
     if (!roles.includes(role)) return res.status(400).json({ error: `Unknown role "${role}".`, roles });
     let rest = m[2].trim().split(/\s+/);
@@ -292,29 +310,17 @@ module.exports = (app, deps) => {
   // one JSON file the user saves offline. Restoring into a fresh clone requires
   // all three — a partial restore causes a vault mismatch and locks the user out.
   app.get('/api/settings/export-credentials', (req, res) => {
-    const SECRETS_DIR = path.join(APP_ROOT, 'secrets');
-    const VAULT_DIR = require(path.join(APP_ROOT, 'services', 'storage.js')).getVaultFile(path.join('blocks', 'security'));
-    const files = {
-      '.env': path.join(APP_ROOT, '.env'),
-      'secrets/aeon-keyslots.json': path.join(SECRETS_DIR, 'aeon-keyslots.json'),
-      'vault/provider_credentials.json': path.join(VAULT_DIR, 'provider_credentials.json'),
-    };
-    const bundle = {
-      _artifact: 'AEON credential backup',
-      _warning: 'Contains plaintext secrets. Store offline, never commit to git.',
-      _restore: 'On a fresh clone: copy .env to root, secrets/aeon-keyslots.json to secrets/, vault/provider_credentials.json to its vault path. Boot — vault auto-unlocks.',
-      exported_at: new Date().toISOString(),
-      files: {},
-    };
-    for (const [key, filePath] of Object.entries(files)) {
-      try { bundle.files[key] = fs.readFileSync(filePath, 'utf8'); }
-      catch { bundle.files[key] = null; }
-    }
-    const hasAnyContent = Object.values(bundle.files).some(v => v !== null);
-    if (!hasAnyContent) return res.status(404).json({ error: 'No credential files found — nothing to export.' });
+    // BO-SHIP P2.2 — this used to assemble the bundle itself: it built the
+    // secrets/ path, dynamically required services/storage.js, and called
+    // getVaultFile('blocks/security') to read a SIBLING BLOCK's Vault
+    // namespace. A block does not own those roots. The kernel does, so the
+    // kernel assembles the bundle and Settings renders the answer.
+    const result = require('../../../kernel/credentialBackup.cjs').exportBundle();
+    if (!result.ok) return res.status(404).json({ error: result.error });
+
     res.setHeader('Content-Type', 'application/json');
-    res.setHeader('Content-Disposition', `attachment; filename="aeon-credentials-${new Date().toISOString().slice(0,10)}.json"`);
-    res.send(JSON.stringify(bundle, null, 2));
+    res.setHeader('Content-Disposition', `attachment; filename="${result.filename}"`);
+    res.send(JSON.stringify(result.bundle, null, 2));
   });
 
   // ── GET /api/settings/block/:id — a block's own settings, resolved ──
@@ -1086,19 +1092,50 @@ module.exports = (app, deps) => {
   app.post('/api/settings/restart', (req, res) => {
     if (!isLocalRequest(req))
       return res.status(403).json({ error: 'Restart is local-only.' });
-    res.json({ ok: true, restarting: true });
+
+    // BO-SHIP P8f — never claim a restart we cannot perform.
+    //
+    // This answered `{ ok: true, restarting: true }` and then, if restart.bat
+    // was absent, called process.exit(0) on the comment "fallback: a
+    // supervisor/launcher relaunches". Under `npm run server` — and under
+    // launch.sh / launch.command — there is no supervisor. So /restart
+    // reported success and took AEON down permanently; the operator had to
+    // relaunch by hand, having just been told it was restarting.
+    //
+    // Verified live: restart.bat does not exist in the repo, /restart returned
+    // restarting:true, and the server never came back. The marathon audit
+    // predicted this (A03-12: `Test-Path scripts/restart.bat` is false while
+    // the route spawns cmd.exe) — it took running the command to see the
+    // consequence.
+    //
+    // A relaunch mechanism must be PROVEN present before the process is
+    // allowed to die. Absent one, refuse and stay up: a running AEON the
+    // operator restarts by hand beats a dead one that promised otherwise.
+    const bat = path.join(__dirname, '..', '..', '..', '..', 'restart.bat');
+    const hasRelauncher = fs.existsSync(bat);
+    const supervised = !!(process.env.AEON_SUPERVISED || process.env.PM2_HOME || process.env.NODEMON);
+
+    if (!hasRelauncher && !supervised) {
+      return res.status(501).json({
+        ok: false,
+        restarting: false,
+        error: 'AEON cannot restart itself in this launch mode — nothing would bring it back up.',
+        remedy: 'Stop AEON and start it again with your normal launcher (LAUNCH.bat, launch.command, launch.sh, or npm start).',
+        detail: 'A restart requires either restart.bat beside the app or a supervisor that relaunches on exit.',
+      });
+    }
+
+    res.json({ ok: true, restarting: true, via: hasRelauncher ? 'restart.bat' : 'supervisor' });
     // Detach the restart script so it survives this process dying.
     setTimeout(() => {
       try {
-        const { spawn } = require('child_process');
-        const bat = path.join(__dirname, '..', '..', '..', '..', 'restart.bat');
-        if (fs.existsSync(bat)) {
+        if (hasRelauncher) {
+          const { spawn } = require('child_process');
           // aeon-shell-allow: launching restart.bat requires cmd.exe; `bat` is a
           // server-side path.join constant, never request-derived.
           spawn('cmd.exe', ['/c', bat], { detached: true, stdio: 'ignore', windowsHide: false }).unref();
-        } else {
-          process.exit(0); // fallback: a supervisor/launcher relaunches
         }
+        process.exit(0); // a supervisor is present, or the script above relaunches
       } catch { process.exit(0); }
     }, 400);
   });

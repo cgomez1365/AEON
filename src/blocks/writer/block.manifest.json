@@ -51,7 +51,7 @@
         "indexed": false,
         "retention": "operational"
       },
-      "access": "compatibility"
+      "access": "scoped"
     },
     "memory": {
       "mode": "document",

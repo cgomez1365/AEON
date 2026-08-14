@@ -125,5 +125,13 @@
       "archive": "tar.gz",
       "stripComponents": 1
     }
-  ]
+  ],
+  "converter": {
+    "_comment": "BO-SHIP P4. The HF->GGUF converter is fetched and then EXECUTED with operator privileges, so it is pinned and hash-verified exactly like the runtime binaries. It was previously fetched from the mutable master branch with no verification.",
+    "tag": "b10216",
+    "filename": "convert_hf_to_gguf.py",
+    "url": "https://raw.githubusercontent.com/ggml-org/llama.cpp/b10216/convert_hf_to_gguf.py",
+    "bytes": 12410,
+    "sha256": "8f1bed9466221e57e434caa7ee720abe1569deb6bc2fe5a65da950ea66c8e737"
+  }
 }

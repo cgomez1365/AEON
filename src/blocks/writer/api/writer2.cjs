@@ -11,7 +11,8 @@
  * Zero dependencies: the markdown→HTML renderer below covers the subset the
  * editor produces (headings, emphasis, lists, links, quotes, code, rules).
  */
-const fs = require('fs');
+// BO-SHIP P2.2 — ported off direct `fs` onto the block's scoped surface.
+// `path` stays: pure string arithmetic, reaches nothing.
 const path = require('path');
 
 // ── Mini markdown → HTML (good enough for export, no deps) ─────────────
@@ -62,15 +63,35 @@ const TEMPLATES = [
 
 module.exports = (app, deps) => {
   const isVercel = require('../../../kernel/runtime.cjs').isCloud();
-  // Must match writer.js exactly — same store, same folder (Vault/blocks/writer/).
-  const DOCS_DIR = isVercel
-    ? '/tmp/aeon_writer'
-    : (deps?.getVaultFile ? deps.getVaultFile('blocks/writer') : path.join(__dirname, '..', '..', '..', '..', 'secrets', 'documents'));
-  try { fs.mkdirSync(DOCS_DIR, { recursive: true }); } catch {}
+
+  // BO-SHIP P2.2 — this module and writer.js disagreed about where the block's
+  // documents live, and had done since they were written:
+  //
+  //   writer.js   getBlockDataFile('writer')      -> data/writer/
+  //   writer2.cjs deps.getVaultFile('blocks/writer') -> Vault/blocks/writer/
+  //
+  // The comment here claimed "must match writer.js exactly", which recorded the
+  // intent while the code drifted away from it. Version history reads snapshots
+  // writer.js writes, so /api/writer/versions/:id was reading a directory
+  // nothing ever wrote to — it could not have worked. Export and restore had
+  // the same split.
+  //
+  // Both modules now resolve through the one block-scoped surface, so there is
+  // a single namespace and no second opinion about where it is.
+  const fs = deps?.blockStorage
+    ? deps.blockStorage.fs
+    : require('../../../kernel/blockStorage.cjs').createRootedStorage(
+        isVercel
+          ? '/tmp/aeon_writer'
+          : (typeof deps?.getBlockDataFile === 'function' ? deps.getBlockDataFile('writer') : null)
+            || path.join(__dirname, '..', '..', '..', '..', 'data', 'writer'),
+      ).fs;
+
+  try { fs.mkdirSync(''); } catch {}
 
   const docTitle = (id) => {
     try {
-      const idx = JSON.parse(fs.readFileSync(path.join(DOCS_DIR, '_index.json'), 'utf8'));
+      const idx = JSON.parse(fs.readFileSync('_index.json', 'utf8'));
       return (idx.find(d => d.id === id) || {}).title || 'Untitled';
     } catch { return 'Untitled'; }
   };
@@ -79,7 +100,7 @@ module.exports = (app, deps) => {
   app.get('/api/writer/templates', (_req, res) => res.json({ ok: true, templates: TEMPLATES }));
 
   // ── Version history ───────────────────────────────────────────────
-  const vDir = (id) => path.join(DOCS_DIR, 'versions', String(id).replace(/[^A-Za-z0-9_-]/g, ''));
+  const vDir = (id) => path.posix.join('versions', String(id).replace(/[^A-Za-z0-9_-]/g, ''));
 
   app.get('/api/writer/versions/:id', (req, res) => {
     const dir = vDir(req.params.id);
@@ -87,7 +108,7 @@ module.exports = (app, deps) => {
     try {
       list = fs.readdirSync(dir).filter(f => f.endsWith('.md')).map(f => {
         const ts = Number(f.replace('.md', ''));
-        const st = fs.statSync(path.join(dir, f));
+        const st = fs.statSync(path.posix.join(dir, f));
         return { ts, when: new Date(ts).toISOString(), size: st.size };
       }).sort((a, b) => b.ts - a.ts);
     } catch {}
@@ -95,20 +116,20 @@ module.exports = (app, deps) => {
   });
 
   app.get('/api/writer/version/:id/:ts', (req, res) => {
-    const fp = path.join(vDir(req.params.id), `${Number(req.params.ts)}.md`);
+    const fp = path.posix.join(vDir(req.params.id), `${Number(req.params.ts)}.md`);
     if (!fs.existsSync(fp)) return res.status(404).json({ error: 'Version not found' });
     res.json({ ok: true, content: fs.readFileSync(fp, 'utf8') });
   });
 
   app.post('/api/writer/restore/:id/:ts', (req, res) => {
     const id = String(req.params.id).replace(/[^A-Za-z0-9_-]/g, '');
-    const fp = path.join(vDir(id), `${Number(req.params.ts)}.md`);
+    const fp = path.posix.join(vDir(id), `${Number(req.params.ts)}.md`);
     if (!fs.existsSync(fp)) return res.status(404).json({ error: 'Version not found' });
     try {
-      const docPath = path.join(DOCS_DIR, `${id}.md`);
+      const docPath = `${id}.md`;
       // Snapshot the current state before rolling back — restore is never destructive.
       if (fs.existsSync(docPath)) {
-        fs.writeFileSync(path.join(vDir(id), `${Date.now()}.md`), fs.readFileSync(docPath, 'utf8'));
+        fs.writeFileSync(path.posix.join(vDir(id), `${Date.now()}.md`), fs.readFileSync(docPath, 'utf8'));
       }
       const content = fs.readFileSync(fp, 'utf8');
       fs.writeFileSync(docPath, content);
@@ -119,7 +140,7 @@ module.exports = (app, deps) => {
   // ── Word export — an .doc file Word/LibreOffice/Pages open natively ──
   app.get('/api/writer/export/:id.doc', (req, res) => {
     const id = String(req.params.id).replace(/[^A-Za-z0-9_-]/g, '');
-    const fp = path.join(DOCS_DIR, `${id}.md`);
+    const fp = `${id}.md`;
     if (!fs.existsSync(fp)) return res.status(404).json({ error: 'Not found' });
     const title = docTitle(id);
     const body = mdToHtml(fs.readFileSync(fp, 'utf8'));

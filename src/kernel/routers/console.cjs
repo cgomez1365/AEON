@@ -1,5 +1,4 @@
 /**
-const { isInside } = require('../pathContainment.cjs');
  * AEON Operator Console — kernel-level terminal superpowers.
  *
  * The terminal is the window into ALL of AEON. This router gives it:
@@ -21,6 +20,11 @@ const { isInside } = require('../pathContainment.cjs');
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+// BO-SHIP P8g — this require lived on line 2, INSIDE the opening `/**` of the
+// file header, so it was never executed. safeJoin() calls isInside() and threw
+// ReferenceError on every /data/:blockId request. A comment swallowed an
+// import, and the file read as though the import were there.
+const { isInside } = require('../pathContainment.cjs');
 
 // provider → canonical env var written by the settings workflow
 const PROVIDER_ENV = {

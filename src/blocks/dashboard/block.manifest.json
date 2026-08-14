@@ -80,32 +80,7 @@
       "vercel": true,
       "cloudflare": true
     },
-    "commands": [
-      {
-        "cmd": "/note",
-        "desc": "Save a quick note",
-        "method": "POST",
-        "route": "/api/notes",
-        "param": "content",
-        "mode": "instant"
-      },
-      {
-        "cmd": "/push",
-        "desc": "Push all blocks to Supabase cloud",
-        "method": "POST",
-        "route": "/api/sync/bulk-push",
-        "mode": "instant",
-        "dangerous": true
-      },
-      {
-        "cmd": "/pull",
-        "desc": "Pull all blocks from Supabase cloud",
-        "method": "POST",
-        "route": "/api/sync/bulk-pull",
-        "mode": "instant",
-        "dangerous": true
-      }
-    ],
+    "commands": [],
     "settings_keys": [],
     "settings": []
   },

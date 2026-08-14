@@ -75,6 +75,15 @@ function createBlockHost({ blocksDir, baseDeps, createScopedDeps, registry, read
   let runState = null;
   try { runState = require('./runState.cjs'); } catch {}
 
+  // BO-SHIP P2.1 — manifest route auth. Same optional-require shape as
+  // runState above: injectable for tests, absent-tolerant at boot.
+  let manifestAuth = null;
+  let sessions = null;
+  try {
+    manifestAuth = require('./manifestRouteAuth.cjs');
+    sessions = require('./server-utils/sessionValidator.cjs');
+  } catch { /* enforcement is skipped and said out loud in mountBlock */ }
+
   // Would this router handle the request? Regexp-match only — no handler runs,
   // so a stopped block can't cause side effects during the probe. Needed because
   // all blocks share the /api mount: refusing before matching would 503 every
@@ -116,6 +125,23 @@ function createBlockHost({ blocksDir, baseDeps, createScopedDeps, registry, read
     const blockDeps = createScopedDeps(baseDeps, manifest, folder);
     blockDeps.lifecycle = makeLifecycle(folder);
 
+    // BO-SHIP P2.1 — the manifest's `auth` is enforced here, before the block
+    // sees the request. Composed with gateRunning rather than replacing it:
+    // auth first (a stopped block must not leak whether a route exists to an
+    // unauthenticated caller), run-state second.
+    const authMw = (manifestAuth && sessions)
+      ? manifestAuth.manifestAuthGuard(manifest, sessions)
+      : null;
+    if (!authMw && Array.isArray(manifest?.routes) && manifest.routes.some((r) => r?.auth === true)) {
+      // R-05: declared protection that is not being applied must be audible.
+      log.error(`[BLOCK HOST] ${folder}: manifest declares auth but the guard is unavailable — routes are NOT protected`);
+    }
+    const gate = (handler, opts) => {
+      const running = gateRunning(folder, handler, opts);
+      if (!authMw) return running;
+      return (req, res, next) => authMw(req, res, (err) => (err ? next(err) : running(req, res, next)));
+    };
+
     const skip = (file, why) => {
       result.skipped.push({ block: folder, file, why });
       // R-05: a module that contributes no routes is a silent failure unless it
@@ -134,8 +160,8 @@ function createBlockHost({ blocksDir, baseDeps, createScopedDeps, registry, read
 
         if (isMountableRouter(factory)) {
           // Shape 1 — the module exports a ready-made router.
-          router.use(`/block/${folder}`, gateRunning(folder, factory, { exclusive: true }));
-          router.use('/api', gateRunning(folder, factory));
+          router.use(`/block/${folder}`, gate(factory, { exclusive: true }));
+          router.use('/api', gate(factory));
         } else if (typeof factory !== 'function') {
           skip(file, `export is ${factory === null ? 'null' : typeof factory}, expected a function or a router`);
           continue;
@@ -151,8 +177,8 @@ function createBlockHost({ blocksDir, baseDeps, createScopedDeps, registry, read
               + 'so it is mounted as `(router, deps)`)');
             continue;
           }
-          router.use(`/block/${folder}`, gateRunning(folder, produced, { exclusive: true }));
-          router.use('/api', gateRunning(folder, produced));
+          router.use(`/block/${folder}`, gate(produced, { exclusive: true }));
+          router.use('/api', gate(produced));
         } else {
           // Shape 3 — plugin: registers verbs directly on the router it is
           // handed. The inner router quacks enough like `app` (verified: only
@@ -164,7 +190,7 @@ function createBlockHost({ blocksDir, baseDeps, createScopedDeps, registry, read
             skip(file, `plugin (arity ${factory.length}) registered zero routes`);
             continue;
           }
-          router.use(gateRunning(folder, sub));
+          router.use(gate(sub));
         }
         result.mounted++;
       } catch (e) {

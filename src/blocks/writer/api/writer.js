@@ -1,4 +1,12 @@
-const fs = require('fs');
+// BO-SHIP P2.2 — writer is ported off direct `fs`.
+//
+// Every filesystem call below goes through the block's own scoped surface, so
+// its paths are relative to data/writer/ and `..` cannot escape it. Before
+// this, writer held the real fs module and built absolute paths itself: the
+// manifest sandbox could delete the injected resolvers and change nothing,
+// which is audit P0-07.
+//
+// `path` stays — it is pure string arithmetic and reaches nothing.
 const path = require('path');
 
 module.exports = (app, deps) => {
@@ -9,17 +17,47 @@ module.exports = (app, deps) => {
   // (data/writer/), NOT the Vault: a document editor's autosaved drafts must
   // never be auto-indexed into the Matrix / Second Brain. Use the explicit
   // "Push to Memory" action to deliberately promote a finished piece into recall.
-  const DOCS_DIR = isVercel
+  // Operator finding F-04, 2026-08-12 — `/write a draft to the it guy saying
+  // thank you` returned EXIT 1 with a raw Node error:
+  //     The "path" argument must be of type string. Received undefined
+  //
+  // `getBlockDataFile` was truthy but returned undefined, so path.join() below
+  // threw with a message that names no cause, no remedy and no next step. The
+  // operator sees an internal argument error on the first thing they typed.
+  //
+  // Resolve deliberately, and if the root cannot be determined say which dep
+  // failed rather than letting path.join speak for us. R-05.
+  const resolvedRoot = isVercel
     ? '/tmp/aeon_writer'
-    : (getBlockDataFile ? getBlockDataFile('writer') : path.join(__dirname, '..', '..', '..', '..', 'data', 'writer'));
-  const STYLE_FILE = path.join(DOCS_DIR, '_style-profile.json');
-  try { fs.mkdirSync(DOCS_DIR, { recursive: true }); } catch {}
+    : (typeof getBlockDataFile === 'function' ? getBlockDataFile('writer') : null)
+      || path.join(__dirname, '..', '..', '..', '..', 'data', 'writer');
+
+  if (typeof resolvedRoot !== 'string' || !resolvedRoot) {
+    throw new Error(
+      'Writer could not determine its storage directory: the host supplied no usable '
+      + 'getBlockDataFile("writer") and the fallback path could not be built. '
+      + 'Writer cannot save or read drafts until block storage is available.'
+    );
+  }
+
+  const DOCS_DIR = resolvedRoot;
+  const STYLE_FILE = '_style-profile.json';
+
+  // The scoped surface. Prefer the host's — it is rooted in the real block
+  // namespace and enforces the manifest's write permission. Fall back to a
+  // kernel-rooted store for Vercel's /tmp and for loading outside the host;
+  // both confine, neither is the raw fs module.
+  const fs = deps.blockStorage
+    ? deps.blockStorage.fs
+    : require('../../../kernel/blockStorage.cjs').createRootedStorage(resolvedRoot).fs;
+
+  try { fs.mkdirSync(''); } catch {}
 
   function loadDocs() {
-    try { return JSON.parse(fs.readFileSync(path.join(DOCS_DIR, '_index.json'), 'utf8')); }
+    try { return JSON.parse(fs.readFileSync('_index.json', 'utf8')); }
     catch { return []; }
   }
-  function saveDocs(docs) { fs.writeFileSync(path.join(DOCS_DIR, '_index.json'), JSON.stringify(docs, null, 2)); }
+  function saveDocs(docs) { fs.writeFileSync('_index.json', JSON.stringify(docs, null, 2)); }
 
   function loadStyle() {
     if (!fs.existsSync(STYLE_FILE)) return null;
@@ -88,7 +126,7 @@ module.exports = (app, deps) => {
         if (data) return res.json({ id: data.id, content: data.content || '' });
       } catch {}
     }
-    const fp = path.join(DOCS_DIR, `${req.params.id}.md`);
+    const fp = `${req.params.id}.md`;
     if (!fs.existsSync(fp)) return res.status(404).json({ error: 'Not found' });
     res.json({ id: req.params.id, content: fs.readFileSync(fp, 'utf8') });
   });
@@ -101,20 +139,20 @@ module.exports = (app, deps) => {
     // ── Version snapshot — every save preserves what it overwrites ──
     // (keeps the last 25 versions per doc; restore via /api/writer/versions)
     try {
-      const prevPath = path.join(DOCS_DIR, `${docId}.md`);
+      const prevPath = `${docId}.md`;
       if (fs.existsSync(prevPath)) {
         const prev = fs.readFileSync(prevPath, 'utf8');
         if (prev && prev !== (content || '')) {
-          const vDir = path.join(DOCS_DIR, 'versions', docId);
-          fs.mkdirSync(vDir, { recursive: true });
-          fs.writeFileSync(path.join(vDir, `${now}.md`), prev);
+          const vDir = path.posix.join('versions', docId);
+          fs.mkdirSync(vDir);
+          fs.writeFileSync(path.posix.join(vDir, `${now}.md`), prev);
           const versions = fs.readdirSync(vDir).filter(f => f.endsWith('.md')).sort();
-          while (versions.length > 25) fs.unlinkSync(path.join(vDir, versions.shift()));
+          while (versions.length > 25) fs.unlinkSync(path.posix.join(vDir, versions.shift()));
         }
       }
     } catch { /* versioning must never block a save */ }
 
-    fs.writeFileSync(path.join(DOCS_DIR, `${docId}.md`), content || '');
+    fs.writeFileSync(`${docId}.md`, content || '');
 
     const docs = loadDocs().filter(d => d.id !== docId);
     docs.unshift({ id: docId, title: title || 'Untitled', tags: tags || [], updated: now, size: (content || '').length });
@@ -135,7 +173,7 @@ module.exports = (app, deps) => {
     if (isVercel && supabase) {
       try { await supabase.from('writer_docs').delete().eq('id', req.params.id); } catch {}
     } else {
-      try { fs.unlinkSync(path.join(DOCS_DIR, `${req.params.id}.md`)); } catch {}
+      try { fs.unlinkSync(`${req.params.id}.md`); } catch {}
       const _docsAfterDelete = loadDocs().filter(d => d.id !== req.params.id);
       saveDocs(_docsAfterDelete);
     }
@@ -155,7 +193,7 @@ module.exports = (app, deps) => {
       const samples = [];
       for (const d of docs.slice(0, 15)) {
         try {
-          const fp = path.join(DOCS_DIR, `${d.id}.md`);
+          const fp = `${d.id}.md`;
           const text = fs.readFileSync(fp, 'utf8');
           if (text.length > 80) samples.push({ title: d.title, text: text.slice(0, 2500) });
         } catch {}
@@ -347,7 +385,7 @@ Return ONLY valid JSON.\n\nSamples:\n${corpus}`
 
   app.post('/api/writer/doc/:id/to-memory', async (req, res) => {
     try {
-      const fp = path.join(DOCS_DIR, `${req.params.id}.md`);
+      const fp = `${req.params.id}.md`;
       if (!fs.existsSync(fp)) return res.status(404).json({ ok: false, reason: 'doc_not_found', error: 'Document not found.' });
       const doc = loadDocs().find(d => d.id === req.params.id);
       const title = doc?.title || 'Writer Draft';

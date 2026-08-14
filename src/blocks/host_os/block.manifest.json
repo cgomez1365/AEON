@@ -122,7 +122,7 @@
         "argHint": "<filePath>"
       },
       {
-        "cmd": "/write",
+        "cmd": "/writefile",
         "desc": "Write a file in the workspace",
         "method": "POST",
         "route": "/api/fs/write",
@@ -132,7 +132,8 @@
         ],
         "dangerous": true,
         "mode": "instant",
-        "category": "content"
+        "category": "content",
+        "argHint": "<filePath> <content>"
       }
     ],
     "settings_keys": [],

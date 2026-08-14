@@ -231,7 +231,19 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     return typeof prompt === 'string' ? prompt : JSON.stringify(prompt);
   };
 
-  const geminiRequest = async (prompt, modelName = 'gemini-2.0-flash', retries = 0, opts = {}) => {
+  // BO-SHIP P9 — default to the alias, not a version number.
+  //
+  // This defaulted to 'gemini-flash-latest', which Google has RETIRED: every
+  // request answers HTTP 404 "This model is no longer available". The keys
+  // authenticate fine — 404, not 401 — so the failure reads as a broken
+  // provider rather than a stale model name, and the fallback chain then
+  // reports whatever the next provider says.
+  //
+  // A pinned Gemini version is the opposite trade-off from the llama.cpp
+  // converter (P4), and deliberately so. There, pinning prevents executing
+  // code nobody reviewed. Here, a pinned version simply ROTS — Google removes
+  // it on a schedule — and the alias is the only value that keeps working.
+  const geminiRequest = async (prompt, modelName = 'gemini-flash-latest', retries = 0, opts = {}) => {
     if (GEMINI_KEY_POOL.length === 0) throw new Error('No Gemini API keys configured in .env');
     if (retries >= GEMINI_KEY_POOL.length) {
       markUnhealthy('gemini', 429, 'key pool exhausted');
@@ -757,8 +769,8 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
         try {
           let text;
           if (pick === 'groq') text = await groqRequest(prompt, 'llama-3.3-70b-versatile', 0, opts);
-          if (pick === 'gemini') text = await geminiRequest(prompt, 'gemini-2.0-flash', 0, opts);
-          if (text !== undefined) return opts.returnMeta ? { text, provider: pick, model: pick === 'groq' ? 'llama-3.3-70b-versatile' : 'gemini-2.0-flash' } : text;
+          if (pick === 'gemini') text = await geminiRequest(prompt, 'gemini-flash-latest', 0, opts);
+          if (text !== undefined) return opts.returnMeta ? { text, provider: pick, model: pick === 'groq' ? 'llama-3.3-70b-versatile' : 'gemini-flash-latest' } : text;
         } catch (e) {
           const status = /error (\d{3})/i.exec(e.message)?.[1];
           if (status) markUnhealthy(pick, Number(status), e.message);
@@ -776,6 +788,9 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       : availableProviders;
     const chain = [provider, ...fallbacks].filter((p, i, a) => a.indexOf(p) === i);
     let lastErr = null;
+    // Every failure in the chain, so the thrown error can name the real cause
+    // rather than whichever provider happened to be tried last. See P8c below.
+    const attempts = [];
     for (const p of chain) {
       if (!isHealthy(p)) continue;
       try {
@@ -785,7 +800,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
           usedModel = p === provider ? model : 'llama-3.3-70b-versatile';
           text = await groqRequest(prompt, usedModel, 0, opts);
         } else if (p === 'gemini' && GEMINI_KEY_POOL.length > 0) {
-          usedModel = p === provider ? model : 'gemini-2.0-flash';
+          usedModel = p === provider ? model : 'gemini-flash-latest';
           text = await geminiRequest(prompt, usedModel, 0, opts);
         } else if (p === 'openrouter' && process.env.OPENROUTER_API_KEY) {
           usedModel = p === provider ? model : 'openai/gpt-4o-mini';
@@ -802,9 +817,44 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
         lastErr = e;
         const status = /error (\d{3})/i.exec(e.message)?.[1] || (/429/.test(e.message) ? '429' : /402/.test(e.message) ? '402' : null);
         if (status) markUnhealthy(p, Number(status), e.message);
+        attempts.push({ provider: p, status: status ? Number(status) : null, message: e.message });
         console.warn(`[KERNEL] ${p} failed (${e.message.slice(0, 120)}), trying next provider`);
       }
     }
+
+    // BO-SHIP P8c — say which provider failed and why.
+    //
+    // This used to throw `lastErr`: the error from the LAST provider in the
+    // chain, which is `local`. So a configured, working Groq key that had
+    // simply hit its per-minute token limit produced
+    //
+    //     "No local model is installed and no cloud provider is configured.
+    //      Install a local model in Cookbook, or add a provider key."
+    //
+    // — a permanent-sounding configuration error, telling the operator to add a
+    // key they already had, for a condition that clears in seconds. Found by
+    // driving /write three times against a live server on a Groq free tier:
+    // call one succeeded, calls two and three "had no provider".
+    //
+    // A transient throttle and an unconfigured install are different states
+    // with different remedies. The old comment asserted this was always "a
+    // configuration state, not an internal fault"; that is only true when
+    // nothing was actually configured.
+    const throttled = attempts.find((a) => a.status === 429);
+    if (throttled) {
+      const err = new Error(
+        `${throttled.provider} is rate-limited right now (HTTP 429). This is temporary — `
+        + `retry in a few seconds. Other providers in the chain could not serve either: `
+        + attempts.filter((a) => a !== throttled).map((a) => a.provider).join(', ') || 'none configured'
+      );
+      err.rateLimited = true;
+      err.provider = throttled.provider;
+      err.retryable = true;
+      // Deliberately NOT noProviderAvailable: a provider IS available, and
+      // sending the operator to Settings would be sending them nowhere.
+      throw err;
+    }
+
     // Every candidate provider was tried and none could serve. That is a
     // configuration state, not an internal fault — a clean install with no API
     // keys and no local chat model lands here on the very first request. The
@@ -812,6 +862,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     // "nothing is configured" instead of a bare 500.
     const exhausted = lastErr || new Error('No LLM provider available (check API keys in Settings)');
     exhausted.noProviderAvailable = true;
+    exhausted.attempts = attempts;
     throw exhausted;
   };
 

@@ -1,0 +1,56 @@
+{
+  "note": "Direct fs requires inside blocks. This surface may only shrink — see tools/scan/block-fs-surface.cjs.",
+  "measuredAt": "2026-08-14",
+  "total": 24,
+  "blocks": 12,
+  "perBlock": {
+    "activity": [
+      "activity/api/analytics.cjs",
+      "activity/api/token-analytics.cjs"
+    ],
+    "aeon_matrix": [
+      "aeon_matrix/api/_extract.cjs",
+      "aeon_matrix/api/_lib.cjs",
+      "aeon_matrix/api/cloudvault.cjs",
+      "aeon_matrix/api/index.cjs",
+      "aeon_matrix/api/ingest.cjs",
+      "aeon_matrix/api/retrieve.cjs",
+      "aeon_matrix/api/sync.cjs"
+    ],
+    "cookbook": [
+      "cookbook/api/index.cjs"
+    ],
+    "council": [
+      "council/api/index.cjs"
+    ],
+    "dashboard": [
+      "dashboard/api/chat-stream.cjs",
+      "dashboard/api/chat.cjs"
+    ],
+    "deep_research": [
+      "deep_research/api/index.cjs"
+    ],
+    "fleet_control": [
+      "fleet_control/api/missions.cjs"
+    ],
+    "host_os": [
+      "host_os/api/fs.cjs",
+      "host_os/api/os.cjs",
+      "host_os/api/system.cjs"
+    ],
+    "master": [
+      "master/api/master.cjs"
+    ],
+    "memory_core": [
+      "memory_core/api/memory.cjs"
+    ],
+    "security": [
+      "security/api/guardian.cjs",
+      "security/api/security.js"
+    ],
+    "settings": [
+      "settings/api/connectivity.js",
+      "settings/api/settings.js"
+    ]
+  }
+}
