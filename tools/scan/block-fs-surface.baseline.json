@@ -1,12 +1,9 @@
 {
   "note": "Direct fs requires inside blocks. This surface may only shrink — see tools/scan/block-fs-surface.cjs.",
   "measuredAt": "2026-08-14",
-  "total": 25,
-  "blocks": 13,
+  "total": 24,
+  "blocks": 12,
   "perBlock": {
-    "_blank": [
-      "_blank/api/blank.cjs"
-    ],
     "activity": [
       "activity/api/analytics.cjs",
       "activity/api/token-analytics.cjs"

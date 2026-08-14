@@ -37,6 +37,21 @@ const BASELINE_FILE = path.join(__dirname, 'block-fs-surface.baseline.json');
 
 const FS_REQUIRE = /require\(\s*['"](?:fs|node:fs|fs\/promises|node:fs\/promises)['"]\s*\)/;
 
+/**
+ * A rule described in prose is not a rule being broken.
+ *
+ * The scaffold's own comment says "Do not require('fs') in a block" and that
+ * kept _blank counted after it had been ported. Line comments are stripped
+ * FIRST: a `//` containing something block-comment-shaped otherwise swallows
+ * real code beneath it, which is how a sibling gate produced a false positive
+ * on DesktopLayout.jsx on 2026-08-11.
+ */
+function stripComments(src) {
+  return src
+    .replace(/^\s*\/\/.*$/gm, '')
+    .replace(/\/\*[\s\S]*?\*\//g, '');
+}
+
 function sourceFiles(dir) {
   const out = [];
   const walk = (d) => {
@@ -68,7 +83,7 @@ function scan() {
   for (const block of blocks) {
     const hits = [];
     for (const file of sourceFiles(path.join(BLOCKS_DIR, block))) {
-      const src = fs.readFileSync(file, 'utf8');
+      const src = stripComments(fs.readFileSync(file, 'utf8'));
       if (FS_REQUIRE.test(src)) {
         hits.push(path.relative(BLOCKS_DIR, file).split(path.sep).join('/'));
       }

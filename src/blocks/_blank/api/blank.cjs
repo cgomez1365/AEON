@@ -4,19 +4,32 @@
  * All routes MUST be namespaced /crn/__BLANK__/... — nothing else.
  */
 const express = require('express');
-const fs = require('fs');
-const path = require('path');
 
 module.exports = function (deps) {
   const router = express.Router();
-  const { kernelLLM, writeOSAudit } = deps || {};
+  const { kernelLLM, writeOSAudit, blockStorage } = deps || {};
 
-  // Block-scoped storage — the ONLY place this block persists data.
-  // data/ is auto-created on first write; never pre-populate it.
-  const DATA_DIR = path.join(__dirname, '..', 'data');
-  const DATA_FILE = path.join(DATA_DIR, 'items.json');
-  const load = () => { try { return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); } catch { return []; } };
-  const save = (items) => { fs.mkdirSync(DATA_DIR, { recursive: true }); fs.writeFileSync(DATA_FILE, JSON.stringify(items, null, 2)); };
+  // ── Block-scoped storage — the ONLY place this block persists data ──
+  //
+  // BO-SHIP P2.2. This scaffold used to open with `require('fs')` and write to
+  // path.join(__dirname, '..', 'data') — INSIDE the block's own source folder,
+  // which is the checkout. Every block cloned from here inherited both habits,
+  // which is most of why 14 blocks held the real fs module and why audit P0-07
+  // found the manifest sandbox unable to constrain any of them: it can only
+  // withhold what it injects, and a block that requires fs was never asking.
+  //
+  // `blockStorage` is the sanctioned surface. Paths are RELATIVE to this
+  // block's own namespace, `..` cannot escape it, and writes are refused
+  // unless the manifest declares permissions.filesystem: "write".
+  //
+  // Do not require('fs') in a block. `npm run scan:block-fs` fails the build
+  // when the number of blocks doing so rises.
+  const store = blockStorage;
+  const load = () => (store ? store.readJSON('items.json', []) : []);
+  const save = (items) => {
+    if (!store) throw new Error('This block was mounted without block storage; it cannot persist.');
+    store.writeJSON('items.json', items);
+  };
 
   // Health — every block has one; readiness checks and the dashboard use it.
   router.get('/crn/__BLANK__/health', (_req, res) => res.json({ ok: true, items: load().length }));

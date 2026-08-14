@@ -39,6 +39,52 @@ function runScanner(blocksDir) {
   }
 }
 
+// CEO decision, 2026-08-12: direct fs is a build-time violation and blocks
+// port to blockStorage. The 13 blocks still holding fs are grandfathered under
+// the ratchet above and come down one at a time. The scaffolds are NOT
+// grandfathered — they are what every new block is copied from, so a violation
+// there is a violation in every block written from today onward.
+describe('the scaffolds teach the sanctioned pattern', () => {
+  const FS_REQUIRE = /require\(\s*['"](?:fs|node:fs|fs\/promises|node:fs\/promises)['"]\s*\)/;
+
+  const stripComments = (src) => src
+    .replace(/^\s*\/\/.*$/gm, '')
+    .replace(/\/\*[\s\S]*?\*\//g, '');
+
+  function sourcesOf(block) {
+    const dir = path.join(ROOT, 'src', 'blocks', block);
+    const out = [];
+    const walk = (d) => {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        const p = path.join(d, e.name);
+        if (e.isDirectory()) { if (e.name !== 'data' && e.name !== 'db') walk(p); }
+        else if (/\.(cjs|js|jsx|mjs)$/.test(e.name)) out.push(p);
+      }
+    };
+    walk(dir);
+    return out;
+  }
+
+  it.each(['_blank', '_template'])('%s requires no filesystem module', (block) => {
+    const offenders = sourcesOf(block)
+      .filter((f) => FS_REQUIRE.test(stripComments(fs.readFileSync(f, 'utf8'))))
+      .map((f) => path.relative(ROOT, f));
+
+    expect(
+      offenders,
+      `${block} is the scaffold every new block is cloned from — a direct fs `
+      + `require here propagates to every block written from now on`,
+    ).toEqual([]);
+  });
+
+  it('_blank persists through blockStorage', () => {
+    const src = fs.readFileSync(path.join(ROOT, 'src', 'blocks', '_blank', 'api', 'blank.cjs'), 'utf8');
+    expect(src).toMatch(/blockStorage/);
+    // And it must not teach writing into the block's own source folder.
+    expect(stripComments(src)).not.toMatch(/__dirname\s*,\s*['"]\.\.['"]\s*,\s*['"]data['"]/);
+  });
+});
+
 describe('block fs surface ratchet', () => {
   it('holds at the recorded baseline', () => {
     const r = runScanner();
