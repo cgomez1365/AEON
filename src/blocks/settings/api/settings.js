@@ -1092,19 +1092,50 @@ module.exports = (app, deps) => {
   app.post('/api/settings/restart', (req, res) => {
     if (!isLocalRequest(req))
       return res.status(403).json({ error: 'Restart is local-only.' });
-    res.json({ ok: true, restarting: true });
+
+    // BO-SHIP P8f — never claim a restart we cannot perform.
+    //
+    // This answered `{ ok: true, restarting: true }` and then, if restart.bat
+    // was absent, called process.exit(0) on the comment "fallback: a
+    // supervisor/launcher relaunches". Under `npm run server` — and under
+    // launch.sh / launch.command — there is no supervisor. So /restart
+    // reported success and took AEON down permanently; the operator had to
+    // relaunch by hand, having just been told it was restarting.
+    //
+    // Verified live: restart.bat does not exist in the repo, /restart returned
+    // restarting:true, and the server never came back. The marathon audit
+    // predicted this (A03-12: `Test-Path scripts/restart.bat` is false while
+    // the route spawns cmd.exe) — it took running the command to see the
+    // consequence.
+    //
+    // A relaunch mechanism must be PROVEN present before the process is
+    // allowed to die. Absent one, refuse and stay up: a running AEON the
+    // operator restarts by hand beats a dead one that promised otherwise.
+    const bat = path.join(__dirname, '..', '..', '..', '..', 'restart.bat');
+    const hasRelauncher = fs.existsSync(bat);
+    const supervised = !!(process.env.AEON_SUPERVISED || process.env.PM2_HOME || process.env.NODEMON);
+
+    if (!hasRelauncher && !supervised) {
+      return res.status(501).json({
+        ok: false,
+        restarting: false,
+        error: 'AEON cannot restart itself in this launch mode — nothing would bring it back up.',
+        remedy: 'Stop AEON and start it again with your normal launcher (LAUNCH.bat, launch.command, launch.sh, or npm start).',
+        detail: 'A restart requires either restart.bat beside the app or a supervisor that relaunches on exit.',
+      });
+    }
+
+    res.json({ ok: true, restarting: true, via: hasRelauncher ? 'restart.bat' : 'supervisor' });
     // Detach the restart script so it survives this process dying.
     setTimeout(() => {
       try {
-        const { spawn } = require('child_process');
-        const bat = path.join(__dirname, '..', '..', '..', '..', 'restart.bat');
-        if (fs.existsSync(bat)) {
+        if (hasRelauncher) {
+          const { spawn } = require('child_process');
           // aeon-shell-allow: launching restart.bat requires cmd.exe; `bat` is a
           // server-side path.join constant, never request-derived.
           spawn('cmd.exe', ['/c', bat], { detached: true, stdio: 'ignore', windowsHide: false }).unref();
-        } else {
-          process.exit(0); // fallback: a supervisor/launcher relaunches
         }
+        process.exit(0); // a supervisor is present, or the script above relaunches
       } catch { process.exit(0); }
     }, 400);
   });
