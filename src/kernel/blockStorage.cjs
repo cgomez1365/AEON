@@ -151,4 +151,34 @@ function createBlockStorage({ blockId, contract = {}, getBlockDataFile, getBlock
   });
 }
 
-module.exports = { createBlockStorage };
+/**
+ * The same surface, rooted at an absolute directory.
+ *
+ * BO-SHIP P2.2. A ported block still needs somewhere to go when the host hands
+ * it no blockStorage — on Vercel the only writable dir is /tmp, and a block
+ * loaded outside the host (tests, tooling) has no injected deps at all.
+ *
+ * Without this, every ported block would keep `require('fs')` solely for its
+ * fallback branch, which would leave the fs ratchet exactly where it started
+ * and make the whole migration cosmetic. The confinement is the same: paths
+ * resolve under `root` and `..` cannot escape it.
+ */
+function createRootedStorage(root, { write = true } = {}) {
+  const base = path.resolve(root);
+  return createBlockStorage({
+    blockId: path.basename(base),
+    contract: { permissions: { filesystem: write ? 'write' : 'read' } },
+    getBlockDataFile: (_blockId, rel = '') => {
+      const resolved = path.resolve(base, rel);
+      if (resolved !== base && !resolved.startsWith(base + path.sep)) {
+        throw new Error(`path escapes the ${path.basename(base)} namespace`);
+      }
+      return resolved;
+    },
+    getBlockVaultFile: (_blockId, rel = '') => path.join(base, '_vault', rel),
+    vaultSync: () => {},
+    requestIndex: () => {},
+  });
+}
+
+module.exports = { createBlockStorage, createRootedStorage };

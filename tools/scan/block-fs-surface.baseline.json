@@ -1,8 +1,8 @@
 {
   "note": "Direct fs requires inside blocks. This surface may only shrink — see tools/scan/block-fs-surface.cjs.",
-  "measuredAt": "2026-08-13",
-  "total": 27,
-  "blocks": 14,
+  "measuredAt": "2026-08-14",
+  "total": 25,
+  "blocks": 13,
   "perBlock": {
     "_blank": [
       "_blank/api/blank.cjs"
@@ -54,10 +54,6 @@
     "settings": [
       "settings/api/connectivity.js",
       "settings/api/settings.js"
-    ],
-    "writer": [
-      "writer/api/writer.js",
-      "writer/api/writer2.cjs"
     ]
   }
 }
