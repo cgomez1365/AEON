@@ -292,29 +292,17 @@ module.exports = (app, deps) => {
   // one JSON file the user saves offline. Restoring into a fresh clone requires
   // all three — a partial restore causes a vault mismatch and locks the user out.
   app.get('/api/settings/export-credentials', (req, res) => {
-    const SECRETS_DIR = path.join(APP_ROOT, 'secrets');
-    const VAULT_DIR = require(path.join(APP_ROOT, 'services', 'storage.js')).getVaultFile(path.join('blocks', 'security'));
-    const files = {
-      '.env': path.join(APP_ROOT, '.env'),
-      'secrets/aeon-keyslots.json': path.join(SECRETS_DIR, 'aeon-keyslots.json'),
-      'vault/provider_credentials.json': path.join(VAULT_DIR, 'provider_credentials.json'),
-    };
-    const bundle = {
-      _artifact: 'AEON credential backup',
-      _warning: 'Contains plaintext secrets. Store offline, never commit to git.',
-      _restore: 'On a fresh clone: copy .env to root, secrets/aeon-keyslots.json to secrets/, vault/provider_credentials.json to its vault path. Boot — vault auto-unlocks.',
-      exported_at: new Date().toISOString(),
-      files: {},
-    };
-    for (const [key, filePath] of Object.entries(files)) {
-      try { bundle.files[key] = fs.readFileSync(filePath, 'utf8'); }
-      catch { bundle.files[key] = null; }
-    }
-    const hasAnyContent = Object.values(bundle.files).some(v => v !== null);
-    if (!hasAnyContent) return res.status(404).json({ error: 'No credential files found — nothing to export.' });
+    // BO-SHIP P2.2 — this used to assemble the bundle itself: it built the
+    // secrets/ path, dynamically required services/storage.js, and called
+    // getVaultFile('blocks/security') to read a SIBLING BLOCK's Vault
+    // namespace. A block does not own those roots. The kernel does, so the
+    // kernel assembles the bundle and Settings renders the answer.
+    const result = require('../../../kernel/credentialBackup.cjs').exportBundle();
+    if (!result.ok) return res.status(404).json({ error: result.error });
+
     res.setHeader('Content-Type', 'application/json');
-    res.setHeader('Content-Disposition', `attachment; filename="aeon-credentials-${new Date().toISOString().slice(0,10)}.json"`);
-    res.send(JSON.stringify(bundle, null, 2));
+    res.setHeader('Content-Disposition', `attachment; filename="${result.filename}"`);
+    res.send(JSON.stringify(result.bundle, null, 2));
   });
 
   // ── GET /api/settings/block/:id — a block's own settings, resolved ──
