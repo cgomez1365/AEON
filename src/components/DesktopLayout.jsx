@@ -3,12 +3,13 @@ import { Routes, Route, Navigate, useNavigate, useLocation } from "react-router-
 import { useAuth } from "../kernel/hooks/useAuth";
 
 // Core Layout Components
-import NeuralTerminal from "./Terminal2"; // Terminal 2.0. NOTE (2026-08-07): the old
-// ./NeuralTerminal is still in the tree but is NO LONGER a working rollback — Terminal2
-// has since gained real stream cancellation (D1c), the challenge/outcome state machine
-// (D2c), honest empty output (D2d) and the argument contract (D2e). It also still calls
-// /api/memory/tidy and /api/orion-scrape, which no longer exist. Treat it as reference,
-// not as a switch.
+import NeuralTerminal from "./Terminal2"; // Terminal 2.0. The local name is
+// historical — the old ./NeuralTerminal.jsx was DELETED 2026-08-16 (§21), because it
+// had stopped being a working rollback: Terminal2 has since gained real stream
+// cancellation (D1c), the challenge/outcome state machine (D2c), honest empty output
+// (D2d) and the argument contract (D2e), and the old file still called
+// /api/memory/tidy and /api/orion-scrape, which no longer exist. Git history is the
+// rollback path. Gate: tests/no-neural-terminal.test.js.
 import GoogleSignIn from "./GoogleSignIn";
 
 // ── Dynamic block registry (cartridge reader) ─────────────────────

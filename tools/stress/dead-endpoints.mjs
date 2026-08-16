@@ -68,8 +68,9 @@ for (const file of walk(path.join(AEON, 'src'))) {
 // bundle loads is not "the UI calling a dead route" — it is dead code, and
 // reporting it as a live defect sends someone hunting a bug that cannot
 // fire. src/components/NeuralTerminal.jsx is the case that forced this: it
-// was replaced by Terminal2 on 2026-08-07 and deliberately kept as
-// reference, and its two stale calls are unreachable.
+// was replaced by Terminal2 on 2026-08-07, kept as reference with two stale
+// unreachable calls, and deleted 2026-08-16 (§21). The check stays — the
+// class of defect it prevents is not specific to that file.
 const allFiles = walk(path.join(AEON, "src"));
 const imported = new Set();
 for (const f of allFiles) {

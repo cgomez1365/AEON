@@ -78,9 +78,10 @@ describe('what the sweep must keep separate', () => {
   });
 
   it('separates calls inside modules nothing imports', () => {
-    // src/components/NeuralTerminal.jsx was replaced by Terminal2 and kept as
-    // reference. Its stale calls cannot fire, so reporting them as live
-    // defects sends someone hunting a bug that does not exist.
+    // src/components/NeuralTerminal.jsx was replaced by Terminal2, kept as
+    // reference, then deleted 2026-08-16. Its stale calls could not fire, so
+    // reporting them as live defects sent someone hunting a bug that did not
+    // exist. The isReachable machinery is generic and still earns its keep.
     expect(src).toMatch(/isReachable/);
     expect(src).toMatch(/DEAD CALL IN AN UNREACHABLE MODULE/);
   });

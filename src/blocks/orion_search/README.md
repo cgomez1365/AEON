@@ -45,16 +45,22 @@ already exist elsewhere in AEON.
 
 ### Terminal / agent entry point
 `block.manifest.json`'s `contract.commands` declares `/orion` (`method: POST`,
-`route: /api/orion/search`, `param: query`). Verified live: `NeuralTerminal.jsx`
-builds a `blockCmdMap` from every block's `contract.commands` and dispatches
-any typed `/cmd` that isn't a built-in against it (see its "BLOCK-DECLARED
-COMMANDS" section) — no other block declares `/orion`, so there's no
-collision, and the built-ins above it in the dispatch chain don't intercept
-it either. Typing `/orion <query>` in the terminal reaches this block's API
-exactly the way the manifest claims.
+`route: /api/orion/search`, `param: query`).
 
-Note: `/api/orion-scrape` (used by `dashboard/api/chat.cjs`'s `/scrape`
-command and several `NeuralTerminal.jsx` research-agent flows) is a
+**Where dispatch lives, corrected 2026-08-16.** This section used to say
+`NeuralTerminal.jsx` built a `blockCmdMap` from every block's
+`contract.commands` and dispatched typed `/cmd`s against it. That file was
+deleted (§21) and the description no longer holds: dispatch is
+`src/kernel/commandRegistry.cjs`, which scans manifests at boot; the terminal
+is a *client* of the registry and holds no dispatch logic of its own.
+No other block declares `/orion`, and the command-collision gate now enforces
+that. **Not re-verified live since the terminal rewrite** — the old "verified
+live" claim was about a component that no longer exists, so it is withdrawn
+rather than carried forward (§08).
+
+Note: `/api/orion-scrape` (was used by `dashboard/api/chat.cjs`'s `/scrape`
+command — retired 2026-08-14, it pointed at a route that never existed — and by
+several `NeuralTerminal.jsx` research-agent flows, deleted 2026-08-16) is a
 **different, older feature** — a client-research web scraper, unrelated to
 this block despite the shared "Orion" name. It does not call, and is not
 called by, anything in this folder.
