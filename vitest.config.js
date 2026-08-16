@@ -29,9 +29,11 @@ export default defineConfig({
     // Half the cores, floor of 2. The suite takes a few seconds longer and
     // stops dying. §19 — a gate that fails randomly is a gate people learn to
     // re-run, which is the same as not having one.
-    poolOptions: {
-      forks: { maxForks: Math.max(2, Math.floor((os.cpus().length || 4) / 2)) },
-    },
+    // Vitest 4 removed `test.poolOptions`; these are top-level now. The first
+    // version of this fix used the old nesting and was silently ignored —
+    // vitest printed a DEPRECATED notice that scrolled past in a suite this
+    // size, and the config looked correct while doing nothing.
+    maxWorkers: Math.max(2, Math.floor((os.cpus().length || 4) / 2)),
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json-summary'],

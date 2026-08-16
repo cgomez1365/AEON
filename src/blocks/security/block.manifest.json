@@ -92,6 +92,20 @@
         "template": "Guard: {policy.guardEnabled} · every-launch: {policy.lockEveryLaunch} · idle: {policy.idleMinutes}min · shield: {policy.shield} · runtime: {runtime}"
       }
     ],
+    "filesystem": {
+      "beyondNamespace": [
+        {
+          "file": "api/guardian.cjs",
+          "scope": "install",
+          "reason": "Guardian's data-at-rest sweep reads files across the install and /tmp to find credential leftovers a session may have dropped."
+        },
+        {
+          "file": "api/security.js",
+          "scope": "install",
+          "reason": "Writes the operator audit log to the kernel's security directory, which is deliberately outside any block namespace."
+        }
+      ]
+    },
     "settings_keys": [
       "security_policy"
     ],

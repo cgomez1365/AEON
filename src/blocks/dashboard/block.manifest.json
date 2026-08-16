@@ -81,6 +81,20 @@
       "cloudflare": true
     },
     "commands": [],
+    "filesystem": {
+      "beyondNamespace": [
+        {
+          "file": "api/chat.cjs",
+          "scope": "vault",
+          "reason": "Chat history is persisted to shared storage so the terminal and dashboard read one transcript."
+        },
+        {
+          "file": "api/chat-stream.cjs",
+          "scope": "vault",
+          "reason": "The streaming chat path writes the same shared transcript as the non-streaming one."
+        }
+      ]
+    },
     "settings_keys": [],
     "settings": []
   },

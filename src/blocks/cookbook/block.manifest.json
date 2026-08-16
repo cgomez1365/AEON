@@ -95,6 +95,15 @@
         "dangerous": true
       }
     ],
+    "filesystem": {
+      "beyondNamespace": [
+        {
+          "file": "api/index.cjs",
+          "scope": "external-cache",
+          "reason": "Scans and prunes the HuggingFace model cache, a directory owned by a third-party tool and shared across AEON installs."
+        }
+      ]
+    },
     "settings_keys": [],
     "settings": []
   },
