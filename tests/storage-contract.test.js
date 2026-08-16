@@ -80,7 +80,17 @@ describe('Vault and block storage contract', () => {
     fs.mkdirSync(path.dirname(restricted), { recursive: true });
     fs.writeFileSync(restricted, '{"ciphertext":"this Vault security record must never be indexed"}', 'utf8');
 
-    const router = ingestFactory({ isVercel: false, VAULT_ROOT: vaultRoot, DATA_ROOT: dataRoot });
+    // BO-SHIP P10 — inject the embedder. This test asserts WHICH PATHS get
+    // indexed; it has nothing to say about embeddings. Left to the default,
+    // buildEntry() loads the native local runtime and then makes a real
+    // network request to Google's embedding API with whatever GEMINI_* keys
+    // are in the environment. That made a scope test hit the network on any
+    // configured machine, and time out under worker contention on any machine
+    // at all — the 1-in-4 intermittent this file was blamed for.
+    const router = ingestFactory({
+      isVercel: false, VAULT_ROOT: vaultRoot, DATA_ROOT: dataRoot,
+      embed: async () => ({ vector: [0, 0, 0], model: 'test-stub' }),
+    });
     await router.runSecondBrainScan();
 
     const index = JSON.parse(fs.readFileSync(path.join(dataRoot, 'vault_index.json'), 'utf8'));
