@@ -1,8 +1,8 @@
 {
   "note": "Direct fs requires inside blocks. This surface may only shrink — see tools/scan/block-fs-surface.cjs.",
-  "measuredAt": "2026-08-14",
-  "total": 24,
-  "blocks": 12,
+  "measuredAt": "2026-08-16",
+  "total": 23,
+  "blocks": 11,
   "perBlock": {
     "activity": [
       "activity/api/analytics.cjs",
@@ -26,9 +26,6 @@
     "dashboard": [
       "dashboard/api/chat-stream.cjs",
       "dashboard/api/chat.cjs"
-    ],
-    "deep_research": [
-      "deep_research/api/index.cjs"
     ],
     "fleet_control": [
       "fleet_control/api/missions.cjs"
