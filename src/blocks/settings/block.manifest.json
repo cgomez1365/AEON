@@ -116,6 +116,20 @@
         "category": "system"
       }
     ],
+    "filesystem": {
+      "beyondNamespace": [
+        {
+          "file": "api/settings.js",
+          "scope": "install",
+          "reason": "Reads and writes install-level settings and block manifests, which are kernel-owned rather than block-scoped."
+        },
+        {
+          "file": "api/connectivity.js",
+          "scope": "install",
+          "reason": "Reads the db/ migration files it offers the operator to apply, which live outside any block namespace."
+        }
+      ]
+    },
     "settings_keys": [],
     "settings": []
   },

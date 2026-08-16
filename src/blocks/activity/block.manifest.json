@@ -75,6 +75,20 @@
       "cloudflare": true
     },
     "commands": [],
+    "filesystem": {
+      "beyondNamespace": [
+        {
+          "file": "api/analytics.cjs",
+          "scope": "install",
+          "reason": "Scans the install's data directories to report activity across every block, which cannot be done from inside one namespace."
+        },
+        {
+          "file": "api/token-analytics.cjs",
+          "scope": "install",
+          "reason": "Reads the kernel's LLM call ledger, which is kernel-owned state rather than this block's data."
+        }
+      ]
+    },
     "settings_keys": [],
     "settings": []
   },

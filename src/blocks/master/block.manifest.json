@@ -130,6 +130,15 @@
         "category": "system"
       }
     ],
+    "filesystem": {
+      "beyondNamespace": [
+        {
+          "file": "api/master.cjs",
+          "scope": "install",
+          "reason": "Enumerates sibling block directories and their manifests to report what is installed — the block's entire purpose."
+        }
+      ]
+    },
     "settings_keys": [],
     "settings": [
       {

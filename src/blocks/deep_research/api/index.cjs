@@ -3,7 +3,12 @@
 // Stores research state as JSON files on disk under WORKSPACE/deep_research/.
 const express = require('express');
 const { vaultSync } = require('../../../kernel/vaultSync.cjs');
-const fs = require('fs');
+// BO-SHIP P11 — ported off direct `fs` onto the block's scoped surface.
+// Every path below is now relative to data/deep_research/reports/ and `..`
+// cannot escape it. deep_research qualified for a clean port because every
+// filesystem call it makes is inside its own namespace: no Vault writes, no
+// install scan, no external model cache.
+// `path` stays — pure string arithmetic, reaches nothing.
 const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
@@ -131,10 +136,17 @@ module.exports = function createResearchRouter(deps) {
   // (which also carried a hollow, code-less "data" block manifest) since
   // whenever that path was written. getDataFile() resolves from repo ROOT and
   // namespaces by block id, so this class of depth miscalculation can't recur.
-  const RESEARCH_DIR = getDataFile
+  const RESEARCH_ROOT = getDataFile
     ? getDataFile('deep_research/reports')
     : (isVercel ? require('path').join('/tmp', 'deep_research') : require('path').join(__dirname, '../../data'));
-  try { if (!fs.existsSync(RESEARCH_DIR)) fs.mkdirSync(RESEARCH_DIR, { recursive: true }); } catch {}
+
+  // Prefer the host's scoped surface; fall back to a kernel-rooted store for
+  // Vercel's /tmp and for loading outside the host. Both confine; neither is
+  // the raw fs module.
+  const fs = deps.blockStorage
+    ? deps.blockStorage.fs
+    : require('../../../kernel/blockStorage.cjs').createRootedStorage(RESEARCH_ROOT).fs;
+  try { fs.mkdirSync(''); } catch {}
 
   // ── In-memory task registry ────────────────────────────────────
   // { [sessionId]: { status, query, owner, progress, result, sources,
@@ -149,13 +161,13 @@ module.exports = function createResearchRouter(deps) {
   }
 
   function readResearchJSON(sessionId) {
-    const p = path.join(RESEARCH_DIR, `${sessionId}.json`);
+    const p = `${sessionId}.json`;
     if (!fs.existsSync(p)) return null;
     try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; }
   }
 
   function writeResearchJSON(sessionId, data) {
-    const p = path.join(RESEARCH_DIR, `${sessionId}.json`);
+    const p = `${sessionId}.json`;
     fs.writeFileSync(p, JSON.stringify(data, null, 2), 'utf8');
   }
 
@@ -476,7 +488,7 @@ Structure: # Title, ## Abstract, ## Findings (thematic, cited), ## Conclusion. D
 
       // vault sync — fire-and-forget
       try {
-        const _rdFiles = fs.readdirSync(RESEARCH_DIR).filter(f => f.endsWith('.json') && !f.startsWith('_'));
+        const _rdFiles = fs.readdirSync('').filter(f => f.endsWith('.json') && !f.startsWith('_'));
         vaultSync('research', { reports: { value: _rdFiles.length, unit: 'count', context: 'completed research reports on disk' }, last_report: { value: query, unit: 'text', context: 'last research query completed' }, status: { value: 'completed', unit: 'text', context: 'latest research status' }, _summary: `Research completed: "${query}" — ${allSources.length} sources` });
       } catch(e) { /* non-critical */ }
 
@@ -661,11 +673,11 @@ Structure: # Title, ## Abstract, ## Findings (thematic, cited), ## Conclusion. D
     let files;
     // Exclude dotfiles (.aeon.runtime.json) and _-prefixed internals — they are
     // not research runs; listing them showed a bogus row that failed to delete.
-    try { files = fs.readdirSync(RESEARCH_DIR).filter(f => f.endsWith('.json') && !f.startsWith('_') && !f.startsWith('.')); } catch { files = []; }
+    try { files = fs.readdirSync('').filter(f => f.endsWith('.json') && !f.startsWith('_') && !f.startsWith('.')); } catch { files = []; }
 
     for (const f of files) {
       try {
-        const d = JSON.parse(fs.readFileSync(path.join(RESEARCH_DIR, f), 'utf8'));
+        const d = JSON.parse(fs.readFileSync(f, 'utf8'));
         if (!!d.archived !== wantArchived) continue;
         const query = d.query || '';
         if (search && !query.toLowerCase().includes(search.toLowerCase())) continue;
@@ -719,7 +731,7 @@ Structure: # Title, ## Abstract, ## Findings (thematic, cited), ## Conclusion. D
   router.delete('/research/:sessionId', (req, res) => {
     const { sessionId } = req.params;
     if (!validateSessionId(sessionId)) return res.status(400).json({ error: 'Invalid session ID' });
-    const p = path.join(RESEARCH_DIR, `${sessionId}.json`);
+    const p = `${sessionId}.json`;
     let deleted = false;
     if (fs.existsSync(p)) { fs.unlinkSync(p); deleted = true; }
     res.json({ deleted });

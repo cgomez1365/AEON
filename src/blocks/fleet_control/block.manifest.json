@@ -70,6 +70,15 @@
       "cloudflare": true
     },
     "commands": [],
+    "filesystem": {
+      "beyondNamespace": [
+        {
+          "file": "api/missions.cjs",
+          "scope": "vault",
+          "reason": "Mission records are written to the shared Vault so they survive the block and remain searchable."
+        }
+      ]
+    },
     "settings_keys": [],
     "settings": []
   },

@@ -136,6 +136,25 @@
         "argHint": "<filePath> <content>"
       }
     ],
+    "filesystem": {
+      "beyondNamespace": [
+        {
+          "file": "api/fs.cjs",
+          "scope": "workspace",
+          "reason": "This IS the File Manager. Browsing and editing the operator's workspace is the feature; scoping it to a block namespace would remove it."
+        },
+        {
+          "file": "api/os.cjs",
+          "scope": "workspace",
+          "reason": "Named OS operations act on the operator's machine by design, under the allowlist in the kernel's execution surface."
+        },
+        {
+          "file": "api/system.cjs",
+          "scope": "install",
+          "reason": "Reads the kernel's audit and violation logs to report system health, which are install-level files."
+        }
+      ]
+    },
     "settings_keys": [],
     "settings": []
   },

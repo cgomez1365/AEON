@@ -108,6 +108,15 @@
         "category": "content"
       }
     ],
+    "filesystem": {
+      "beyondNamespace": [
+        {
+          "file": "api/memory.cjs",
+          "scope": "vault",
+          "reason": "Long-term memories live in the shared Vault so every block and the Second Brain can read them."
+        }
+      ]
+    },
     "settings_keys": [],
     "settings": [
       {
