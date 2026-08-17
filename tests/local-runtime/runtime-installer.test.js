@@ -41,15 +41,52 @@ describe('selectAsset', () => {
     expect(['cpu', 'cuda', 'metal', 'vulkan', 'rocm']).toContain(asset.backend);
   });
 
-  it('prefers cpu when preferBackend is cpu', () => {
-    const asset = selectAsset({ preferBackend: 'cpu' });
-    expect(asset.backend).toBe('cpu');
+  // Both of these asserted a win32/linux assumption — that a cpu build always
+  // exists for the running platform. It does not: darwin/arm64 ships ONE asset,
+  // metal. The first macos-latest CI run (2026-08-16) failed here with
+  // "expected 'metal' to be 'cpu'", which is the leg doing its job — nothing
+  // had ever run this file on a Mac.
+  //
+  // The contract that is actually true on every platform: honour the request
+  // when that backend is built for this platform+arch, otherwise fall back to
+  // something real. Assert THAT, not the Windows-shaped version of it.
+  const availableBackends = () => ASSETS.platforms
+    .filter(a => a.platform === os.platform() && a.arch === os.arch())
+    .map(a => a.backend);
+
+  it('honours preferBackend when that build exists for this platform', () => {
+    const have = availableBackends();
+    for (const backend of have) {
+      expect(selectAsset({ preferBackend: backend }).backend).toBe(backend);
+    }
   });
 
-  it('falls back to cpu when a preferred backend is unavailable', () => {
-    // 'rocm' is only in the Linux assets; on win32 it should fall back.
-    const asset = selectAsset({ preferBackend: 'rocm' });
-    expect(['cpu', 'rocm']).toContain(asset.backend);
+  it('falls back to a real asset when the preferred backend is not built', () => {
+    // 'rocm' is Linux-only; 'cpu' does not exist on darwin/arm64. Whichever
+    // platform this runs on, the result must still be an asset that exists.
+    for (const missing of ['rocm', 'cpu', 'cuda', 'metal']) {
+      if (availableBackends().includes(missing)) continue;
+      const asset = selectAsset({ preferBackend: missing });
+      expect(availableBackends()).toContain(asset.backend);
+    }
+  });
+
+  it('says so out loud when it substitutes a different backend (R-05)', () => {
+    // The silent substitution was the actual defect: AEON_LLM_BACKEND=cpu on an
+    // Apple Silicon Mac installed metal and never mentioned it, so the setting
+    // read as doing nothing.
+    const absent = ['rocm', 'cpu', 'cuda', 'metal', 'vulkan']
+      .find(b => !availableBackends().includes(b));
+    if (!absent) return; // every backend is built here — nothing to substitute
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      selectAsset({ preferBackend: absent });
+      expect(warn).toHaveBeenCalled();
+      expect(String(warn.mock.calls[0][0])).toContain(absent);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('each platform record has required fields', () => {

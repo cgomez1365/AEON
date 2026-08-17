@@ -46,7 +46,29 @@ function selectAsset(opts = {}) {
     throw new Error(`No llama.cpp asset available for ${plat}/${arch}. Supported: win32/x64, darwin/arm64, darwin/x64, linux/x64`);
   }
 
-  return candidates.find(a => a.backend === prefer) || candidates.find(a => a.backend === 'cpu') || candidates[0];
+  const chosen = candidates.find(a => a.backend === prefer)
+    || candidates.find(a => a.backend === 'cpu')
+    || candidates[0];
+
+  // R-05 — say so when we did not give the caller what they asked for.
+  //
+  // Found 2026-08-16 by the first macos-latest CI run. darwin/arm64 ships ONE
+  // asset, metal; there is no darwin-arm64-cpu build. So an operator who sets
+  // AEON_LLM_BACKEND=cpu on Apple Silicon — the reasonable move when Metal is
+  // broken in their environment — silently received the Metal build anyway and
+  // had no way to discover it. That is the BO-E2 shape: a runtime substituted
+  // without telling anyone, which reads as "the backend setting does nothing".
+  //
+  // The substitution itself is correct: metal is the only build that exists for
+  // that platform, and refusing to install would be worse. Only the silence was
+  // the defect.
+  if (chosen.backend !== prefer) {
+    console.warn(
+      `[RUNTIME] no ${prefer} build exists for ${plat}/${arch} — installing ` +
+      `${chosen.backend} instead. Available: ${candidates.map(a => a.backend).join(', ')}.`,
+    );
+  }
+  return chosen;
 }
 
 /**
