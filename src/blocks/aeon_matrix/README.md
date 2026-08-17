@@ -81,7 +81,7 @@ work, depending on kernel mount order):
 | POST | `/crn/second-brain/ingest/scan-docs` | Incremental re-index, streamed via SSE |
 | GET | `/crn/second-brain/index-status` | Last index run stats (doc count, errors) |
 | POST | `/crn/second-brain/retrieve` | Semantic retrieval, no intent gate (block-namespaced) |
-| POST | `/search` | Same retrieval, but gated by `isRecallQuery()` — what the Neural Terminal calls on every message; a leading `/matrix ` bypasses the gate |
+| ~~POST~~ | ~~`/search`~~ | **Deleted 2026-08-16 (§21).** Its only caller was `NeuralTerminal.jsx`, removed the same day. The recall gate and the `/matrix ` bypass live on in `dashboard/api/chat.cjs`, which re-implements them locally; retrieval itself is unchanged on `/crn/second-brain/retrieve`. |
 | POST | `/crn/second-brain/vault-push` | Push new/changed docs to Supabase `vault_docs` |
 | GET | `/crn/second-brain/vault-push/status` | Last push stats |
 

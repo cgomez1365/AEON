@@ -240,8 +240,16 @@ describe('BO-F4 gate — deliberate exclusions preserved', () => {
 });
 
 describe('BO-F4 gate — anti-oversilencing (the matching rule)', () => {
-  it('/api/search is ignored but /api/search-web still banners', () => {
-    expect(res500('/api/search')).toBe(false);
+  // The original case here was "/api/search is ignored but /api/search-web
+  // still banners". POST /api/search was deleted 2026-08-16 (§21) along with
+  // its only caller, so it left IGNORED_ENDPOINTS too — and asserting that a
+  // route which no longer exists is "ignored" asserts nothing. The rule it
+  // proved (an ignored entry must not swallow a longer sibling) is still
+  // covered below by /api/audit vs /api/audit-log, in the same direction.
+  //
+  // /api/search-web is NOT deleted — it is a different, live route — so its
+  // half of the pair is kept where it still means something.
+  it('/api/search-web banners, and is not silenced by any surviving entry', () => {
     expect(res500('/api/search-web')).toBe(true);
     expect(throwOn('/api/search-web')).not.toBeNull();
   });
@@ -269,7 +277,7 @@ describe('BO-F4 gate — anti-oversilencing (the matching rule)', () => {
 
   it('query strings and hashes are stripped before matching', () => {
     expect(res500('/api/audit?limit=50')).toBe(false);
-    expect(res500('/api/search#top')).toBe(false);
+    expect(res500('/api/health#top')).toBe(false);
     expect(res500('/api/search-web?q=rust%20vs%20go')).toBe(true);
     expect(throwOn('/api/search-web?q=x')).not.toBeNull();
   });
