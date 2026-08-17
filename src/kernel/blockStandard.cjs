@@ -265,6 +265,30 @@ function normalizeManifest(folder) {
       },
       // Terminal commands this block registers (e.g. /trading start)
       commands: m.contract?.commands || [],
+      // ── BO-SHIP P12 — declared, audited filesystem access ──────────────
+      //
+      // Filesystem access a block genuinely needs BEYOND its own namespace,
+      // each entry naming the file, a scope and a reason:
+      //
+      //   filesystem: { beyondNamespace: [
+      //     { file: 'api/fs.cjs', scope: 'workspace', reason: '…' } ] }
+      //
+      // This grants nothing — Node hands a block `fs` regardless. It is a
+      // statement, checked against the source by tools/scan/block-fs-surface,
+      // so "which blocks touch the filesystem, and why" has a truthful answer
+      // in the manifest a buyer reads rather than in twelve blocks' code.
+      //
+      // It must be listed HERE or it does not survive. normalizeManifest
+      // rebuilds `contract` from this whitelist and syncAllBlocks() writes the
+      // result back over every manifest to heal drift — so any field the
+      // whitelist does not name is silently erased on the next sync. That is
+      // how this feature's first eleven declarations disappeared, and it is a
+      // trap for anyone adding a manifest field: the write is invisible in
+      // `git status` for ignored paths and only shows up as a reverted file.
+      // Carried through only when the block actually declares one. Defaulting
+      // it to an empty object would add a meaningless field to every manifest
+      // on the next sync — drift introduced by the very code meant to heal it.
+      ...(m.contract?.filesystem ? { filesystem: m.contract.filesystem } : {}),
       // Settings keys this block reads from aeon-settings.json
       settings_keys: m.contract?.settings_keys || [],
       // Declared settings controls — Settings renders these automatically.

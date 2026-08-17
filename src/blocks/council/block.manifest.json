@@ -72,6 +72,15 @@
       "cloudflare": true
     },
     "commands": [],
+    "filesystem": {
+      "beyondNamespace": [
+        {
+          "file": "api/index.cjs",
+          "scope": "vault",
+          "reason": "Debate transcripts are written to the shared Vault so they are searchable by the Second Brain, not kept private to this block."
+        }
+      ]
+    },
     "settings_keys": [],
     "settings": []
   },

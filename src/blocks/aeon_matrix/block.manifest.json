@@ -166,6 +166,45 @@
         "dangerous": true
       }
     ],
+    "filesystem": {
+      "beyondNamespace": [
+        {
+          "file": "api/ingest.cjs",
+          "scope": "vault",
+          "reason": "The Second Brain indexer walks the whole Vault; restricting it to one block namespace would index nothing."
+        },
+        {
+          "file": "api/retrieve.cjs",
+          "scope": "vault",
+          "reason": "Reads Vault documents to answer retrieval queries across every block's contributed material."
+        },
+        {
+          "file": "api/_lib.cjs",
+          "scope": "vault",
+          "reason": "Shared extraction helpers that read Vault files on behalf of the indexer and retriever."
+        },
+        {
+          "file": "api/_extract.cjs",
+          "scope": "vault",
+          "reason": "Text extraction from Vault documents (pdf, docx) for the Second Brain index."
+        },
+        {
+          "file": "api/cloudvault.cjs",
+          "scope": "vault",
+          "reason": "Mirrors Vault documents to Supabase so the Second Brain is available on mobile."
+        },
+        {
+          "file": "api/sync.cjs",
+          "scope": "vault",
+          "reason": "Bulk push and pull of Vault content between this install and the cloud mirror."
+        },
+        {
+          "file": "api/index.cjs",
+          "scope": "vault",
+          "reason": "Serves the Second Brain over routes that read Vault paths outside any single block namespace."
+        }
+      ]
+    },
     "settings_keys": [
       "aeon_matrix_settings"
     ],

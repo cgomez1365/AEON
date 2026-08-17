@@ -25,11 +25,31 @@ let getSupabase, resetSupabase;
 beforeEach(async () => {
   created.length = 0;
   vi.resetModules();
+
+  // ── Hermetic, BO-SHIP P10 ──────────────────────────────────────────
+  //
+  // build() short-circuits on import.meta.env.VITE_SUPABASE_* — deliberately,
+  // so an install configured through .env pays no round trip. Vitest injects
+  // the developer's REAL .env into import.meta.env, so on any machine with
+  // Supabase actually configured that branch won, the runtime path below was
+  // never reached, and these nine tests went red.
+  //
+  // Measured both ways: 9 failed with a populated .env, 9 passed with it moved
+  // aside. CI stayed green only because CI has no credentials — the suite was
+  // passing for the wrong reason, and would have ambushed the first person to
+  // configure AEON properly.
+  //
+  // A test must own the environment it asserts against. These assert the
+  // RUNTIME path, so the env vars are cleared here; the env-wins branch gets
+  // its own tests below, which set them explicitly.
+  vi.stubEnv('VITE_SUPABASE_URL', '');
+  vi.stubEnv('VITE_SUPABASE_ANON_KEY', '');
+
   // Fresh module instance per test — the cache is module-scoped by design.
   ({ getSupabase, resetSupabase } = await import('../src/kernel/supabase.js'));
 });
 
-afterEach(() => { vi.restoreAllMocks(); });
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
 const stubFetch = (payload, ok = true) =>
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok, json: async () => payload })));
@@ -110,5 +130,49 @@ describe('the public config contract', () => {
     const keysUsed = created.map((c) => c.key);
     expect(keysUsed).toEqual(['anon-123']);
     expect(keysUsed).not.toContain('SHOULD-NEVER-BE-USED');
+  });
+});
+
+/**
+ * The build-time branch, which had no coverage at all.
+ *
+ * BO-SHIP P10. It was exercised only by accident — on whichever developer
+ * machine happened to have VITE_SUPABASE_* set, where it silently replaced the
+ * runtime path the other tests assert. That is the worst of both: no
+ * intentional coverage, and interference with the tests that do have some.
+ *
+ * Asserted deliberately here, with the env owned by the test.
+ */
+describe('build-time credentials still win, when they are really set', () => {
+  it('uses .env values and never asks the kernel', async () => {
+    vi.stubEnv('VITE_SUPABASE_URL', 'https://from-env.supabase.co');
+    vi.stubEnv('VITE_SUPABASE_ANON_KEY', 'anon-from-env');
+    vi.resetModules();
+    const f = vi.fn();
+    vi.stubGlobal('fetch', f);
+
+    const mod = await import('../src/kernel/supabase.js');
+    const c = await mod.getSupabase();
+
+    expect(c).toBeTruthy();
+    expect(created.at(-1)).toEqual({ url: 'https://from-env.supabase.co', key: 'anon-from-env' });
+    expect(f, 'a build-time config must not pay a round trip').not.toHaveBeenCalled();
+  });
+
+  it('falls through to the runtime route when only one half is set', async () => {
+    // A half-configured .env is the shape that produces a confusing failure:
+    // present enough to look configured, incomplete enough to be unusable.
+    vi.stubEnv('VITE_SUPABASE_URL', 'https://from-env.supabase.co');
+    vi.stubEnv('VITE_SUPABASE_ANON_KEY', '');
+    vi.resetModules();
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ configured: true, supabaseUrl: 'https://runtime.supabase.co', supabaseAnonKey: 'anon-runtime' }),
+    })));
+
+    const mod = await import('../src/kernel/supabase.js');
+    await mod.getSupabase();
+
+    expect(created.at(-1)).toEqual({ url: 'https://runtime.supabase.co', key: 'anon-runtime' });
   });
 });

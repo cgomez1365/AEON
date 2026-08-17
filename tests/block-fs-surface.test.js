@@ -94,7 +94,7 @@ describe('block fs surface ratchet', () => {
 
   it('has a baseline that matches a real measurement', () => {
     const b = JSON.parse(fs.readFileSync(BASELINE, 'utf8'));
-    expect(b.total).toBeGreaterThan(0);
+    expect(b.total).toBeGreaterThanOrEqual(0);
     expect(Object.keys(b.perBlock).length).toBe(b.blocks);
     // Every listed file must still exist, or the baseline is describing a tree
     // that no longer exists and the number means nothing.
@@ -135,5 +135,73 @@ describe('block fs surface ratchet', () => {
     // And it must recover — a gate stuck red gets skipped, and §19 is explicit
     // that a gate skipped once stops being a gate.
     expect(runScanner().code).toBe(0);
+  });
+});
+
+/**
+ * Declared filesystem access — BO-SHIP P12.
+ *
+ * The first version of this ratchet counted every `require('fs')` in a block as
+ * a defect. Inventorying all twelve showed that is wrong: five blocks touch the
+ * filesystem because the filesystem IS their job — the File Manager, the
+ * install integrity scan, the block enumerator, the Second Brain's Vault walk,
+ * the HuggingFace cache pruner. A ratchet that cannot reach zero sits at a
+ * permanent number nobody can act on, which is how a gate stops being read.
+ *
+ * A block now DECLARES the access it genuinely needs beyond its namespace,
+ * with a scope and a reason, in the manifest a buyer can read. The declaration
+ * grants nothing — Node hands a block `fs` regardless. It is a statement,
+ * checked against reality, so "which blocks touch the filesystem, and why" has
+ * a truthful answer without reading twelve blocks' source.
+ *
+ * That is what lets the undeclared count reach and hold zero.
+ */
+describe('declared filesystem access', () => {
+  const BLOCKS = path.join(ROOT, 'src', 'blocks');
+  const SCOPES = ['install', 'workspace', 'vault', 'external-cache'];
+
+  function manifests() {
+    return fs.readdirSync(BLOCKS)
+      .filter((b) => fs.existsSync(path.join(BLOCKS, b, 'block.manifest.json')))
+      .map((b) => [b, JSON.parse(fs.readFileSync(path.join(BLOCKS, b, 'block.manifest.json'), 'utf8'))]);
+  }
+
+  it('every declaration names a real file that really uses fs', () => {
+    // The scanner enforces this; asserting it here means a stale declaration
+    // fails the suite and not only the release gate.
+    const r = runScanner();
+    expect(r.stdout).not.toMatch(/DECLARATION ERRORS/);
+    expect(r.code).toBe(0);
+  });
+
+  it('every declaration carries a usable scope and a real reason', () => {
+    for (const [block, m] of manifests()) {
+      for (const d of (m.contract?.filesystem?.beyondNamespace || [])) {
+        expect(SCOPES, `${block}/${d.file} has scope "${d.scope}"`).toContain(d.scope);
+        expect(
+          (d.reason || '').trim().length,
+          `${block}/${d.file}: a one-word reason is not a reason`,
+        ).toBeGreaterThanOrEqual(20);
+      }
+    }
+  });
+
+  it('the undeclared surface is zero — every fs touch is accounted for', () => {
+    const b = JSON.parse(fs.readFileSync(BASELINE, 'utf8'));
+    expect(
+      b.total,
+      'an undeclared fs require is filesystem access nobody reviewed',
+    ).toBe(0);
+    expect(b.declaredTotal).toBeGreaterThan(0);
+  });
+
+  // The File Manager is the case that proves the concept: it must be allowed,
+  // and it must be visible.
+  it('host_os declares the File Manager, and says why', () => {
+    const m = JSON.parse(fs.readFileSync(path.join(BLOCKS, 'host_os', 'block.manifest.json'), 'utf8'));
+    const d = (m.contract?.filesystem?.beyondNamespace || []).find((x) => x.file === 'api/fs.cjs');
+    expect(d, 'host_os/api/fs.cjs is undeclared').toBeTruthy();
+    expect(d.scope).toBe('workspace');
+    expect(d.reason).toMatch(/File Manager/i);
   });
 });

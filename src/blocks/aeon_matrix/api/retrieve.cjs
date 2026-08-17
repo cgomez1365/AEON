@@ -8,8 +8,11 @@
  *
  * Route:
  *   POST /crn/second-brain/retrieve  { query, k? }  — block-namespaced, no gate.
- *   POST /api/search  { query, k? }  — what NeuralTerminal.jsx actually calls for
- *     its semantic search step. Used to collide with outreach/api/search.js (now
+ *   POST /api/search  { query, k? }  — NO CALLER as of 2026-08-16. Its only caller
+ *     was NeuralTerminal.jsx, deleted that day (§21); dashboard/api/chat.cjs uses
+ *     the block-namespaced /crn/second-brain/retrieve and Terminal2 does not call
+ *     this at all. Candidate for its own §21 deletion — prove it with a running
+ *     probe first. Used to collide with outreach/api/search.js (now
  *     archived — see archive/legacy-second-brain-cortex/README.md); this is the
  *     real, reachable path today. A leading "/matrix " in query bypasses the
  *     recall gate (explicit ask) and gets stripped before search runs.
@@ -114,8 +117,9 @@ module.exports = function retrieveFactory(deps) {
     return results;
   }
 
-  // POST /api/search — see file header. This is what NeuralTerminal.jsx calls
-  // on every submitted message, so the recall gate does the token-conservation
+  // POST /api/search — see file header. This WAS what NeuralTerminal.jsx called
+  // on every submitted message; that file was deleted 2026-08-16 and this route
+  // now has no caller. The recall gate below does the token-conservation
   // work here; a leading "/matrix " bypasses it (explicit ask) and is stripped.
   router.post('/search', async (req, res) => {
     let { query, k } = req.body || {};

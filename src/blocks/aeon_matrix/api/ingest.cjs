@@ -56,7 +56,22 @@ function deriveTags(relPosix) {
 
 module.exports = function ingestFactory(deps) {
   const router   = express.Router();
-  const { isVercel, VAULT_ROOT, DATA_ROOT: injectedDataRoot } = deps;
+  const {
+    isVercel, VAULT_ROOT, DATA_ROOT: injectedDataRoot,
+    // BO-SHIP P10 — an injectable embedder, so a caller that is not testing
+    // embeddings does not pay for them.
+    //
+    // buildEntry() calls embed() for every indexed document. embed() loads the
+    // native local runtime and, failing that, makes a REAL network request to
+    // Google's embedding API using whatever GEMINI_* keys are in the
+    // environment. A test asserting which paths get indexed was therefore
+    // making live API calls on any configured machine, and timing out under
+    // worker contention on any machine at all — the 1-in-4 intermittent in
+    // storage-contract.test.js.
+    //
+    // Default is the real embedder, so production is unchanged.
+    embed: injectedEmbed,
+  } = deps;
 
   const DATA_ROOT  = injectedDataRoot || path.join(__dirname, '..', 'data');
   const BRAIN_DIR  = VAULT_ROOT || path.join(DATA_ROOT, 'Vault');
@@ -114,7 +129,7 @@ module.exports = function ingestFactory(deps) {
       updatedAt: Date.now(),
     };
     try {
-      const { vector, model } = await embed(summary);
+      const { vector, model } = await (injectedEmbed || embed)(summary);
       entry.embedding = vector;
       entry.embeddingModel = model;
     } catch (e) {

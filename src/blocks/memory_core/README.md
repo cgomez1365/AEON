@@ -120,16 +120,16 @@ context injection over HTTP. Instead:
 same ranked/budgeted text over HTTP (e.g. a mission agent) — the terminal
 itself does not use it today.
 
-**Known gap, not fixed by this pass:** `src/components/NeuralTerminal.jsx`
-still has a `/tidy` slash-command that calls `POST /api/memory/tidy`
-(`fetch('/api/memory/tidy', ...)`, around line 679 and 1532). That route does
-not exist anywhere in this block or elsewhere in the kernel — it's a 404 today.
-`docs/BLOCK_MATRIX.md` still documents the old deleted `memory` block's route
-set (`/api/memory/bulk-delete`, `/api/memory/tidy`, `/api/memory/import`,
-Supabase-backed) which never carried over to `memory_core`. Fixing
-`NeuralTerminal.jsx` or `docs/BLOCK_MATRIX.md` is outside this block's folder
-and was left alone; flagging here so it doesn't get rediscovered as a mystery
-bug later.
+**Half of a known gap closed 2026-08-16.** `src/components/NeuralTerminal.jsx`
+had a `/tidy` slash-command calling `POST /api/memory/tidy`, a route that
+exists nowhere in this block or the kernel. That file was deleted (§21), so
+the stale caller is gone with it.
+
+**Still open:** `docs/BLOCK_MATRIX.md` documents the old deleted `memory`
+block's route set (`/api/memory/bulk-delete`, `/api/memory/tidy`,
+`/api/memory/import`, Supabase-backed) which never carried over to
+`memory_core`. Outside this block's folder, left alone; flagged here so it
+doesn't get rediscovered as a mystery bug later.
 
 ## Settings / config keys
 

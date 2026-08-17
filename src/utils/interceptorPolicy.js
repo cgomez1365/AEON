@@ -12,8 +12,9 @@
  * That rule is not cosmetic. Two live pairs in this repo would break under
  * naive prefix matching:
  *   '/api/search' (retrieve.cjs:112) is ignored, but '/api/search-web' is a
- *     separate route called from the browser (NeuralTerminal.jsx:428,794 and
- *     deep_research/index.jsx:367) whose failures must be seen.
+ *     separate route called from the browser (deep_research/index.jsx:367;
+ *     NeuralTerminal.jsx was the other caller until it was deleted 2026-08-16)
+ *     whose failures must be seen.
  *   '/api/writer/style/analyze' is ignored, but '/api/writer/style'
  *     (writer.js:147) is fetched at writer/index.jsx:151 behind a bare
  *     `.catch(() => {})` — the banner is its ONLY surface.
