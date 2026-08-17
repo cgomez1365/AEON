@@ -117,31 +117,19 @@ module.exports = function retrieveFactory(deps) {
     return results;
   }
 
-  // POST /api/search — see file header. This WAS what NeuralTerminal.jsx called
-  // on every submitted message; that file was deleted 2026-08-16 and this route
-  // now has no caller. The recall gate below does the token-conservation
-  // work here; a leading "/matrix " bypasses it (explicit ask) and is stripped.
-  router.post('/search', async (req, res) => {
-    let { query, k } = req.body || {};
-    if (!query) return res.status(400).json({ documents: [] });
-
-    if (query.trim() === 'health-check-test') return res.status(200).json({ documents: [], message: 'Link Stable' });
-
-    const isMatrixCommand = /^\/matrix\s+/i.test(query.trim());
-    if (isMatrixCommand) {
-      query = query.trim().replace(/^\/matrix\s+/i, '').replace(/^"(.*)"$/, '$1');
-    } else if (!isRecallQuery(query)) {
-      return res.json({ documents: [], skipped: true });
-    }
-
-    try {
-      const docs = await retrieve(query, k || DEFAULT_K);
-      res.json({ documents: docs });
-    } catch (err) {
-      console.warn('[RETRIEVE] error:', err.message);
-      res.json({ documents: [], error: err.message });
-    }
-  });
+  // POST /api/search was mounted here until 2026-08-16 and is DELETED (§21).
+  // Its only caller was src/components/NeuralTerminal.jsx, removed the same
+  // day; dashboard/api/chat.cjs uses /crn/second-brain/retrieve and Terminal2
+  // never called it. Verified live before removal — it answered HTTP 200
+  // {"documents":[],"skipped":true} — so this removed a genuinely mounted
+  // route, not a stale line. Gate: tests/no-api-search.test.js.
+  //
+  // The recall gate and the "/matrix " bypass it carried are NOT lost, but they
+  // do NOT survive here: dashboard/api/chat.cjs:152-170 re-implements both
+  // locally ("mirrors retrieve.cjs's isRecallQuery"), and that is the path a
+  // terminal turn actually takes. Consequence worth knowing: isRecallQuery()
+  // above now has no caller in this file either — see TASKS.md, deliberately
+  // left for its own scoped commit rather than folded into this one.
 
   // ── POST /crn/second-brain/ask — the last hop ─────────────────────────────
   //

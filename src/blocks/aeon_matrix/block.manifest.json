@@ -378,11 +378,6 @@
       "auth": true
     },
     {
-      "method": "POST",
-      "path": "/api/search",
-      "auth": true
-    },
-    {
       "method": "GET",
       "path": "/api/sync/:block",
       "auth": true

@@ -48,7 +48,7 @@
 // client, so their failures have no other surface — the banner IS the signal
 // there, and suppressing it would be the R-05 violation in reverse.
 export const IGNORED_ENDPOINTS = [
-  '/api/audit', '/api/search', '/api/health', '/api/canva/status',
+  '/api/audit', '/api/health', '/api/canva/status',
   '/api/telemetry', '/api/llm-telemetry', '/api/local-status',
   '/api/gas/status', '/api/transcribe', '/api/kernel/llm', '/api/auth/status',
   '/api/writer/cowrite', '/api/writer/improve', '/api/writer/generate',

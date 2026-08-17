@@ -52,6 +52,27 @@ jobs:
           - os: ubuntu-latest
             node: '22.13'
             install: npm install --no-audit --no-fund
+          # macOS. launch.command ran once, by hand, on real Apple hardware on
+          # 2026-08-12 — which is what closed DoD §20 #1 on clean physical
+          # hardware. One manual run proves it worked that day; it cannot prove
+          # it still works, and this is the launcher with a KNOWN first-run
+          # friction defect (it needed a chmod), so it is the one most likely to
+          # regress silently. Free: the repo is public.
+          #
+          # This leg is NOT a replacement for that run and must not be cited as
+          # one (§08). It never installs a model and never pulls the network, so
+          # it says nothing about "a local model answered offline". What it does
+          # say: the suite, gates and build hold on macOS, and launch.command
+          # still parses there.
+          #
+          # Note the chmod that run needed is NOT a missing git mode —
+          # launch.command is committed 100755, and tests/launcher-contract
+          # keeps it that way. A downloaded zip loses modes and Gatekeeper
+          # quarantines downloaded files; neither is reproducible in CI, so that
+          # friction stays an open defect rather than a solved one.
+          - os: macos-latest
+            node: '24'
+            install: npm ci
     # Windows runners default to PowerShell; the node -e and grep steps below
     # are bash. GitHub's Windows images ship bash, so pin it for every step
     # rather than maintaining two dialects of the same check.

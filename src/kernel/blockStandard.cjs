@@ -144,6 +144,53 @@ function readManifest(folder) {
   try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; }
 }
 
+/**
+ * Why this exists — the 2026-08-06 incident.
+ *
+ * writer/block.manifest.json was found gutted to scaffold defaults mid-session:
+ * route table, AI roles and permissions wiped, breaking four unrelated test
+ * files until it was restored by hand. It never reproduced, because a normal
+ * boot cannot reproduce it.
+ *
+ * The mechanism: readManifest() returns null for BOTH "no such file" and
+ * "the file is there but I could not parse it". normalizeManifest did
+ * `readManifest(folder) || {}`, so an unreadable manifest became an EMPTY one —
+ * and every field was then rebuilt from scaffold defaults and written straight
+ * back over the real file by syncAllBlocks(). A transient read failure (a
+ * concurrent write, an editor mid-save, a partial flush) was silently converted
+ * into permanent data loss, and the code doing it was the code whose job is to
+ * "heal drift".
+ *
+ * Two states that must never be confused:
+ *   absent     — a new/scaffold block. Defaults are correct. Safe to write.
+ *   unreadable — a real manifest we cannot currently read. Defaults are a
+ *                GUESS, and writing a guess over the truth destroys it.
+ *
+ * R-05: no silent failures.
+ */
+function classifyManifest(folder) {
+  const p = path.join(BLOCKS_DIR, folder, 'block.manifest.json');
+  if (!fs.existsSync(p)) return { state: 'absent', data: {} };
+  let raw;
+  try {
+    raw = fs.readFileSync(p, 'utf8');
+  } catch (e) {
+    return { state: 'unreadable', data: null, error: `read failed: ${e.message}` };
+  }
+  // An empty or whitespace-only file is not a block with no fields — it is a
+  // file caught mid-write. Treat it as unreadable, never as {}.
+  if (!raw.trim()) return { state: 'unreadable', data: null, error: 'file is empty' };
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { state: 'unreadable', data: null, error: 'manifest is not a JSON object' };
+    }
+    return { state: 'present', data: parsed };
+  } catch (e) {
+    return { state: 'unreadable', data: null, error: `invalid JSON: ${e.message}` };
+  }
+}
+
 /** Build the env-var list a block needs from its declared API requirements. */
 function deriveEnv(apis) {
   const env = [];
@@ -160,7 +207,23 @@ function deriveEnv(apis) {
  * the canonical NAV route when present (heals drift).
  */
 function normalizeManifest(folder) {
-  const m = readManifest(folder) || {};
+  // See classifyManifest — `readManifest(folder) || {}` here is what gutted
+  // writer/block.manifest.json on 2026-08-06. An unreadable manifest must not
+  // become an empty one; the caller decides what to do, and syncAllBlocks
+  // refuses to write.
+  const read = classifyManifest(folder);
+  if (read.state === 'unreadable') {
+    const err = new Error(
+      `[BLOCK] refusing to normalize ${folder}: ${read.error}. ` +
+      `The manifest exists but cannot be read, so normalizing it would write ` +
+      `scaffold defaults over real content (the 2026-08-06 writer incident). ` +
+      `Fix the file, or delete it if the block is genuinely new.`,
+    );
+    err.code = 'MANIFEST_UNREADABLE';
+    err.folder = folder;
+    throw err;
+  }
+  const m = read.data;
   const nav = NAV[folder];
   const icon = (nav && nav.icon) || ICON_FALLBACKS[folder] || m.nav?.icon || m.icon || 'Boxes';
   // ── Icon: the manifest IS the store ────────────────────────────────
@@ -470,7 +533,20 @@ function syncAllBlocks(ctx = {}) {
   const registry = [];
   for (const folder of listBlockFolders()) {
     mergeBlockEnv(folder);                 // cartridge defaults fill gaps (central wins)
-    const manifest = normalizeManifest(folder);
+    let manifest;
+    try {
+      manifest = normalizeManifest(folder);
+    } catch (e) {
+      if (e.code === 'MANIFEST_UNREADABLE') {
+        // Skip the block entirely rather than heal it into scaffold defaults.
+        // Loud, and NOT fatal: one corrupt manifest must not stop AEON booting,
+        // or the operator loses the server they need in order to fix it (the
+        // same reasoning as the first-run vault guard).
+        console.error(e.message);
+        continue;
+      }
+      throw e;
+    }
     // Persist normalized manifest (heals drift, adds nav/env).
     try {
       fs.writeFileSync(path.join(BLOCKS_DIR, folder, 'block.manifest.json'), JSON.stringify(manifest, null, 2));
@@ -488,6 +564,6 @@ function syncAllBlocks(ctx = {}) {
 module.exports = {
   BLOCKS_DIR, NAV, GROUP_META, API_ENV, MEMORY_POLICY,
   ICON_BASE, ICON_PNG_BASE, ICON_DIR,
-  listBlockFolders, readManifest, normalizeManifest, deriveEnv,
+  listBlockFolders, readManifest, classifyManifest, normalizeManifest, deriveEnv,
   checkReadiness, writeRuntimeConfig, syncAllBlocks, mergeBlockEnv,
 };
