@@ -71,7 +71,6 @@ const NAV = {
   orion_search:  { route: '/orion',      group: 'content', order: 3, icon: 'Telescope' },
   aeon_matrix:   { route: '/brain',      group: 'content', order: 4, icon: 'Workflow' },
   files:         { route: '/files',      group: 'content', order: 5, icon: 'Folder' },
-  portfolio:     { route: '/portfolio',  group: 'content', order: 6, icon: 'FileText' },
   // TOOLS — utilities
   host_os:       { route: '/host',       group: 'tools',   order: 0, icon: 'Monitor' },
   council:       { route: '/council',    group: 'tools',   order: 1, icon: 'Landmark' },
