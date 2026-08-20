@@ -49,9 +49,9 @@ Not of the design. A declaration with no consumer is not a feature; a badge that
 
 That rule applies to this README. Every figure above carries the commit and date it was measured at, because a reference that carries stale numbers teaches people to distrust all of it.
 
-### Twelve standing gates, cleared on every pull request
+### Fifteen standing gates, cleared on every pull request
 
-Suite, release gate, dependency audit, build, five CI legs, empty-shell boot, clean-room isolation, route collision, command collision, manifest freshness, declared filesystem surface, tree integrity. A gate skipped once stops being a gate. → [Engineering standard](docs/ENGINEERING_STANDARD.md)
+Suite, release gate, dependency audit, build, five CI legs, empty-shell boot, clean-room isolation, route collision, command collision, manifest freshness, declared filesystem surface, tree integrity, manifest read safety, scaffold invariant, launcher contract. A gate skipped once stops being a gate. → [Engineering standard](docs/ENGINEERING_STANDARD.md)
 
 ### "Done" requires evidence, named
 
@@ -133,7 +133,7 @@ npm start               # vite dev server + kernel (hot reload)
 npm run build           # production frontend → dist/
 npm run server          # kernel only, serves dist/ at :3001
 npm test                # vitest — 1,139 tests
-npm run scan:release-gate   # no-ollama · path authority · cloud ratchet · block filesystem
+npm run scan:release-gate   # runtime purity · path authority · cloud ratchet · block filesystem
 npm run scan:audit          # no unreviewed high/critical advisories
 ```
 
