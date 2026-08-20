@@ -21,7 +21,7 @@ gate**, so there is no "just this time" path.
 | Gate | Command | What it protects |
 |---|---|---|
 | Suite | `npm test` | Every test passes. The count is a dated reading, not a target |
-| Release gate | `npm run scan:release-gate` | No Ollama assumptions · no unauthorized machine-root access · cloud-surface ratchet · declared block filesystem |
+| Release gate | `npm run scan:release-gate` | No assumption of an external model daemon · no unauthorized machine-root access · cloud-surface ratchet · declared block filesystem |
 | Audit | `npm run scan:audit` | No unreviewed high/critical advisory. Acceptances carry a review date |
 | Build | `npm run build` | Manifests regenerate; artifact builds clean |
 | CI | 5 legs | Windows 24 · Ubuntu 24 · Ubuntu 22.13 · macOS 24 · security |
