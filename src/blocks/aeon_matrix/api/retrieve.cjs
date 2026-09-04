@@ -75,23 +75,76 @@ module.exports = function retrieveFactory(deps) {
     try { return JSON.parse(fs.readFileSync(INDEX_FILE, 'utf8')); } catch { return { documents: {} }; }
   }
 
+  /**
+   * Retrieve, and when nothing comes back, say WHY.
+   *
+   * Every failure below used to return a bare `[]`, which the caller could
+   * only render as "no relevant documents found" — indistinguishable from a
+   * healthy index that genuinely had no match. Three very different states
+   * wore the same face: nothing indexed yet, no embedding model available at
+   * all, and an index embedded in a vector space the query cannot be compared
+   * against. Each has a different remedy and the operator could see none of
+   * them (§08).
+   *
+   * @returns {{documents: Array, unavailable?: {reason, message, action}}}
+   */
   async function retrieve(query, k = DEFAULT_K) {
     const index = readIndex();
-    const docs = Object.values(index.documents || {}).filter(d => Array.isArray(d.embedding));
-    if (!docs.length) return [];
+    const all = Object.values(index.documents || {});
+    const docs = all.filter(d => Array.isArray(d.embedding));
+    if (!docs.length) {
+      return {
+        documents: [],
+        unavailable: {
+          reason: all.length ? 'index_not_embedded' : 'index_empty',
+          message: all.length
+            ? `${all.length} document${all.length === 1 ? '' : 's'} are in the Vault but none have been embedded yet, so they cannot be searched by meaning.`
+            : 'Nothing has been indexed from the Vault yet.',
+          action: 'Run /index-brain in the terminal, or open Aeon Matrix and rebuild the index.',
+        },
+      };
+    }
 
     let queryEmbedding, queryModel;
     try {
       ({ vector: queryEmbedding, model: queryModel } = await embed(query));
     } catch (e) {
       console.warn('[RETRIEVE] query embed failed (native runtime not ready and no Gemini keys):', e.message);
-      return [];
+      return {
+        documents: [],
+        unavailable: {
+          reason: 'no_embedding_model',
+          message: 'Searching your documents by meaning needs an embedding model, and none is available — the local runtime has no embedding model loaded and there is no Gemini key to fall back on.',
+          action: 'Add an embedding model in Cookbook (nomic-embed-text is the small default), or add a Gemini key in Settings → Connections.',
+        },
+      };
     }
 
     // Vectors from different embedding models aren't comparable — only score
     // docs embedded in the same space. Legacy untagged entries predate the
     // Gemini fallback and were embedded by the native local runtime.
     const comparable = docs.filter(d => (d.embeddingModel || EMBED_MODEL) === queryModel);
+
+    // Every document is in a different space from the query. This is the
+    // silent-zero-results case: the index was built with one embedder (say
+    // the local nomic model) and the query is being embedded with another
+    // (Gemini, because the local runtime is not up this session). Scoring is
+    // mathematically meaningless across spaces, so the filter above correctly
+    // discards everything — but discarding everything and reporting "no
+    // matches" told the operator their documents were irrelevant when in fact
+    // they were unreachable, and re-indexing is the fix.
+    if (!comparable.length) {
+      const spaces = [...new Set(docs.map(d => d.embeddingModel || EMBED_MODEL))];
+      return {
+        documents: [],
+        unavailable: {
+          reason: 'embedding_model_mismatch',
+          message: `Your documents were indexed with ${spaces.join(' and ')}, but this search is using ${queryModel}. Vectors from different embedding models cannot be compared, so none of the ${docs.length} indexed documents could be searched.`,
+          action: `Re-index with /index-brain while ${queryModel} is the active embedder, or restore the model the index was built with (${spaces[0]}) in Cookbook.`,
+        },
+      };
+    }
+
     const ranked = comparable
       .map(d => ({ d, score: cosineSimilarity(queryEmbedding, d.embedding) }))
       .filter(r => r.score >= MATCH_THRESHOLD)
@@ -114,7 +167,9 @@ module.exports = function retrieveFactory(deps) {
         });
       } catch { /* skip unreadable file, don't fail the whole request */ }
     }
-    return results;
+    // A genuine empty result — the index was searchable and nothing scored
+    // above the threshold. No `unavailable`, because nothing is broken.
+    return { documents: results };
   }
 
   // POST /api/search was mounted here until 2026-08-16 and is DELETED (§21).
@@ -164,11 +219,24 @@ module.exports = function retrieveFactory(deps) {
       });
     }
 
-    let docs;
+    let docs, unavailable;
     try {
-      docs = await retrieve(query, k || DEFAULT_K);
+      ({ documents: docs, unavailable } = await retrieve(query, k || DEFAULT_K));
     } catch (e) {
       return res.status(500).json({ ok: false, error: 'retrieval_failed', message: e.message });
+    }
+
+    // The index could not be searched at all — a different answer from "the
+    // index was searched and had nothing", and the only one that comes with
+    // something the operator can go and do.
+    if (unavailable) {
+      return res.json({
+        ok: true, answered: false,
+        reason: unavailable.reason,
+        message: unavailable.message,
+        remedy: unavailable.action,
+        citations: [],
+      });
     }
 
     // Answering costs a model call; searching does not. So /ask holds a higher
@@ -293,8 +361,13 @@ module.exports = function retrieveFactory(deps) {
     if (!query) return res.status(400).json({ error: 'query required' });
 
     try {
-      const docs = await retrieve(query, k || DEFAULT_K);
-      res.json({ documents: docs, count: docs.length });
+      const { documents, unavailable } = await retrieve(query, k || DEFAULT_K);
+      // `unavailable` rides alongside the (empty) documents rather than
+      // replacing them with an error status: retrieval is best-effort for its
+      // callers — the terminal must not fail a chat turn because the index is
+      // cold — but a caller that wants to tell the operator why they got
+      // nothing now has something to tell them.
+      res.json({ documents, count: documents.length, ...(unavailable ? { unavailable } : {}) });
     } catch (err) {
       console.error('[RETRIEVE] error:', err.message);
       res.status(500).json({ error: err.message });

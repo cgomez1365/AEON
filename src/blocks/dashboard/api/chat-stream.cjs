@@ -91,6 +91,20 @@ module.exports = function ({ getLocalFile, GEMINI_KEY_POOL, _trackLLM, writeOSAu
           context: `\n\n[AEON SECOND BRAIN CONTEXT]\nRelevant indexed knowledge — cite the source file when you use it. If nothing here is relevant, ignore it:\n\n${body}`,
         };
       }
+
+      // The index could not be searched — no embedding model, nothing indexed
+      // yet, or an index built in a different vector space. The model is told
+      // the remedy verbatim so it can hand the operator something to DO,
+      // rather than reporting an absence of documents that were never
+      // actually consulted. This is the answer to "why does my vault seem
+      // empty": it was never a matter of relevance.
+      if (data.unavailable) {
+        return {
+          query, count: 0, forced, unavailable: data.unavailable.reason,
+          context: `\n\n[AEON SECOND BRAIN CONTEXT]\nThe operator's document index COULD NOT BE SEARCHED for this request. Reason: ${data.unavailable.message} Remedy: ${data.unavailable.action}\nTell the operator this plainly before answering. Do not claim their documents are irrelevant or missing — they were never searched. Answer from general knowledge only if that is still useful, and say that is what you are doing.`,
+        };
+      }
+
       // Only say "nothing found" when the operator explicitly asked. On a
       // pattern-triggered lookup they did not ask for a search, so reporting
       // an empty one would be noise — but on /matrix, silence would read as
@@ -394,7 +408,8 @@ module.exports = function ({ getLocalFile, GEMINI_KEY_POOL, _trackLLM, writeOSAu
         // found nothing is an answer, and the operator should be able to tell
         // it apart from one that never ran.
         recall: sb.count,
-        recallRan: sb.forced || sb.count > 0,
+        recallRan: sb.forced || sb.count > 0 || !!sb.unavailable,
+        recallUnavailable: sb.unavailable || null,
       });
 
       const buildGenerator = async (provider, model) => {
