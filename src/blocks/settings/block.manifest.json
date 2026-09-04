@@ -136,6 +136,11 @@
   "routes": [
     {
       "method": "GET",
+      "path": "/api/capabilities",
+      "auth": true
+    },
+    {
+      "method": "GET",
       "path": "/api/connections",
       "auth": true
     },

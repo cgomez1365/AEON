@@ -133,6 +133,25 @@ export default function OrionSearch() {
           <div style={{ fontSize: 10, color: 'var(--text-dim)', marginBottom: 10 }}>
             {visible.length} shown · web {results.counts.web} · brain {results.counts.brain} · blocks {results.counts.block}
           </div>
+
+          {/* A lens that could not run at all. The API has always reported
+              this in `degraded` and nothing rendered it, so a dead web engine
+              or an unsearchable document index was indistinguishable from
+              "nothing matched" — the operator retyped their query instead of
+              fixing the cause they were never shown. */}
+          {results.degraded && Object.entries(results.degraded).map(([lens, why]) => (
+            <div key={lens} role="status" style={{
+              display: 'flex', gap: 8, alignItems: 'flex-start',
+              fontSize: 11, lineHeight: 1.5, color: 'var(--amber)',
+              background: 'var(--amber-dim)', border: '1px solid var(--amber-dim)',
+              borderRadius: 4, padding: '8px 12px', marginBottom: 8,
+            }}>
+              <span aria-hidden="true">⚠</span>
+              <span>
+                <strong style={{ textTransform: 'capitalize' }}>{lens === 'brain' ? 'Your documents' : lens}</strong> could not be searched — {why}
+              </span>
+            </div>
+          ))}
           {visible.map((r, i) => {
             const meta = SOURCE_META[r.source] || SOURCE_META.web;
             const Icon = meta.icon;

@@ -147,13 +147,71 @@ function ModelPicker({ models, value, onChange, label = 'Model', id }) {
 }
 
 // ── Toggle Switch (Odysseus syncPrefToggle) ──────────────────────────
-function PrefToggle({ label, desc, prefKey, defaultVal = true, onMsg, offMsg, onChange: externalOnChange }) {
+// ── Capability registry (shared across every toggle on the page) ─────
+// One fetch, cached for the life of the page. Each toggle asking for itself
+// would issue a dozen identical requests on tab open.
+let _capsPromise = null;
+const loadCapabilities = () => {
+  if (!_capsPromise) {
+    _capsPromise = fetch('/api/capabilities')
+      .then(r => r.json())
+      .then(d => Object.fromEntries((d.capabilities || []).map(c => [c.key, c])))
+      .catch(() => ({}));
+  }
+  return _capsPromise;
+};
+
+/**
+ * A toggle whose label, description, default and live/inert state all come
+ * from the kernel's capability registry.
+ *
+ * The panel used to hardcode all four, which is how eight toggles came to
+ * describe agent permissions that no code consulted: nothing connected the
+ * claim in the UI to the enforcement (or absence of it) in the kernel. Now
+ * src/kernel/capabilities.cjs is the one declaration, and a capability that
+ * gains real enforcement goes live here by flipping a flag there.
+ */
+function CapabilityToggle({ capKey, label, onMsg, offMsg, onChange }) {
+  const [cap, setCap] = useState(null);
+
+  useEffect(() => { loadCapabilities().then(all => setCap(all[capKey] || null)); }, [capKey]);
+
+  // Registry unreachable, or a key it does not declare. Render nothing rather
+  // than guess: a toggle with an invented default is how this started.
+  if (!cap) return null;
+
+  return (
+    <PrefToggle
+      label={label}
+      desc={cap.summary}
+      prefKey={capKey}
+      defaultVal={cap.default}
+      pending={cap.implemented ? null : cap.pending}
+      onMsg={onMsg}
+      offMsg={offMsg}
+      onChange={onChange}
+    />
+  );
+}
+
+/**
+ * A preference toggle.
+ *
+ * `pending` marks a capability the kernel has declared but nothing enforces
+ * yet (src/kernel/capabilities.cjs). Such a toggle renders inert and says why
+ * in the operator's own terms, instead of accepting a click and changing
+ * nothing — which is what every one of these did before, including the eight
+ * that claimed to govern what the agent may do. A control that reports its
+ * own absence is honest; one that silently no-ops is not (§08).
+ */
+function PrefToggle({ label, desc, prefKey, defaultVal = true, onMsg, offMsg, onChange: externalOnChange, pending }) {
   const [checked, setChecked] = useState(defaultVal);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (pending) { setLoading(false); return; }
     loadPref(prefKey, defaultVal).then(v => { setChecked(!!v); setLoading(false); });
-  }, [prefKey]);
+  }, [prefKey, pending]);
 
   const toggle = async () => {
     const next = !checked;
@@ -169,19 +227,25 @@ function PrefToggle({ label, desc, prefKey, defaultVal = true, onMsg, offMsg, on
   };
 
   return (
-    <div className="pref-toggle-row">
+    <div className={`pref-toggle-row${pending ? ' pref-toggle-row--pending' : ''}`}>
       <div className="pref-toggle-info">
-        <span className="pref-toggle-label">{label}</span>
+        <span className="pref-toggle-label">
+          {label}
+          {pending && <span className="pref-toggle-badge">not yet active</span>}
+        </span>
         {desc && <span className="pref-toggle-desc">{desc}</span>}
+        {pending && <span className="pref-toggle-pending">{pending}</span>}
       </div>
       <button
-        className={`pref-toggle-btn ${checked ? 'pref-toggle-btn--on' : ''} ${loading ? 'pref-toggle-btn--loading' : ''}`}
+        className={`pref-toggle-btn ${checked && !pending ? 'pref-toggle-btn--on' : ''} ${loading ? 'pref-toggle-btn--loading' : ''}`}
         onClick={toggle}
-        disabled={loading}
+        disabled={loading || !!pending}
         type="button"
         role="switch"
-        aria-checked={checked}
+        aria-checked={pending ? false : checked}
         aria-label={label}
+        aria-disabled={!!pending}
+        title={pending || undefined}
       >
         <span className="pref-toggle-knob" />
       </button>
@@ -2904,14 +2968,14 @@ export default function SystemSettings() {
           <BuildQueuePanel />
           <div className="admin-card prefs-card">
             <div className="agent-tools-desc">Control what the AI agent is allowed to do when processing requests. Disabled tools won't appear in the agent's toolset.</div>
-            <PrefToggle label="File system access" desc="Read, write, and manage files on the local OS" prefKey="tool_filesystem" defaultVal={true} onMsg="FS access on" offMsg="FS access off" />
-            <PrefToggle label="Shell commands" desc="Execute OS commands (ls, git, npm, etc.)" prefKey="tool_shell" defaultVal={true} onMsg="Shell on" offMsg="Shell off" />
-            <PrefToggle label="Web search" desc="Search the internet via DuckDuckGo / API" prefKey="tool_web_search" defaultVal={true} onMsg="Web search on" offMsg="Web search off" />
-            <PrefToggle label="Email dispatch" desc="Send emails via Google Apps Script" prefKey="tool_email" defaultVal={false} onMsg="Email on" offMsg="Email off" />
-            <PrefToggle label="CRM management" desc="Add, edit, delete clients and invoices" prefKey="tool_crm" defaultVal={true} onMsg="CRM on" offMsg="CRM off" />
-            <PrefToggle label="Memory management" desc="Add facts to persistent memory" prefKey="tool_memory" defaultVal={true} onMsg="Memory on" offMsg="Memory off" />
-            <PrefToggle label="Autopilot control" desc="Start/stop YouTube autopilot pipeline" prefKey="tool_autopilot" defaultVal={false} onMsg="Autopilot on" offMsg="Autopilot off" />
-            <PrefToggle label="Deploy" desc="Push to Vercel, Cloudflare, or other hosts" prefKey="tool_deploy" defaultVal={false} onMsg="Deploy on" offMsg="Deploy off" />
+            <CapabilityToggle capKey="tool_filesystem" label="File system access" onMsg="FS access on" offMsg="FS access off" />
+            <CapabilityToggle capKey="tool_shell" label="Shell commands" onMsg="Shell on" offMsg="Shell off" />
+            <CapabilityToggle capKey="tool_web_search" label="Web search" onMsg="Web search on" offMsg="Web search off" />
+            <CapabilityToggle capKey="tool_email" label="Email dispatch" onMsg="Email on" offMsg="Email off" />
+            <CapabilityToggle capKey="tool_crm" label="CRM management" onMsg="CRM on" offMsg="CRM off" />
+            <CapabilityToggle capKey="tool_memory" label="Memory management" onMsg="Memory on" offMsg="Memory off" />
+            <CapabilityToggle capKey="tool_autopilot" label="Autopilot control" onMsg="Autopilot on" offMsg="Autopilot off" />
+            <CapabilityToggle capKey="tool_deploy" label="Deploy" onMsg="Deploy on" offMsg="Deploy off" />
           </div>
         </>
       )}
@@ -2931,38 +2995,10 @@ export default function SystemSettings() {
       {tab === 'system' && (
         <>
         <div className="admin-card prefs-card">
-          <PrefToggle
-            label="Auto-sync to cloud"
-            desc="Push local state to Supabase relay on changes"
-            prefKey="auto_sync"
-            defaultVal={true}
-            onMsg="Cloud sync enabled"
-            offMsg="Cloud sync disabled"
-          />
-          <PrefToggle
-            label="Telemetry"
-            desc="Track LLM latency, token usage, and error rates"
-            prefKey="telemetry_enabled"
-            defaultVal={true}
-            onMsg="Telemetry enabled"
-            offMsg="Telemetry disabled"
-          />
-          <PrefToggle
-            label="Sound effects"
-            desc="Play audio on notifications and events"
-            prefKey="sound_effects"
-            defaultVal={false}
-            onMsg="Sound effects on"
-            offMsg="Sound effects off"
-          />
-          <PrefToggle
-            label="Auto-backup settings"
-            desc="Snapshot settings to Supabase every 6 hours"
-            prefKey="auto_backup"
-            defaultVal={false}
-            onMsg="Auto-backup enabled"
-            offMsg="Auto-backup disabled"
-          />
+          <CapabilityToggle capKey="auto_sync" label="Auto-sync to cloud" onMsg="Cloud sync enabled" offMsg="Cloud sync disabled" />
+          <CapabilityToggle capKey="telemetry_enabled" label="Telemetry" onMsg="Telemetry enabled" offMsg="Telemetry disabled" />
+          <CapabilityToggle capKey="sound_effects" label="Sound effects" onMsg="Sound effects on" offMsg="Sound effects off" />
+          <CapabilityToggle capKey="auto_backup" label="Auto-backup settings" onMsg="Auto-backup enabled" offMsg="Auto-backup disabled" />
         </div>
 
         {/* Second Brain index status */}
@@ -3347,6 +3383,35 @@ export default function SystemSettings() {
         .pref-toggle-info { display: flex; flex-direction: column; gap: 1px; }
         .pref-toggle-label { font-size: 12px; color: var(--text); font-weight: 500; }
         .pref-toggle-desc { font-size: 10px; color: var(--text-dim); }
+
+        /* A capability the kernel declares but nothing enforces yet. Dimmed
+           and inert, with the reason stated — never a live-looking control
+           that silently does nothing. */
+        .pref-toggle-row--pending .pref-toggle-label,
+        .pref-toggle-row--pending .pref-toggle-desc { opacity: 0.55; }
+        .pref-toggle-badge {
+          margin-left: 8px;
+          padding: 1px 6px;
+          border-radius: 8px;
+          font-size: 9px;
+          font-weight: 600;
+          letter-spacing: 0.03em;
+          text-transform: uppercase;
+          color: var(--amber);
+          background: var(--amber-dim);
+          border: 1px solid var(--amber-dim);
+          vertical-align: middle;
+        }
+        .pref-toggle-pending {
+          font-size: 10px;
+          line-height: 1.45;
+          color: var(--text-dim);
+          max-width: 52ch;
+          margin-top: 3px;
+          padding-left: 8px;
+          border-left: 2px solid var(--amber-dim);
+        }
+        .pref-toggle-btn[aria-disabled="true"] { cursor: not-allowed; opacity: 0.3; }
         .pref-toggle-btn {
           width: 36px;
           height: 20px;

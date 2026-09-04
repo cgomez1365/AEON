@@ -2,6 +2,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const { requireOperator } = require('../../../kernel/server-utils/requireOperator.cjs');
+const capabilities = require('../../../kernel/capabilities.cjs');
 
 module.exports = function createSystemRouter(deps) {
   const router = express.Router();
@@ -146,9 +147,18 @@ module.exports = function createSystemRouter(deps) {
       // Terminal's /index-brain command (aeon_matrix-owned) if a hard rescan is
       // required. Kept as a no-op log line rather than silently deleting the step.
       logs.push('ℹ Matrix indexing is handled by aeon_matrix (boot auto-sync + /index-brain) — skipped here.');
-      // Auto-push all blocks to Supabase after scan
+      // Auto-push all blocks to Supabase after scan.
+      //
+      // Settings → System → "Auto-sync to cloud" governs this. The toggle was
+      // read by nothing, so an operator who switched it off — the operator
+      // most likely to care, since the objection to cloud sync is usually
+      // privacy — still had every block pushed to Supabase on the next scan.
+      // A manual /push is unaffected: that is an explicit instruction, not
+      // automatic sync.
       if (supabase && !isVercel) {
-        try {
+        if (!capabilities.enabled('auto_sync')) {
+          logs.push('ℹ Cloud sync skipped — "Auto-sync to cloud" is off in Settings → System.');
+        } else try {
           const syncRes = await new Promise((resolve) => {
             const http = require('http');
             const selfPort = Number(process.env.PORT) || 3001;

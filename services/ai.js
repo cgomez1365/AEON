@@ -7,6 +7,7 @@
 const fs = require('fs');
 const path = require('path');
 const { isCloud: _isCloud } = require('../src/kernel/runtime.cjs');
+const _capabilities = require('../src/kernel/capabilities.cjs');
 
 // Phase 6: native local runtime (llama.cpp). Lazy require.
 // Loaded lazily so ai.js still boots on machines without the runtime installed.
@@ -200,6 +201,20 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   const setActivityRecorder = (fn) => { _recordActivity = fn; };
   const _llmTelemetry = { calls: {}, totalCalls: 0, totalTokens: 0 };
   function _trackLLM(engine, model, tokens, latencyMs, success) {
+    // Settings → System → Telemetry. The toggle existed and was read by
+    // nothing, so switching it off recorded exactly as much as switching it
+    // on. Measurement stops here, at the one place every provider path funnels
+    // through, rather than at each call site.
+    //
+    // The audit line and the cost ledger are NOT measurement and continue
+    // regardless: the audit trail is a security record, and the ledger is what
+    // stands between the operator and a surprise bill. Turning off performance
+    // stats must not quietly turn off spend tracking.
+    if (!_capabilities.enabled('telemetry_enabled')) {
+      writeOSAudit(`LLM_${engine.toUpperCase()}`, `${model} | ${tokens} tok | ${latencyMs}ms${success ? '' : ' | FAILED'}`, success ? 200 : 500, tokens);
+      try { if (callLedger) callLedger.record({ provider: engine, model, tokens, latencyMs, success }); } catch {}
+      return;
+    }
     const key = `${engine}/${model}`;
     if (!_llmTelemetry.calls[key]) _llmTelemetry.calls[key] = { engine, model, requests: 0, tokens: 0, errors: 0, avgLatency: 0 };
     const c = _llmTelemetry.calls[key];
