@@ -4,6 +4,7 @@
  * upload handling, and orphan cleanup. All path resolution lives here.
  */
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const multer = require('multer');
 const { isCloud: _isCloud } = require('../src/kernel/runtime.cjs');
@@ -51,7 +52,21 @@ const getLocalFile = (filename) => {
   if (scriptsFiles.includes(filename)) return path.join(ROOT, 'scripts', filename);
   if (secretsFiles.includes(filename)) return path.join(ROOT, 'secrets', filename);
 
-  return path.join(ROOT, '..', filename);
+  // Anything not on a list above lands in the install's own runtime folder.
+  //
+  // This used to be `path.join(ROOT, '..', filename)` — the PARENT of the
+  // install. On a Desktop install that is the Desktop itself, so AEON's
+  // scratch directories (temp_frames, staging, …) were created as siblings of
+  // the app, in the middle of the operator's own files. It also contradicted
+  // the workspace rule stated immediately below, which exists precisely so a
+  // consumer install stays inside its own folder.
+  //
+  // An install that already has data at the old location keeps reading it, so
+  // upgrading does not strand a file someone's work is in; only new paths are
+  // created in the contained place.
+  const legacy = path.join(ROOT, '..', filename);
+  try { if (fs.existsSync(legacy)) return legacy; } catch {}
+  return path.join(ROOT, 'data', 'runtime', filename);
 };
 
 // Default workspace = the AEON install folder itself. The File Manager and
@@ -173,7 +188,28 @@ const upload = multer({
     // never carried here. Hand the error to multer via cb instead.
     destination: (req, file, cb) => {
       try {
-        const dest = req.body.targetDir || WORKSPACE;
+        // `targetDir` arrives from the request body and used to be trusted
+        // verbatim, so an upload could land anywhere the process can write —
+        // a LaunchAgent, a shell profile, a Windows Start Menu startup folder,
+        // all of which execute what is put there. This is the last gate before
+        // bytes hit disk.
+        //
+        // The boundary matches the File Manager's own: the operator's home
+        // plus the workspace and vault (which may sit outside it). Uploading
+        // into a browsed folder is the feature; escaping the home directory
+        // is not.
+        const roots = [os.homedir(), WORKSPACE, VAULT_ROOT]
+          .filter(Boolean).map(r => path.resolve(r));
+        const requested = typeof req.body.targetDir === 'string' ? req.body.targetDir.trim() : '';
+        if (requested.includes('\0')) return cb(new Error('cannot write to upload target: invalid path'));
+        const dest = requested
+          ? path.resolve(path.isAbsolute(requested) ? requested : path.join(WORKSPACE, requested))
+          : path.resolve(WORKSPACE);
+
+        const inside = roots.some(root => dest === root || dest.startsWith(root + path.sep));
+        if (!inside) {
+          return cb(new Error(`Upload target is outside the allowed area: ${dest}`));
+        }
         if (!fs.existsSync(dest)) fs.mkdirSync(dest, { recursive: true });
         cb(null, dest);
       } catch (e) {

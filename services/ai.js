@@ -563,7 +563,16 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       }
     }
   };
-  hydrateEnvFromVault();
+  // The hydration promise is kept, not discarded. It used to be fired and
+  // dropped: every consumer that read process.env during boot — block
+  // readiness, Council's engineAlive, Deep Research's provider list — ran
+  // against an env that had not been filled yet, and reported a correctly
+  // configured install as having no providers. Exposing the promise lets
+  // those callers await the one hydration that is already in flight instead
+  // of each starting their own or guessing.
+  const envHydrated = hydrateEnvFromVault().catch((e) => {
+    console.warn('[KERNEL] vault→env hydration failed:', e.message);
+  });
 
   const openRouterRequest = async (prompt, model = 'openai/gpt-4o-mini', opts = {}) => {
     const apiKey = nextKey('openrouter') || process.env.OPENROUTER_API_KEY;
@@ -873,5 +882,6 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     KILL_SWITCH_THRESHOLD, GEMINI_PRICE_PER_TOKEN, GROQ_PRICE_PER_TOKEN,
     getProviderHealth, getKeyPoolInfo, dehydrateProvider,
     defaultLocalModel, localRuntimePresent,
+    envHydrated,
   };
 };

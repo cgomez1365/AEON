@@ -150,19 +150,44 @@ describe('BO-H8 — a bad upload must not kill the kernel', () => {
     // the REAL checkout data root. The destination callback mkdirSync's its
     // target, so an ordinary `npm test` created operational state inside the
     // install it was running from. On a clone pointed at a live install, the
-    // suite had write authority over the product's data. A scratch dir proves
-    // exactly the same property and touches nothing.
+    // suite had write authority over the product's data.
+    //
+    // The home directory proves the same property and is better still: it is
+    // inside the upload boundary, it already exists, so the callback's
+    // mkdirSync is never reached and the test writes nothing at all. A scratch
+    // dir under os.tmpdir() no longer works here — see the containment case
+    // below, which is the reason why.
     const engine = storage.upload.storage;
-    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'aeon-upload-dest-'));
-    try {
-      const req = { body: { targetDir: scratch } };
-      let dest = null; let err = 'NOT_CALLED';
-      engine.getDestination(req, { originalname: 'x.txt' }, (e, d) => { err = e; dest = d; });
-      expect(err).toBeNull();
-      expect(dest).toBeTruthy();
-    } finally {
-      fs.rmSync(scratch, { recursive: true, force: true });
+    const req = { body: { targetDir: os.homedir() } };
+    let dest = null; let err = 'NOT_CALLED';
+    engine.getDestination(req, { originalname: 'x.txt' }, (e, d) => { err = e; dest = d; });
+    expect(err).toBeNull();
+    expect(dest).toBeTruthy();
+  });
+
+  it('refuses a destination outside the operator\'s own area', () => {
+    // The security property, pinned. `targetDir` arrives in the request body
+    // and was previously trusted verbatim, so an upload could be aimed at any
+    // path the process could write — including the directories that execute
+    // what is placed in them (LaunchAgents, a shell profile, Startup). The
+    // destination must land inside the home directory, workspace, or vault.
+    const engine = storage.upload.storage;
+    for (const evil of ['/tmp/aeon-escape', '/etc', path.join(os.tmpdir(), 'x')]) {
+      let err = 'NOT_CALLED';
+      engine.getDestination({ body: { targetDir: evil } }, { originalname: 'x.txt' }, (e) => { err = e; });
+      expect(err, `${evil} should have been refused`).toBeInstanceOf(Error);
+      expect(err.message).toMatch(/outside the allowed area/);
     }
+  });
+
+  it('refuses a destination that climbs out with ../', () => {
+    // Containment is judged after resolution, so the traversal is already
+    // collapsed. Testing the raw string instead would let this through.
+    const engine = storage.upload.storage;
+    let err = 'NOT_CALLED';
+    const escape = path.join(os.homedir(), '..', '..', '..', 'etc');
+    engine.getDestination({ body: { targetDir: escape } }, { originalname: 'x.txt' }, (e) => { err = e; });
+    expect(err).toBeInstanceOf(Error);
   });
 
   it('keeps the 50 MB / 20 file limits the error handler reports on', () => {
