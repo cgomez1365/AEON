@@ -175,6 +175,11 @@
   --shadow-panel: 0 8px 48px rgba(0,0,0,0.9),  0 2px 8px rgba(0,0,0,0.8);
 }
 
+/* Frosting off — declared AFTER the theme blocks so it wins the cascade at
+   equal specificity, while leaving each theme's own --glass intact when
+   frosting is on. */
+:root[data-frosted="off"] { --glass: none; }
+
 /* Sidebar width. The grid reads --sidebar-w; these set it. */
 :root[data-sidebar="compact"] { --sidebar-w: clamp(160px, 13vw, 190px); }
 :root[data-sidebar="wide"]    { --sidebar-w: clamp(250px, 23vw, 330px); }

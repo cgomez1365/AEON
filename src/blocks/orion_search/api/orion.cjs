@@ -133,10 +133,19 @@ module.exports = function (deps) {
     // about this" when the vault was never actually searched.
     const brainError = brain?.error || null;
     const brainUnavailable = brain?.unavailable || null;
+    // Both brain signals go into ONE key, so they must be joined rather than
+    // spread — an object literal with two `brain:` entries silently keeps the
+    // last, and the fetch-level error would vanish behind the index message.
+    // They come from mutually exclusive paths today; joining them means that
+    // staying true is not a precondition for the report being complete.
+    const brainNote = [
+      brainError,
+      brainUnavailable ? `${brainUnavailable.message} ${brainUnavailable.action}` : null,
+    ].filter(Boolean).join(' — ');
+
     const degraded = {
       ...(webError ? { web: webError } : {}),
-      ...(brainError ? { brain: brainError } : {}),
-      ...(brainUnavailable ? { brain: `${brainUnavailable.message} ${brainUnavailable.action}` } : {}),
+      ...(brainNote ? { brain: brainNote } : {}),
     };
 
     res.json({

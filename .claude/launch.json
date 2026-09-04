@@ -3,9 +3,12 @@
   "configurations": [
     {
       "name": "aeon3",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "start"],
-      "port": 3000
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "server.cjs"
+      ],
+      "port": 3001,
+      "autoPort": false
     }
   ]
 }

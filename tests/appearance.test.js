@@ -128,13 +128,27 @@ describe('theme builder — font, density and frosted apply', () => {
   });
 
   it('frosted applies in BOTH directions', async () => {
-    // The old inline version only handled the "on" branch, so turning
+    // The original inline version only handled the "on" branch, so turning
     // frosting off saved the preference and left the blur running.
     const { applyThemeBuilder } = await load();
-    applyThemeBuilder({ frosted: true });
-    expect(dom.props.get('--glass')).toMatch(/blur/);
     applyThemeBuilder({ frosted: false });
-    expect(dom.props.get('--glass')).toBe('none');
+    expect(dom.attrs.get('data-frosted')).toBe('off');
+    applyThemeBuilder({ frosted: true });
+    expect(dom.attrs.has('data-frosted')).toBe(false);
+  });
+
+  it('frosting never sets --glass inline, which would outrank every theme', async () => {
+    // Found by the settings tracer. An inline custom property beats EVERY
+    // stylesheet rule regardless of specificity or source order, so setting
+    // --glass here permanently overrode the amoled theme's own blur value:
+    // once the operator touched this toggle in either direction, switching to
+    // amoled silently kept the old blur forever. An attribute participates in
+    // the normal cascade instead.
+    const { applyThemeBuilder } = await load();
+    applyThemeBuilder({ frosted: false });
+    expect(dom.props.has('--glass'), '--glass must not be set inline').toBe(false);
+    applyThemeBuilder({ frosted: true });
+    expect(dom.props.has('--glass'), '--glass must not be set inline').toBe(false);
   });
 });
 
@@ -179,6 +193,15 @@ describe('the CSS defines what the applier stamps', () => {
 
   it('the spacing scale actually consumes --density-scale', () => {
     expect(css).toMatch(/--sp-4:\s*calc\([^)]*var\(--density-scale\)/);
+  });
+
+  it('the frosted-off rule exists and is declared AFTER the theme blocks', () => {
+    // Source order decides at equal specificity, so a frosted-off rule placed
+    // before the themes would lose to amoled's own --glass.
+    const frosted = css.indexOf(':root[data-frosted="off"]');
+    const amoled = css.indexOf(':root[data-theme="amoled"]');
+    expect(frosted, 'frosted-off rule missing').toBeGreaterThan(-1);
+    expect(frosted, 'frosted-off must come after the theme blocks').toBeGreaterThan(amoled);
   });
 
   it('every font the builder offers is loaded or generic', () => {

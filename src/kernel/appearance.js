@@ -95,11 +95,21 @@ export function applyThemeBuilder(t) {
   }
   if (typeof t.frosted === 'boolean') {
     // Frosted off means no backdrop blur anywhere. The blur is expensive on
-    // low-end GPUs, which is the reason the toggle exists — and the inline
-    // version this replaces only ever acted in the "on" direction, so
-    // turning frosting OFF saved the preference and left the blur running
-    // until the next restart.
-    set('--glass', t.frosted ? 'blur(18px) saturate(160%)' : 'none');
+    // low-end GPUs, which is the reason the toggle exists — and the version
+    // this replaces only ever acted in the "on" direction, so turning
+    // frosting OFF saved the preference and left the blur running until the
+    // next restart.
+    //
+    // Driven by an attribute rather than an inline --glass value. An inline
+    // custom property outranks EVERY stylesheet rule regardless of
+    // specificity or source order, so setting it here permanently overrode
+    // the amoled theme's own `--glass: blur(10px) saturate(120%)`: once the
+    // operator had touched this toggle in either direction, switching to
+    // amoled silently kept the old blur forever. An attribute participates
+    // in the normal cascade, so the theme keeps its own value when frosting
+    // is on, and the off-rule still wins because it is declared last.
+    if (t.frosted) el.removeAttribute('data-frosted');
+    else el.setAttribute('data-frosted', 'off');
   }
 }
 
