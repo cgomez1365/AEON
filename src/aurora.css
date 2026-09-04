@@ -217,12 +217,40 @@ body {
   z-index: 10000;
 }
 
+/* Block and section icons.
+   Masked, not filtered. The old rule was a filter chain ending in
+   hue-rotate(147deg): a fixed recipe that lands on cyan and cannot land
+   anywhere else, so icons stayed cyan no matter what accent the operator
+   picked — while the --icon-accent token three screens up claimed they
+   "follow whatever the operator picks in Settings for free". The token was
+   real; nothing consumed it.
+   A mask paints the token through the glyph's own shape, so one declaration
+   serves every accent. The mask image itself is set inline from the icon's
+   src, since only the element knows which file it is. */
 .block-icon-svg {
   display: block;
   flex: 0 0 auto;
-  object-fit: contain;
-  filter: brightness(0) saturate(100%) invert(82%) sepia(88%) saturate(1663%) hue-rotate(147deg) brightness(104%) contrast(103%)
-    drop-shadow(0 0 6px rgba(0, 226, 255, 0.4));
+  background-color: var(--icon-accent);
+  -webkit-mask-position: center;
+          mask-position: center;
+  -webkit-mask-repeat: no-repeat;
+          mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+          mask-size: contain;
+  filter: drop-shadow(0 0 6px var(--accent-glow));
+}
+
+/* The Lucide fallback, drawn when a block ships no icon asset — a custom
+   section, most often. It is an inline SVG stroked with currentColor and it
+   was given no color at all, so it inherited whatever the surrounding text
+   was and rendered near-black against the dark chrome: the "new section icon
+   comes up black, not neon" report. Same accent, same glow as the masked
+   path, so the two are indistinguishable to the operator. */
+.block-icon-lucide {
+  display: block;
+  flex: 0 0 auto;
+  color: var(--icon-accent);
+  filter: drop-shadow(0 0 6px var(--accent-glow));
 }
 
 .modal-portal-layer {
