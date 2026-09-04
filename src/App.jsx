@@ -8,6 +8,10 @@ import AuthGate from "./components/AuthGate";
 import CloudSetupGate from "./components/CloudSetupGate";
 import { TelemetryProvider } from "./kernel/contexts/TelemetryContext";
 import { shouldBannerResponse, describeResponseBanner, decideNetworkBanner, isSelfReported } from "./utils/interceptorPolicy";
+// Boot-time appearance lives in the kernel, shared with Settings → Appearance.
+// It used to be a private copy here, which is how theme and sidebar width came
+// to be saved by the panel and applied by nobody.
+import { loadAndApplyAppearance } from "./kernel/appearance";
 
 // One place that answers "is anyone signed in?". Read fresh on every call —
 // a captured boolean would keep the interceptor and the IDE-mode poll acting
@@ -16,39 +20,13 @@ function hasSessionToken() {
   try { return !!localStorage.getItem('aeon_session_token'); } catch { return false; }
 }
 
-// ── Load persisted appearance on boot (theme, accent, font) ──────────
-// Order matters: theme_builder sets the base palette first, then
-// appearance overlays accent + font on top so the user's simple color
-// pick always wins over whatever the theme builder last saved.
-async function applyPersistedAppearance() {
-  const set = (k, v) => document.documentElement.style.setProperty(k, v);
-  try {
-    const tb = await fetch('/api/prefs/theme_builder').then(r => r.json()).catch(() => ({}));
-    const t = tb.value;
-    if (t?.colors) {
-      if (t.colors.background) set('--bg', t.colors.background);
-      if (t.colors.text) set('--text', t.colors.text);
-      if (t.colors.panel) set('--bg-card', t.colors.panel);
-      if (t.colors.border) set('--border', t.colors.border + '40');
-      if (t.colors.accent) { set('--accent', t.colors.accent); set('--accent-dim', t.colors.accent + '1a'); }
-    }
-  } catch {}
-  // appearance always applies last — its accent + font override theme_builder
-  try {
-    const ap = await fetch('/api/prefs/appearance').then(r => r.json()).catch(() => ({}));
-    const a = ap.value;
-    if (!a) return;
-    if (a.accent) { set('--accent', a.accent); set('--accent-dim', a.accent + '1a'); }
-    if (a.fontSize) set('font-size', `${a.fontSize}px`);
-  } catch {}
-}
 
 export default function App() {
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
   const [chatHistory, setChatHistory] = useState([]);
   const [auditLogs, setAuditLogs] = useState([]);
 
-  useEffect(() => { applyPersistedAppearance(); }, []);
+  useEffect(() => { loadAndApplyAppearance(); }, []);
 
   useEffect(() => {
     const handleResize = () => setIsMobile(window.innerWidth <= 768);

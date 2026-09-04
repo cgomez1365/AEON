@@ -3,6 +3,7 @@ import { Settings as SettingsIcon, Check, X, RefreshCw, Zap, Shield, ChevronDown
 import { authFetch, login as apiLogin, logout as apiLogout } from '../../kernel/auth';
 import { BLOCKS as INSTALLED_BLOCKS } from '../../kernel/blockRegistry';
 import { BlockIcon } from '../../components/BlockIcon';
+import { applyAppearance, applyThemeBuilder } from '../../kernel/appearance';
 
 // Derive provider registry from nervous system — no mutable module state.
 function getProviderRegistry(ns) {
@@ -1126,10 +1127,12 @@ function AppearancePanel() {
     if (key === 'sidebarWidth') setSidebarWidth(value);
     await savePref('appearance', current);
 
-    // Live-apply accent color
-    if (key === 'accent') document.documentElement.style.setProperty('--accent', value);
-    if (key === 'fontSize') document.documentElement.style.setProperty('font-size', `${value}px`);
-    showToast(`Appearance updated`);
+    // Apply through the kernel's applier, the same one the boot path uses.
+    // This was two hand-written lines covering accent and font size, so theme
+    // and sidebar width saved successfully and changed nothing — including
+    // after a restart, because the boot path was missing them too.
+    applyAppearance(current);
+    showToast('Appearance updated');
   };
 
   const ACCENTS = [
@@ -1269,13 +1272,13 @@ function ThemeBuilder() {
   const apply = async () => {
     const theme = { colors, harmony, mode, font, density, frosted };
     await savePref('theme_builder', theme);
-    document.documentElement.style.setProperty('--bg', colors.background);
-    document.documentElement.style.setProperty('--text', colors.text);
-    document.documentElement.style.setProperty('--bg-card', colors.panel);
-    document.documentElement.style.setProperty('--border', colors.border + '40');
-    document.documentElement.style.setProperty('--accent', colors.accent);
-    document.documentElement.style.setProperty('--accent-dim', colors.accent + '1a');
-    if (frosted) document.documentElement.style.setProperty('--glass', 'blur(22px) saturate(170%)');
+    // Through the kernel applier, which is also what the boot path replays.
+    // The hand-written version here set six colors and, of the three controls
+    // below them, only ever acted on `frosted` — and only in the "on"
+    // direction, so turning frosting OFF saved the preference and left the
+    // blur in place until a restart. Font and density were saved and never
+    // read at all.
+    applyThemeBuilder(theme);
     showToast('Theme applied');
   };
 

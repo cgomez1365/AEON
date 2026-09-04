@@ -5,7 +5,9 @@
    applyPersistedAppearance() in App.jsx overrides tokens at runtime.
 ================================================================ */
 
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+/* Inter is offered by Settings → Theme Builder → Font and was never loaded,
+   so choosing it fell through to whatever the system happened to have. */
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap');
 
 /* ── AURORA TOKENS — "Aurora" clear glass on gradient glow ──────────── */
 :root {
@@ -78,6 +80,9 @@
   --font-display: 'Space Grotesk', var(--font-body);
 
   /* ── Layout ── */
+  /* Settings → Appearance → Sidebar writes data-sidebar on <html>; the
+     command-center grid reads this. Default matches the historical value. */
+  --sidebar-w:    clamp(200px, 18vw, 260px);
   --radius:       14px;
   --radius-sm:    6px;
   --radius-md:    10px;
@@ -87,8 +92,20 @@
   --nav-height:   64px;
 
   /* ── Spacing ── */
-  --sp-1: 4px;  --sp-2: 8px;  --sp-3: 12px; --sp-4: 16px;
-  --sp-5: 20px; --sp-6: 24px; --sp-8: 32px; --sp-10: 40px;
+  /* Scaled by Settings → Theme Builder → Density, which writes
+     --density-scale. Note the reach: these tokens are the design system's
+     spacing scale, but most of the app is still styled with hardcoded inline
+     pixel values, so density moves the token-based surfaces and not yet the
+     rest. Components migrated off inline styles inherit it for free. */
+  --density-scale: 1;
+  --sp-1: calc(4px  * var(--density-scale));
+  --sp-2: calc(8px  * var(--density-scale));
+  --sp-3: calc(12px * var(--density-scale));
+  --sp-4: calc(16px * var(--density-scale));
+  --sp-5: calc(20px * var(--density-scale));
+  --sp-6: calc(24px * var(--density-scale));
+  --sp-8: calc(32px * var(--density-scale));
+  --sp-10: calc(40px * var(--density-scale));
 
   /* ── Motion ── */
   --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
@@ -113,6 +130,54 @@
   --transition-smooth:    var(--t-base);
   --transition-spring:    var(--t-spring);
 }
+
+/* ── THEME VARIANTS ────────────────────────────────────────────────── */
+/* Settings → Appearance has offered dark / midnight / amoled since it was
+   written, and the choice was saved and then read by nothing: all three
+   rendered identically. These are the definitions that make the control mean
+   something. Only the ground and its derived surfaces move — accent, text and
+   spacing are shared, so a theme switch never fights the operator's accent.
+
+   "dark" is the default palette above, so it needs no block: an explicit
+   [data-theme="dark"] would have to restate every value and would then be a
+   second copy to keep in sync. */
+
+/* Midnight — deeper, bluer, higher-contrast panels than the default. */
+:root[data-theme="midnight"] {
+  --bg:          #050710;
+  --bg-card:     rgba(10, 14, 28, 0.58);
+  --bg-elevated: rgba(14, 19, 38, 0.70);
+  --surface-1:   rgba(8, 11, 22, 0.52);
+  --surface-2:   rgba(11, 15, 30, 0.64);
+  --surface-3:   rgba(15, 20, 40, 0.76);
+  --glass-bg:    rgba(10, 14, 28, 0.58);
+  --text:        #e2ecf8;
+  --text-dim:    #55759a;
+}
+
+/* AMOLED — true black, for panels that switch themselves off pixel by pixel.
+   Surfaces become opaque rather than translucent: a glass panel over pure
+   black reads as grey haze and loses the only thing this theme is for. */
+:root[data-theme="amoled"] {
+  --bg:          #000000;
+  --bg-card:     rgba(9, 9, 11, 0.92);
+  --bg-elevated: rgba(14, 14, 17, 0.96);
+  --surface-1:   rgba(6, 6, 8, 0.94);
+  --surface-2:   rgba(10, 10, 13, 0.96);
+  --surface-3:   rgba(16, 16, 20, 0.98);
+  --glass-bg:    rgba(9, 9, 11, 0.92);
+  --glass:       blur(10px) saturate(120%);
+  --border:      rgba(255, 255, 255, 0.14);
+  --border-mute: rgba(255, 255, 255, 0.07);
+  --text:        #f0f2f5;
+  --text-dim:    #6b7280;
+  --shadow-card:  0 4px 24px rgba(0,0,0,0.85), 0 1px 3px rgba(0,0,0,0.7);
+  --shadow-panel: 0 8px 48px rgba(0,0,0,0.9),  0 2px 8px rgba(0,0,0,0.8);
+}
+
+/* Sidebar width. The grid reads --sidebar-w; these set it. */
+:root[data-sidebar="compact"] { --sidebar-w: clamp(160px, 13vw, 190px); }
+:root[data-sidebar="wide"]    { --sidebar-w: clamp(250px, 23vw, 330px); }
 
 /* ── RESET ─────────────────────────────────────────────────────────── */
 *, *::before, *::after {
@@ -204,7 +269,7 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 .command-center.with-sidebar {
-  grid-template-columns: clamp(200px, 18vw, 260px) 1fr minmax(320px, 380px);
+  grid-template-columns: var(--sidebar-w, clamp(200px, 18vw, 260px)) 1fr minmax(320px, 380px);
 }
 
 .aeon-shell {
