@@ -6,7 +6,7 @@
  * Runs through /api/ai, so it works on whatever providers are alive.
  */
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Landmark, Play, Loader, ChevronDown, Copy, Check, Users, Plus, Trash2, Save, Clock, X } from 'lucide-react';
+import { Landmark, Play, Loader, ChevronDown, Copy, Check, Users, Plus, Trash2, Save, Clock, X, Pencil } from 'lucide-react';
 
 async function ask(prompt, provider, model) {
   const r = await fetch('/api/ai', {
@@ -240,6 +240,9 @@ export default function Council() {
 function RosterPanel({ members, availModels, onChange }) {
   const [adding, setAdding] = useState(false);
   const [form, setForm] = useState({ label: '', persona: '', model: '' });
+  const [editingId, setEditingId] = useState(null);
+  const [edit, setEdit] = useState({ label: '', persona: '' });
+  const [err, setErr] = useState('');
   const modelOpts = availModels.map(m => ({ value: `${m.engine}|${m.id}`, label: `${m.id} (${m.engine})` }));
 
   const add = async () => {
@@ -248,8 +251,37 @@ function RosterPanel({ members, availModels, onChange }) {
     await fetch('/api/council/members', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ label: form.label, persona: form.persona, provider, model }) });
     setForm({ label: '', persona: '', model: '' }); setAdding(false); onChange();
   };
-  const del = async (id) => { await fetch(`/api/council/members/${id}`, { method: 'DELETE' }); onChange(); };
-  const setModel = async (id, val) => { const [provider, model] = val.split('|'); await fetch(`/api/council/members/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider, model }) }); onChange(); };
+
+  // Every mutation reports what the server said. These all used to fire and
+  // ignore the response, so a refusal — the chair rules below, a 404 on a
+  // stale id — looked exactly like success until the list failed to change.
+  const patch = async (id, body) => {
+    setErr('');
+    const r = await fetch(`/api/council/members/${id}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    if (!r.ok) { setErr((await r.json().catch(() => ({}))).error || 'Could not save that change.'); return false; }
+    onChange();
+    return true;
+  };
+
+  const del = async (id) => {
+    setErr('');
+    const r = await fetch(`/api/council/members/${id}`, { method: 'DELETE' });
+    if (!r.ok) { setErr((await r.json().catch(() => ({}))).error || 'Could not remove that member.'); return; }
+    const d = await r.json().catch(() => ({}));
+    if (d.newChair) setErr(`Removed. ${d.newChair} is the new chair.`);
+    onChange();
+  };
+
+  const setModel = (id, val) => { const [provider, model] = val.split('|'); return patch(id, { provider, model }); };
+  const makeChair = (id) => patch(id, { chair: true });
+
+  const startEdit = (m) => { setEditingId(m.id); setEdit({ label: m.label || '', persona: m.persona || '' }); setErr(''); };
+  const saveEdit = async (id) => {
+    if (!edit.label.trim()) { setErr('A member needs a name.'); return; }
+    if (await patch(id, { label: edit.label.trim(), persona: edit.persona.trim() })) setEditingId(null);
+  };
 
   const inp = { background: 'var(--surface-1)', border: '1px solid var(--border)', borderRadius: 6, padding: '7px 10px', color: 'var(--text)', fontSize: 12, outline: 'none' };
   return (
@@ -267,19 +299,75 @@ function RosterPanel({ members, availModels, onChange }) {
           No council members yet — add one below.
         </div>
       )}
+      {err && <div role="status" style={{ fontSize: 11.5, color: 'var(--amber)', background: 'var(--amber-dim)', border: '1px solid var(--amber-dim)', borderRadius: 6, padding: '7px 11px', marginBottom: 8, lineHeight: 1.5 }}>{err}</div>}
+
       {members.map(m => (
         <div key={m.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', border: '1px solid var(--border-mute)', borderRadius: 8, marginBottom: 8 }}>
           <span style={{ width: 9, height: 9, borderRadius: '50%', background: m.color, flexShrink: 0 }} />
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 13, fontWeight: 600 }}>{m.label} {m.chair && <span style={{ fontSize: 9, color: 'var(--accent)', border: '1px solid var(--accent)', borderRadius: 3, padding: '1px 5px', marginLeft: 4 }}>CHAIR</span>}</div>
-            {m.persona && <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>{m.persona}</div>}
-          </div>
-          <select value={`${m.provider}|${m.model}`} onChange={e => setModel(m.id, e.target.value)}
-            aria-label={`Change model for ${m.label}`} className="council-focusable" style={{ ...inp, maxWidth: 220 }}>
-            <option value={`${m.provider}|${m.model}`}>{m.model} ({m.provider})</option>
-            {modelOpts.filter(o => o.value !== `${m.provider}|${m.model}`).map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-          </select>
-          {members.length > 2 && <button onClick={() => del(m.id)} title="remove" aria-label={`Remove ${m.label} from council`} className="council-focusable" style={{ background: 'none', border: 'none', color: 'var(--text-dim)', cursor: 'pointer' }}><Trash2 size={14} aria-hidden="true" /></button>}
+
+          {editingId === m.id ? (
+            // Name and persona were fixed at creation: the API had accepted a
+            // PUT for both since it was written, and nothing in the UI ever
+            // sent one, so a typo in a member's name was permanent.
+            <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <input autoFocus style={inp} className="council-focusable" aria-label="Member name" value={edit.label}
+                onChange={e => setEdit({ ...edit, label: e.target.value })}
+                onKeyDown={e => { if (e.key === 'Enter') saveEdit(m.id); if (e.key === 'Escape') setEditingId(null); }} />
+              <input style={inp} className="council-focusable" aria-label="Member persona" placeholder="Persona / role — how this voice thinks" value={edit.persona}
+                onChange={e => setEdit({ ...edit, persona: e.target.value })}
+                onKeyDown={e => { if (e.key === 'Enter') saveEdit(m.id); if (e.key === 'Escape') setEditingId(null); }} />
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button onClick={() => saveEdit(m.id)} className="council-focusable" style={{ ...inp, cursor: 'pointer', color: 'var(--accent)', border: '1px solid var(--accent)', fontWeight: 600, padding: '5px 12px' }}>Save</button>
+                <button onClick={() => setEditingId(null)} className="council-focusable" style={{ ...inp, cursor: 'pointer', color: 'var(--text-dim)', padding: '5px 12px' }}>Cancel</button>
+              </div>
+            </div>
+          ) : (
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>
+                {m.label}
+                {m.chair && <span style={{ fontSize: 9, color: 'var(--accent)', border: '1px solid var(--accent)', borderRadius: 3, padding: '1px 5px', marginLeft: 4 }}>CHAIR</span>}
+              </div>
+              {m.persona && <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>{m.persona}</div>}
+            </div>
+          )}
+
+          {editingId !== m.id && (
+            <>
+              <select value={`${m.provider}|${m.model}`} onChange={e => setModel(m.id, e.target.value)}
+                aria-label={`Change model for ${m.label}`} className="council-focusable" style={{ ...inp, maxWidth: 220 }}>
+                <option value={`${m.provider}|${m.model}`}>{m.model} ({m.provider})</option>
+                {modelOpts.filter(o => o.value !== `${m.provider}|${m.model}`).map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+
+              {/* Chair was assigned once at seeding and never reassignable, so
+                  the member who writes the verdict was whoever happened to be
+                  created first. */}
+              {!m.chair && (
+                <button onClick={() => makeChair(m.id)} title="Make chair — this member writes the verdict"
+                  aria-label={`Make ${m.label} the chair`} className="council-focusable"
+                  style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-dim)', cursor: 'pointer', fontSize: 9, padding: '3px 7px', letterSpacing: '0.05em' }}>
+                  CHAIR
+                </button>
+              )}
+
+              <button onClick={() => startEdit(m)} title="Edit name and persona" aria-label={`Edit ${m.label}`}
+                className="council-focusable" style={{ background: 'none', border: 'none', color: 'var(--text-dim)', cursor: 'pointer', display: 'flex' }}>
+                <Pencil size={13} aria-hidden="true" />
+              </button>
+
+              {/* Was hidden whenever the roster held 2 or fewer, so a council
+                  seeded with two members could never be changed — the state
+                  the operator was most likely to land in on a fresh install.
+                  A debate needs two voices, so that is the real floor, and
+                  the reason is stated rather than the control vanishing. */}
+              <button onClick={() => members.length > 2 ? del(m.id) : setErr('A debate needs at least two voices. Add another member before removing this one.')}
+                title={members.length > 2 ? 'Remove' : 'A debate needs at least two voices'}
+                aria-label={`Remove ${m.label} from council`} className="council-focusable"
+                style={{ background: 'none', border: 'none', color: members.length > 2 ? 'var(--text-dim)' : 'var(--text-faint)', cursor: members.length > 2 ? 'pointer' : 'not-allowed', display: 'flex' }}>
+                <Trash2 size={14} aria-hidden="true" />
+              </button>
+            </>
+          )}
         </div>
       ))}
       {adding ? (
