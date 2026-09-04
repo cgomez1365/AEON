@@ -48,12 +48,38 @@ module.exports = function (deps) {
         body: JSON.stringify({ query: q, k }),
       }),
       // Blocks: match the live registry briefs (local, sync, no fetch)
+      //
+      // Matched on TERMS, not on the whole query as one substring. The old
+      // test was `b.id.includes(ql)` with ql the entire lowercased query, so
+      // "trading strategy" asked whether the id "trading" contains the string
+      // "trading strategy" — false — and this lens returned nothing for any
+      // query longer than one word. It appeared to work only because the
+      // obvious thing to type while testing is a single word.
+      //
+      // Scored rather than filtered, so the closest block sorts first: id and
+      // label are what someone is naming when they type it, the brief is
+      // weaker evidence.
       Promise.resolve().then(() => {
         try {
           const { getBlockBriefs } = require('../../../kernel/blockAwareness.cjs');
-          const ql = q.toLowerCase();
-          return getBlockBriefs().filter(b =>
-            b.id.includes(ql) || b.label.toLowerCase().includes(ql) || b.brief.toLowerCase().includes(ql));
+          const terms = q.toLowerCase().match(/[a-z0-9]{2,}/g) || [];
+          if (!terms.length) return [];
+          return getBlockBriefs()
+            .map((b) => {
+              const id = String(b.id || '').toLowerCase();
+              const label = String(b.label || '').toLowerCase();
+              const brief = String(b.brief || '').toLowerCase();
+              let score = 0;
+              for (const t of terms) {
+                if (id.includes(t)) score += 3;
+                if (label.includes(t)) score += 3;
+                if (brief.includes(t)) score += 1;
+              }
+              return { b, score };
+            })
+            .filter(x => x.score > 0)
+            .sort((x, y) => y.score - x.score)
+            .map(x => x.b);
         } catch { return []; }
       }),
     ]);
@@ -98,11 +124,26 @@ module.exports = function (deps) {
       });
     }
 
+    // The brain leg has the same two failure modes the web leg does, and
+    // reported neither. `error` is the fetch dying; `unavailable` is retrieve
+    // saying the index could not be searched at all — no embedding model,
+    // nothing indexed, or an index built in a different vector space. Both
+    // used to arrive here as an empty document list and leave via ok:true
+    // with no results, which reads to the operator as "your vault has nothing
+    // about this" when the vault was never actually searched.
+    const brainError = brain?.error || null;
+    const brainUnavailable = brain?.unavailable || null;
+    const degraded = {
+      ...(webError ? { web: webError } : {}),
+      ...(brainError ? { brain: brainError } : {}),
+      ...(brainUnavailable ? { brain: `${brainUnavailable.message} ${brainUnavailable.action}` } : {}),
+    };
+
     res.json({
       ok: true, query: q,
       counts: { web: webBlocks.length, brain: brainDocs.length, block: (blocks || []).length },
       results,
-      ...(webError ? { degraded: { web: webError } } : {}),
+      ...(Object.keys(degraded).length ? { degraded } : {}),
     });
   });
 

@@ -30,6 +30,96 @@ module.exports = function ({ getLocalFile, GEMINI_KEY_POOL, _trackLLM, writeOSAu
     } catch { return { models: { chat: { provider: 'local', model: localModel } } }; }
   };
 
+  // ── Second Brain recall ────────────────────────────────────────────
+  // Ported from chat.cjs, which had it and this endpoint never did. The
+  // terminal moved to streaming and quietly lost the ability to answer from
+  // the operator's own indexed documents — the single feature that separates
+  // "a chat box" from "a chat box that knows my vault". Asking "what's in my
+  // notes about X" hit the model's training data and nothing else.
+  //
+  // `/matrix <request>` forces a lookup; otherwise the patterns gate it so an
+  // ordinary message never pays for a retrieval round-trip. Same patterns and
+  // same route as chat.cjs, deliberately: two copies of a recall policy that
+  // drift apart is how this endpoint came to have none.
+  const SB_RECALL_PATTERNS = [
+    /\b(remember|told|said|mentioned|last time|earlier|before|yesterday|history|historical|conversation|we discussed|i asked)\b/i,
+    /\b(my notes?|my docs?|my files?|second brain|brain|knowledge base|what do i know)\b/i,
+    /\b(find|search|look up|retrieve|recall|pull up)\b/i,
+    /\b(aeon )?matrix\b/i,
+    /\b(vault|reading library)\b/i,
+    /\b(collected|on file|our (data|records|knowledge)|existing (data|notes|documentation))\b/i,
+  ];
+
+  /**
+   * @returns {{query: string, context: string, count: number, forced: boolean}}
+   *   `query` is the message with any /matrix prefix stripped, so the model
+   *   never sees the command itself.
+   */
+  async function buildSecondBrainContext(message) {
+    const lower = String(message || '').toLowerCase();
+    const forced = lower.startsWith('/matrix ');
+    let query = message;
+    if (forced) query = message.slice(8).trim().replace(/^"(.*)"$/, '$1');
+
+    if (!forced && !SB_RECALL_PATTERNS.some(p => p.test(lower))) {
+      return { query, context: '', count: 0, forced };
+    }
+
+    try {
+      // Loopback, never the Host header. The retrieve route is served by THIS
+      // process, so the address is known; deriving it from a request header
+      // would let a caller send `Host: evil.com` and have the kernel POST the
+      // operator's own query — and their vault content — to that host
+      // instead. chat.cjs builds this URL from the header because on Vercel
+      // it has no other way to address itself; this endpoint is desktop-only
+      // and has no such excuse.
+      const base = process.env.AEON_KERNEL_URL || `http://127.0.0.1:${process.env.PORT || 3001}`;
+      const r = await fetch(`${base}/api/crn/second-brain/retrieve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query }),
+        signal: AbortSignal.timeout(8000),
+      });
+      const data = await r.json();
+      const docs = Array.isArray(data.documents) ? data.documents : [];
+      if (docs.length) {
+        const body = docs.map(d => `[${d.metadata?.source || 'document'}] ${d.content}`).join('\n\n');
+        return {
+          query,
+          count: docs.length,
+          forced,
+          context: `\n\n[AEON SECOND BRAIN CONTEXT]\nRelevant indexed knowledge — cite the source file when you use it. If nothing here is relevant, ignore it:\n\n${body}`,
+        };
+      }
+
+      // The index could not be searched — no embedding model, nothing indexed
+      // yet, or an index built in a different vector space. The model is told
+      // the remedy verbatim so it can hand the operator something to DO,
+      // rather than reporting an absence of documents that were never
+      // actually consulted. This is the answer to "why does my vault seem
+      // empty": it was never a matter of relevance.
+      if (data.unavailable) {
+        return {
+          query, count: 0, forced, unavailable: data.unavailable.reason,
+          context: `\n\n[AEON SECOND BRAIN CONTEXT]\nThe operator's document index COULD NOT BE SEARCHED for this request. Reason: ${data.unavailable.message} Remedy: ${data.unavailable.action}\nTell the operator this plainly before answering. Do not claim their documents are irrelevant or missing — they were never searched. Answer from general knowledge only if that is still useful, and say that is what you are doing.`,
+        };
+      }
+
+      // Only say "nothing found" when the operator explicitly asked. On a
+      // pattern-triggered lookup they did not ask for a search, so reporting
+      // an empty one would be noise — but on /matrix, silence would read as
+      // an answer from documents that were never consulted (§08).
+      if (forced) {
+        return {
+          query, count: 0, forced,
+          context: `\n\n[AEON SECOND BRAIN CONTEXT]\nNo relevant indexed documents were found for this request — say so plainly rather than inventing sources.`,
+        };
+      }
+    } catch { /* best-effort — never block a chat turn on the index being down */ }
+
+    return { query, context: '', count: 0, forced };
+  }
+
   // ── Memory injection ───────────────────────────────────────────────
   // Pinned + recent memories ride along on every message (brain_settings
   // gates it). The wake phrase "vp come online" triggers a FULL memory
@@ -163,7 +253,18 @@ module.exports = function ({ getLocalFile, GEMINI_KEY_POOL, _trackLLM, writeOSAu
     }
   }
 
-  async function* streamLocal(prompt, model, signal) {
+  // The local path takes the SAME messages array every cloud provider gets.
+  //
+  // It used to receive `promptFlat` — every message's content joined with
+  // newlines, system prompt included — so the model saw one undifferentiated
+  // block of text with no idea which lines were its instructions, which were
+  // the operator's, and which were its own earlier replies. That is why a
+  // local chat answered as a generic assistant while the same settings on a
+  // cloud provider answered as AEON: the identity and the injected memories
+  // were present in the string but carried no more weight than any other
+  // line in it. llama.cpp applies the model's own chat template to a real
+  // messages array, which is what makes a system turn a system turn.
+  async function* streamLocal(messages, model, signal) {
     const lr = (() => { try { return require('../../../../services/local-runtime/index.cjs'); } catch { return null; } })();
     if (!lr || !lr.isAvailable()) throw new Error('Native local runtime not ready');
     let resolve, reject;
@@ -172,7 +273,7 @@ module.exports = function ({ getLocalFile, GEMINI_KEY_POOL, _trackLLM, writeOSAu
     let ended = false;
     // D1c — the signal has to reach llama-server. Without it, "stop" could
     // only ever stop the display.
-    lr.inferStream(prompt, { model: model || undefined, signal }, (token) => {
+    lr.inferStream('', { model: model || undefined, signal, messages }, (token) => {
       tokens.push(token);
       if (resolve) { const r = resolve; resolve = null; r(); }
     }).then(() => { ended = true; if (resolve) resolve(); }).catch(e => { ended = true; if (reject) reject(e); });
@@ -183,12 +284,27 @@ module.exports = function ({ getLocalFile, GEMINI_KEY_POOL, _trackLLM, writeOSAu
     }
   }
 
-  async function* streamGemini(prompt, model, apiKey) {
+  // Same messages array as every other provider, mapped onto Gemini's shape.
+  //
+  // This too was handed the flattened string, which threw away both the
+  // system turn and the conversation's turn boundaries — Gemini has a
+  // dedicated systemInstruction field and its own role names, and using
+  // neither meant the identity and memory block arrived as ordinary user
+  // text the model could weigh however it liked.
+  async function* streamGemini(messages, model, apiKey) {
+    const system = messages.filter(m => m.role === 'system').map(m => m.content).join('\n\n');
+    const contents = messages
+      .filter(m => m.role !== 'system')
+      // Gemini names the model's own turns "model", not "assistant".
+      .map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] }));
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${apiKey}`;
     const r = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+      body: JSON.stringify({
+        contents,
+        ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),
+      }),
     });
     if (!r.ok) throw new Error(`Gemini ${r.status}: ${await r.text()}`);
     const reader = r.body.getReader();
@@ -263,6 +379,7 @@ module.exports = function ({ getLocalFile, GEMINI_KEY_POOL, _trackLLM, writeOSAu
           })()) || 8192)
         : 8192;
       const mem = buildMemoryContext(message, settings, contextTokens);
+      const sb = await buildSecondBrainContext(message);
       const messages = [
         // AEON is a tool, not a staff member. This prompt used to cast the
         // assistant as "VP (VP of Operations), the operator's autonomous
@@ -270,9 +387,11 @@ module.exports = function ({ getLocalFile, GEMINI_KEY_POOL, _trackLLM, writeOSAu
         // which is not what a customer is buying.
         { role: 'system', content: 'You are AEON, a private AI workspace built by Broken Gear Industries. You are helpful, precise, and concise. When the user asks you to do something, do it directly.' + mem.text },
         ...history.slice(-20).map(m => ({ role: m.role === 'error' || m.role === 'system' ? 'user' : m.role, content: m.content })),
-        { role: 'user', content: message },
+        // Retrieved documents ride with the user's turn, not as a system
+        // message: they are material for THIS question, and a system turn
+        // would imply they outrank the operator's own instructions.
+        { role: 'user', content: sb.query + sb.context },
       ];
-      const promptFlat = messages.map(m => m.content).join('\n');
       // D2a #11 — eviction is reported, not silent. "22 of 34 injected,
       // 12 dropped for space" is the operator's answer to "do you have all
       // my memories?", and previously nothing could answer it. Emitted even
@@ -285,6 +404,12 @@ module.exports = function ({ getLocalFile, GEMINI_KEY_POOL, _trackLLM, writeOSAu
         skillsDropped: mem.skillsDropped,
         autoMemory: mem.autoMemoryEnabled,
         wake: mem.wake,
+        // Same principle as the memory counts: a retrieval that happened and
+        // found nothing is an answer, and the operator should be able to tell
+        // it apart from one that never ran.
+        recall: sb.count,
+        recallRan: sb.forced || sb.count > 0 || !!sb.unavailable,
+        recallUnavailable: sb.unavailable || null,
       });
 
       const buildGenerator = async (provider, model) => {
@@ -293,11 +418,11 @@ module.exports = function ({ getLocalFile, GEMINI_KEY_POOL, _trackLLM, writeOSAu
           if (!apiKey) throw new Error('No Groq key (set GROQ_API_KEY or add a connection)');
           return streamGroq(messages, model, apiKey);
         }
-        if (provider === 'local') return streamLocal(promptFlat, model, abort.signal);
+        if (provider === 'local') return streamLocal(messages, model, abort.signal);
         if (provider === 'gemini') {
           const apiKey = await resolveKey('gemini', 'GEMINI_PAID_KEY', 'GEMINI_FREE_KEY_1');
           if (!apiKey) throw new Error('No Gemini key');
-          return streamGemini(promptFlat, model, apiKey);
+          return streamGemini(messages, model, apiKey);
         }
         if (provider === 'openrouter') {
           const apiKey = await resolveKey('openrouter', 'OPENROUTER_API_KEY');

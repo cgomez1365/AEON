@@ -340,6 +340,22 @@ module.exports = (app, deps) => {
     res.json({ id, values: { ...defaults, ...saved } });
   });
 
+  // ── GET /api/capabilities — what each toggle governs, and whether
+  //    anything enforces it yet.
+  //
+  // Settings renders toggles from this rather than from a hardcoded list, so
+  // a control cannot claim to govern something no code consults. The moment a
+  // capability gains real enforcement, its `implemented` flag flips in
+  // src/kernel/capabilities.cjs and the toggle becomes live here with no
+  // change to this route or to the panel.
+  app.get('/api/capabilities', (_req, res) => {
+    try {
+      res.json({ capabilities: require('../../../kernel/capabilities.cjs').describe() });
+    } catch (e) {
+      res.status(500).json({ error: e.message, capabilities: [] });
+    }
+  });
+
   // ── GET /api/prefs/:key — read a single preference ────────────────
   app.get('/api/prefs/:key', (req, res) => {
     const settings = loadSettings();

@@ -117,6 +117,32 @@ module.exports = function createResearchRouter(deps) {
     ? kernelLLM(prompt, { role: 'research', background: true, max_tokens: 4096, ...opts })
     : geminiRequest(prompt, 'AEON-RESEARCH', opts);
 
+  /**
+   * An LLM call that cannot outlive the run's own deadline.
+   *
+   * DR-1. Every call here inherited services/ai.js's 240s default while the
+   * run's total budget was 300s, so ONE stalled provider — a free tier under
+   * queue, most often — could eat 80% of the budget before returning. Worse,
+   * the deadline was only tested at the top of each round, so a call that
+   * blew through it was never interrupted; the loop simply discovered on its
+   * next iteration that the time was gone. The visible result was five
+   * minutes of "searching…" and no report, which is the loop the operator
+   * reported being stuck in.
+   *
+   * A call is now capped at whatever remains, less a reserve for the write
+   * phase, and refuses outright rather than starting a request it cannot
+   * finish. `leaveMs` is what the caller wants to protect for later work.
+   */
+  const budgetedLlm = (deadline, prompt, opts = {}, leaveMs = 0) => {
+    const remaining = deadline - Date.now() - leaveMs;
+    if (remaining <= 5000) {
+      const e = new Error('research time budget exhausted');
+      e.budgetExhausted = true;
+      throw e;
+    }
+    return llm(prompt, { timeout_ms: Math.min(remaining, opts.timeout_ms || remaining), ...opts });
+  };
+
   // searchFor: pick the right search function by explicit provider name
   const searchFor = (provider) => {
     if (provider === 'tavily'     && fetchTavilySearch) return fetchTavilySearch;
@@ -125,6 +151,60 @@ module.exports = function createResearchRouter(deps) {
     if (provider === 'duckduckgo')                      return fetchDuckDuckGo;
     return fetchWebSearch || fetchDuckDuckGo; // auto
   };
+
+  /**
+   * Which search providers this install can actually reach, best first.
+   *
+   * DR-5, DR-6. The default provider fired up to ten scrapes at DuckDuckGo in
+   * quick succession; it rate-limits after roughly three, so rounds 4-8
+   * returned nothing and the loop churned through them in silence. There was
+   * no fallback to a keyed provider and no backoff.
+   *
+   * Keys are read through the pool prefix (BASE, BASE_2, …) rather than the
+   * bare variable, because hydrateEnvFromVault numbers vault accounts — the
+   * same defect that hid providers from Council's engineAlive.
+   */
+  const hasKey = (base) => Object.keys(process.env)
+    .some(k => (k === base || k.startsWith(`${base}_`)) && !!process.env[k]);
+
+  const availableSearchProviders = () => {
+    const out = [];
+    if (hasKey('TAVILY_API_KEY') && fetchTavilySearch) out.push('tavily');
+    if (hasKey('SERPER_API_KEY') && fetchSerperSearch) out.push('serper');
+    if (hasKey('BRAVE_API_KEY') && fetchBraveSearch) out.push('brave');
+    out.push('duckduckgo'); // always last: free, unkeyed, rate-limits fast
+    return out;
+  };
+
+  /**
+   * Search with fallback across providers, and a short backoff between
+   * attempts so a rate-limited engine is given a moment rather than hammered.
+   *
+   * Returns the context AND which provider produced it, so the run can report
+   * that it degraded instead of silently returning less.
+   */
+  async function searchWithFallback(query, sessionId, preferred, deadline) {
+    const chain = preferred && preferred !== 'auto'
+      ? [preferred, ...availableSearchProviders().filter(p => p !== preferred)]
+      : availableSearchProviders();
+
+    let lastError = null;
+    for (let i = 0; i < chain.length; i++) {
+      if (Date.now() > deadline) break;
+      const provider = chain[i];
+      try {
+        const ctx = await searchFor(provider)(query, `RESEARCH-${sessionId}`);
+        if (ctx && ctx.length >= 50) return { context: ctx, provider };
+        lastError = `${provider} returned nothing usable`;
+      } catch (e) {
+        lastError = `${provider}: ${e.message}`;
+      }
+      // Backoff before the next provider — a rate-limited engine that gets an
+      // immediate retry just refuses again.
+      if (i < chain.length - 1) await new Promise(r => setTimeout(r, 600));
+    }
+    return { context: '', provider: null, error: lastError };
+  }
 
   // On Vercel the repo FS is read-only and block data dirs are vercelignored —
   // an unguarded mkdir here crashed the whole factory, 404ing every /research
@@ -189,13 +269,24 @@ module.exports = function createResearchRouter(deps) {
 
     const { query: rawQuery, maxRounds, maxTime, searchProvider, category } = opts;
     const startTime = Date.now();
-    const deadline = startTime + (maxTime || 300) * 1000;
+    const maxTimeMs = (maxTime || 300) * 1000;
+    const deadline = startTime + maxTimeMs;
     const rounds = maxRounds || 8;
+    // The write phase is the only part whose output the operator actually
+    // reads, so it gets a protected share of the budget. Search rounds stop
+    // when they reach into it rather than when the clock runs out entirely —
+    // the old loop spent every second searching and then had nothing left to
+    // write with.
+    const WRITE_RESERVE_MS = Math.min(90000, Math.round(maxTimeMs * 0.35));
 
     const allSources = [];
     const allFindings = [];
     let subQueries = [];
     let charts = [];
+    // Why the search phase ended, when it ended for a reason worth telling the
+    // operator: 'time' (budget reserved for writing) or 'search' (the engines
+    // stopped answering). Null means it simply finished its rounds.
+    let stoppedEarly = null;
 
     const updateProgress = (phase, extra = {}) => {
       task.progress = {
@@ -231,7 +322,9 @@ Rules:
 - Return ONLY the corrected query as one line of plain text. No quotes, no explanation, no markdown.
 
 Raw input: "${rawQuery}"`;
-        const fixed = await llm(cleanupPrompt);
+        // Reserve the bulk of the budget: this is a nicety, and it used to be
+        // able to consume 240 of the run's 300 seconds on its own.
+        const fixed = await budgetedLlm(deadline, cleanupPrompt, { timeout_ms: 20000 }, maxTimeMs * 0.8);
         const t = (fixed || '').trim().replace(/^["'`]+|["'`]+$/g, '').split('\n')[0].trim();
         if (t && t.length > 1 && t.length < 400) query = t;
       } catch {}
@@ -249,7 +342,7 @@ ${category ? `Research category/format: ${category}` : ''}
 Return format: ["sub-query 1", "sub-query 2", ...]`;
 
       try {
-        const planResult = await llm(planPrompt);
+        const planResult = await budgetedLlm(deadline, planPrompt, { timeout_ms: 30000 }, maxTimeMs * 0.65);
         const cleaned = (planResult || '').replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
         const parsed = JSON.parse(cleaned);
         if (Array.isArray(parsed)) subQueries = parsed.slice(0, 6);
@@ -282,9 +375,31 @@ Return format: ["sub-query 1", "sub-query 2", ...]`;
       } catch {}
 
       // Phase 2: Search + Read rounds
+      //
+      // DR-2. The old loop treated an empty search as `continue` and said
+      // nothing. DuckDuckGo — the unkeyed default — rate-limits after roughly
+      // three rapid scrapes, so on a typical run rounds 4 through 8 all
+      // returned nothing, the progress counter kept climbing, and the operator
+      // watched eight rounds of "searching…" accumulate zero findings. That is
+      // the loop that appeared stuck: it was not hung, it was failing silently
+      // and refusing to say so.
+      //
+      // Now: consecutive failures are counted and the run stops early with a
+      // reason rather than burning the budget on an engine that has already
+      // stopped answering.
+      let consecutiveSearchFailures = 0;
+      let searchDegraded = null;
+      const MAX_CONSECUTIVE_FAILURES = 3;
+
       for (let round = 1; round <= rounds; round++) {
-        if (Date.now() > deadline) break;
         if (task.status === 'cancelled') return;
+        // Stop when the remaining time belongs to the write phase. Testing
+        // only `> deadline` meant the loop could consume every second and
+        // leave nothing to produce a report with.
+        if (Date.now() > deadline - WRITE_RESERVE_MS) {
+          stoppedEarly = 'time';
+          break;
+        }
 
         const roundQuery = round <= subQueries.length
           ? subQueries[round - 1]
@@ -292,15 +407,30 @@ Return format: ["sub-query 1", "sub-query 2", ...]`;
 
         updateProgress('searching', { round, queries: round });
 
-        // Web search — Brave if keyed, DuckDuckGo as fallback
-        let searchContext = '';
-        try {
-          searchContext = await searchFor(searchProvider)(roundQuery, `RESEARCH-${sessionId}`);
-        } catch (e) {
-          searchContext = '';
-        }
+        const { context: searchContext, provider: usedProvider, error: searchError } =
+          await searchWithFallback(roundQuery, sessionId, searchProvider, deadline - WRITE_RESERVE_MS);
 
-        if (!searchContext || searchContext.length < 50) continue;
+        if (!searchContext) {
+          consecutiveSearchFailures++;
+          searchDegraded = searchError || 'no search provider returned results';
+          updateProgress('searching', {
+            round,
+            queries: round,
+            search_failed: consecutiveSearchFailures,
+            note: searchDegraded,
+          });
+          if (consecutiveSearchFailures >= MAX_CONSECUTIVE_FAILURES) {
+            stoppedEarly = 'search';
+            break;
+          }
+          continue;
+        }
+        consecutiveSearchFailures = 0;
+        // A run that fell back off the operator's chosen engine should say so
+        // rather than quietly returning thinner results.
+        if (usedProvider && searchProvider && searchProvider !== 'auto' && usedProvider !== searchProvider) {
+          searchDegraded = `${searchProvider} was unavailable — used ${usedProvider} instead`;
+        }
 
         // Parse out source URLs from the search context
         const urlMatches = (searchContext.match(/https?:\/\/[^\s<>"{}|\\^`\[\]]+/g) || []).map(cleanUrl);
@@ -322,7 +452,7 @@ ${searchContext.slice(0, 6000)}
 Return a concise summary of the most important facts, data points, and claims found. Focus on accuracy and specificity.`;
 
         try {
-          const finding = await llm(analyzePrompt);
+          const finding = await budgetedLlm(deadline, analyzePrompt, { timeout_ms: 45000 }, WRITE_RESERVE_MS);
           if (finding) {
             allFindings.push({
               title: roundQuery,
@@ -357,7 +487,7 @@ Rules:
 - Use "line" for a trend over time, "bar" for a comparison across categories.
 
 Return ONLY the JSON array, no other text.`;
-        const raw = await llm(dataPrompt);
+        const raw = await budgetedLlm(deadline, dataPrompt, { timeout_ms: 30000 }, WRITE_RESERVE_MS);
         const cleanedJson = (raw || '').replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
         const parsed = JSON.parse(cleanedJson);
         if (Array.isArray(parsed)) {
@@ -426,8 +556,38 @@ Write in full prose (not bullet dumps) except where a table or numbered steps ge
 
       let report = '';
       let writeError = null;
+      let degraded = null;
+
+      // DR-3. With no findings the write prompt used to be sent anyway, with
+      // an empty FINDINGS section — so the model either invented a report
+      // from its training data with no sources behind it, or refused. Both
+      // were then stored with status 'done'. A run that gathered nothing has
+      // no report to write, and saying so is the only honest output.
+      if (!allFindings.length) {
+        const why = stoppedEarly === 'search'
+          ? `Every search attempt failed. ${searchDegraded || ''}`.trim()
+          : stoppedEarly === 'time'
+            ? 'The time budget ran out before any search returned usable results.'
+            : 'No search returned usable results.';
+        const remedy = availableSearchProviders().length <= 1
+          ? 'This install has no search API key, so it fell back to scraping DuckDuckGo, which blocks repeated automated queries. Add a Brave, Serper, or Tavily key in Settings → Connections for reliable research.'
+          : 'Try again in a moment, or pick a different search provider.';
+        throw Object.assign(
+          new Error(`No sources could be gathered for "${query}". ${why} ${remedy}`),
+          { researchEmpty: true }
+        );
+      }
+
       try {
-        report = await llm(writePrompt, { max_tokens: 8192, timeout_ms: 300000 });
+        // Whatever is left of the run, with a floor: the report is the only
+        // output the operator reads, so a nearly-spent budget still gets a
+        // real attempt rather than a doomed two-second one. Floored, not
+        // extended — an earlier version added the reserve to the deadline and
+        // handed a 60-second run an 81-second call, which is not a budget.
+        report = await llm(writePrompt, {
+          max_tokens: 8192,
+          timeout_ms: Math.min(maxTimeMs, Math.max(30000, deadline - Date.now())),
+        });
       } catch (e) {
         writeError = e && e.message ? e.message : String(e);
         try { console.error(`[RESEARCH] report write failed for "${query}": ${writeError}`); } catch {}
@@ -446,12 +606,22 @@ FINDINGS:
 ${compactFindings}
 
 Structure: # Title, ## Abstract, ## Findings (thematic, cited), ## Conclusion. Do NOT write a References section — it is generated automatically afterward. Be thorough but concise.`;
-          report = await llm(compactPrompt, { max_tokens: 6144 });
+          report = await llm(compactPrompt, {
+            max_tokens: 6144,
+            // The first attempt already spent from this budget. Whatever is
+            // left is what the retry gets — with a floor, because a retry
+            // given two seconds is not a retry.
+            timeout_ms: Math.min(maxTimeMs, Math.max(30000, deadline - Date.now())),
+          });
           writeError = null;
         } catch (e2) {
           report = `# ${query}\n\n**Report generation failed after retry** — the research provider returned an error (${writeError}). Raw findings are listed below; check /api/system/provider-health for account/key status.\n\n${
             allFindings.map(f => `## ${f.title}\n${f.summary}\n${f.url ? `Source: ${f.url}` : ''}`).join('\n\n')
           }`;
+          // The findings survived and are worth keeping, but this is not a
+          // completed report and must not be filed as one. Marked partial so
+          // the library and the UI can say which it is.
+          degraded = `The report could not be written (${writeError}). The raw findings are preserved below.`;
         }
       }
 
@@ -474,7 +644,18 @@ Structure: # Title, ## Abstract, ## Findings (thematic, cited), ## Conclusion. D
         sources: allSources,
         raw_findings: allFindings,
         charts,
-        status: 'done',
+        // 'partial' when the report itself could not be written, or when the
+        // search phase was cut short. Filing either as 'done' is what let a
+        // failed run show a success indicator over a wall of raw findings.
+        status: (degraded || stoppedEarly) ? 'partial' : 'done',
+        ...(degraded ? { degraded } : {}),
+        ...(stoppedEarly ? {
+          stopped_early: stoppedEarly,
+          stopped_reason: stoppedEarly === 'search'
+            ? `Search stopped early — ${searchDegraded || 'the search engines stopped returning results'}.`
+            : 'Stopped early to leave time to write the report.',
+        } : {}),
+        ...(searchDegraded && !stoppedEarly ? { search_note: searchDegraded } : {}),
         started_at: Math.floor(startTime / 1000),
         completed_at: Math.floor(Date.now() / 1000),
         stats: {
@@ -492,7 +673,9 @@ Structure: # Title, ## Abstract, ## Findings (thematic, cited), ## Conclusion. D
         vaultSync('research', { reports: { value: _rdFiles.length, unit: 'count', context: 'completed research reports on disk' }, last_report: { value: query, unit: 'text', context: 'last research query completed' }, status: { value: 'completed', unit: 'text', context: 'latest research status' }, _summary: `Research completed: "${query}" — ${allSources.length} sources` });
       } catch(e) { /* non-critical */ }
 
-      task.status = 'done';
+      task.status = researchData.status;
+      task.degraded = degraded || null;
+      task.stopped_early = stoppedEarly || null;
       task.result = report;
       task.sources = allSources;
       task.raw_findings = allFindings;
@@ -501,7 +684,7 @@ Structure: # Title, ## Abstract, ## Findings (thematic, cited), ## Conclusion. D
       task.original_query = queryWasCorrected ? rawQuery : undefined;
       task.query_corrected = queryWasCorrected;
       task.progress = { phase: 'done', total_sources: allSources.length, total_findings: allFindings.length };
-      task._emitter.emit('progress', { ...task.progress, status: 'done', final: true });
+      task._emitter.emit('progress', { ...task.progress, status: researchData.status, degraded: degraded || null, final: true });
 
       if (writeOSAudit) {
         writeOSAudit(`RESEARCH-${sessionId}`, `Deep Research completed: "${query}" — ${allSources.length} sources, ${allFindings.length} findings`);
@@ -512,6 +695,42 @@ Structure: # Title, ## Abstract, ## Findings (thematic, cited), ## Conclusion. D
       task.result = err.message;
       task.progress = { phase: 'error' };
       task._emitter.emit('progress', { status: 'error', error: err.message, final: true });
+
+      // A failed run is still worth persisting: the operator opened Deep
+      // Research, waited, and is entitled to find out later what happened.
+      // Previously a failure existed only in memory and vanished on restart,
+      // so the library showed nothing at all for a run they had watched.
+      try {
+        writeResearchJSON(sessionId, {
+          query: rawQuery,
+          category: category || '',
+          result: `# ${rawQuery}\n\n**Research could not be completed.**\n\n${err.message}`,
+          sources: allSources,
+          raw_findings: allFindings,
+          charts: [],
+          status: 'error',
+          error: err.message,
+          started_at: Math.floor(startTime / 1000),
+          completed_at: Math.floor(Date.now() / 1000),
+          stats: {
+            Duration: `${Math.round((Date.now() - startTime) / 1000)}s`,
+            Rounds: String(allFindings.length),
+            Sources: String(allSources.length),
+          },
+        });
+      } catch { /* disk unavailable — the in-memory task still carries the error */ }
+    } finally {
+      // DR-4. Finished tasks were only ever removed by a client calling
+      // /research/result, and only on the success path — so every failed or
+      // cancelled run stayed in activeTasks forever, holding its EventEmitter
+      // and its listeners. The result is readable from disk after this, so
+      // dropping the in-memory copy costs the operator nothing.
+      //
+      // Delayed rather than immediate: an SSE client is usually still attached
+      // when the final event fires, and /research/result may arrive moments
+      // later. The timer is unref'd so it never holds the process open.
+      const reap = setTimeout(() => { delete activeTasks[sessionId]; }, 5 * 60 * 1000);
+      reap.unref?.();
     }
   }
 
@@ -855,11 +1074,20 @@ Structure: # Title, ## Abstract, ## Findings (thematic, cited), ## Conclusion. D
 
   // GET /research/search/providers — available search providers
   router.get('/research/search/providers', (req, res) => {
+    // DR-6. Read through the pool prefix, not the bare variable: vault keys
+    // hydrate as BASE, BASE_2, BASE_3, so a key added through Settings could
+    // be present and still report "Set BRAVE_API_KEY in .env".
+    const keyed = (base) => hasKey(base);
     res.json([
-      { id: 'duckduckgo', label: 'DuckDuckGo', available: true,                          note: 'Free scrape — no key needed' },
-      { id: 'brave',      label: 'Brave Search', available: !!process.env.BRAVE_API_KEY,  note: process.env.BRAVE_API_KEY  ? 'Active' : 'Set BRAVE_API_KEY in .env' },
-      { id: 'serper',     label: 'Serper (Google)', available: !!process.env.SERPER_API_KEY, note: process.env.SERPER_API_KEY ? 'Active' : 'Set SERPER_API_KEY in .env' },
-      { id: 'tavily',     label: 'Tavily',       available: !!process.env.TAVILY_API_KEY,  note: process.env.TAVILY_API_KEY ? 'Active' : 'Set TAVILY_API_KEY in .env' },
+      {
+        id: 'duckduckgo', label: 'DuckDuckGo', available: true,
+        // Stated plainly because it is the default and it is the reason most
+        // multi-round runs come back thin.
+        note: 'Free, no key — but blocks repeated automated queries, so long research runs lose rounds to it.',
+      },
+      { id: 'brave',  label: 'Brave Search',     available: keyed('BRAVE_API_KEY'),  note: keyed('BRAVE_API_KEY')  ? 'Active' : 'Add a Brave key in Settings → Connections' },
+      { id: 'serper', label: 'Serper (Google)',  available: keyed('SERPER_API_KEY'), note: keyed('SERPER_API_KEY') ? 'Active' : 'Add a Serper key in Settings → Connections' },
+      { id: 'tavily', label: 'Tavily',           available: keyed('TAVILY_API_KEY'), note: keyed('TAVILY_API_KEY') ? 'Active' : 'Add a Tavily key in Settings → Connections' },
     ]);
   });
 

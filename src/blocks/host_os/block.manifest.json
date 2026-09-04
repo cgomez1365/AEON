@@ -205,6 +205,11 @@
       "auth": true
     },
     {
+      "method": "POST",
+      "path": "/api/fs/rename",
+      "auth": true
+    },
+    {
       "method": "GET",
       "path": "/api/fs/serve",
       "auth": true

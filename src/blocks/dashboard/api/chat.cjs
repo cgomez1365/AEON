@@ -183,6 +183,12 @@ module.exports = function createChatRouter(deps) {
                 .map(d => `[${d.metadata.source}] ${d.content}`)
                 .join('\n\n');
               modifiedPrompt = `${modifiedPrompt}\n\n[AEON SECOND BRAIN CONTEXT]\nRelevant indexed knowledge — cite the source file when you use it. If nothing here is relevant, ignore it:\n\n${sbContext}`;
+            } else if (sbData.unavailable) {
+              // The index could not be searched at all — no embedding model,
+              // nothing indexed, or an index in a different vector space.
+              // Distinct from "searched and found nothing", and the only one
+              // of the two with a remedy the operator can act on.
+              modifiedPrompt = `${modifiedPrompt}\n\n[AEON SECOND BRAIN CONTEXT]\nThe operator's document index COULD NOT BE SEARCHED. Reason: ${sbData.unavailable.message} Remedy: ${sbData.unavailable.action}\nTell the operator this plainly. Do not claim their documents are irrelevant — they were never searched.`;
             } else if (isMatrixCommand) {
               modifiedPrompt = `${modifiedPrompt}\n\n[AEON SECOND BRAIN CONTEXT]\nNo relevant indexed documents were found for this request — say so plainly rather than inventing sources.`;
             }

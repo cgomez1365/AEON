@@ -329,6 +329,47 @@ async function resolveForRole(role, supabase) {
  *
  * @returns {{ok: boolean, provider?: string, model?: string, reason?: string}}
  */
+/**
+ * Env-var fallback for readiness when no endpoint registry exists.
+ *
+ * Ordered by what a fresh install is most likely to have working, and each
+ * entry names a model the provider actually serves today — a readiness badge
+ * that resolves to a model the router then 404s on is the BO-A5b defect, and
+ * it is no less a defect for coming from the fallback path.
+ *
+ * This answers "can this install serve a turn at all", not "which model should
+ * this role use". Once the operator adds a provider through Settings the
+ * registry exists and this is never consulted again.
+ */
+const ENV_PROVIDER_FALLBACK = [
+  { provider: 'groq',       model: 'llama-3.3-70b-versatile', vars: ['GROQ_API_KEY'] },
+  { provider: 'gemini',     model: 'gemini-2.5-flash',        vars: ['GEMINI_PAID_KEY', 'GEMINI_API_KEY', 'GEMINI_FREE_KEY_1'] },
+  { provider: 'openai',     model: 'gpt-4o-mini',             vars: ['OPENAI_API_KEY'] },
+  { provider: 'claude',     model: 'claude-sonnet-5',         vars: ['ANTHROPIC_API_KEY'] },
+  { provider: 'openrouter', model: 'openai/gpt-4o-mini',      vars: ['OPENROUTER_API_KEY'] },
+];
+
+function describeRoleFromEnv() {
+  for (const cand of ENV_PROVIDER_FALLBACK) {
+    // Numbered pool members count too (GROQ_API_KEY_2, GEMINI_FREE_KEY_3):
+    // an operator who added a second account and removed the first still has
+    // a working provider, and readiness must see it.
+    const hit = cand.vars.some((base) => Object.keys(process.env).some(
+      (k) => (k === base || k.startsWith(`${base}_`)) && !!process.env[k]
+    ));
+    if (hit) return { ok: true, provider: cand.provider, model: cand.model, source: 'env' };
+  }
+
+  // A local model with no cloud key is still a working install.
+  try {
+    const st = require('../../services/local-runtime/index.cjs').status();
+    const model = st?.readyModels?.[0]?.id;
+    if (model) return { ok: true, provider: 'local', model, source: 'local_runtime' };
+  } catch { /* runtime absent — not an error, just nothing to report */ }
+
+  return null;
+}
+
 function describeRoleLocal(role) {
   if (isPortable()) {
     const st = (() => {
@@ -342,7 +383,14 @@ function describeRoleLocal(role) {
 
   const reg = readLocal();
   if (!reg || !Array.isArray(reg.endpoints) || !reg.endpoints.length) {
-    return { ok: false, reason: 'no_providers_configured' };
+    // No registry file is the NORMAL state of a clean install — the file is
+    // written the first time a provider is added through Settings. Reporting
+    // "no providers configured" from its absence alone declared every install
+    // broken that had put its keys in .env instead, which is the documented
+    // way to configure one. The registry is the richer source; the environment
+    // is the older one, and it still counts.
+    const env = describeRoleFromEnv();
+    return env || { ok: false, reason: 'no_providers_configured' };
   }
 
   const runtime = isVercel ? 'cloud' : 'local';
@@ -393,7 +441,7 @@ module.exports = {
   PROVIDER_TRANSPORT, load, save,
   addEndpoint, removeEndpoint, assignRole,
   discoverModels, resolveForRole, isVercel,
-  lmStudioHost, isPortable, describeRoleLocal,
+  lmStudioHost, isPortable, describeRoleLocal, describeRoleFromEnv,
   // Exported so the gate tests the REAL predicate rather than re-implementing it.
   pickChatModel, NON_CHAT_MODEL_RE, isProviderConfigured,
 };

@@ -7,6 +7,7 @@
 const fs = require('fs');
 const path = require('path');
 const { isCloud: _isCloud } = require('../src/kernel/runtime.cjs');
+const _capabilities = require('../src/kernel/capabilities.cjs');
 
 // Phase 6: native local runtime (llama.cpp). Lazy require.
 // Loaded lazily so ai.js still boots on machines without the runtime installed.
@@ -200,6 +201,20 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   const setActivityRecorder = (fn) => { _recordActivity = fn; };
   const _llmTelemetry = { calls: {}, totalCalls: 0, totalTokens: 0 };
   function _trackLLM(engine, model, tokens, latencyMs, success) {
+    // Settings → System → Telemetry. The toggle existed and was read by
+    // nothing, so switching it off recorded exactly as much as switching it
+    // on. Measurement stops here, at the one place every provider path funnels
+    // through, rather than at each call site.
+    //
+    // The audit line and the cost ledger are NOT measurement and continue
+    // regardless: the audit trail is a security record, and the ledger is what
+    // stands between the operator and a surprise bill. Turning off performance
+    // stats must not quietly turn off spend tracking.
+    if (!_capabilities.enabled('telemetry_enabled')) {
+      writeOSAudit(`LLM_${engine.toUpperCase()}`, `${model} | ${tokens} tok | ${latencyMs}ms${success ? '' : ' | FAILED'}`, success ? 200 : 500, tokens);
+      try { if (callLedger) callLedger.record({ provider: engine, model, tokens, latencyMs, success }); } catch {}
+      return;
+    }
     const key = `${engine}/${model}`;
     if (!_llmTelemetry.calls[key]) _llmTelemetry.calls[key] = { engine, model, requests: 0, tokens: 0, errors: 0, avgLatency: 0 };
     const c = _llmTelemetry.calls[key];
@@ -563,7 +578,16 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       }
     }
   };
-  hydrateEnvFromVault();
+  // The hydration promise is kept, not discarded. It used to be fired and
+  // dropped: every consumer that read process.env during boot — block
+  // readiness, Council's engineAlive, Deep Research's provider list — ran
+  // against an env that had not been filled yet, and reported a correctly
+  // configured install as having no providers. Exposing the promise lets
+  // those callers await the one hydration that is already in flight instead
+  // of each starting their own or guessing.
+  const envHydrated = hydrateEnvFromVault().catch((e) => {
+    console.warn('[KERNEL] vault→env hydration failed:', e.message);
+  });
 
   const openRouterRequest = async (prompt, model = 'openai/gpt-4o-mini', opts = {}) => {
     const apiKey = nextKey('openrouter') || process.env.OPENROUTER_API_KEY;
@@ -873,5 +897,6 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     KILL_SWITCH_THRESHOLD, GEMINI_PRICE_PER_TOKEN, GROQ_PRICE_PER_TOKEN,
     getProviderHealth, getKeyPoolInfo, dehydrateProvider,
     defaultLocalModel, localRuntimePresent,
+    envHydrated,
   };
 };

@@ -250,10 +250,18 @@ export default function DeepResearch() {
             const updated = { ...j, progress: d };
             if (d.model && !j.modelName) updated.modelName = d.model;
             if (d.final) {
-              updated.status = d.status === 'done' ? 'done' : d.error ? 'error' : 'cancelled';
+              // 'partial' is a real terminal state: the run produced a report
+              // but something was wrong with it — the write failed and only
+              // raw findings survived, or the search phase was cut short. It
+              // used to be collapsed into 'done', so a failed run showed a
+              // success indicator over a wall of unformatted findings.
+              updated.status = (d.status === 'done' || d.status === 'partial')
+                ? d.status
+                : d.error ? 'error' : 'cancelled';
               updated.elapsed = Date.now() - j.startedAt;
               if (d.error) updated.errorMsg = d.error;
-              if (d.status === 'done') fetchResult(job.id);
+              if (d.degraded) updated.degraded = d.degraded;
+              if (d.status === 'done' || d.status === 'partial') fetchResult(job.id);
             }
             return updated;
           }));
@@ -672,7 +680,8 @@ IMPORTANT: Do NOT fabricate URLs, citations, or specific statistics that were no
   // ── Render ──
 
   const activeJobs = jobs.filter(j => j.status === 'running' || j.status === 'error' || j.status === 'cancelled');
-  const doneJobs = jobs.filter(j => j.status === 'done');
+  // 'partial' is finished — it has a report to read, with a caveat attached.
+  const doneJobs = jobs.filter(j => j.status === 'done' || j.status === 'partial');
 
   return (
     <div style={{ padding: '24px', maxWidth: '900px', margin: '0 auto' }}>
@@ -939,7 +948,8 @@ IMPORTANT: Do NOT fabricate URLs, citations, or specific statistics that were no
 
 function JobCard({ job, copied, onCancel, onDismiss, onRetry, onCopy, onReport, onDelete }) {
   const isRunning = job.status === 'running';
-  const isDone = job.status === 'done';
+  const isDone = job.status === 'done' || job.status === 'partial';
+  const isPartial = job.status === 'partial';
   const isError = job.status === 'error' || job.status === 'cancelled';
   const elapsed = formatElapsed(job.elapsed || 0);
 
@@ -974,6 +984,23 @@ function JobCard({ job, copied, onCancel, onDismiss, onRetry, onCopy, onReport, 
           {elapsed}
         </span>
       </div>
+
+      {/* A finished run that is not a clean one. The report is readable and
+          worth keeping, but something went wrong producing it — and the
+          operator must be able to tell that from the card, not by noticing
+          the prose looks like raw notes. */}
+      {isPartial && (
+        <div role="status" style={{
+          display: 'flex', gap: '8px', alignItems: 'flex-start',
+          fontSize: '11px', lineHeight: 1.5, color: 'var(--amber, #f59e0b)',
+          background: 'var(--amber-dim, rgba(245,158,11,0.1))',
+          border: '1px solid var(--amber-dim, rgba(245,158,11,0.1))',
+          borderRadius: '6px', padding: '8px 11px', marginBottom: '8px',
+        }}>
+          <span aria-hidden="true">⚠</span>
+          <span>{job.degraded || 'This run finished early, so the report covers less than a full search would have.'}</span>
+        </div>
+      )}
 
       {/* Running state */}
       {isRunning && (

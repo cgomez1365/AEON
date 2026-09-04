@@ -93,23 +93,61 @@ module.exports = function createCompareRouter(deps) {
   });
 
   // PUT /council/members/:id — edit
+  //
+  // The chair writes the verdict, so exactly one member holds it. This looped
+  // over the editable fields and wrote `chair` like any other, which meant
+  // promoting a second chair produced two — and the debate then picked
+  // whichever `find()` reached first, silently, with the operator believing
+  // they had chosen.
   router.put('/council/members/:id', (req, res) => {
     const members = loadMembers() || [];
     const m = members.find(x => x.id === req.params.id);
     if (!m) return res.status(404).json({ error: 'not found' });
-    for (const k of ['label', 'persona', 'provider', 'model', 'chair']) if (req.body[k] !== undefined) m[k] = req.body[k];
+
+    for (const k of ['label', 'persona', 'provider', 'model']) {
+      if (req.body[k] !== undefined) m[k] = req.body[k];
+    }
+
+    if (req.body.chair !== undefined) {
+      if (req.body.chair) {
+        // Promotion is a move, not an addition: every other member steps down.
+        for (const other of members) other.chair = other.id === m.id;
+      } else if (m.chair) {
+        // Refuse to leave the council chairless. Demotion happens by promoting
+        // someone else, which is the only form of it that leaves a council
+        // that can still deliver a verdict.
+        return res.status(409).json({
+          error: 'The chair writes the verdict, so the council needs one. Promote another member instead — that steps this one down.',
+        });
+      }
+    }
+
     saveMembers(members);
     res.json({ ok: true, member: m });
   });
 
   // DELETE /council/members/:id
+  //
+  // Deleting the chair used to succeed and leave a council with no verdict
+  // writer — a state the UI offered no way back from, since chair was not
+  // reassignable there either. The seat passes to the next member rather than
+  // blocking the delete: the operator asked to remove a member, and refusing
+  // would trap them just as badly when the chair is the one they want gone.
   router.delete('/council/members/:id', (req, res) => {
     let members = loadMembers() || [];
-    const before = members.length;
+    const target = members.find(x => x.id === req.params.id);
+    if (!target) return res.status(404).json({ error: 'not found' });
+
     members = members.filter(x => x.id !== req.params.id);
-    if (members.length === before) return res.status(404).json({ error: 'not found' });
+
+    let newChair = null;
+    if (target.chair && members.length && !members.some(x => x.chair)) {
+      members[0].chair = true;
+      newChair = members[0].label || members[0].id;
+    }
+
     saveMembers(members);
-    res.json({ ok: true });
+    res.json({ ok: true, ...(newChair ? { newChair } : {}) });
   });
 
   // POST /council/debate/save — persist a completed debate to the vault
@@ -229,6 +267,26 @@ module.exports = function createCompareRouter(deps) {
   }
 
   // Filter dead engines: a model only survives if its provider has a live key.
+  //
+  // Two defects lived in the old version of this, and both made a correctly
+  // configured install look empty:
+  //
+  //   GEMINI_API_KEY was not checked at all. Only the _FREE_1 and _PAID
+  //   variants were, so the plainest possible Gemini setup — the variable
+  //   name Google's own docs use — reported Gemini dead and every Gemini
+  //   model vanished from the roster.
+  //
+  //   Numbered pool members were invisible. hydrateEnvFromVault writes vault
+  //   accounts as BASE, BASE_2, BASE_3…, so an operator who added a second
+  //   Groq account and removed the first had GROQ_API_KEY_2 and no
+  //   GROQ_API_KEY, and Groq read as unconfigured.
+  //
+  // Reading the pool prefix covers both, and matches how services/ai.js
+  // actually resolves a key rather than guessing at one spelling of it.
+  const anyKey = (...bases) => bases.some((base) =>
+    Object.keys(process.env).some(k => (k === base || k.startsWith(`${base}_`)) && !!process.env[k])
+  );
+
   const engineAlive = (engine) => {
     if (engine === 'local') {
       try {
@@ -236,10 +294,11 @@ module.exports = function createCompareRouter(deps) {
         return lr.isAvailable();
       } catch { return false; }
     }
-    if (engine === 'gemini') return !!(process.env.GEMINI_FREE_KEY_1 || process.env.GEMINI_PAID_KEY);
-    if (engine === 'groq') return !!process.env.GROQ_API_KEY;
-    if (engine === 'openrouter') return !!process.env.OPENROUTER_API_KEY;
-    if (engine === 'claude') return !!process.env.ANTHROPIC_API_KEY;
+    if (engine === 'gemini') return anyKey('GEMINI_PAID_KEY', 'GEMINI_API_KEY', 'GEMINI_FREE_KEY_1', 'GEMINI_FREE_KEY');
+    if (engine === 'groq') return anyKey('GROQ_API_KEY');
+    if (engine === 'openrouter') return anyKey('OPENROUTER_API_KEY');
+    if (engine === 'claude') return anyKey('ANTHROPIC_API_KEY');
+    if (engine === 'openai') return anyKey('OPENAI_API_KEY');
     return false;
   };
 

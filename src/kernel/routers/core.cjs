@@ -6,7 +6,7 @@ module.exports = function createCoreRouter(deps) {
     _blockRegistry, _blockReadiness, _loadSettings, _llmTelemetry,
     getDailyCost, isVercel, fs, path, kernelLLM,
     _skippedRoutes, getLocalFile,
-    getProviderHealth, getKeyPoolInfo,
+    getProviderHealth, getKeyPoolInfo, VAULT_ROOT,
   } = deps;
 
   // Coinbase CDP key: inside the install (secrets/) first, Desktop only as legacy.
@@ -59,12 +59,21 @@ module.exports = function createCoreRouter(deps) {
     providers.gas = !!env.VITE_GAS_URL;
     providers.canva = !!env.CANVA_CLIENT_SECRET;
 
+    // The store lives at Vault/Agents/vp/memory/, owned by memory_core.
+    // This pointed at src/blocks/memory/data/ — a block that was REMOVED, so
+    // the path could never exist and system status reported 0 memories on
+    // every install regardless of how many were saved. chat-stream.cjs had
+    // the identical stale path and was corrected; this copy was missed, which
+    // is the argument for the shared constant rather than a third hardcoding.
     let memoryCount = 0;
     try {
-      const memDir = path.join(__dirname, '..', '..', 'blocks', 'memory', 'data');
-      const memFile = path.join(memDir, 'memories.json');
+      const memFile = path.join(
+        VAULT_ROOT || path.join(__dirname, '..', '..', 'blocks', 'aeon_matrix', 'data', 'Vault'),
+        'Agents', 'vp', 'memory', 'memories.json'
+      );
       if (fs.existsSync(memFile)) {
-        memoryCount = JSON.parse(fs.readFileSync(memFile, 'utf8')).length;
+        const parsed = JSON.parse(fs.readFileSync(memFile, 'utf8'));
+        memoryCount = Array.isArray(parsed) ? parsed.length : 0;
       }
     } catch {}
 
