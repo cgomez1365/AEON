@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Folder, FileText, Upload, FolderPlus, ChevronRight, Home, ArrowLeft, X, RefreshCw, Trash2, Download, Cloud, Monitor, Save, Columns } from 'lucide-react';
+import { Folder, FileText, Upload, FolderPlus, ChevronRight, Home, ArrowLeft, X, RefreshCw, Trash2, Download, Cloud, Monitor, Save, Columns, PenLine } from 'lucide-react';
 import { getSupabase } from '../../kernel/supabase';
 import { WORKSPACE } from '../../config.js';
 import ModalPortal from '../../components/ModalPortal.jsx';
@@ -28,6 +28,13 @@ const formatSize = (bytes) => {
 };
 
 const folderPrefix = (folder) => folder ? folder + '/' : '';
+
+// The host's path separator, inferred from the workspace path the server
+// reported rather than assumed. Every path-splitting site below used a
+// hardcoded backslash, which is correct on Windows and wrong everywhere
+// else — breadcrumbs rendered as one unsplittable blob on macOS and Linux,
+// and "up one folder" jumped straight to the root.
+const SEP = /^[A-Za-z]:\\|\\\\/.test(String(WORKSPACE || '')) ? '\\' : '/';
 
 function FilePane({ mode, onPreview, onEdit }) {
   const [currentFolder, setCurrentFolder] = useState('');
@@ -127,9 +134,22 @@ function FilePane({ mode, onPreview, onEdit }) {
       parts.pop();
       loadDir(parts.join('/'));
     } else {
-      const parts = currentFolder.split('\\').filter(Boolean);
-      if (parts.length > 3) { parts.pop(); loadDir(parts.join('\\')); }
-      else loadDir('');
+      // F-4. This split on a literal backslash, so on macOS and Linux — where
+      // the separator is '/' — the whole path was one segment and "up" could
+      // only ever jump to the root. SEP is derived from the paths the server
+      // actually returns, so the same code is right on either platform.
+      //
+      // The leading separator is preserved rather than filtered away: a POSIX
+      // path split on '/' begins with an empty segment, and dropping it turns
+      // "/Users/cris/Vault" into the relative "Users/cris" — which resolves
+      // against the workspace instead of the disk and lands somewhere the
+      // operator did not ask for.
+      const posixRoot = SEP === '/' && currentFolder.startsWith('/');
+      const parts = currentFolder.split(SEP).filter(Boolean);
+      if (parts.length > 1) {
+        parts.pop();
+        loadDir((posixRoot ? SEP : '') + parts.join(SEP));
+      } else loadDir('');
     }
   };
 
@@ -215,6 +235,36 @@ function FilePane({ mode, onPreview, onEdit }) {
     e.target.value = '';
   };
 
+  // F-3. Rename and move reach POST /api/fs/rename, which is new — the hub
+  // previously had no way to do either, so a file put in the wrong folder had
+  // to be downloaded and re-uploaded to get anywhere else. Local only: the
+  // cloud bucket has no equivalent single-call rename.
+  const handleRename = async (e, entry) => {
+    e.stopPropagation();
+    const next = window.prompt(
+      `Rename "${entry.name}" to:\n\nType a name to rename it, or a full path to move it.`,
+      entry.name
+    );
+    if (!next || next === entry.name) return;
+
+    // A bare name stays in the current folder; anything containing a
+    // separator is taken as a destination path the operator meant.
+    const dir = entry.storagePath.slice(0, entry.storagePath.lastIndexOf(SEP));
+    const to = next.includes('/') || next.includes('\\') ? next : `${dir}${SEP}${next}`;
+
+    try {
+      const res = await fetch(`${LOCAL_API}/rename`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ from: entry.storagePath, to }),
+      });
+      if (res.status === 423) { setFsLocked(true); throw new Error('Locked — unlock the hub (🔓) to rename or move.'); }
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `Rename failed (${res.status})`);
+      setUploadStatus(`✅ Renamed to ${next}`);
+      setTimeout(() => setUploadStatus(''), 4000);
+      loadDir(currentFolder);
+    } catch (error) { setUploadStatus(`❌ ${error.message}`); }
+  };
+
   const handleDelete = async (e, entry) => {
     e.stopPropagation();
     if (!window.confirm(`Delete "${entry.name}"?`)) return;
@@ -278,9 +328,9 @@ function FilePane({ mode, onPreview, onEdit }) {
     }
   };
 
-  const crumbs = mode === 'cloud' 
+  const crumbs = mode === 'cloud'
     ? currentFolder.split('/').filter(Boolean)
-    : currentFolder.replace(WORKSPACE, '').split('\\').filter(Boolean);
+    : currentFolder.replace(WORKSPACE, '').split(SEP).filter(Boolean);
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: 'rgba(0,0,0,0.2)', borderRadius: '12px', padding: '20px', border: `1px solid rgba(255,255,255,0.05)`, minWidth: 0 }}>
@@ -308,11 +358,14 @@ function FilePane({ mode, onPreview, onEdit }) {
           <button onClick={() => loadDir(currentFolder)} aria-label="Refresh file list" title="Refresh" style={{ background: themeBg, border: `1px solid ${themeColor}40`, color: themeColor, padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', fontWeight: 600 }}>
             <RefreshCw size={12} />
           </button>
-          {mode === 'cloud' && (
-            <button onClick={() => setShowNewFolder(!showNewFolder)} aria-label="New folder" title="New folder" aria-expanded={showNewFolder} style={{ background: themeBg, border: `1px solid ${themeColor}40`, color: themeColor, padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', fontWeight: 600 }}>
-              <FolderPlus size={12} />
-            </button>
-          )}
+          {/* F-1. This was gated to cloud mode, so the local hub had no way to
+              create a folder — while POST /api/fs/mkdir had supported it all
+              along and handleCreateFolder already had the local branch
+              written. A capability that existed end to end, missing only its
+              button. */}
+          <button onClick={() => setShowNewFolder(!showNewFolder)} aria-label="New folder" title="New folder" aria-expanded={showNewFolder} style={{ background: themeBg, border: `1px solid ${themeColor}40`, color: themeColor, padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', fontWeight: 600 }}>
+            <FolderPlus size={12} />
+          </button>
         </div>
       </div>
 
@@ -330,7 +383,7 @@ function FilePane({ mode, onPreview, onEdit }) {
         </div>
       )}
 
-      {showNewFolder && mode === 'cloud' && (
+      {showNewFolder && (
         <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
           <input autoFocus value={newFolderName} onChange={e => setNewFolderName(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleCreateFolder()} placeholder="Folder name..." aria-label="New folder name" onFocus={e => { e.currentTarget.style.borderColor = themeColor; e.currentTarget.style.boxShadow = `0 0 0 2px ${themeBg}`; }} onBlur={e => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.1)'; e.currentTarget.style.boxShadow = 'none'; }} style={{ flex: 1, padding: '8px 12px', background: '#090d16', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '6px', color: '#fff', outline: 'none', fontSize: '12px' }} />
           <button onClick={handleCreateFolder} style={{ background: themeColor, color: '#000', border: 'none', padding: '8px 16px', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer', fontSize: '12px' }}>Create</button>
@@ -344,7 +397,7 @@ function FilePane({ mode, onPreview, onEdit }) {
           <Home size={12} /> {mode === 'cloud' ? 'Cloud' : 'Local'}
         </button>
         {crumbs.map((crumb, i) => {
-          const path = mode === 'cloud' ? crumbs.slice(0, i + 1).join('/') : WORKSPACE + '\\' + crumbs.slice(0, i + 1).join('\\');
+          const path = mode === 'cloud' ? crumbs.slice(0, i + 1).join('/') : WORKSPACE + SEP + crumbs.slice(0, i + 1).join(SEP);
           return (
             <React.Fragment key={i}>
               <ChevronRight size={10} color="#475569" />
@@ -378,6 +431,9 @@ function FilePane({ mode, onPreview, onEdit }) {
                 {entry.type === 'file' && (
                   <div style={{ display: 'flex', gap: '2px' }} onClick={e => e.stopPropagation()}>
                     <button onClick={(e) => handleDownload(e, entry)} aria-label={`Download ${entry.name}`} title="Download" style={{ background: 'transparent', border: 'none', color: '#64748b', cursor: 'pointer', padding: '2px', display: 'flex' }}><Download size={12} /></button>
+                    {mode !== 'cloud' && !fsLocked && (
+                      <button onClick={(e) => handleRename(e, entry)} aria-label={`Rename or move ${entry.name}`} title="Rename or move" style={{ background: 'transparent', border: 'none', color: '#64748b', cursor: 'pointer', padding: '2px', display: 'flex' }}><PenLine size={12} /></button>
+                    )}
                     {(mode === 'cloud' || !fsLocked) && (
                       <button onClick={(e) => handleDelete(e, entry)} aria-label={`Delete ${entry.name}`} title="Delete" style={{ background: 'transparent', border: 'none', color: '#ef4444', cursor: 'pointer', padding: '2px', display: 'flex' }}><Trash2 size={12} /></button>
                     )}
