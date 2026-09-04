@@ -6,6 +6,16 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Brain, Pin, Trash2, Plus, Sparkles, RefreshCw, Pencil, Check, X } from 'lucide-react';
 
+// Two independent dimensions, not one list split in half — the API stores
+// both on every record (see api/memory.cjs): CATS says what a memory is
+// ABOUT, TYPES says what SHAPE it has, and a memory can carry one, both, or
+// only a category.
+//
+// The filter bar has always offered all ten, while the add form offered only
+// TYPES — so six of the ten filters could never match anything the operator
+// created by hand. Every manual memory silently took the API's `category`
+// default of "fact", which is why filtering by "identity" or "contact"
+// returned nothing on a store the operator had filled themselves.
 const TYPES = ['outline', 'algorithm', 'decision', 'milestone'];
 const CATS = ['fact', 'identity', 'preference', 'contact', 'project', 'goal'];
 
@@ -29,6 +39,7 @@ export default function MemoryCore() {
   const [q, setQ] = useState('');
   const [newText, setNewText] = useState('');
   const [newType, setNewType] = useState('');
+  const [newCat, setNewCat] = useState('');
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState('');
   const [editingId, setEditingId] = useState(null);
@@ -54,9 +65,16 @@ export default function MemoryCore() {
     if (newText.trim().length < 6) throw new Error('too short');
     await fetch('/api/memory/add', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: newText.trim(), type: newType || null, source: 'operator' }),
+      body: JSON.stringify({
+        text: newText.trim(),
+        type: newType || null,
+        // Omitted rather than sent empty, so the API's own "fact" default
+        // applies when the operator did not choose.
+        ...(newCat ? { category: newCat } : {}),
+        source: 'operator',
+      }),
     });
-    setNewText(''); setNewType('');
+    setNewText(''); setNewType(''); setNewCat('');
   }, 'memory saved');
 
   const pin = (id) => act(() => fetch(`/api/memory/${id}/pin`, { method: 'POST' }));
@@ -104,8 +122,9 @@ export default function MemoryCore() {
 
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 }} role="group" aria-label="Filter memories by type or category">
         <button type="button" style={chip(!filter)} aria-pressed={!filter} onClick={() => setFilter(null)}>all</button>
-        {TYPES.map(t => <button type="button" key={t} style={chip(filter === t)} aria-pressed={filter === t} onClick={() => setFilter(filter === t ? null : t)}>{t}</button>)}
-        {CATS.map(c => <button type="button" key={c} style={chip(filter === c)} aria-pressed={filter === c} onClick={() => setFilter(filter === c ? null : c)}>{c}</button>)}
+        {CATS.map(c => <button type="button" key={c} title={`About: ${c}`} style={chip(filter === c)} aria-pressed={filter === c} onClick={() => setFilter(filter === c ? null : c)}>{c}</button>)}
+        <span aria-hidden="true" style={{ width: 1, alignSelf: 'stretch', background: 'var(--border, #223)', margin: '0 2px' }} />
+        {TYPES.map(t => <button type="button" key={t} title={`Shape: ${t}`} style={chip(filter === t)} aria-pressed={filter === t} onClick={() => setFilter(filter === t ? null : t)}>{t}</button>)}
         <label htmlFor="mc-search" style={srOnly}>Search memories</label>
         <input id="mc-search" value={q} onChange={e => setQ(e.target.value)} placeholder="search…" aria-label="Search memories"
           style={{ marginLeft: 'auto', background: 'transparent', border: '1px solid var(--border, #223)', borderRadius: 4, color: 'inherit', padding: '3px 8px', fontSize: 12 }} />
@@ -116,10 +135,18 @@ export default function MemoryCore() {
         <input id="mc-new-text" value={newText} onChange={e => setNewText(e.target.value)} placeholder="teach VP something durable…"
           onKeyDown={e => e.key === 'Enter' && add()} aria-label="New memory text"
           style={{ flex: 1, background: 'transparent', border: '1px solid var(--border, #223)', borderRadius: 4, color: 'inherit', padding: '6px 10px', fontSize: 13 }} />
-        <label htmlFor="mc-new-type" style={srOnly}>Memory type</label>
-        <select id="mc-new-type" value={newType} onChange={e => setNewType(e.target.value)} aria-label="Memory type"
+        <label htmlFor="mc-new-cat" style={srOnly}>What this memory is about</label>
+        <select id="mc-new-cat" value={newCat} onChange={e => setNewCat(e.target.value)} aria-label="What this memory is about"
+          title="What the memory is about — this is what the filter chips match"
           style={{ background: 'transparent', border: '1px solid var(--border, #223)', borderRadius: 4, color: 'inherit', fontSize: 12 }}>
-          <option value="">type…</option>
+          <option value="">about…</option>
+          {CATS.map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
+        <label htmlFor="mc-new-type" style={srOnly}>Memory shape (optional)</label>
+        <select id="mc-new-type" value={newType} onChange={e => setNewType(e.target.value)} aria-label="Memory shape (optional)"
+          title="Optional — the shape of the memory, for continuity ranking"
+          style={{ background: 'transparent', border: '1px solid var(--border, #223)', borderRadius: 4, color: 'inherit', fontSize: 12 }}>
+          <option value="">shape…</option>
           {TYPES.map(t => <option key={t} value={t}>{t}</option>)}
         </select>
         <button type="button" onClick={add} disabled={busy} style={{ ...chip(true), display: 'flex', alignItems: 'center', gap: 4 }}><Plus size={12} /> save</button>
