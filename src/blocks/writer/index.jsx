@@ -273,7 +273,15 @@ export default function Writer() {
     const selected = content.slice(start, end);
     const newContent = content.slice(0, start) + before + selected + after + content.slice(end);
     setVal(newContent);
-    setTimeout(() => { el.focus(); el.setSelectionRange(start + before.length, start + before.length + selected.length); }, 0);
+    if (selected.length > 0) {
+      // Text was selected: the user is formatting something that exists.
+      // Flip to Preview so they see bold/italic/etc. rendered, not raw asterisks.
+      setPreview(true);
+    } else {
+      // No selection: cursor-only — they're about to type formatted text.
+      // Stay in Edit so they can keep typing without switching modes.
+      setTimeout(() => { el.focus(); el.setSelectionRange(start + before.length, start + before.length); }, 0);
+    }
   };
 
   const getSelection = () => {
@@ -491,7 +499,7 @@ export default function Writer() {
         {/* Toolbar */}
         <div className="writer-toolbar">
           <div className="writer-toolbar-left">
-            <button className={`writer-tb ${!preview ? 'writer-tb--active' : ''}`} onClick={() => setPreview(false)} title="Edit"><Edit3 size={13} /></button>
+            <button className={`writer-tb ${!preview ? 'writer-tb--active' : ''}`} onClick={() => { setPreview(false); setTimeout(() => editorRef.current?.focus(), 0); }} title="Edit"><Edit3 size={13} /></button>
             <button className={`writer-tb ${preview ? 'writer-tb--active' : ''}`} onClick={() => setPreview(true)} title="Preview"><Eye size={13} /></button>
             <span className="writer-tb-sep" />
             <button className="writer-tb" onClick={() => insertMarkdown('**', '**')} title="Bold"><Bold size={13} /></button>
