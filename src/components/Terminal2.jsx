@@ -642,6 +642,31 @@ const Terminal2 = ({ onUsageUpdate }) => {
         </div>
       )}
 
+      {/* ── Session action strip — top of terminal, not in the input row ── */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 0, borderBottom: '1px solid #111a28', flexShrink: 0 }}>
+        <button onClick={() => saveSession().then(d => d && push({ type: 'msg', role: 'system', content: `💾 Saved: ${d.name}` }))}
+          title="Save this chat"
+          style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'transparent', border: 'none', borderRight: '1px solid #111a28', color: sessionSaving ? '#39ff14' : '#3a5070', padding: '5px 12px', cursor: 'pointer', fontSize: 10, fontFamily: 'inherit', letterSpacing: '0.08em', whiteSpace: 'nowrap' }}
+          onMouseEnter={e => e.currentTarget.style.color = '#00f2ff'}
+          onMouseLeave={e => e.currentTarget.style.color = sessionSaving ? '#39ff14' : '#3a5070'}>
+          <Archive size={11} /> SAVE
+        </button>
+        <button onClick={() => { setShowSessions(v => !v); if (!showSessions) fetchSessions(); }}
+          title="Chat history"
+          style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'transparent', border: 'none', borderRight: '1px solid #111a28', color: showSessions ? '#00f2ff' : '#3a5070', padding: '5px 12px', cursor: 'pointer', fontSize: 10, fontFamily: 'inherit', letterSpacing: '0.08em', whiteSpace: 'nowrap' }}
+          onMouseEnter={e => e.currentTarget.style.color = '#00f2ff'}
+          onMouseLeave={e => e.currentTarget.style.color = showSessions ? '#00f2ff' : '#3a5070'}>
+          <History size={11} /> HISTORY {sessions.length > 0 && <span style={{ color: '#2a4060', fontSize: 9 }}>({sessions.length})</span>}
+        </button>
+        <button onClick={newChat}
+          title="Save & start new chat"
+          style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'transparent', border: 'none', color: '#3a5070', padding: '5px 12px', cursor: 'pointer', fontSize: 10, fontFamily: 'inherit', letterSpacing: '0.08em', whiteSpace: 'nowrap' }}
+          onMouseEnter={e => e.currentTarget.style.color = '#00f2ff'}
+          onMouseLeave={e => e.currentTarget.style.color = '#3a5070'}>
+          <Plus size={11} /> NEW CHAT
+        </button>
+      </div>
+
       <div ref={scrollRef} style={{ flex: 1, overflowY: 'auto', padding: '12px 14px' }}>
         {feed.map(entry => {
           if (entry.type === 'chip') return <EventChip key={entry.id} ev={entry} onToggle={() => patch(entry.id, e => ({ expanded: !e.expanded }))} />;
@@ -778,18 +803,6 @@ const Terminal2 = ({ onUsageUpdate }) => {
         <input ref={fileInputRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={onFileSelected} />
         <Paperclip size={14} style={{ cursor: 'pointer', color: pendingImage ? '#00f2ff' : '#4a5568', flexShrink: 0 }} onClick={() => fileInputRef.current?.click()} />
         <Cpu size={14} aria-label="Hotswap model" style={{ cursor: 'pointer', color: showModelPicker ? '#00f2ff' : '#4a5568', flexShrink: 0 }} onClick={() => setShowModelPicker(v => !v)} />
-        {/* Save current session */}
-        <Archive size={14} aria-label="Save chat session"
-          style={{ cursor: 'pointer', color: sessionSaving ? '#39ff14' : '#4a5568', flexShrink: 0 }}
-          onClick={() => saveSession().then(d => d && push({ type: 'msg', role: 'system', content: `💾 Saved: ${d.name}` }))} />
-        {/* Toggle history panel */}
-        <History size={14} aria-label="Chat history"
-          style={{ cursor: 'pointer', color: showSessions ? '#00f2ff' : '#4a5568', flexShrink: 0 }}
-          onClick={() => { setShowSessions(v => !v); if (!showSessions) fetchSessions(); }} />
-        {/* New chat */}
-        <Plus size={14} aria-label="New chat"
-          style={{ cursor: 'pointer', color: '#4a5568', flexShrink: 0 }}
-          onClick={newChat} title="Save & start new chat" />
         <input
           value={input}
           onChange={e => setInput(e.target.value)}
