@@ -339,25 +339,32 @@ export default function Writer() {
     }, 0);
   };
 
+  // execFmt: run a formatting command WITHOUT stealing focus.
+  // Call this from onMouseDown (not onClick) on toolbar buttons so the editor
+  // selection is still alive when execCommand runs.
   const execFmt = (command, value = null) => {
-    editorRef.current?.focus();
     document.execCommand(command, false, value);
     syncContent();
   };
 
-  // insertMarkdown kept as alias for block-level inserts (heading, list, divider, link)
-  // Inline formats (bold, italic, strike) now use execFmt directly.
-  const insertMarkdown = (_before, _after = '', _inline = true) => {
-    // This path is only called by block-format buttons now — use insertHTML
-    editorRef.current?.focus();
-    const tag = _before === '## ' ? '<h2><br></h2>'
-      : _before === '- ' ? '<ul><li><br></li></ul>'
-      : _before.startsWith('---') ? '<hr>'
-      : _before === '[' ? '<a href="url">link</a>'
-      : null;
-    if (tag) document.execCommand('insertHTML', false, tag);
+  // Block formats — also called via onMouseDown so selection is preserved.
+  const insertBlock = (type) => {
+    switch (type) {
+      case 'h2':    document.execCommand('formatBlock', false, 'h2'); break;
+      case 'ul':    document.execCommand('insertUnorderedList'); break;
+      case 'hr':    document.execCommand('insertHTML', false, '<hr>'); break;
+      case 'link': {
+        const url = prompt('URL:', 'https://');
+        if (url) document.execCommand('createLink', false, url);
+        break;
+      }
+      default: break;
+    }
     syncContent();
   };
+
+  // Legacy alias — no longer used for inline formats; kept for any remaining call sites.
+  const insertMarkdown = (_before, _after = '', _inline = true) => {};
 
   const getSelection = () => {
     const sel = window.getSelection();
@@ -598,19 +605,19 @@ export default function Writer() {
         <div className="writer-toolbar">
           <div className="writer-toolbar-left">
             <span className="writer-tb-sep" />
-            {/* Inline formats — execCommand; work on any selection like Google Docs */}
-            <button className="writer-tb" onClick={() => execFmt('bold')} title="Bold (Ctrl+B)"><Bold size={13} /></button>
-            <button className="writer-tb" onClick={() => execFmt('italic')} title="Italic (Ctrl+I)"><Italic size={13} /></button>
-            <button className="writer-tb" onClick={() => execFmt('strikeThrough')} title="Strikethrough"><Strikethrough size={13} /></button>
+            {/* Inline formats — onMouseDown keeps editor focus + selection alive */}
+            <button className="writer-tb" onMouseDown={e => { e.preventDefault(); execFmt('bold'); }} title="Bold (Ctrl+B)"><Bold size={13} /></button>
+            <button className="writer-tb" onMouseDown={e => { e.preventDefault(); execFmt('italic'); }} title="Italic (Ctrl+I)"><Italic size={13} /></button>
+            <button className="writer-tb" onMouseDown={e => { e.preventDefault(); execFmt('strikeThrough'); }} title="Strikethrough"><Strikethrough size={13} /></button>
             <span className="writer-tb-sep" />
-            {/* Block formats */}
-            <button className="writer-tb" onClick={() => insertMarkdown('## ', '', false)} title="Heading"><Heading size={13} /></button>
-            <button className="writer-tb" onClick={() => insertMarkdown('- ', '', false)} title="Bullet list"><List size={13} /></button>
-            <button className="writer-tb" onClick={() => insertMarkdown('[', '](url)', false)} title="Link"><Link size={13} /></button>
-            <button className="writer-tb" onClick={() => insertMarkdown('---\n', '', false)} title="Divider"><Minus size={13} /></button>
+            {/* Block formats — same onMouseDown pattern */}
+            <button className="writer-tb" onMouseDown={e => { e.preventDefault(); insertBlock('h2'); }} title="Heading 2"><Heading size={13} /></button>
+            <button className="writer-tb" onMouseDown={e => { e.preventDefault(); insertBlock('ul'); }} title="Bullet list"><List size={13} /></button>
+            <button className="writer-tb" onMouseDown={e => { e.preventDefault(); insertBlock('link'); }} title="Insert link"><Link size={13} /></button>
+            <button className="writer-tb" onMouseDown={e => { e.preventDefault(); insertBlock('hr'); }} title="Divider"><Minus size={13} /></button>
             <span className="writer-tb-sep" />
-            <button className="writer-tb" onClick={undo} disabled={undoStack.length === 0} title="Undo (Ctrl+Z)">Undo</button>
-            <button className="writer-tb" onClick={redo} disabled={redoStack.length === 0} title="Redo (Ctrl+Shift+Z)">Redo</button>
+            <button className="writer-tb" onMouseDown={e => { e.preventDefault(); undo(); }} disabled={undoStack.length === 0} title="Undo (Ctrl+Z)">Undo</button>
+            <button className="writer-tb" onMouseDown={e => { e.preventDefault(); redo(); }} disabled={redoStack.length === 0} title="Redo (Ctrl+Shift+Z)">Redo</button>
             <span className="writer-tb-sep" />
             <button className={`writer-tb ${outlineOpen ? 'writer-tb--active' : ''}`} onClick={() => setOutlineOpen(o => !o)} title="Outline">☰ Outline</button>
             <button className={`writer-tb ${findOpen ? 'writer-tb--active' : ''}`} onClick={() => setFindOpen(o => !o)} title="Find & replace (Ctrl+F)">🔍 Find</button>
