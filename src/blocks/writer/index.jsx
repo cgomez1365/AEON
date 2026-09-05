@@ -327,7 +327,7 @@ export default function Writer() {
         body: JSON.stringify({ prompt: p, mode: writeMode, draft: content, tone: generateTone, length: generateLength }) });
       const d = await r.json();
       if (aiFail(d, r)) { setAiLoading(false); return; }
-      if (d.content) setVal(d.content);
+      if (d.content) { setVal(d.content); setPreview(true); }
       else showToast('AI returned no content.');
     } catch (e) { aiCrash(e); }
     setAiLoading(false);
@@ -341,7 +341,7 @@ export default function Writer() {
         body: JSON.stringify({ mode: 'continue', draft: content }) });
       const d = await r.json();
       if (aiFail(d, r)) { setAiLoading(false); return; }
-      if (d.content) setVal(content + '\n\n' + d.content);
+      if (d.content) { setVal(content + '\n\n' + d.content); setPreview(true); }
       else showToast('AI returned no continuation.');
     } catch (e) { aiCrash(e); }
     setAiLoading(false);
