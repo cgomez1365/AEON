@@ -450,7 +450,7 @@ export default function Writer() {
     if (e.key === 'Escape' && focusMode) setFocusMode(false);
   };
 
-  const QUICK_PROMPTS = ['What next?', 'Summarize', 'Sound like me?', 'Weakest part?', 'Conclude'];
+  const QUICK_PROMPTS = ['Spell check', 'Flag weak words', 'Grammar check', 'Weakest part?', 'What next?'];
 
   return (
     <div className={`writer-root ${focusMode ? 'writer-root--focus' : ''}`} onKeyDown={handleKey}>
@@ -665,7 +665,7 @@ export default function Writer() {
               </div>
               <div className="cowrite-msgs">
                 {cowriteHistory.length === 0 && (
-                  <div className="cowrite-empty">Ask anything about your draft.<br/>I always have it in context.</div>
+                  <div className="cowrite-empty">Your editorial assistant — flags spelling, grammar, weak words, and structure. Use the quick prompts below, or ask anything. Say "rewrite" only when you want a full pass.</div>
                 )}
                 {cowriteHistory.map((m, i) => (
                   <div key={i} className={`cowrite-msg ${m.role === 'user' ? 'cowrite-msg--user' : 'cowrite-msg--ai'}`}>

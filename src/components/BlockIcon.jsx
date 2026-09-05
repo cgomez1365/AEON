@@ -63,26 +63,41 @@ export function BlockIcon({
     );
   }
 
-  // The mask is set here rather than in the stylesheet because only this
-  // element knows which file it is drawing. The <img> is kept (rather than a
-  // plain <span>) so its onError still fires: the mask hides the rendered
-  // pixels, not the load.
+  // WHY A SPAN, NOT AN IMG:
+  // The SVGs use fill="currentColor". When loaded as <img>, currentColor
+  // resolves to black — the img's own black pixels cover the CSS
+  // background-color, so the mask's colour-through trick never shows.
+  // A <span> has no painted content; background-color + mask works as
+  // designed: the accent colour is visible through exactly the icon shape.
+  // A hidden <img> is kept solely to trigger onError for the fallback chain.
   const maskUrl = `url("${String(source).replace(/"/g, '\\"')}")`;
 
   return (
-    <img
-      src={source}
-      alt=""
-      aria-hidden="true"
-      className={`block-icon-svg ${className}`.trim()}
-      width={size}
-      height={size}
-      style={{ WebkitMaskImage: maskUrl, maskImage: maskUrl, ...style }}
-      onError={() => {
-        if (source !== iconAssetPng && iconAssetPng) setSource(iconAssetPng);
-        else setSource(null);
-      }}
-    />
+    <>
+      <img
+        src={source}
+        alt=""
+        aria-hidden="true"
+        style={{ display: 'none', position: 'absolute', pointerEvents: 'none' }}
+        onError={() => {
+          if (source !== iconAssetPng && iconAssetPng) setSource(iconAssetPng);
+          else setSource(null);
+        }}
+      />
+      <span
+        aria-hidden="true"
+        className={`block-icon-svg ${className}`.trim()}
+        style={{
+          width: size,
+          height: size,
+          display: 'block',
+          flexShrink: 0,
+          WebkitMaskImage: maskUrl,
+          maskImage: maskUrl,
+          ...style,
+        }}
+      />
+    </>
   );
 }
 
