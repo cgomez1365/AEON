@@ -17,11 +17,10 @@ export default function Writer() {
   const [activeId, setActiveId] = useState(null);
   const [content, setContent] = useState('');
   const [title, setTitle] = useState('Untitled');
-  // 'split' = textarea left + live preview right (default)
-  // 'edit'  = textarea full width
-  // 'read'  = rendered markdown full width
-  const [editorMode, setEditorMode] = useState('split');
-  const preview = editorMode === 'read'; // keeps all existing setEditorMode('read') calls working
+  // editorMode kept for toolbar-right AI buttons that gate on preview
+  const editorMode = 'edit';
+  const setEditorMode = () => {}; // no-op — WYSIWYG has no modes
+  const preview = false;
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [aiMenu, setAiMenu] = useState(false);
@@ -46,7 +45,7 @@ export default function Writer() {
   const [autosaving, setAutosaving] = useState(false);
   const editorRef = useRef(null);
   const skipHistoryRef = useRef(false);
-  const [selLen, setSelLen] = useState(0); // chars selected in textarea
+  const [selLen, setSelLen] = useState(0); // unused now (WYSIWYG tracks its own selection)
 
   // ── Writer 2.0 state ──
   const [outlineOpen, setOutlineOpen] = useState(false);
@@ -75,51 +74,78 @@ export default function Writer() {
     return () => window.removeEventListener('keydown', onKey);
   }, [focusMode]);
 
-  // Outline: every #/##/### heading with its character offset
+  // Outline: parse h1/h2/h3 elements from HTML content
   const outline = React.useMemo(() => {
     const items = [];
-    let offset = 0;
-    for (const line of content.split('\n')) {
-      const m = line.match(/^(#{1,3})\s+(.*)$/);
-      if (m) items.push({ level: m[1].length, text: m[2].slice(0, 60), offset });
-      offset += line.length + 1;
+    const matches = [...content.matchAll(/<h([1-3])[^>]*>(.*?)<\/h[1-3]>/gi)];
+    for (const m of matches) {
+      const text = m[2].replace(/<[^>]*>/g, '').slice(0, 60);
+      items.push({ level: parseInt(m[1]), text });
     }
     return items;
   }, [content]);
 
-  const jumpTo = (offset) => {
-    setEditorMode(m => m === "read" ? "split" : m);
-    setTimeout(() => {
-      const el = editorRef.current; if (!el) return;
-      el.focus(); el.setSelectionRange(offset, offset);
-      const before = content.slice(0, offset).split('\n').length;
-      el.scrollTop = Math.max(0, (before - 4) * 22);
-    }, 50);
+  const jumpTo = (text) => {
+    const el = editorRef.current; if (!el) return;
+    // Find heading node by text content and scroll to it
+    const headings = el.querySelectorAll('h1,h2,h3');
+    for (const h of headings) {
+      if (h.textContent.slice(0, 60) === text) {
+        h.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        break;
+      }
+    }
   };
 
   const findCount = React.useMemo(() => {
     if (!findText) return 0;
-    return content.split(findText).length - 1;
+    const text = content.replace(/<[^>]*>/g, '');
+    return text.split(findText).length - 1;
   }, [content, findText]);
 
   const findNext = () => {
-    if (!findText) return;
-    const el = editorRef.current; if (!el) return;
-    const from = el.selectionEnd || 0;
-    let idx = content.indexOf(findText, from);
-    if (idx === -1) idx = content.indexOf(findText);   // wrap around
-    if (idx === -1) return;
-    setEditorMode(m => m === "read" ? "split" : m);
-    setTimeout(() => {
-      el.focus(); el.setSelectionRange(idx, idx + findText.length);
-      const before = content.slice(0, idx).split('\n').length;
-      el.scrollTop = Math.max(0, (before - 4) * 22);
-    }, 30);
+    if (!findText || !editorRef.current) return;
+    // Use browser's native find on the contenteditable
+    const sel = window.getSelection();
+    const range = document.createRange();
+    const walker = document.createTreeWalker(editorRef.current, NodeFilter.SHOW_TEXT);
+    let node; let found = false;
+    // Start after current selection end if possible
+    const curNode = sel?.focusNode;
+    let past = !curNode;
+    while ((node = walker.nextNode())) {
+      if (!past && node === curNode) { past = true; continue; }
+      if (!past) continue;
+      const idx = node.textContent.indexOf(findText);
+      if (idx !== -1) {
+        range.setStart(node, idx);
+        range.setEnd(node, idx + findText.length);
+        sel?.removeAllRanges(); sel?.addRange(range);
+        range.startContainer.parentElement?.scrollIntoView({ block: 'center' });
+        found = true; break;
+      }
+    }
+    // Wrap: try from beginning
+    if (!found) {
+      const w2 = document.createTreeWalker(editorRef.current, NodeFilter.SHOW_TEXT);
+      while ((node = w2.nextNode())) {
+        const idx = node.textContent.indexOf(findText);
+        if (idx !== -1) {
+          range.setStart(node, idx); range.setEnd(node, idx + findText.length);
+          sel?.removeAllRanges(); sel?.addRange(range);
+          range.startContainer.parentElement?.scrollIntoView({ block: 'center' });
+          break;
+        }
+      }
+    }
   };
 
   const replaceAll = () => {
-    if (!findText || findCount === 0) return;
-    setVal(content.split(findText).join(replaceText));
+    if (!findText || findCount === 0 || !editorRef.current) return;
+    // Replace in innerHTML
+    const newHtml = editorRef.current.innerHTML.split(findText).join(replaceText);
+    editorRef.current.innerHTML = newHtml;
+    setContent(newHtml); setDirty(true);
     showToast(`Replaced ${findCount} occurrence${findCount !== 1 ? 's' : ''}`);
   };
 
@@ -140,10 +166,14 @@ export default function Writer() {
   };
 
   const startFromTemplate = (t) => {
-    setActiveId(null); setTitle(t.id === 'blank' ? 'Untitled' : t.label); setContent(t.content);
-    setDirty(!!t.content); setEditorMode(m => m === "read" ? "split" : m); setCritiqueText('');
+    setActiveId(null); setTitle(t.id === 'blank' ? 'Untitled' : t.label); setContent(t.content || '');
+    setDirty(!!t.content); setCritiqueText('');
     setUndoStack([]); setRedoStack([]); setTemplatesOpen(false);
-    setTimeout(() => editorRef.current?.focus(), 100);
+    setTimeout(() => {
+      const el = editorRef.current; if (!el) return;
+      el.innerHTML = t.content || '';
+      el.focus();
+    }, 100);
   };
 
   const loadDocs = useCallback(async () => {
@@ -212,15 +242,24 @@ export default function Writer() {
       const r = await fetch(`/api/writer/doc/${id}`);
       const d = await r.json();
       setActiveId(id); setContent(d.content); setTitle(docs.find(x => x.id === id)?.title || 'Untitled');
-      setDirty(false); setEditorMode(m => m === "read" ? "split" : m); setCritiqueText('');
+      setDirty(false); setCritiqueText('');
       setUndoStack([]); setRedoStack([]);
+      setTimeout(() => {
+        const el = editorRef.current; if (!el) return;
+        el.innerHTML = d.content || '';
+        el.focus();
+      }, 0);
     } catch {}
   };
 
   const newDoc = () => {
-    setActiveId(null); setContent(''); setTitle('Untitled'); setDirty(false); setEditorMode(m => m === "read" ? "split" : m);
+    setActiveId(null); setContent(''); setTitle('Untitled'); setDirty(false);
     setCritiqueText(''); setUndoStack([]); setRedoStack([]);
-    setTimeout(() => editorRef.current?.focus(), 100);
+    setTimeout(() => {
+      const el = editorRef.current; if (!el) return;
+      el.innerHTML = '';
+      el.focus();
+    }, 100);
   };
 
   const saveDoc = async () => {
@@ -267,45 +306,66 @@ export default function Writer() {
     skipHistoryRef.current = false;
   };
 
-  const setVal = (v) => {
-    pushUndo(content);
-    setContent(v); setDirty(true);
+  // ── WYSIWYG helpers ────────────────────────────────────────────────────────
+  // The editor is a contenteditable div. All formatting goes through
+  // document.execCommand — the same path browsers use natively for ctrl+b, ctrl+i.
+  // content state mirrors innerHTML for AI/save purposes; the ground truth is the DOM.
+
+  const syncContent = () => {
+    const el = editorRef.current; if (!el) return;
+    const html = el.innerHTML;
+    setContent(html);
+    setDirty(true);
   };
 
-  // inline = true  → wraps selected text (bold, italic, strike).
-  //                   Does nothing when nothing is selected.
-  // inline = false → block-level prefix (heading, list, divider, link).
-  //                   Inserts at the beginning of the current line.
-  const insertMarkdown = (before, after = '', inline = true) => {
-    const el = editorRef.current; if (!el) return;
-    const cursorPos = el.selectionStart;
-    const selEnd = el.selectionEnd;
-    const selected = content.slice(cursorPos, selEnd);
+  const setVal = (v) => {
+    // v may be HTML (from AI) or plain text. Insert into the contenteditable.
+    pushUndo(content);
+    setContent(v);
+    setDirty(true);
+    // Reflect in DOM on next tick
+    setTimeout(() => {
+      const el = editorRef.current;
+      if (!el) return;
+      el.innerHTML = v;
+      // Move caret to end
+      const range = document.createRange();
+      const sel = window.getSelection();
+      range.selectNodeContents(el);
+      range.collapse(false);
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+      el.focus();
+    }, 0);
+  };
 
-    if (inline) {
-      if (selected.length === 0) return; // inline with no selection → do nothing
-      const newContent = content.slice(0, cursorPos) + before + selected + after + content.slice(selEnd);
-      setVal(newContent);
-      // Formatting visible content: preview pane (split) already shows it; no mode switch needed.
-    } else {
-      // Block: find start of current line and prepend there
-      const lineStart = content.lastIndexOf('\n', cursorPos - 1) + 1;
-      const newContent = content.slice(0, lineStart) + before + content.slice(lineStart);
-      setVal(newContent);
-      setTimeout(() => {
-        el.focus();
-        const newCursor = lineStart + before.length + (cursorPos - lineStart);
-        el.setSelectionRange(newCursor, newCursor);
-      }, 0);
-    }
+  const execFmt = (command, value = null) => {
+    editorRef.current?.focus();
+    document.execCommand(command, false, value);
+    syncContent();
+  };
+
+  // insertMarkdown kept as alias for block-level inserts (heading, list, divider, link)
+  // Inline formats (bold, italic, strike) now use execFmt directly.
+  const insertMarkdown = (_before, _after = '', _inline = true) => {
+    // This path is only called by block-format buttons now — use insertHTML
+    editorRef.current?.focus();
+    const tag = _before === '## ' ? '<h2><br></h2>'
+      : _before === '- ' ? '<ul><li><br></li></ul>'
+      : _before.startsWith('---') ? '<hr>'
+      : _before === '[' ? '<a href="url">link</a>'
+      : null;
+    if (tag) document.execCommand('insertHTML', false, tag);
+    syncContent();
   };
 
   const getSelection = () => {
-    const el = editorRef.current;
-    return el ? content.slice(el.selectionStart, el.selectionEnd) : '';
+    const sel = window.getSelection();
+    return sel ? sel.toString() : '';
   };
 
-  const wordCount = content.trim().split(/\s+/).filter(Boolean).length;
+  // Word count from visible text (strip HTML tags)
+  const wordCount = content.replace(/<[^>]*>/g, ' ').trim().split(/\s+/).filter(Boolean).length;
 
   // ── AI: Improve ────────────────────────────────────────────────────────────
 
@@ -448,14 +508,12 @@ export default function Writer() {
         return;
       }
     }
-    // Fall back: regular text response — insert at cursor position.
+    // Fall back: regular text response — insert at cursor position via execCommand.
     const el = editorRef.current;
-    if (!el) { setVal(content + '\n\n' + text); return; }
-    const s = el.selectionStart;
-    const before = content.slice(0, s);
-    const after = content.slice(s);
-    const gap = before && !before.endsWith('\n') ? '\n\n' : '';
-    setVal(before + gap + text + '\n\n' + after);
+    if (!el) return;
+    el.focus();
+    document.execCommand('insertText', false, '\n\n' + text + '\n\n');
+    syncContent();
   };
 
   // ── Push to Memory Core ────────────────────────────────────────────────────
@@ -488,9 +546,11 @@ export default function Writer() {
 
   const handleKey = (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); saveDoc(); }
-    if ((e.ctrlKey || e.metaKey) && e.key === 'b') { e.preventDefault(); insertMarkdown('**', '**'); }
-    if ((e.ctrlKey || e.metaKey) && e.key === 'i') { e.preventDefault(); insertMarkdown('*', '*'); }
-    if ((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); if (e.shiftKey) redo(); else undo(); }
+    // Bold/italic/underline: let the browser handle ctrl+b/i natively in contenteditable,
+    // just sync state after.
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'b' || e.key === 'i' || e.key === 'u')) {
+      setTimeout(syncContent, 0);
+    }
     if ((e.ctrlKey || e.metaKey) && e.key === 'f') { e.preventDefault(); setFindOpen(true); }
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); setFocusMode(f => !f); }
     if (e.key === 'Escape' && focusMode) setFocusMode(false);
@@ -537,38 +597,17 @@ export default function Writer() {
         {/* Toolbar */}
         <div className="writer-toolbar">
           <div className="writer-toolbar-left">
-            <button className={`writer-tb ${editorMode === 'split' ? 'writer-tb--active' : ''}`}
-              onClick={() => { setEditorMode('split'); setTimeout(() => editorRef.current?.focus(), 0); }}
-              title="Split — edit and preview side by side">
-              <Edit3 size={11} /><Eye size={11} />
-            </button>
-            <button className={`writer-tb ${editorMode === 'edit' ? 'writer-tb--active' : ''}`}
-              onClick={() => { setEditorMode('edit'); setTimeout(() => editorRef.current?.focus(), 0); }}
-              title="Edit only">
-              <Edit3 size={13} />
-            </button>
-            <button className={`writer-tb ${editorMode === 'read' ? 'writer-tb--active' : ''}`}
-              onClick={() => setEditorMode('read')}
-              title="Read — rendered markdown">
-              <Eye size={13} />
-            </button>
             <span className="writer-tb-sep" />
-            {/* Inline formats — require selection; disabled + tooltip when nothing selected */}
-            <button className="writer-tb" disabled={preview || selLen === 0}
-              onClick={() => insertMarkdown('**', '**')}
-              title={selLen === 0 ? 'Select text first' : 'Bold'}><Bold size={13} /></button>
-            <button className="writer-tb" disabled={preview || selLen === 0}
-              onClick={() => insertMarkdown('*', '*')}
-              title={selLen === 0 ? 'Select text first' : 'Italic'}><Italic size={13} /></button>
-            <button className="writer-tb" disabled={preview || selLen === 0}
-              onClick={() => insertMarkdown('~~', '~~')}
-              title={selLen === 0 ? 'Select text first' : 'Strikethrough'}><Strikethrough size={13} /></button>
+            {/* Inline formats — execCommand; work on any selection like Google Docs */}
+            <button className="writer-tb" onClick={() => execFmt('bold')} title="Bold (Ctrl+B)"><Bold size={13} /></button>
+            <button className="writer-tb" onClick={() => execFmt('italic')} title="Italic (Ctrl+I)"><Italic size={13} /></button>
+            <button className="writer-tb" onClick={() => execFmt('strikeThrough')} title="Strikethrough"><Strikethrough size={13} /></button>
             <span className="writer-tb-sep" />
-            {/* Block formats — work without selection; disabled in Preview */}
-            <button className="writer-tb" disabled={preview} onClick={() => insertMarkdown('## ', '', false)} title="Heading"><Heading size={13} /></button>
-            <button className="writer-tb" disabled={preview} onClick={() => insertMarkdown('- ', '', false)} title="List"><List size={13} /></button>
-            <button className="writer-tb" disabled={preview} onClick={() => insertMarkdown('[', '](url)', false)} title="Link"><Link size={13} /></button>
-            <button className="writer-tb" disabled={preview} onClick={() => insertMarkdown('---\n', '', false)} title="Divider"><Minus size={13} /></button>
+            {/* Block formats */}
+            <button className="writer-tb" onClick={() => insertMarkdown('## ', '', false)} title="Heading"><Heading size={13} /></button>
+            <button className="writer-tb" onClick={() => insertMarkdown('- ', '', false)} title="Bullet list"><List size={13} /></button>
+            <button className="writer-tb" onClick={() => insertMarkdown('[', '](url)', false)} title="Link"><Link size={13} /></button>
+            <button className="writer-tb" onClick={() => insertMarkdown('---\n', '', false)} title="Divider"><Minus size={13} /></button>
             <span className="writer-tb-sep" />
             <button className="writer-tb" onClick={undo} disabled={undoStack.length === 0} title="Undo (Ctrl+Z)">Undo</button>
             <button className="writer-tb" onClick={redo} disabled={redoStack.length === 0} title="Redo (Ctrl+Shift+Z)">Redo</button>
@@ -672,31 +711,23 @@ export default function Writer() {
               {outline.length === 0 && <div className="writer-empty">Add # headings to build an outline</div>}
               {outline.map((h, i) => (
                 <button key={i} className="writer-outline-item" style={{ paddingLeft: 8 + (h.level - 1) * 14 }}
-                  onClick={() => jumpTo(h.offset)}>
+                  onClick={() => jumpTo(h.text)}>
                   {h.text}
                 </button>
               ))}
             </nav>
           )}
-          <div className={`writer-editor-col${editorMode === 'split' ? ' writer-editor-col--split' : ''}`}>
-            {/* Textarea — visible in split and edit modes */}
-            {editorMode !== 'read' && (
-              <textarea ref={editorRef} className={`writer-editor${editorMode === 'split' ? ' writer-editor--half' : ''}`}
-                value={content}
-                onChange={e => { pushUndo(content); setContent(e.target.value); setDirty(true); }}
-                onSelect={e => setSelLen(e.target.selectionEnd - e.target.selectionStart)}
-                onBlur={() => setSelLen(0)}
-                placeholder={writeMode === 'braindump' ? 'Paste your brain dump here...' : 'Start typing or use Generate above...'}
-                spellCheck={false} />
-            )}
-            {/* Live preview — always visible in split, full-width in read */}
-            {(editorMode === 'split' || editorMode === 'read') && (
-              <div className={`writer-preview${editorMode === 'split' ? ' writer-preview--half' : ''}`}>
-                {content
-                  ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
-                  : <span style={{ color: 'var(--text-dim)', fontStyle: 'italic', fontSize: 13 }}>Preview will appear here as you write…</span>}
-              </div>
-            )}
+          <div className="writer-editor-col">
+            {/* WYSIWYG contenteditable — bold/italic/etc. are real formatting, not markdown tokens */}
+            <div
+              ref={editorRef}
+              className="writer-editor writer-editor--rich"
+              contentEditable
+              suppressContentEditableWarning
+              onInput={syncContent}
+              onKeyDown={handleKey}
+              data-placeholder={writeMode === 'braindump' ? 'Paste your brain dump here…' : 'Start typing…'}
+            />
             <div className="writer-word-count">{wordCount} word{wordCount !== 1 ? 's' : ''}</div>
           </div>
 
@@ -891,17 +922,33 @@ export default function Writer() {
 
         .writer-body-wrap { flex: 1; display: flex; min-height: 0; overflow: hidden; }
         .writer-editor-col { flex: 1; display: flex; flex-direction: column; position: relative; min-width: 0; overflow: hidden; }
-        .writer-editor-col--split { flex-direction: row; }
-        .writer-editor--half { width: 50%; min-width: 0; flex: none; border-right: 1px solid var(--border); }
-        .writer-preview--half { width: 50%; min-width: 0; flex: none; border-left: none; }
-        .writer-editor { flex: 1; border: none; background: transparent; color: var(--text); font-family: var(--w-editor-font); font-size: 13px; line-height: 1.7; padding: 12px 20px; resize: none; outline: none; overflow-y: auto; tab-size: 2; }
-        .writer-preview { flex: 1; padding: 12px 20px; overflow-y: auto; color: var(--text); font-size: 14px; line-height: 1.7; }
-        .writer-preview h1,.writer-preview h2,.writer-preview h3 { color: var(--text); margin: 20px 0 8px; }
-        .writer-preview h1 { font-size: 1.5em; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
-        .writer-preview h2 { font-size: 1.25em; color: var(--accent); }
-        .writer-preview code { background: rgba(255,255,255,0.06); padding: 2px 6px; border-radius: 3px; font-size: 0.9em; }
-        .writer-preview ul,.writer-preview ol { padding-left: 24px; }
-        .writer-preview blockquote { border-left: 3px solid var(--accent); margin: 12px 0; padding: 4px 16px; color: var(--text-dim); }
+
+        /* WYSIWYG contenteditable editor */
+        .writer-editor--rich {
+          flex: 1; border: none; background: transparent; color: var(--text);
+          font-family: var(--w-editor-font); font-size: 14px; line-height: 1.8;
+          padding: 20px 24px; outline: none; overflow-y: auto;
+          word-break: break-word; white-space: pre-wrap;
+        }
+        .writer-editor--rich:empty::before {
+          content: attr(data-placeholder); color: var(--text-dim);
+          font-style: italic; pointer-events: none;
+        }
+        /* Rich text element styles inside the editor */
+        .writer-editor--rich b, .writer-editor--rich strong { font-weight: 700; color: var(--text); }
+        .writer-editor--rich i, .writer-editor--rich em { font-style: italic; }
+        .writer-editor--rich s { text-decoration: line-through; }
+        .writer-editor--rich h1 { font-size: 1.6em; font-weight: 700; margin: 24px 0 10px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+        .writer-editor--rich h2 { font-size: 1.3em; font-weight: 700; margin: 20px 0 8px; color: var(--accent); }
+        .writer-editor--rich h3 { font-size: 1.1em; font-weight: 600; margin: 16px 0 6px; }
+        .writer-editor--rich ul { list-style: disc; padding-left: 24px; margin: 8px 0; }
+        .writer-editor--rich ol { list-style: decimal; padding-left: 24px; margin: 8px 0; }
+        .writer-editor--rich li { margin: 4px 0; }
+        .writer-editor--rich a { color: var(--accent); text-decoration: underline; }
+        .writer-editor--rich hr { border: none; border-top: 1px solid var(--border); margin: 20px 0; }
+        .writer-editor--rich code { background: rgba(255,255,255,0.06); padding: 2px 6px; border-radius: 3px; font-size: 0.9em; }
+        .writer-editor--rich blockquote { border-left: 3px solid var(--accent); margin: 12px 0; padding: 4px 16px; color: var(--text-dim); }
+
         .writer-word-count { position: absolute; bottom: 8px; right: 12px; font-size: 10px; color: var(--text-dim); pointer-events: none; }
 
         .writer-critique { background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: 8px; margin: 0 12px; padding: 14px; font-size: 13px; color: var(--text-dim); line-height: 1.7; max-height: 200px; overflow-y: auto; }
