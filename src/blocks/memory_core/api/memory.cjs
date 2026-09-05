@@ -7,8 +7,8 @@
  * This block owns that store again, vault-resident so the operator can see
  * every memory as a file in Aeon Matrix.
  *
- * Store: Vault/Agents/vp/memory/memories.json  (canonical array)
- *        Vault/Agents/vp/memory/<id>.md        (operator-readable mirror)
+ * Store: Vault/Agents/Aeon/memory/memories.json  (canonical array)
+ *        Vault/Agents/Aeon/memory/<id>.md        (operator-readable mirror)
  * Record: { id, text, category, type, title, tags, pinned, timestamp, source, refs }
  *   - category: legacy taxonomy (fact|identity|preference|contact|project|goal)
  *   - type: operator taxonomy (outline|algorithm|decision|milestone) — optional
@@ -30,7 +30,7 @@ module.exports = function createMemoryRouter(deps) {
   const router = express.Router();
   const { kernelLLM, VAULT_ROOT } = deps;
 
-  const MEM_DIR = path.join(VAULT_ROOT || path.join(__dirname, '..', '..', 'aeon_matrix', 'data', 'Vault'), 'Agents', 'vp', 'memory');
+  const MEM_DIR = path.join(VAULT_ROOT || path.join(__dirname, '..', '..', 'aeon_matrix', 'data', 'Vault'), 'Agents', 'Aeon', 'memory');
   const STORE = path.join(MEM_DIR, 'memories.json');
   try { if (!fs.existsSync(MEM_DIR)) fs.mkdirSync(MEM_DIR, { recursive: true }); } catch {}
 

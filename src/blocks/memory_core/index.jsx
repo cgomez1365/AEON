@@ -1,7 +1,7 @@
 /**
  * Memory Core — VP's persistent memory, operator view.
  * List / filter / pin / edit / delete / distill. Every memory is also a
- * vault file (Vault/Agents/vp/memory) visible in Aeon Matrix.
+ * vault file (Vault/Agents/Aeon/memory) visible in Aeon Matrix.
  */
 import React, { useState, useEffect, useCallback } from 'react';
 import { Brain, Pin, Trash2, Plus, Sparkles, RefreshCw, Pencil, Check, X } from 'lucide-react';

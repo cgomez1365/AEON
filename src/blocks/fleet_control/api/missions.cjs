@@ -1,7 +1,7 @@
 /**
  * Fleet Control — VP mission history from the Vault (read-only).
  * The agent_core block that owned /api/agent/missions was removed; mission
- * records live on as files in Aeon Matrix (Vault/Agents/vp/missions). Fleet
+ * records live on as files in Aeon Matrix (Vault/Agents/Aeon/missions). Fleet
  * reads them directly so the ops view never depends on a block that's gone.
  */
 const express = require('express');
@@ -11,7 +11,7 @@ const { isInside } = require('../../../kernel/pathContainment.cjs');
 
 module.exports = (deps) => {
   const router = express.Router();
-  const MISSIONS_DIR = path.join(deps?.VAULT_ROOT || path.join(__dirname, '..', '..', 'aeon_matrix', 'data', 'Vault'), 'Agents', 'vp', 'missions');
+  const MISSIONS_DIR = path.join(deps?.VAULT_ROOT || path.join(__dirname, '..', '..', 'aeon_matrix', 'data', 'Vault'), 'Agents', 'Aeon', 'missions');
 
   router.get('/fleet/missions', (req, res) => {
     if (!fs.existsSync(MISSIONS_DIR)) return res.json({ missions: [], dir: MISSIONS_DIR });

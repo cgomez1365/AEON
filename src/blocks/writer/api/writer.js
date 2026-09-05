@@ -342,7 +342,7 @@ ${styleNote}${draftNote}`;
   //
   // MATRIX DECISION (F1d): pushing promotes into Memory Core ONLY — it does not
   // also copy the document into the Vault as a second file. Memory Core already
-  // mirrors every record to VAULT_ROOT/Agents/vp/memory/<id>.md
+  // mirrors every record to VAULT_ROOT/Agents/Aeon/memory/<id>.md
   // (memory_core/api/memory.cjs mdMirror), and aeon_matrix/api/ingest.cjs walks
   // all of VAULT_ROOT, so one push is both a memory and an indexable vault file.
   // A second copy of the same draft would be a second source of truth to keep in
