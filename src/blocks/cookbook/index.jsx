@@ -654,6 +654,22 @@ export default function CookbookHardware() {
                 <Download size={13} />
                 {lrInstalling ? 'Installing...' : 'Install llama.cpp'}
               </button>
+
+              {/* The other half of the answer.
+                  Cookbook is local-only by design and is where a keyless
+                  install gets pointed — so it explained the cloud-vs-local
+                  tradeoff and then offered no way to act on the cloud half.
+                  A user who would rather paste a key than pull gigabytes had
+                  to already know Settings existed. On a modest machine the
+                  local path is also the slower one, so the person most likely
+                  to give up was the one this block could not help. */}
+              <div style={{ marginTop: '14px', paddingTop: '12px', borderTop: '1px solid var(--border, rgba(255,255,255,0.08))', fontSize: '11.5px', color: 'var(--text-dim)', lineHeight: 1.6 }}>
+                Prefer not to download several gigabytes? An API key from Groq, Gemini,
+                OpenAI or Anthropic works instantly and needs no local model.{' '}
+                <a href="/settings" style={{ color: 'var(--color-primary, #00f2ff)', textDecoration: 'none', fontWeight: 600 }}>
+                  Add a key in Settings →
+                </a>
+              </div>
             </div>
           )}
           {lrStatus?.runtimeReady && (

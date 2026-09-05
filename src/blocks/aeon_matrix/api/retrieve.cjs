@@ -234,6 +234,12 @@ module.exports = function retrieveFactory(deps) {
         ok: true, answered: false,
         reason: unavailable.reason,
         message: unavailable.message,
+        // Both names are sent. /ask has always called this `remedy` and
+        // /retrieve calls it `action`, so a client consuming both had to
+        // special-case them for one concept. Renaming either would break an
+        // existing caller; emitting both costs nothing and lets consumers
+        // settle on one. New code should read `action`.
+        action: unavailable.action,
         remedy: unavailable.action,
         citations: [],
       });

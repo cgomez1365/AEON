@@ -130,11 +130,17 @@ export default function MemoryCore() {
           style={{ marginLeft: 'auto', background: 'transparent', border: '1px solid var(--border, #223)', borderRadius: 4, color: 'inherit', padding: '3px 8px', fontSize: 12 }} />
       </div>
 
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+      {/* Wraps. This row is a text input plus two selects plus two buttons,
+          and at a phone width it ran past the viewport — with overflow-x
+          hidden on both the row's ancestors and #root, so `save` and
+          `distill session` were not merely tight but unreachable. You could
+          compose a memory on a phone and had no way to store it, which is the
+          whole point of the block. */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
         <label htmlFor="mc-new-text" style={srOnly}>New memory text</label>
         <input id="mc-new-text" value={newText} onChange={e => setNewText(e.target.value)} placeholder="teach VP something durable…"
           onKeyDown={e => e.key === 'Enter' && add()} aria-label="New memory text"
-          style={{ flex: 1, background: 'transparent', border: '1px solid var(--border, #223)', borderRadius: 4, color: 'inherit', padding: '6px 10px', fontSize: 13 }} />
+          style={{ flex: '1 1 220px', minWidth: 0, background: 'transparent', border: '1px solid var(--border, #223)', borderRadius: 4, color: 'inherit', padding: '6px 10px', fontSize: 13 }} />
         <label htmlFor="mc-new-cat" style={srOnly}>What this memory is about</label>
         <select id="mc-new-cat" value={newCat} onChange={e => setNewCat(e.target.value)} aria-label="What this memory is about"
           title="What the memory is about — this is what the filter chips match"

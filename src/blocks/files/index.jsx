@@ -473,9 +473,9 @@ export default function FileManager() {
   };
 
   return (
-    <div style={{ padding: '30px', color: '#f8fafc', height: '100%', display: 'flex', flexDirection: 'column', position: 'relative' }}>
+    <div style={{ padding: 'clamp(14px, 4vw, 30px)', color: '#f8fafc', height: '100%', display: 'flex', flexDirection: 'column', position: 'relative' }}>
       
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
         <div>
           <h2 style={{ margin: 0, color: '#fff', display: 'flex', alignItems: 'center', gap: '10px', fontSize: '20px' }}>
             <Folder size={24} color="#64748b" /> FILE MANAGER
@@ -483,8 +483,12 @@ export default function FileManager() {
           <p style={{ color: '#64748b', fontSize: '13px', margin: '5px 0 0 0' }}>Manage your Local OS and Cloud storage</p>
         </div>
 
+        {/* The view toggle scrolls rather than clipping. At a phone width the
+            third option (DUAL VIEW) sat past the viewport edge, and with
+            overflow-x hidden on #root there was no way to reach it — two of
+            the three view modes were unselectable on a phone. */}
         {IS_LOCAL_ENV && (
-          <div style={{ display: 'flex', background: '#090d16', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)', overflow: 'hidden' }}>
+          <div style={{ display: 'flex', background: '#090d16', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)', overflowX: 'auto', maxWidth: '100%', flexShrink: 1 }}>
             <button onClick={() => setViewMode('local')} aria-label="Show local files only" aria-pressed={viewMode === 'local'} style={{ padding: '8px 16px', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 'bold', border: 'none', cursor: 'pointer', background: viewMode === 'local' ? 'rgba(0,242,255,0.15)' : 'transparent', color: viewMode === 'local' ? '#00f2ff' : '#64748b', transition: 'all 0.2s' }}>
               <Monitor size={14} /> LOCAL
             </button>
