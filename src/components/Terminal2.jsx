@@ -23,7 +23,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Send, Loader, Cpu, Clock, Zap, ChevronRight, ChevronDown, ShieldAlert, Paperclip, Square, X as XIcon } from 'lucide-react';
+import { Send, Loader, Cpu, Clock, Zap, ChevronRight, ChevronDown, ShieldAlert, Paperclip, Square, X as XIcon, Archive, History, Plus, Trash2 } from 'lucide-react';
 import { describeStreamFailure } from '../utils/interceptorPolicy.js';
 import { describeDispatchOutcome, describeDenial, describeCommandOutput } from '../utils/commandOutcome.js';
 
@@ -96,11 +96,13 @@ function InterceptCard({ prompt, onAllow, onDeny }) {
   );
 }
 
+const BOOT_MSG = { id: 0, type: 'msg', role: 'system', content: 'AEON Operator Console — link established. Type / for commands.' };
+
 const Terminal2 = ({ onUsageUpdate }) => {
   const [input, setInput] = useState('');
   const [pendingImage, setPendingImage] = useState(null); // { dataUri, name }
   const fileInputRef = useRef(null);
-  const [feed, setFeed] = useState([{ id: 0, type: 'msg', role: 'system', content: 'AEON Operator Console — link established. Type / for commands.' }]);
+  const [feed, setFeed] = useState([BOOT_MSG]);
   const [isLoading, setIsLoading] = useState(false);
   const [commands, setCommands] = useState([]);
   const [showPalette, setShowPalette] = useState(false);
@@ -109,6 +111,93 @@ const Terminal2 = ({ onUsageUpdate }) => {
   const feedId = useRef(1);
   // D1c — the generation currently in flight: { controller, streamId, msgId }.
   const activeChatRef = useRef(null);
+
+  // ── Chat session persistence ──────────────────────────────────────────────
+  const [sessions, setSessions] = useState([]);         // list metadata
+  const [showSessions, setShowSessions] = useState(false);
+  const [sessionSaving, setSessionSaving] = useState(false);
+  const feedRef = useRef(feed); // always-fresh ref for unload handlers
+  useEffect(() => { feedRef.current = feed; }, [feed]);
+
+  const fetchSessions = useCallback(async () => {
+    try {
+      const r = await fetch('/api/terminal/sessions');
+      if (r.ok) setSessions(await r.json());
+    } catch {}
+  }, []);
+
+  useEffect(() => { fetchSessions(); }, [fetchSessions]);
+
+  const saveSession = useCallback(async ({ name, autoSaved = false } = {}) => {
+    const msgs = feedRef.current.filter(e => e.type === 'msg' && (e.role === 'user' || e.role === 'assistant'));
+    if (msgs.length === 0) return null;
+    setSessionSaving(true);
+    try {
+      const r = await fetch('/api/terminal/sessions', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, messages: feedRef.current, autoSaved }),
+      });
+      const d = await r.json();
+      await fetchSessions();
+      return d;
+    } catch { return null; } finally { setSessionSaving(false); }
+  }, [fetchSessions]);
+
+  const loadSession = useCallback(async (id) => {
+    try {
+      const r = await fetch(`/api/terminal/sessions/${id}`);
+      const d = await r.json();
+      if (d.messages) {
+        const nextId = Math.max(...d.messages.map(m => m.id || 0), 0) + 1;
+        feedId.current = nextId;
+        setFeed([...d.messages, { id: nextId, type: 'msg', role: 'system', content: `📂 Loaded: ${d.name}` }]);
+        feedId.current = nextId + 1;
+        setShowSessions(false);
+      }
+    } catch (e) {
+      setFeed(prev => [...prev, { id: feedId.current++, type: 'msg', role: 'error', content: `[SESSION] ${e.message}` }]);
+    }
+  }, []);
+
+  const deleteSession = useCallback(async (id, e) => {
+    e.stopPropagation();
+    try {
+      await fetch(`/api/terminal/sessions/${id}`, { method: 'DELETE' });
+      await fetchSessions();
+    } catch {}
+  }, [fetchSessions]);
+
+  // New chat — save current, start fresh
+  const newChat = useCallback(async () => {
+    await saveSession({ autoSaved: true });
+    setFeed([{ ...BOOT_MSG, content: 'AEON Operator Console — new session started.' }]);
+    feedId.current = 1;
+    setShowSessions(false);
+  }, [saveSession]);
+
+  // Auto-save on page unload / tab hide (refresh, close, sleep)
+  useEffect(() => {
+    const handleUnload = () => {
+      const msgs = feedRef.current.filter(e => e.type === 'msg' && (e.role === 'user' || e.role === 'assistant'));
+      if (msgs.length === 0) return;
+      // sendBeacon is fire-and-forget and survives page unload.
+      // Must use a Blob with application/json so the express JSON parser picks it up.
+      const blob = new Blob(
+        [JSON.stringify({ messages: feedRef.current, autoSaved: true })],
+        { type: 'application/json' }
+      );
+      navigator.sendBeacon('/api/terminal/sessions', blob);
+    };
+    const handleVisibility = () => {
+      if (document.visibilityState === 'hidden') handleUnload();
+    };
+    window.addEventListener('beforeunload', handleUnload);
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      window.removeEventListener('beforeunload', handleUnload);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, []);
 
   const push = useCallback((entry) => {
     const id = feedId.current++;
@@ -620,6 +709,42 @@ const Terminal2 = ({ onUsageUpdate }) => {
         </div>
       )}
 
+      {/* ── Chat history recovery panel ── */}
+      {showSessions && (
+        <div style={{ borderTop: '1px solid #1e2d45', background: '#080c14', maxHeight: 240, overflowY: 'auto' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 14px 4px', borderBottom: '1px solid #1a2535' }}>
+            <span style={{ fontSize: 10, letterSpacing: '0.1em', color: '#4a6080', fontWeight: 600 }}>CHAT HISTORY</span>
+            <button onClick={newChat}
+              style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'rgba(0,242,255,0.07)', border: '1px solid #00f2ff44', color: '#00f2ff', padding: '2px 10px', borderRadius: 2, cursor: 'pointer', fontSize: 10, fontFamily: 'inherit', letterSpacing: '0.06em' }}>
+              <Plus size={10} /> NEW CHAT
+            </button>
+          </div>
+          {sessions.length === 0 && (
+            <div style={{ padding: '12px 14px', fontSize: 11, color: '#3a4f66' }}>No saved sessions yet — chats auto-save on refresh or close.</div>
+          )}
+          {sessions.map(s => (
+            <div key={s.id} onClick={() => loadSession(s.id)}
+              style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 14px', cursor: 'pointer', borderBottom: '1px solid #111a28' }}
+              onMouseEnter={e => e.currentTarget.style.background = 'rgba(0,242,255,0.04)'}
+              onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 11.5, color: '#c8d6e8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</div>
+                <div style={{ fontSize: 9.5, color: '#3a5070', marginTop: 1 }}>
+                  {s.autoSaved ? 'AUTO · ' : 'SAVED · '}{s.messageCount} msgs · {new Date(s.savedAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                </div>
+              </div>
+              <button onClick={(e) => deleteSession(s.id, e)}
+                aria-label="Delete session"
+                style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#3a5070', padding: 2, lineHeight: 1 }}
+                onMouseEnter={e => e.currentTarget.style.color = '#ff4455'}
+                onMouseLeave={e => e.currentTarget.style.color = '#3a5070'}>
+                <Trash2 size={12} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       {pendingImage && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 14px', borderTop: '1px solid #1e2d45', fontSize: 11, color: '#00f2ff' }}>
           <Paperclip size={11} /> {pendingImage.name}
@@ -653,6 +778,18 @@ const Terminal2 = ({ onUsageUpdate }) => {
         <input ref={fileInputRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={onFileSelected} />
         <Paperclip size={14} style={{ cursor: 'pointer', color: pendingImage ? '#00f2ff' : '#4a5568', flexShrink: 0 }} onClick={() => fileInputRef.current?.click()} />
         <Cpu size={14} aria-label="Hotswap model" style={{ cursor: 'pointer', color: showModelPicker ? '#00f2ff' : '#4a5568', flexShrink: 0 }} onClick={() => setShowModelPicker(v => !v)} />
+        {/* Save current session */}
+        <Archive size={14} aria-label="Save chat session"
+          style={{ cursor: 'pointer', color: sessionSaving ? '#39ff14' : '#4a5568', flexShrink: 0 }}
+          onClick={() => saveSession().then(d => d && push({ type: 'msg', role: 'system', content: `💾 Saved: ${d.name}` }))} />
+        {/* Toggle history panel */}
+        <History size={14} aria-label="Chat history"
+          style={{ cursor: 'pointer', color: showSessions ? '#00f2ff' : '#4a5568', flexShrink: 0 }}
+          onClick={() => { setShowSessions(v => !v); if (!showSessions) fetchSessions(); }} />
+        {/* New chat */}
+        <Plus size={14} aria-label="New chat"
+          style={{ cursor: 'pointer', color: '#4a5568', flexShrink: 0 }}
+          onClick={newChat} title="Save & start new chat" />
         <input
           value={input}
           onChange={e => setInput(e.target.value)}

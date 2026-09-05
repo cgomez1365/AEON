@@ -11,8 +11,83 @@ module.exports = function createChatRouter(deps) {
     getLocalFile, getDailyCost, addRunCost,
     KILL_SWITCH_THRESHOLD, GEMINI_PRICE_PER_TOKEN, GROQ_PRICE_PER_TOKEN,
     geminiRequest, groqRequest, writeOSAudit, fetchDuckDuckGo,
-    aeonTerminalStream, TERMINAL_HISTORY_FILE, DEFAULT_LOCAL_MODEL, defaultLocalModel
+    aeonTerminalStream, TERMINAL_HISTORY_FILE, DEFAULT_LOCAL_MODEL, defaultLocalModel,
+    VAULT_ROOT,
   } = deps;
+
+  // ── Chat session persistence (Vault/Agents/Aeon/chat_sessions/) ──────────
+  // Sessions saved here appear as nodes in the AEON Matrix graph.
+  const SESSIONS_DIR = path.join(
+    VAULT_ROOT || path.join(__dirname, '..', '..', 'aeon_matrix', 'data', 'Vault'),
+    'Agents', 'Aeon', 'chat_sessions'
+  );
+  const ensureSessionsDir = () => { try { if (!fs.existsSync(SESSIONS_DIR)) fs.mkdirSync(SESSIONS_DIR, { recursive: true }); } catch {} };
+
+  // GET /api/terminal/sessions — list saved sessions, newest first
+  router.get('/terminal/sessions', (req, res) => {
+    try {
+      ensureSessionsDir();
+      const files = fs.readdirSync(SESSIONS_DIR)
+        .filter(f => f.endsWith('.json'))
+        .map(f => {
+          try {
+            const raw = JSON.parse(fs.readFileSync(path.join(SESSIONS_DIR, f), 'utf8'));
+            return { id: raw.id, name: raw.name, savedAt: raw.savedAt, autoSaved: !!raw.autoSaved, messageCount: raw.messageCount || 0 };
+          } catch { return null; }
+        })
+        .filter(Boolean)
+        .sort((a, b) => new Date(b.savedAt) - new Date(a.savedAt));
+      res.json(files);
+    } catch (e) {
+      res.json([]);
+    }
+  });
+
+  // POST /api/terminal/sessions — save a session
+  router.post('/terminal/sessions', (req, res) => {
+    try {
+      ensureSessionsDir();
+      const { name, messages, autoSaved } = req.body || {};
+      if (!Array.isArray(messages) || messages.length === 0) {
+        return res.status(400).json({ error: 'messages required' });
+      }
+      const id = new Date().toISOString().replace(/[:.]/g, '-');
+      const record = {
+        id,
+        name: name || `Chat — ${new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`,
+        savedAt: new Date().toISOString(),
+        autoSaved: !!autoSaved,
+        messageCount: messages.length,
+        messages,
+      };
+      fs.writeFileSync(path.join(SESSIONS_DIR, `${id}.json`), JSON.stringify(record, null, 2));
+      res.json({ ok: true, id, name: record.name });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // GET /api/terminal/sessions/:id — load one session
+  router.get('/terminal/sessions/:id', (req, res) => {
+    try {
+      const file = path.join(SESSIONS_DIR, `${req.params.id}.json`);
+      if (!fs.existsSync(file)) return res.status(404).json({ error: 'Session not found' });
+      res.json(JSON.parse(fs.readFileSync(file, 'utf8')));
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // DELETE /api/terminal/sessions/:id — delete one session
+  router.delete('/terminal/sessions/:id', (req, res) => {
+    try {
+      const file = path.join(SESSIONS_DIR, `${req.params.id}.json`);
+      if (fs.existsSync(file)) fs.unlinkSync(file);
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
   const localModel = (defaultLocalModel ? defaultLocalModel() : null) || DEFAULT_LOCAL_MODEL || null;
 
   // GET /api/chat — retrieve chat history
