@@ -592,8 +592,16 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   const openRouterRequest = async (prompt, model = 'openai/gpt-4o-mini', opts = {}) => {
     const apiKey = nextKey('openrouter') || process.env.OPENROUTER_API_KEY;
     if (!apiKey) throw new Error('OPENROUTER_API_KEY missing in .env');
+    // Free-tier models (openrouter/free, or any :free suffix) are $0/token
+    // but OpenRouter still reserves max_tokens against your credit balance to
+    // prevent abuse — a large reservation 402s even with zero cost. Cap at 1024
+    // so any free-tier key works without prepaid credits.
+    const isFree = model === 'openrouter/free' || model.endsWith(':free');
+    const effectiveOpts = isFree
+      ? { ...opts, max_tokens: Math.min(opts.max_tokens || 1024, 1024) }
+      : opts;
     try {
-      return await genericOpenAIRequest(prompt, model, 'https://openrouter.ai/api/v1', apiKey, opts);
+      return await genericOpenAIRequest(prompt, model, 'https://openrouter.ai/api/v1', apiKey, effectiveOpts);
     } catch (e) {
       if (/error (429|402)/i.test(e.message)) rotateKeyPool('openrouter');
       throw e;
