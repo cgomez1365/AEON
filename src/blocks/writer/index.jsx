@@ -42,6 +42,7 @@ export default function Writer() {
   const [autosaving, setAutosaving] = useState(false);
   const editorRef = useRef(null);
   const skipHistoryRef = useRef(false);
+  const [selLen, setSelLen] = useState(0); // chars selected in textarea
 
   // ── Writer 2.0 state ──
   const [outlineOpen, setOutlineOpen] = useState(false);
@@ -267,19 +268,21 @@ export default function Writer() {
     setContent(v); setDirty(true);
   };
 
-  const insertMarkdown = (before, after = '') => {
+  // inline = true  → requires a selection (bold, italic, strikethrough).
+  //                   Does nothing if nothing is selected — prevents accidental
+  //                   markdown tokens being sprayed at random cursor positions.
+  // inline = false → block-level (heading, list, link, divider).
+  //                   Inserts at the current line even with no selection.
+  const insertMarkdown = (before, after = '', inline = true) => {
     const el = editorRef.current; if (!el) return;
     const start = el.selectionStart, end = el.selectionEnd;
     const selected = content.slice(start, end);
+    if (inline && selected.length === 0) return; // no selection → silently ignore
     const newContent = content.slice(0, start) + before + selected + after + content.slice(end);
     setVal(newContent);
     if (selected.length > 0) {
-      // Text was selected: the user is formatting something that exists.
-      // Flip to Preview so they see bold/italic/etc. rendered, not raw asterisks.
-      setPreview(true);
+      setPreview(true); // show the rendered result immediately
     } else {
-      // No selection: cursor-only — they're about to type formatted text.
-      // Stay in Edit so they can keep typing without switching modes.
       setTimeout(() => { el.focus(); el.setSelectionRange(start + before.length, start + before.length); }, 0);
     }
   };
@@ -411,6 +414,28 @@ export default function Writer() {
   };
 
   const insertCowriteAt = (text) => {
+    // If the Co-Write response is a list of `old → new` corrections (spell
+    // check, grammar, weak-word flags), apply them as in-document replacements
+    // rather than dumping the suggestion text literally into the document.
+    const correctionLines = text.split('\n')
+      .map(l => l.match(/^(.+?)\s*→\s*(.+)$/))
+      .filter(Boolean);
+    if (correctionLines.length > 0 && correctionLines.length === text.trim().split('\n').filter(Boolean).length) {
+      // Every non-empty line is a `before → after` pair — apply all as replacements.
+      let updated = content;
+      let replaced = 0;
+      for (const [, from, to] of correctionLines) {
+        const f = from.trim(), t = to.trim();
+        if (f && t && updated.includes(f)) { updated = updated.split(f).join(t); replaced++; }
+      }
+      if (replaced > 0) {
+        setVal(updated);
+        showToast(`✓ Applied ${replaced} correction${replaced > 1 ? 's' : ''}`);
+        setPreview(true);
+        return;
+      }
+    }
+    // Fall back: regular text response — insert at cursor position.
     const el = editorRef.current;
     if (!el) { setVal(content + '\n\n' + text); return; }
     const s = el.selectionStart;
@@ -502,14 +527,22 @@ export default function Writer() {
             <button className={`writer-tb ${!preview ? 'writer-tb--active' : ''}`} onClick={() => { setPreview(false); setTimeout(() => editorRef.current?.focus(), 0); }} title="Edit"><Edit3 size={13} /></button>
             <button className={`writer-tb ${preview ? 'writer-tb--active' : ''}`} onClick={() => setPreview(true)} title="Preview"><Eye size={13} /></button>
             <span className="writer-tb-sep" />
-            <button className="writer-tb" onClick={() => insertMarkdown('**', '**')} title="Bold"><Bold size={13} /></button>
-            <button className="writer-tb" onClick={() => insertMarkdown('*', '*')} title="Italic"><Italic size={13} /></button>
-            <button className="writer-tb" onClick={() => insertMarkdown('~~', '~~')} title="Strikethrough"><Strikethrough size={13} /></button>
+            {/* Inline formats — require selection; disabled + tooltip when nothing selected */}
+            <button className="writer-tb" disabled={preview || selLen === 0}
+              onClick={() => insertMarkdown('**', '**')}
+              title={selLen === 0 ? 'Select text first' : 'Bold'}><Bold size={13} /></button>
+            <button className="writer-tb" disabled={preview || selLen === 0}
+              onClick={() => insertMarkdown('*', '*')}
+              title={selLen === 0 ? 'Select text first' : 'Italic'}><Italic size={13} /></button>
+            <button className="writer-tb" disabled={preview || selLen === 0}
+              onClick={() => insertMarkdown('~~', '~~')}
+              title={selLen === 0 ? 'Select text first' : 'Strikethrough'}><Strikethrough size={13} /></button>
             <span className="writer-tb-sep" />
-            <button className="writer-tb" onClick={() => insertMarkdown('## ')} title="Heading"><Heading size={13} /></button>
-            <button className="writer-tb" onClick={() => insertMarkdown('1. ')} title="List"><List size={13} /></button>
-            <button className="writer-tb" onClick={() => insertMarkdown('[', '](url)')} title="Link"><Link size={13} /></button>
-            <button className="writer-tb" onClick={() => insertMarkdown('---\n')} title="Divider"><Minus size={13} /></button>
+            {/* Block formats — work without selection; disabled in Preview */}
+            <button className="writer-tb" disabled={preview} onClick={() => insertMarkdown('## ', '', false)} title="Heading"><Heading size={13} /></button>
+            <button className="writer-tb" disabled={preview} onClick={() => insertMarkdown('1. ', '', false)} title="List"><List size={13} /></button>
+            <button className="writer-tb" disabled={preview} onClick={() => insertMarkdown('[', '](url)', false)} title="Link"><Link size={13} /></button>
+            <button className="writer-tb" disabled={preview} onClick={() => insertMarkdown('---\n', '', false)} title="Divider"><Minus size={13} /></button>
             <span className="writer-tb-sep" />
             <button className="writer-tb" onClick={undo} disabled={undoStack.length === 0} title="Undo (Ctrl+Z)">Undo</button>
             <button className="writer-tb" onClick={redo} disabled={redoStack.length === 0} title="Redo (Ctrl+Shift+Z)">Redo</button>
@@ -625,6 +658,8 @@ export default function Writer() {
             ) : (
               <textarea ref={editorRef} className="writer-editor" value={content}
                 onChange={e => { pushUndo(content); setContent(e.target.value); setDirty(true); }}
+                onSelect={e => setSelLen(e.target.selectionEnd - e.target.selectionStart)}
+                onBlur={() => setSelLen(0)}
                 placeholder={writeMode === 'braindump' ? 'Paste your brain dump here...' : 'Start typing or use Generate above...'}
                 spellCheck={false} />
             )}
