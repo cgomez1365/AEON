@@ -41,7 +41,7 @@
  */
 import React, { useState, useEffect, useCallback } from 'react';
 import { Card, StatCard } from '../../components/aurora';
-import { Dna, FolderTree, Radio, LayoutGrid, RefreshCw, ShieldCheck, PackagePlus, Inbox } from 'lucide-react';
+import { Dna, FolderTree, Radio, LayoutGrid, RefreshCw } from 'lucide-react';
 
 const ANATOMY = [
   ['block.manifest.json', 'Identity + contract. nav, permissions, commands, widget. Manifest is truth.'],
@@ -70,7 +70,6 @@ const jpost = async (url, body) => {
 };
 
 export default function Master() {
-  const [tab, setTab] = useState('build');
   const [registry, setRegistry] = useState(null);
   const [kernel, setKernel] = useState('checking');
 
@@ -78,9 +77,6 @@ export default function Master() {
     fetch('/blocks/registry')
       .then((r) => r.json())
       .then((d) => { setRegistry(Array.isArray(d) ? d : d.blocks || []); setKernel('online'); })
-      // Report it. An empty count that means "the fetch failed" is
-      // indistinguishable from "no blocks", which is the bug class this
-      // whole block exists to argue against.
       .catch((e) => { setKernel(`unreachable — ${e.message}`); });
   }, []);
 
@@ -96,17 +92,11 @@ export default function Master() {
           </span>
         </h2>
         <p style={{ color: 'var(--dim, #9aa3b2)', fontSize: 13, marginTop: 6 }}>
-          Scaffold a block, run the real gates against it, and promote it through the approval
-          queue — without touching the filesystem.
+          Everything an AI system needs to build a production-ready AEON block from scratch.
         </p>
       </header>
 
       <div aria-live="polite" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 12, marginBottom: 18 }}>
-        {/* StatCard renders `icon` directly as a child, so it takes an ELEMENT.
-            Passing the bare lucide component here handed React a forwardRef
-            object ({$$typeof, render, displayName}) and crashed the page with
-            minified error #31 — "objects are not valid as a React child".
-            The build compiled it happily: JSX cannot tell the difference. */}
         <StatCard icon={<LayoutGrid size={14} aria-hidden="true" />} label="Installed blocks"
           value={registry ? registry.length : '—'} sub="live from /blocks/registry" />
         <StatCard icon={<Radio size={14} aria-hidden="true" />} label="Kernel"
@@ -114,27 +104,7 @@ export default function Master() {
           sub={kernel === 'online' ? window.location.host : kernel} />
       </div>
 
-      <nav style={{ display: 'flex', gap: 6, marginBottom: 16, borderBottom: '1px solid var(--line, #272d39)' }}>
-        {[['build', 'Build', PackagePlus], ['queue', 'Queue', Inbox], ['reference', 'Reference', FolderTree]].map(([id, label, Icon]) => (
-          <button
-            key={id}
-            onClick={() => setTab(id)}
-            aria-current={tab === id ? 'page' : undefined}
-            style={{
-              background: 'none', border: 'none', cursor: 'pointer', padding: '9px 14px',
-              fontSize: 13, color: tab === id ? 'var(--pu, #a78bfa)' : 'var(--dim, #9aa3b2)',
-              borderBottom: tab === id ? '2px solid var(--pu, #a78bfa)' : '2px solid transparent',
-              display: 'flex', alignItems: 'center', gap: 7,
-            }}
-          >
-            <Icon size={14} aria-hidden="true" /> {label}
-          </button>
-        ))}
-      </nav>
-
-      {tab === 'build' && <BuildPanel onPromoted={loadRegistry} />}
-      {tab === 'queue' && <QueuePanel onDecided={loadRegistry} />}
-      {tab === 'reference' && <ReferencePanel registry={registry} onRefresh={loadRegistry} />}
+      <ReferencePanel registry={registry} onRefresh={loadRegistry} />
     </div>
   );
 }
@@ -553,21 +523,179 @@ function QueuePanel({ onDecided }) {
 
 /* ── Reference ───────────────────────────────────────────────────────────── */
 
+const CODE = (s) => (
+  <code style={{ background: 'rgba(255,255,255,0.06)', padding: '1px 5px', borderRadius: 3, fontSize: 12 }}>{s}</code>
+);
+
+const PROMPT_TEMPLATE = `You are building a self-contained AEON block. Follow every rule below exactly.
+
+## What I want
+[DESCRIBE YOUR BLOCK HERE — one sentence: what it does, what data it owns]
+
+## Block identity
+- id: my_block          ← snake_case, unique across src/blocks/
+- label: My Block       ← title-case display name (derived from id if omitted)
+- category: tools       ← one of: tools | agents | data | system
+
+## Files to create
+Create these files inside src/blocks/my_block/:
+
+### 1. block.manifest.json  (REQUIRED — manifest is truth)
+\`\`\`json
+{
+  "id": "my_block",
+  "label": "My Block",
+  "description": "One sentence: what this block owns.",
+  "version": "1.0.0",
+  "category": "tools",
+  "nav": { "icon": "Puzzle", "order": 99 },
+  "permissions": {
+    "network": "internal"
+  },
+  "widget": {
+    "height": 2,
+    "description": "One-line summary shown on the dashboard tile."
+  },
+  "commands": []
+}
+\`\`\`
+Permission options:
+- "network": "internal" (default, localhost only) | "external" (public internet)
+- "ai": true            (lets this block call the kernel LLM via /api/ai)
+- "secrets": true       (lets this block read Vault credentials)
+- "storage": "read" | "write" | "readwrite"
+
+### 2. index.jsx  (REQUIRED — the UI)
+\`\`\`jsx
+import React, { useState, useEffect } from 'react';
+import { Card, StatCard } from '../../components/aurora';
+
+export default function MyBlock() {
+  const [data, setData] = useState(null);
+
+  useEffect(() => {
+    fetch('/api/my_block/status')
+      .then(r => r.json())
+      .then(setData)
+      .catch(console.error);
+  }, []);
+
+  return (
+    <div className="block-root">
+      <header style={{ marginBottom: 18 }}>
+        <h2 style={{ margin: 0 }}>My Block</h2>
+        <p style={{ color: 'var(--dim, #9aa3b2)', fontSize: 13, marginTop: 6 }}>
+          What this block does, in plain language for any user.
+        </p>
+      </header>
+      <Card>
+        <p>{data ? JSON.stringify(data) : 'Loading…'}</p>
+      </Card>
+    </div>
+  );
+}
+\`\`\`
+
+### 3. api/my_block.cjs  (optional — backend routes)
+\`\`\`js
+const express = require('express');
+
+module.exports = (deps) => {
+  // deps = { VAULT_ROOT, DATA_ROOT, endpoints, vault, storage }
+  // NEVER hardcode paths. Use deps.DATA_ROOT for block data.
+  const router = express.Router();
+
+  router.get('/status', (req, res) => {
+    res.json({ ok: true });
+  });
+
+  // Widget endpoint — dashboard calls this for the tile
+  router.get('/widget', (req, res) => {
+    res.json({ summary: 'Everything is fine.' });
+  });
+
+  return router;
+};
+\`\`\`
+
+### 4. README.md  (REQUIRED)
+One paragraph: what the block owns, what it reads, what it writes.
+
+## Absolute rules — the kernel enforces all of these
+1. NEVER hardcode localhost or a port. All fetch() calls use relative paths (/api/…).
+2. NEVER put secrets in index.jsx or any browser-side file. Vault reads are server-only (api/*.cjs).
+3. NEVER use VITE_ prefixed env vars for secrets.
+4. The block id, folder name, manifest id, and api filename MUST all match exactly.
+5. api/*.cjs must export \`module.exports = (deps) => router\` — no named exports.
+6. index.jsx must default-export exactly one React component.
+7. Declare every permission you need in the manifest. The sandbox strips undeclared deps.
+8. The widget endpoint GET /api/<id>/widget MUST return JSON (the dashboard renders it).
+
+## What NOT to do
+- Do not edit server/server.js, server/block-loader.js, or src/kernel/*.
+- Do not create routes outside your api/ file.
+- Do not import from other blocks' source folders.
+- Do not write to VAULT_ROOT directly — use deps.storage if you need persistence.
+
+## When you are done
+Drop the entire src/blocks/my_block/ folder into the AEON project and restart the server.
+The kernel auto-discovers it via the manifest and mounts it. No other files change.`;
+
 function ReferencePanel({ registry, onRefresh }) {
+  const [copied, setCopied] = useState(false);
+
+  const copyPrompt = () => {
+    navigator.clipboard.writeText(PROMPT_TEMPLATE).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
+
   return (
     <>
+      {/* ── AI Prompt ──────────────────────────────────────────────────── */}
+      <Card>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 14 }}>
+          <div>
+            <h3 style={{ marginTop: 0, marginBottom: 4 }}>AI block-builder prompt</h3>
+            <p style={{ margin: 0, fontSize: 12.5, color: 'var(--dim, #9aa3b2)' }}>
+              Copy this into any AI coding assistant — Claude, Cursor, Copilot — and fill in what you want the block to do.
+              The AI will generate all required files following AEON's cartridge contract.
+            </p>
+          </div>
+          <button
+            onClick={copyPrompt}
+            style={{
+              flexShrink: 0, background: copied ? 'var(--ok, #3fb950)' : 'var(--pu, #a78bfa)',
+              color: '#fff', border: 'none', borderRadius: 5, padding: '7px 14px',
+              fontSize: 12, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap',
+            }}
+          >
+            {copied ? '✓ Copied' : 'Copy prompt'}
+          </button>
+        </div>
+        <pre style={{
+          background: 'rgba(0,0,0,0.3)', borderRadius: 6, padding: 14, margin: 0,
+          fontSize: 11.5, lineHeight: 1.65, color: 'var(--text, #e6edf3)',
+          overflowX: 'auto', maxHeight: 340, overflowY: 'auto',
+          whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+        }}>{PROMPT_TEMPLATE}</pre>
+      </Card>
+
+      {/* ── Anatomy ────────────────────────────────────────────────────── */}
       <Card>
         <h3 style={{ marginTop: 0 }}>Anatomy of a block</h3>
         <ul role="list" style={{ listStyle: 'none', padding: 0, margin: 0 }}>
           {ANATOMY.map(([file, what]) => (
             <li key={file} style={{ display: 'flex', gap: 14, padding: '8px 0', borderBottom: '1px solid var(--line, #272d39)' }}>
-              <code style={{ minWidth: 168, fontSize: 12.5 }}>{file}</code>
+              {CODE(file)}
               <span style={{ fontSize: 12.5, color: 'var(--dim, #9aa3b2)' }}>{what}</span>
             </li>
           ))}
         </ul>
       </Card>
 
+      {/* ── Four rules ─────────────────────────────────────────────────── */}
       <Card>
         <h3 style={{ marginTop: 0 }}>The four rules</h3>
         <ol style={{ paddingLeft: 20, margin: 0 }}>
@@ -579,11 +707,12 @@ function ReferencePanel({ registry, onRefresh }) {
           ))}
         </ol>
         <p style={{ fontSize: 12, color: 'var(--dim, #9aa3b2)', marginTop: 14 }}>
-          The manifest schema the kernel enforces is <code>src/kernel/schema.json</code>, applied by
-          <code> validateManifest()</code> in <code>src/kernel/staging.cjs</code>. It is the only one.
+          The manifest schema the kernel enforces is {CODE('src/kernel/schema.json')}, applied by
+          {CODE(' validateManifest()')} in {CODE('src/kernel/staging.cjs')}. It is the only one.
         </p>
       </Card>
 
+      {/* ── Installed blocks ───────────────────────────────────────────── */}
       <Card>
         <h3 style={{ marginTop: 0, display: 'flex', alignItems: 'center', gap: 9 }}>
           Installed blocks

@@ -17,7 +17,11 @@ export default function Writer() {
   const [activeId, setActiveId] = useState(null);
   const [content, setContent] = useState('');
   const [title, setTitle] = useState('Untitled');
-  const [preview, setPreview] = useState(false);
+  // 'split' = textarea left + live preview right (default)
+  // 'edit'  = textarea full width
+  // 'read'  = rendered markdown full width
+  const [editorMode, setEditorMode] = useState('split');
+  const preview = editorMode === 'read'; // keeps all existing setEditorMode('read') calls working
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [aiMenu, setAiMenu] = useState(false);
@@ -84,7 +88,7 @@ export default function Writer() {
   }, [content]);
 
   const jumpTo = (offset) => {
-    setPreview(false);
+    setEditorMode(m => m === "read" ? "split" : m);
     setTimeout(() => {
       const el = editorRef.current; if (!el) return;
       el.focus(); el.setSelectionRange(offset, offset);
@@ -105,7 +109,7 @@ export default function Writer() {
     let idx = content.indexOf(findText, from);
     if (idx === -1) idx = content.indexOf(findText);   // wrap around
     if (idx === -1) return;
-    setPreview(false);
+    setEditorMode(m => m === "read" ? "split" : m);
     setTimeout(() => {
       el.focus(); el.setSelectionRange(idx, idx + findText.length);
       const before = content.slice(0, idx).split('\n').length;
@@ -137,7 +141,7 @@ export default function Writer() {
 
   const startFromTemplate = (t) => {
     setActiveId(null); setTitle(t.id === 'blank' ? 'Untitled' : t.label); setContent(t.content);
-    setDirty(!!t.content); setPreview(false); setCritiqueText('');
+    setDirty(!!t.content); setEditorMode(m => m === "read" ? "split" : m); setCritiqueText('');
     setUndoStack([]); setRedoStack([]); setTemplatesOpen(false);
     setTimeout(() => editorRef.current?.focus(), 100);
   };
@@ -208,13 +212,13 @@ export default function Writer() {
       const r = await fetch(`/api/writer/doc/${id}`);
       const d = await r.json();
       setActiveId(id); setContent(d.content); setTitle(docs.find(x => x.id === id)?.title || 'Untitled');
-      setDirty(false); setPreview(false); setCritiqueText('');
+      setDirty(false); setEditorMode(m => m === "read" ? "split" : m); setCritiqueText('');
       setUndoStack([]); setRedoStack([]);
     } catch {}
   };
 
   const newDoc = () => {
-    setActiveId(null); setContent(''); setTitle('Untitled'); setDirty(false); setPreview(false);
+    setActiveId(null); setContent(''); setTitle('Untitled'); setDirty(false); setEditorMode(m => m === "read" ? "split" : m);
     setCritiqueText(''); setUndoStack([]); setRedoStack([]);
     setTimeout(() => editorRef.current?.focus(), 100);
   };
@@ -268,22 +272,31 @@ export default function Writer() {
     setContent(v); setDirty(true);
   };
 
-  // inline = true  → requires a selection (bold, italic, strikethrough).
-  //                   Does nothing if nothing is selected — prevents accidental
-  //                   markdown tokens being sprayed at random cursor positions.
-  // inline = false → block-level (heading, list, link, divider).
-  //                   Inserts at the current line even with no selection.
+  // inline = true  → wraps selected text (bold, italic, strike).
+  //                   Does nothing when nothing is selected.
+  // inline = false → block-level prefix (heading, list, divider, link).
+  //                   Inserts at the beginning of the current line.
   const insertMarkdown = (before, after = '', inline = true) => {
     const el = editorRef.current; if (!el) return;
-    const start = el.selectionStart, end = el.selectionEnd;
-    const selected = content.slice(start, end);
-    if (inline && selected.length === 0) return; // no selection → silently ignore
-    const newContent = content.slice(0, start) + before + selected + after + content.slice(end);
-    setVal(newContent);
-    if (selected.length > 0) {
-      setPreview(true); // show the rendered result immediately
+    const cursorPos = el.selectionStart;
+    const selEnd = el.selectionEnd;
+    const selected = content.slice(cursorPos, selEnd);
+
+    if (inline) {
+      if (selected.length === 0) return; // inline with no selection → do nothing
+      const newContent = content.slice(0, cursorPos) + before + selected + after + content.slice(selEnd);
+      setVal(newContent);
+      // Formatting visible content: preview pane (split) already shows it; no mode switch needed.
     } else {
-      setTimeout(() => { el.focus(); el.setSelectionRange(start + before.length, start + before.length); }, 0);
+      // Block: find start of current line and prepend there
+      const lineStart = content.lastIndexOf('\n', cursorPos - 1) + 1;
+      const newContent = content.slice(0, lineStart) + before + content.slice(lineStart);
+      setVal(newContent);
+      setTimeout(() => {
+        el.focus();
+        const newCursor = lineStart + before.length + (cursorPos - lineStart);
+        el.setSelectionRange(newCursor, newCursor);
+      }, 0);
     }
   };
 
@@ -338,7 +351,7 @@ export default function Writer() {
         body: JSON.stringify({ prompt: p, mode: writeMode, draft: content, tone: generateTone, length: generateLength }) });
       const d = await r.json();
       if (aiFail(d, r)) { setAiLoading(false); return; }
-      if (d.content) { setVal(d.content); setPreview(true); }
+      if (d.content) { setVal(d.content); setEditorMode('read'); }
       else showToast('AI returned no content.');
     } catch (e) { aiCrash(e); }
     setAiLoading(false);
@@ -352,7 +365,7 @@ export default function Writer() {
         body: JSON.stringify({ mode: 'continue', draft: content }) });
       const d = await r.json();
       if (aiFail(d, r)) { setAiLoading(false); return; }
-      if (d.content) { setVal(content + '\n\n' + d.content); setPreview(true); }
+      if (d.content) { setVal(content + '\n\n' + d.content); setEditorMode('read'); }
       else showToast('AI returned no continuation.');
     } catch (e) { aiCrash(e); }
     setAiLoading(false);
@@ -431,7 +444,7 @@ export default function Writer() {
       if (replaced > 0) {
         setVal(updated);
         showToast(`✓ Applied ${replaced} correction${replaced > 1 ? 's' : ''}`);
-        setPreview(true);
+        setEditorMode('read');
         return;
       }
     }
@@ -524,8 +537,21 @@ export default function Writer() {
         {/* Toolbar */}
         <div className="writer-toolbar">
           <div className="writer-toolbar-left">
-            <button className={`writer-tb ${!preview ? 'writer-tb--active' : ''}`} onClick={() => { setPreview(false); setTimeout(() => editorRef.current?.focus(), 0); }} title="Edit"><Edit3 size={13} /></button>
-            <button className={`writer-tb ${preview ? 'writer-tb--active' : ''}`} onClick={() => setPreview(true)} title="Preview"><Eye size={13} /></button>
+            <button className={`writer-tb ${editorMode === 'split' ? 'writer-tb--active' : ''}`}
+              onClick={() => { setEditorMode('split'); setTimeout(() => editorRef.current?.focus(), 0); }}
+              title="Split — edit and preview side by side">
+              <Edit3 size={11} /><Eye size={11} />
+            </button>
+            <button className={`writer-tb ${editorMode === 'edit' ? 'writer-tb--active' : ''}`}
+              onClick={() => { setEditorMode('edit'); setTimeout(() => editorRef.current?.focus(), 0); }}
+              title="Edit only">
+              <Edit3 size={13} />
+            </button>
+            <button className={`writer-tb ${editorMode === 'read' ? 'writer-tb--active' : ''}`}
+              onClick={() => setEditorMode('read')}
+              title="Read — rendered markdown">
+              <Eye size={13} />
+            </button>
             <span className="writer-tb-sep" />
             {/* Inline formats — require selection; disabled + tooltip when nothing selected */}
             <button className="writer-tb" disabled={preview || selLen === 0}
@@ -540,7 +566,7 @@ export default function Writer() {
             <span className="writer-tb-sep" />
             {/* Block formats — work without selection; disabled in Preview */}
             <button className="writer-tb" disabled={preview} onClick={() => insertMarkdown('## ', '', false)} title="Heading"><Heading size={13} /></button>
-            <button className="writer-tb" disabled={preview} onClick={() => insertMarkdown('1. ', '', false)} title="List"><List size={13} /></button>
+            <button className="writer-tb" disabled={preview} onClick={() => insertMarkdown('- ', '', false)} title="List"><List size={13} /></button>
             <button className="writer-tb" disabled={preview} onClick={() => insertMarkdown('[', '](url)', false)} title="Link"><Link size={13} /></button>
             <button className="writer-tb" disabled={preview} onClick={() => insertMarkdown('---\n', '', false)} title="Divider"><Minus size={13} /></button>
             <span className="writer-tb-sep" />
@@ -652,16 +678,24 @@ export default function Writer() {
               ))}
             </nav>
           )}
-          <div className="writer-editor-col">
-            {preview ? (
-              <div className="writer-preview"><ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown></div>
-            ) : (
-              <textarea ref={editorRef} className="writer-editor" value={content}
+          <div className={`writer-editor-col${editorMode === 'split' ? ' writer-editor-col--split' : ''}`}>
+            {/* Textarea — visible in split and edit modes */}
+            {editorMode !== 'read' && (
+              <textarea ref={editorRef} className={`writer-editor${editorMode === 'split' ? ' writer-editor--half' : ''}`}
+                value={content}
                 onChange={e => { pushUndo(content); setContent(e.target.value); setDirty(true); }}
                 onSelect={e => setSelLen(e.target.selectionEnd - e.target.selectionStart)}
                 onBlur={() => setSelLen(0)}
                 placeholder={writeMode === 'braindump' ? 'Paste your brain dump here...' : 'Start typing or use Generate above...'}
                 spellCheck={false} />
+            )}
+            {/* Live preview — always visible in split, full-width in read */}
+            {(editorMode === 'split' || editorMode === 'read') && (
+              <div className={`writer-preview${editorMode === 'split' ? ' writer-preview--half' : ''}`}>
+                {content
+                  ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+                  : <span style={{ color: 'var(--text-dim)', fontStyle: 'italic', fontSize: 13 }}>Preview will appear here as you write…</span>}
+              </div>
             )}
             <div className="writer-word-count">{wordCount} word{wordCount !== 1 ? 's' : ''}</div>
           </div>
@@ -856,7 +890,10 @@ export default function Writer() {
         .writer-title-input::placeholder { color: var(--text-dim); }
 
         .writer-body-wrap { flex: 1; display: flex; min-height: 0; overflow: hidden; }
-        .writer-editor-col { flex: 1; display: flex; flex-direction: column; position: relative; min-width: 0; }
+        .writer-editor-col { flex: 1; display: flex; flex-direction: column; position: relative; min-width: 0; overflow: hidden; }
+        .writer-editor-col--split { flex-direction: row; }
+        .writer-editor--half { width: 50%; min-width: 0; flex: none; border-right: 1px solid var(--border); }
+        .writer-preview--half { width: 50%; min-width: 0; flex: none; border-left: none; }
         .writer-editor { flex: 1; border: none; background: transparent; color: var(--text); font-family: var(--w-editor-font); font-size: 13px; line-height: 1.7; padding: 12px 20px; resize: none; outline: none; overflow-y: auto; tab-size: 2; }
         .writer-preview { flex: 1; padding: 12px 20px; overflow-y: auto; color: var(--text); font-size: 14px; line-height: 1.7; }
         .writer-preview h1,.writer-preview h2,.writer-preview h3 { color: var(--text); margin: 20px 0 8px; }

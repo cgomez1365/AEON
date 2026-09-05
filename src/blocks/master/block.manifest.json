@@ -4,7 +4,7 @@
   "label": "Master",
   "icon": "Cpu",
   "route": "/master",
-  "description": "The canonical block. Every new block starts as a copy of this folder — manifest, UI, API, and widget contract in their reference form.",
+  "description": "The block standard. Complete AI-system instructions and reference for building any AEON block from scratch — manifest contract, file anatomy, four rules, and a ready-to-paste prompt.",
   "category": "system",
   "tier": "core",
   "nav": {
