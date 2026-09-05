@@ -28,17 +28,18 @@ const _handler = async (req, res) => {
     }
   }
 
-  // Fallback to Firestore if implemented or just return structured data so UI doesn't crash
-  if (telemetry.totalRequests === 0) {
-    telemetry.totalTokens = 1200;
-    telemetry.totalRequests = 4;
-    telemetry.staffUsage = {
-      qwen: { requests: 2, tokens: 600 },
-      zenith: { requests: 2, tokens: 600 },
-      groq: { requests: 0, tokens: 0 },
-      gemini: { requests: 0, tokens: 0 },
-    };
-  }
+  // No fabricated fallback.
+  //
+  // This used to inject 4 requests / 1200 tokens attributed to "qwen" and
+  // "zenith" whenever the real total was zero, so the charts "looked alive"
+  // — on a fresh install with no providers configured, the dashboard would
+  // report usage that had never happened. A meter that invents readings is
+  // worse than one showing zero, because the operator cannot tell.
+  //
+  // activity/api/analytics.cjs already made exactly this correction ("the old
+  // code injected 12 fake calls here so the charts 'looked alive'; a trusted
+  // meter never fakes data") and this second copy of the same route never got
+  // it. An empty install reports zero, which is the truth.
 
   res.status(200).json(telemetry);
 };

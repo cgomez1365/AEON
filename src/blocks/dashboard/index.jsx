@@ -172,6 +172,13 @@ export default function Dashboard({ chatHistory = [], auditLogs = [], blockLayou
   useEffect(() => { const i = setInterval(loadFleetData, 5000); return () => clearInterval(i); }, [loadFleetData]);
   useEffect(() => { const i = setInterval(loadBlockStates, 10000); return () => clearInterval(i); }, [loadBlockStates]);
 
+  // Engines reachable right now. Reported as a plain number, including zero.
+  // This was `activeEngines || totalCalls > 0 ? activeEngines : '—'`, which
+  // JS parses as `(activeEngines || totalCalls > 0) ? activeEngines : '—'` —
+  // so with no engines but some historical calls it rendered a literal 0 next
+  // to "1 calls", and with neither it rendered a dash. Two different displays
+  // for the same fact, decided by an unrelated counter. Zero engines is a
+  // true and useful thing to say, so it just says it.
   const totalCalls = apiUsage?.totalRequests || 0;
   const totalTokens = apiUsage?.totalTokens || 0;
   const currentCost = apiUsage?.totalCost || 0;
@@ -208,7 +215,7 @@ export default function Dashboard({ chatHistory = [], auditLogs = [], blockLayou
       {/* ═══ TOP KPI ROW ═══ */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '10px', marginBottom: '20px' }}>
         <StatCard label="API Spend" value={`$${(currentCost ?? 0).toFixed(4)}`} accent="amber" sub="$15 daily limit" icon={<Zap size={14} aria-hidden="true" />} />
-        <StatCard label="LLM Engines" value={activeEngines || totalCalls > 0 ? activeEngines : '—'} accent="cyan" sub={`${totalCalls} calls | ${fmt(totalTokens)} tok`} icon={<Activity size={14} aria-hidden="true" />} />
+        <StatCard label="LLM Engines" value={activeEngines} accent="cyan" sub={`${totalCalls} calls | ${fmt(totalTokens)} tok`} icon={<Activity size={14} aria-hidden="true" />} />
         <StatCard label="Server" value={serverUp ? 'ONLINE' : 'CLOUD'} accent={serverUp ? 'emerald' : 'amber'} sub={serverUp ? 'Local kernel' : 'Supabase relay'} icon={serverUp ? <Wifi size={14} aria-hidden="true" /> : <WifiOff size={14} aria-hidden="true" />} />
         <StatCard label="Autopilot" value={autopilot?.status || '—'} accent={autopilot?.producerRunning ? 'emerald' : 'cyan'} sub={autopilot ? `${autopilot.totalProduced || 0} produced` : 'Unknown'} icon={<Server size={14} aria-hidden="true" />} />
       </div>
