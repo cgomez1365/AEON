@@ -2077,17 +2077,31 @@ function TunnelPanel() {
 function BlockSettingControl({ def, value, onChange }) {
   const current = value !== undefined ? value : def.default;
   const fieldLabel = def.label || def.key;
-  if (def.type === 'toggle') {
+  // 'boolean' is accepted alongside 'toggle'. Manifests use both spellings —
+  // six settings across security, memory_core and aeon_matrix declare
+  // "boolean" — and only 'toggle' was handled, so those six fell through to
+  // the plain text input at the bottom of this function.
+  //
+  // That is not merely ugly. The value they saved was a STRING, and every
+  // consumer tests it for truthiness: guardian.cjs:68 does
+  // `if (!p.lockEveryLaunch) return;`. Since Boolean("false") is true, an
+  // operator typing "false" into the box to turn OFF "Ask for password every
+  // time AEON opens" would have turned it ON. A security control that
+  // inverts under a plausible input is the worst shape this defect can take.
+  if (def.type === 'toggle' || def.type === 'boolean') {
+    // Coerced, because a store written by the old text input may still hold
+    // the string "false" — which must read as off, not on.
+    const on = current === true || current === 'true' || current === 1 || current === '1';
     return (
       <button
         type="button"
-        className={`roulette-btn ${current ? 'roulette-btn--on' : ''}`}
-        onClick={() => onChange(!current)}
+        className={`roulette-btn ${on ? 'roulette-btn--on' : ''}`}
+        onClick={() => onChange(!on)}
         role="switch"
-        aria-checked={!!current}
+        aria-checked={on}
         aria-label={fieldLabel}
       >
-        {current ? <><ToggleRight size={14} /> ON</> : <><ToggleLeft size={14} /> OFF</>}
+        {on ? <><ToggleRight size={14} /> ON</> : <><ToggleLeft size={14} /> OFF</>}
       </button>
     );
   }
