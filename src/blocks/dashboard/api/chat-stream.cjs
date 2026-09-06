@@ -131,7 +131,7 @@ module.exports = function ({ getLocalFile, GEMINI_KEY_POOL, _trackLLM, writeOSAu
   // derived from the shared VAULT_ROOT constant instead of a second
   // independently-hardcoded path, so it can't drift out of sync with
   // memory_core's own MEM_DIR again.)
-  const MEMORY_FILE = path.join(VAULT_ROOT || path.join(__dirname, '..', '..', 'aeon_matrix', 'data', 'Vault'), 'Agents', 'vp', 'memory', 'memories.json');
+  const MEMORY_FILE = path.join(VAULT_ROOT || path.join(__dirname, '..', '..', 'aeon_matrix', 'data', 'Vault'), 'Agents', 'Aeon', 'memory', 'memories.json');
   const WAKE_RE = /\bvp[,!]?\s+(?:come\s+)?online\b/i;
 
   function buildMemoryContext(message, settings, contextTokens = 8192) {

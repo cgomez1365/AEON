@@ -154,6 +154,20 @@ module.exports = ({ supabase, getLocalFile, WORKSPACE, AUDIT_FILE, SDI_VIOLATION
   ];
 
   const USER_HOME = process.env.USERPROFILE || process.env.HOME || ''; // aeon-path-authority-allow
+
+  // The operator's home directory, resolved ONCE for the whole process and
+  // handed to blocks through deps. src/blocks/host_os/api/fs.cjs used to call
+  // os.homedir() itself to build the File Manager's containment boundary —
+  // a second module resolving a machine root, which is what the path-authority
+  // gate exists to prevent, and a duplicated security boundary besides: tighten
+  // one and the other silently keeps the old rule.
+  //
+  // Deliberately NOT the same value as USER_HOME above. USER_HOME is env-only
+  // and feeds ALLOWED_ROOTS (shell containment); this uses os.homedir(), which
+  // falls back to the passwd database when HOME is unset, and preserves
+  // fs.cjs's existing behaviour byte-for-byte. Keeping them separate means
+  // this change cannot move the shell boundary.
+  const HOME_ROOT = require('os').homedir(); // aeon-path-authority-allow
   const ALLOWED_ROOTS = [
     USER_HOME,
     WORKSPACE,
@@ -261,7 +275,7 @@ module.exports = ({ supabase, getLocalFile, WORKSPACE, AUDIT_FILE, SDI_VIOLATION
 
   return {
     correlationId, corsMiddleware, helmetMiddleware, apiLimiter, tunnelGate,
-    requireShellAuth, SAFE_EXEC_PREFIXES, ALLOWED_ROOTS, writeOSAudit,
+    requireShellAuth, SAFE_EXEC_PREFIXES, ALLOWED_ROOTS, HOME_ROOT, writeOSAudit,
     SDI_SCHEMAS, validateSDI, logSDIViolation,
   };
 };

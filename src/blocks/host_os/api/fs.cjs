@@ -4,7 +4,7 @@ const path = require('path');
 
 module.exports = function createFsRouter(deps) {
   const router = express.Router();
-  const { isVercel, WORKSPACE, upload, VAULT_ROOT, getDataFile } = deps;
+  const { isVercel, WORKSPACE, upload, VAULT_ROOT, getDataFile, HOME_ROOT } = deps;
 
   // ── Path containment ──────────────────────────────────────────────
   // Every route below took a path straight from the request body and handed
@@ -24,8 +24,17 @@ module.exports = function createFsRouter(deps) {
   // What the boundary actually buys: the process cannot be steered outside
   // the operator's own home (no /etc, /System, /Library, no other user's
   // files), and cannot touch credentials or persistence hooks even inside it.
-  const os = require('os');
-  const HOME = path.resolve(os.homedir());
+  // The home root arrives through deps rather than being resolved here. Two
+  // reasons, and the second is the one that matters: a block resolving a
+  // machine root is what the path-authority gate forbids, and this boundary is
+  // ALSO computed in services/storage.js for the upload destination check —
+  // two copies of one security rule, where tightening either leaves the other
+  // enforcing the old one. The kernel resolves it once and hands it down.
+  //
+  // Falls back to nothing rather than to os.homedir(): if a block's manifest
+  // declares filesystem: 'none' the sandbox strips HOME_ROOT, and this must
+  // then narrow the boundary, never silently restore it.
+  const HOME = HOME_ROOT ? path.resolve(HOME_ROOT) : null;
 
   const ROOTS = [HOME, WORKSPACE, VAULT_ROOT].filter(Boolean).map(r => path.resolve(r));
 

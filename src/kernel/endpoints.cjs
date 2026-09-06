@@ -42,6 +42,82 @@ function isPortable() {
   return process.env.AEON_PORTABLE === 'true';
 }
 
+// ── Egress policy for operator-supplied addresses ────────────────────
+//
+// A custom endpoint means the operator types a URL that the SERVER then
+// fetches, carrying an API key. On the desktop that is exactly the point — the
+// operator IS the machine's owner, and a loopback address has to keep working
+// for a local model server. In a hosted deployment it is a server-side request
+// forgery primitive: the same field would reach cloud metadata services
+// (169.254.169.254) and anything else inside the deployment's network.
+//
+// So the scheme rule is tied to the address class rather than being a separate
+// switch, which answers both questions at once:
+//   • private / loopback target → http is fine (a LAN model server), local only
+//   • public target             → https required, so the key is not on the wire
+//   • hosted runtime            → private and loopback refused outright
+// Link-local is never a model server anywhere — 169.254.169.254 is the cloud
+// metadata service on AWS/GCP/Azure, which is the single most valuable SSRF
+// target there is. Refused in every runtime, desktop included, rather than
+// being lumped in with "private" (which the desktop deliberately permits so
+// a local model server and a LAN box keep working).
+function isLinkLocal(hostname) {
+  const h = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
+  return /^169\.254\./.test(h) || /^fe80:/.test(h);
+}
+
+function isPrivateHost(hostname) {
+  const h = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
+  if (h === 'localhost' || h === '::1' || h.endsWith('.local') || h.endsWith('.internal')) return true;
+  if (/^127\./.test(h) || /^10\./.test(h) || /^192\.168\./.test(h)) return true;
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(h)) return true;
+  if (/^(fc|fd)[0-9a-f]{2}:/.test(h)) return true;      // IPv6 unique-local
+  if (isLinkLocal(h)) return true;
+  return false;
+}
+
+/**
+ * Validate an operator-supplied base URL before anything fetches it.
+ * Returns { ok: true, url, private } or { ok: false, error }, with messages
+ * written for a non-technical operator.
+ *
+ * Deliberately NOT runtime-conditional. The obvious shape here is "block
+ * private addresses when hosted, allow them on the desktop", but that adds a
+ * cloud branch to a surface the project is ratcheting down — and it turns out
+ * to buy nothing, because three other controls already cover the hosted case:
+ *
+ *   1. Link-local is refused here unconditionally, which is the actual prize
+ *      (169.254.169.254 is the cloud metadata service).
+ *   2. addEndpoint marks a private endpoint reachable_from ['local'], so a
+ *      cloud runtime never resolves a role to it.
+ *   3. /api/connections/discover no longer lets a caller pair a stored vault
+ *      key with an arbitrary address, so probing carries no secret.
+ *
+ * The residual hosted exposure is an already-authenticated operator probing
+ * their own deployment's private network with no credential attached — far
+ * below the bar that would justify widening the cloud surface.
+ */
+function checkBaseUrl(raw) {
+  let u;
+  try { u = new URL(String(raw || '').trim()); }
+  catch { return { ok: false, error: 'That does not look like a web address. It should start with https:// and usually ends in /v1' }; }
+
+  if (u.protocol !== 'https:' && u.protocol !== 'http:') {
+    return { ok: false, error: `Only https:// and http:// addresses work here — not ${u.protocol}` };
+  }
+  if (isLinkLocal(u.hostname)) {
+    return { ok: false, error: 'That address is reserved by the network and cannot be a model service.' };
+  }
+
+  const priv = isPrivateHost(u.hostname);
+  // http is for a box you control on this network. Over the public internet it
+  // would put the API key on the wire in clear text.
+  if (u.protocol === 'http:' && !priv) {
+    return { ok: false, error: 'Use https:// for an address on the internet — plain http:// would send your API key unencrypted. http:// is only allowed for a server on this computer or your local network.' };
+  }
+  return { ok: true, url: u, private: priv };
+}
+
 // ── Provider transport profiles (how to actually call them) ──────────
 const PROVIDER_TRANSPORT = {
   groq:   { style: 'openai', base: 'https://api.groq.com/openai/v1', list: '/models',     reach: ['local', 'cloud'] },
@@ -52,6 +128,12 @@ const PROVIDER_TRANSPORT = {
   openrouter: { style: 'openai', base: 'https://openrouter.ai/api/v1', list: '/models', reach: ['local', 'cloud'] },
   local:  { style: 'local',  base: null,                              list: null,          reach: ['local'] },
   lmstudio: { style: 'openai', base: `${lmStudioHost()}/v1`,          list: '/models',     reach: ['local'] },
+  // Generic OpenAI-compatible endpoint — the operator supplies the address.
+  // `base` is deliberately null: there is no correct default host for "somebody
+  // else's server", and addEndpoint does `ep.base_url || profile.base`, so any
+  // value here would silently become the destination for the operator's API key
+  // whenever they left the field blank. A blank base is refused instead.
+  custom: { style: 'openai', base: null, list: '/models', reach: ['local'], requiresBaseUrl: true, rpm: 30 },
 };
 
 function defaultRegistry() {
@@ -105,20 +187,70 @@ async function save(reg, supabase) {
 async function addEndpoint(ep, supabase) {
   const reg = await load(supabase);
   const profile = PROVIDER_TRANSPORT[ep.provider] || {};
+  const base_url = String(ep.base_url || profile.base || '').trim();
+
+  // A generic endpoint IS its address — there is nothing else identifying the
+  // server. Saved blank it would resolve to '' and die inside fetch() three
+  // layers from the field that was left empty.
+  if (profile.requiresBaseUrl && !base_url) {
+    const err = new Error('Enter the Base URL for this service. It usually ends in /v1');
+    err.status = 400;
+    throw err;
+  }
+  // Validate at write time as well as at fetch time: a registry row can also
+  // arrive from the Supabase mirror, written by another machine or an older build.
+  if (base_url && ep.base_url) {
+    const check = checkBaseUrl(base_url);
+    if (!check.ok) { const err = new Error(check.error); err.status = 400; throw err; }
+  }
+
+  // Where an endpoint can be reached FROM is a property of its address, not of
+  // its provider name: a public gateway is callable from a cloud runtime, a box
+  // on the LAN is not. Derived from the same classifier the egress check uses so
+  // the routing decision and the security decision cannot drift apart.
+  const isPriv = base_url ? isPrivateHost((() => { try { return new URL(base_url).hostname; } catch { return ''; } })()) : true;
+  const derivedReach = profile.requiresBaseUrl
+    ? (isPriv ? ['local'] : ['local', 'cloud'])
+    : (profile.reach || ['local']);
+
   const endpoint = {
-    id: ep.id || `${ep.provider}-${Date.now().toString(36)}`,
-    label: ep.label || ep.provider,
-    kind: ep.kind || (profile.reach && profile.reach.includes('cloud') ? 'cloud' : 'local'),
+    // Date.now() alone is one millisecond of resolution — fine for a human
+    // clicking Save, not for a double-submitted form or a scripted add, and
+    // this list upserts BY id, so a collision silently overwrites.
+    id: ep.id || `${ep.provider}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+    label: ep.label || defaultLabel(ep.provider, base_url, reg, ep.id),
+    kind: ep.kind || (derivedReach.includes('cloud') ? 'cloud' : 'local'),
     provider: ep.provider,
-    base_url: ep.base_url || profile.base || '',
+    base_url,
     auth_ref: ep.auth_ref || null,
     models: ep.models || [],
-    reachable_from: ep.reachable_from || profile.reach || ['local'],
+    reachable_from: ep.reachable_from || derivedReach,
+    // Model the operator typed themselves, when the service publishes no list.
+    preferred_model: ep.preferred_model || null,
+    // Client-side pacing, requests per minute. 0 means uncapped.
+    rpm_limit: Number.isFinite(ep.rpm_limit) ? ep.rpm_limit : (profile.rpm ?? null),
   };
   reg.endpoints = reg.endpoints.filter(e => e.id !== endpoint.id);
   reg.endpoints.push(endpoint);
   await save(reg, supabase);
   return endpoint;
+}
+
+// "custom" is a transport, not a name. Two generic connections both shown as
+// "custom" are indistinguishable in the connection list and in the Model
+// Assignment dropdown — which is exactly where an operator picks the wrong one.
+// Default to the host they typed, and disambiguate collisions.
+function defaultLabel(provider, base_url, reg, keepId) {
+  let label = provider;
+  if (PROVIDER_TRANSPORT[provider]?.requiresBaseUrl) {
+    try { const u = new URL(base_url); label = u.port ? `${u.hostname}:${u.port}` : u.hostname; }
+    catch { label = 'Custom endpoint'; }
+  }
+  const taken = (reg.endpoints || []).filter(e => e.id !== keepId).map(e => e.label);
+  if (!taken.includes(label)) return label;
+  let n = 2;
+  while (taken.includes(`${label} (${n})`)) n++;
+  return `${label} (${n})`;
 }
 
 async function removeEndpoint(id, supabase) {
@@ -143,6 +275,22 @@ async function discoverModels(provider, base_url, apiKey) {
   const profile = PROVIDER_TRANSPORT[provider] || {};
   const base = base_url || profile.base;
   const timeout = (ms) => new Promise((_, r) => setTimeout(() => r(new Error('timeout')), ms));
+
+  if (profile.requiresBaseUrl && !base) {
+    return { error: 'Enter the Base URL for the service first.' };
+  }
+  // Any address the operator typed is checked before it is fetched. A
+  // provider's own built-in base is trusted and skips this.
+  if (base_url) {
+    const check = checkBaseUrl(base_url);
+    if (!check.ok) return { error: check.error };
+    // A user-supplied host must never be paired with a transport that puts the
+    // key in the query string — that is how a key ends up in an access log.
+    if (profile.style === 'gemini') {
+      return { error: 'A custom address cannot be used with this provider.' };
+    }
+  }
+
   try {
     if (profile.style === 'local') {
       try {
@@ -164,15 +312,55 @@ async function discoverModels(provider, base_url, apiKey) {
       if (d.error) return { error: d.error.message || 'Anthropic auth failed' };
       return (d.data || []).map(m => m.id);
     }
-    // openai-style (groq, openai, grok, lmstudio)
-    const r = await Promise.race([
-      fetch(`${base}/models`, apiKey ? { headers: { Authorization: `Bearer ${apiKey}` } } : {}),
-      timeout(8000)
-    ]);
-    const d = await r.json();
-    return (d.data || []).map(m => m.id);
+    // openai-style (groq, openai, grok, lmstudio, custom)
+    //
+    // Every failure below used to return an empty array, so a rejected key, a
+    // mistyped URL and a server that simply does not publish a model list were
+    // all indistinguishable: an empty dropdown with nothing to act on. Each one
+    // now returns its own sentence. `manual: true` means "the connection may
+    // still be fine — let them type the model name themselves".
+    const r = await fetch(`${base}/models`, {
+      headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
+      signal: AbortSignal.timeout(8000), // actually aborts, unlike a raced promise
+      redirect: 'manual',                // a 3xx must not carry the key to a new host
+    });
+
+    if (r.status >= 300 && r.status < 400) {
+      return { error: 'That address redirects somewhere else. Enter the final address directly.' };
+    }
+    if (r.status === 401 || r.status === 403) {
+      return { error: 'That service rejected the API key. Check the key and that it is valid for this address.' };
+    }
+    if (r.status === 404) {
+      return { error: 'Connected, but this service does not publish a list of its models. Type the model name yourself.', manual: true };
+    }
+    if (!r.ok) {
+      return { error: `That address answered with an error (HTTP ${r.status}). Check the Base URL — it usually ends in /v1`, manual: true };
+    }
+
+    const d = await r.json().catch(() => null);
+    if (!d) return { error: 'That address replied, but not with model data. Check the Base URL — it usually ends in /v1', manual: true };
+
+    // Tolerate the shapes OpenAI-compatible servers actually return: the
+    // standard { data: [{ id }] }, plus { models: [...] }, a bare array, and
+    // rows keyed name/model instead of id.
+    const rows = Array.isArray(d) ? d : (Array.isArray(d.data) ? d.data : (Array.isArray(d.models) ? d.models : []));
+    const ids = rows
+      .map(m => (typeof m === 'string' ? m : (m?.id || m?.name || m?.model || null)))
+      .filter(m => typeof m === 'string' && m)
+      .map(m => m.replace(/^models\//, ''));
+
+    if (!ids.length) return { error: 'Connected, but this service listed no models. Type the model name yourself.', manual: true };
+    return ids;
   } catch (e) {
-    return { error: e.message };
+    // NEVER return e.message raw — the gemini branch above puts the key in the
+    // URL, and fetch failures quote the URL back in the message.
+    const name = e?.name === 'TimeoutError' || /abort/i.test(e?.name || '') ? 'timeout' : (e?.cause?.code || e?.code || '');
+    if (name === 'timeout') return { error: 'That address took too long to respond. Check it is correct and the server is running.' };
+    if (name === 'ENOTFOUND' || name === 'EAI_AGAIN') return { error: 'No server found at that address — check the Base URL for a typo.' };
+    if (name === 'ECONNREFUSED') return { error: 'Nothing is listening at that address. If the service runs on this computer, make sure it is started.' };
+    if (name === 'CERT_HAS_EXPIRED' || /CERT|SSL|TLS/i.test(String(name))) return { error: 'That server\'s security certificate could not be verified.' };
+    return { error: 'Could not reach that address. Check the Base URL and your connection.' };
   }
 }
 
@@ -309,6 +497,9 @@ async function resolveForRole(role, supabase) {
     apiKey,
     via: reachable ? 'direct' : 'relay',  // 'relay' → enqueue to desktop_commands
     endpoint_id: ep.id,
+    // Client-side pacing budget for this endpoint, carried to the transport so
+    // a free tier's requests-per-minute cap is respected before it is hit.
+    rpm_limit: ep.rpm_limit ?? null,
     role,
   };
 }
@@ -444,4 +635,7 @@ module.exports = {
   lmStudioHost, isPortable, describeRoleLocal, describeRoleFromEnv,
   // Exported so the gate tests the REAL predicate rather than re-implementing it.
   pickChatModel, NON_CHAT_MODEL_RE, isProviderConfigured,
+  // Egress policy — the settings block validates the operator's address with
+  // the same predicate the kernel enforces, so the two cannot drift.
+  checkBaseUrl, isPrivateHost,
 };

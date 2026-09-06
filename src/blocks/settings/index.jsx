@@ -932,11 +932,11 @@ function ConnectionsPanel({ nervousSystem }) {
   const CONN_PROVIDERS = nervousSystem
     ? Object.values(nervousSystem.providers)
         .filter(p => ['cloud', 'local', 'service', 'infra'].includes(p.kind))
-        .map(p => ({ id: p.id, label: p.label, kind: p.kind, needsKey: p.needsKey, base: p.base || '' }))
+        .map(p => ({ id: p.id, label: p.label, kind: p.kind, needsKey: p.needsKey, base: p.base || '', requiresBaseUrl: !!p.requiresBaseUrl }))
     : [];
   const [data, setData] = useState(null);
   const [adding, setAdding] = useState(false);
-  const [form, setForm] = useState({ provider: 'groq', label: '', base_url: '', apiKey: '', models: [], selectedModel: '', accountEmail: '', assignedBlocks: [] });
+  const [form, setForm] = useState({ provider: 'groq', label: '', base_url: '', apiKey: '', models: [], selectedModel: '', accountEmail: '', assignedBlocks: [], modelName: '', manualModel: false, discoverNote: '', rpmLimit: '' });
   const [discovering, setDiscovering] = useState(false);
   const [busy, setBusy] = useState(false);
   const [accts, setAccts] = useState({});
@@ -969,9 +969,17 @@ function ConnectionsPanel({ nervousSystem }) {
         body: JSON.stringify({ provider: form.provider, base_url: form.base_url, apiKey: form.apiKey || undefined }),
       });
       const d = await r.json();
-      if (d.ok) { setForm(f => ({ ...f, models: d.models, selectedModel: d.models[0] || '' })); showToast(`Found ${d.models.length} models`); }
-      else showToast(d.error || 'Discovery failed', 'error');
-    } catch { showToast('Discovery failed', 'error'); }
+      if (d.ok) {
+        setForm(f => ({ ...f, models: d.models, selectedModel: d.models[0] || '', manualModel: false, discoverNote: '' }));
+        showToast(`Found ${d.models.length} model${d.models.length === 1 ? '' : 's'}`);
+      } else {
+        // d.manual means the connection may well be fine — the service just
+        // does not publish a model list. Open the manual field instead of
+        // leaving an empty dropdown with nothing to act on.
+        setForm(f => ({ ...f, manualModel: !!d.manual, discoverNote: d.error || 'Could not read the model list.' }));
+        showToast(d.error || 'Discovery failed', d.manual ? 'info' : 'error');
+      }
+    } catch { showToast('Could not reach that address', 'error'); }
     setDiscovering(false);
   };
 
@@ -987,6 +995,8 @@ function ConnectionsPanel({ nervousSystem }) {
           base_url: form.base_url,
           models: form.selectedModel ? [form.selectedModel, ...form.models.filter(m => m !== form.selectedModel)] : form.models,
           apiKey: form.apiKey || undefined,
+          preferred_model: (form.manualModel ? form.modelName : form.selectedModel) || undefined,
+          rpm_limit: form.rpmLimit === '' || form.rpmLimit == null ? undefined : Number(form.rpmLimit),
         }),
       });
       const d = await r.json();
@@ -999,7 +1009,7 @@ function ConnectionsPanel({ nervousSystem }) {
           await savePref('provider_accounts', accts);
         }
         showToast('Connection saved'); setAdding(false);
-        setForm({ provider: 'groq', label: '', base_url: '', apiKey: '', models: [], selectedModel: '', accountEmail: '', assignedBlocks: [] }); load();
+        setForm({ provider: 'groq', label: '', base_url: '', apiKey: '', models: [], selectedModel: '', accountEmail: '', assignedBlocks: [], modelName: '', manualModel: false, discoverNote: '', rpmLimit: '' }); load();
       } else showToast(d.error || 'Save failed', 'error');
     } catch { showToast('Save failed', 'error'); }
     setBusy(false);
@@ -1099,7 +1109,15 @@ function ConnectionsPanel({ nervousSystem }) {
             </div>
             <div className="role-select-group" style={{ flex: 2 }}>
               <label className="role-select-label" htmlFor="conn-base-url">Base URL</label>
-              <input id="conn-base-url" className="settings-select" value={form.base_url} onChange={e => setForm(f => ({ ...f, base_url: e.target.value }))} />
+              <input id="conn-base-url" className="settings-select" value={form.base_url}
+                onChange={e => setForm(f => ({ ...f, base_url: e.target.value }))}
+                placeholder={prov?.requiresBaseUrl ? 'https://example.com/v1' : undefined} />
+              {prov?.requiresBaseUrl && (
+                <span style={{ fontSize: 10.5, color: 'var(--text-dim)', marginTop: 3, display: 'block', lineHeight: 1.5 }}>
+                  The address of any service that speaks the OpenAI format. It usually ends in <code>/v1</code>.
+                  Plain <code>http://</code> works only for a model server on this computer or your local network.
+                </span>
+              )}
             </div>
           </div>
           {prov?.needsKey && (
@@ -1121,14 +1139,59 @@ function ConnectionsPanel({ nervousSystem }) {
           />
           <div className="conn-add-actions">
             <button type="button" className="settings-btn settings-btn--secondary" onClick={discover} disabled={discovering}>
-              <Search size={12} /> {discovering ? 'Discovering...' : 'Discover models'}
+              <Search size={12} /> {discovering ? 'Checking...' : 'Get model list'}
             </button>
-            {form.models.length > 0 && (
+            {/* Picking from the real list is how a wrong model name becomes
+                impossible. Manual entry is the fallback for the servers that
+                genuinely do not publish one. */}
+            {form.models.length > 0 && !form.manualModel && (
               <select className="settings-select" style={{ flex: 1 }} value={form.selectedModel} onChange={e => setForm(f => ({ ...f, selectedModel: e.target.value }))} aria-label="Selected model">
                 {form.models.map(m => <option key={m} value={m}>{m}</option>)}
               </select>
             )}
+            {form.manualModel && (
+              <input className="settings-input" style={{ flex: 1 }} value={form.modelName}
+                onChange={e => setForm(f => ({ ...f, modelName: e.target.value }))}
+                placeholder="Model name, exactly as the service spells it"
+                aria-label="Model name" />
+            )}
           </div>
+
+          {/* Says WHY discovery came back empty. Previously a rejected key, a
+              mistyped address and a server with no model list all produced the
+              same blank dropdown. */}
+          {form.discoverNote && (
+            <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 6, lineHeight: 1.5 }}>
+              {form.discoverNote}
+              {!form.manualModel && (
+                <button type="button" onClick={() => setForm(f => ({ ...f, manualModel: true }))}
+                  style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', padding: '0 0 0 4px', fontSize: 11, textDecoration: 'underline' }}>
+                  Type the model name instead
+                </button>
+              )}
+            </div>
+          )}
+          {form.models.length > 0 && !form.manualModel && (
+            <button type="button" onClick={() => setForm(f => ({ ...f, manualModel: true }))}
+              style={{ background: 'none', border: 'none', color: 'var(--text-dim)', cursor: 'pointer', padding: '4px 0 0', fontSize: 11, textDecoration: 'underline' }}>
+              Model not listed? Type its name
+            </button>
+          )}
+
+          {/* Free tiers commonly cap near 40 requests a minute, and one
+              multi-step task can spend that. Pacing here beats finding out
+              halfway through a run. */}
+          {prov?.requiresBaseUrl && (
+            <label className="settings-field" style={{ marginTop: 8 }}>
+              <span className="settings-label">Requests per minute limit</span>
+              <input className="settings-input" type="number" min="0" max="600"
+                value={form.rpmLimit} onChange={e => setForm(f => ({ ...f, rpmLimit: e.target.value }))}
+                placeholder="30" />
+              <span style={{ fontSize: 10.5, color: 'var(--text-dim)', marginTop: 3, display: 'block', lineHeight: 1.5 }}>
+                AEON spaces out requests so it stays under this. Free plans are often capped near 40 per minute — leave blank for 30, or enter 0 for no limit.
+              </span>
+            </label>
+          )}
           <div className="conn-add-footer">
             <button type="button" className="settings-btn settings-btn--secondary" onClick={() => setAdding(false)}>Cancel</button>
             <button type="button" className="settings-btn settings-btn--primary" onClick={saveConn}

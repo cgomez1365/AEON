@@ -92,6 +92,7 @@ module.exports = ({ app, ROOT, isVercel, loadSettings, baseDeps }) => {
     if (perms.filesystem === 'none') {
       delete scoped.WORKSPACE;
       delete scoped.ALLOWED_ROOTS;
+      delete scoped.HOME_ROOT;
       delete scoped.blockStorage;
     }
     if (perms.ai === false) {
