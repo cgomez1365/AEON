@@ -459,6 +459,14 @@ module.exports = (app, deps) => {
       tavily:     { keys: ['TAVILY_API_KEY'], kind: 'search', icon: '🔍' },
       serper:     { keys: ['SERPER_API_KEY'], kind: 'search', icon: '🔍' },
       brave:      { keys: ['BRAVE_API_KEY'], kind: 'search', icon: '🔍' },
+      // Generic OpenAI-compatible endpoint. It has NO .env key by design — the
+      // address, key and model are supplied per connection and the key lives in
+      // the vault, so `configured` is decided by the registry rather than by
+      // process.env. `alwaysOffer: true` keeps it in the Add-connection list
+      // even with nothing configured yet; without an entry here the nervous
+      // system reports kind 'unknown' and the settings dropdown filters it out
+      // entirely, making the whole feature unreachable.
+      custom:     { keys: [], kind: 'cloud', icon: '🔌', base: null, alwaysOffer: true },
     };
 
     // Check endpoint registry for vault-stored connections
@@ -537,7 +545,11 @@ module.exports = (app, deps) => {
         blocks,
         details,
         registryModels: registryProviders[id]?.models || [],
-        needsKey: meta.keys.length > 0 && !meta.detect,
+        // A custom endpoint needs a key at runtime but has no env var to read,
+        // so the env-derived test would wrongly report "no key required".
+        needsKey: meta.alwaysOffer ? true : (meta.keys.length > 0 && !meta.detect),
+        // Address is per-connection, not per-provider.
+        requiresBaseUrl: !!meta.alwaysOffer,
       };
     }
 

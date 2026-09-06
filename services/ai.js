@@ -47,6 +47,57 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     try { aeonTerminalStream?.emit('log', { type: 'SYSTEM/CORE', message, meta, timestamp: Date.now() }); } catch {}
   };
 
+  // Keys must never reach a log line, an error message or an audit entry.
+  // A provider's own error body frequently quotes the request back.
+  const _redactKeys = (s) => String(s || '')
+    .replace(/\b(sk-|gsk_|xai-|nvapi-|AIza|or-v1-)[A-Za-z0-9_\-]{8,}/g, '$1***')
+    .replace(/([?&](?:key|api_key|access_token)=)[^&\s]+/gi, '$1***');
+
+  // ── Per-endpoint pacing ──────────────────────────────────────────────────
+  // Free OpenAI-compatible tiers commonly cap near 40 requests/minute, and one
+  // multi-step agent task can spend that inside a single run. Pacing locally is
+  // cheaper than discovering the cap as a 429 halfway through.
+  //
+  // This sits at the TRANSPORT seam rather than the resolver, because the paths
+  // that actually burst — Council fans out ~8 concurrent calls — pass a provider
+  // and model directly and never touch resolveForRole. Keyed by address so two
+  // custom endpoints get independent budgets instead of poisoning each other.
+  const _buckets = new Map(); // key -> { stamps: number[], rpm }
+
+  const _paceKey = (baseUrl, provider) => {
+    try { const u = new URL(baseUrl); return `${u.protocol}//${u.host}`; }
+    catch { return provider || 'unknown'; }
+  };
+
+  /**
+   * Wait until this endpoint's budget allows another call. Delays rather than
+   * rejecting, so an agent slows down instead of failing — but never waits
+   * unboundedly: past the cap it throws a flagged error the caller can report.
+   */
+  const _pace = async (key, rpm) => {
+    if (!rpm || rpm <= 0) return;
+    const MAX_WAIT_MS = 60_000;
+    const started = Date.now();
+    for (;;) {
+      const b = _buckets.get(key) || { stamps: [] };
+      const cutoff = Date.now() - 60_000;
+      b.stamps = b.stamps.filter(t => t > cutoff);
+      if (b.stamps.length < rpm) {
+        b.stamps.push(Date.now());
+        _buckets.set(key, b);
+        return;
+      }
+      _buckets.set(key, b);
+      const waitFor = Math.max(250, (b.stamps[0] + 60_000) - Date.now());
+      if (Date.now() - started + waitFor > MAX_WAIT_MS) {
+        const err = new Error('This endpoint is at its requests-per-minute limit. Wait a moment and try again, or raise the limit in Settings → Connections.');
+        err.localThrottle = true; // structural — never scraped from message text
+        throw err;
+      }
+      await new Promise(r => setTimeout(r, Math.min(waitFor, 2000)));
+    }
+  };
+
   // ── Provider health tracker ──────────────────────────────────────────────
   // Every 429/402 marks the provider "in cooldown" for a computed duration so
   // the fallback chain skips it instead of wasting a request finding out
@@ -615,6 +666,8 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
     const messages = _toMessages(prompt, opts);
     if (opts.system) messages.unshift({ role: 'system', content: opts.system });
+    // Pace before the call, not after the 429.
+    await _pace(_paceKey(baseUrl, opts.provider), opts.rpm_limit);
     const response = await fetch(url, {
       method: 'POST', headers,
       body: JSON.stringify({ model, messages, max_tokens: opts.max_tokens || 4096 }),
@@ -622,10 +675,37 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     });
     if (!response.ok) {
       _trackLLM('openai-compat', model, 0, Date.now() - _t0, false);
-      throw new Error(`Endpoint error ${response.status}: ${(await response.text()).slice(0, 200)}`);
+      const body = (await response.text().catch(() => '')).slice(0, 200);
+      const err = new Error(
+        response.status === 401 || response.status === 403
+          ? 'That service rejected the API key.'
+          : response.status === 404
+            ? 'That address or model was not found. Check the Base URL ends in /v1 and the model name is right.'
+            : `Endpoint error ${response.status}: ${_redactKeys(body)}`
+      );
+      // Structured, so callers never have to scrape the message text.
+      err.status = response.status;
+      const ra = response.headers.get('retry-after');
+      if (ra) err.retryAfterMs = /^\d+$/.test(ra.trim())
+        ? parseInt(ra, 10) * 1000
+        : Math.max(0, new Date(ra).getTime() - Date.now());
+      throw err;
     }
-    const data = await response.json();
-    const text = data?.choices?.[0]?.message?.content || '';
+    const data = await response.json().catch(() => null);
+    // An OpenAI-compatible server that is merely *incompatible* answers 200 with
+    // a shape this used to read as an empty string — and returned that empty
+    // string as SUCCESS. Callers then wrote it over the user's document. Read
+    // the shapes that actually occur (reasoning models put the text in
+    // reasoning_content and leave content null), and if there is genuinely
+    // nothing, fail loudly instead of returning ''.
+    const msg = data?.choices?.[0]?.message;
+    const text = msg?.content || msg?.reasoning_content || data?.choices?.[0]?.text || data?.message?.content || '';
+    if (typeof text !== 'string' || text.trim() === '') {
+      _trackLLM('openai-compat', model, 0, Date.now() - _t0, false);
+      const err = new Error('The model returned an empty response. If this is a custom endpoint, check the model name is one this service actually serves.');
+      err.emptyResponse = true;
+      throw err;
+    }
     const tokens = data?.usage?.total_tokens || Math.ceil(text.length / 4);
     _trackLLM('openai-compat', model, tokens, Date.now() - _t0, true);
     return text;
@@ -655,11 +735,14 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   };
 
   const _dispatchResolved = async (prompt, r, opts = {}) => {
-    const { provider, model, base_url, apiKey } = r;
-    if (provider === 'gemini') return genericGeminiRequest(prompt, model, base_url, apiKey, opts);
-    if (provider === 'claude') return claudeRequest(prompt, model, apiKey, undefined, opts);
-    if (provider === 'local') return localNativeRequest(prompt, model, opts);
-    return genericOpenAIRequest(prompt, model, base_url, apiKey, opts);
+    const { provider, model, base_url, apiKey, rpm_limit } = r;
+    // Carry the endpoint's own pacing budget into the transport. Everything
+    // else already flows through opts.
+    const o = rpm_limit != null ? { ...opts, rpm_limit, provider } : { ...opts, provider };
+    if (provider === 'gemini') return genericGeminiRequest(prompt, model, base_url, apiKey, o);
+    if (provider === 'claude') return claudeRequest(prompt, model, apiKey, undefined, o);
+    if (provider === 'local') return localNativeRequest(prompt, model, o);
+    return genericOpenAIRequest(prompt, model, base_url, apiKey, o);
   };
 
   // ── Vision — reads an image via whatever provider the "vision" role is
