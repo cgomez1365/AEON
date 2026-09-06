@@ -46,8 +46,8 @@ function isPortable() {
 //
 // A custom endpoint means the operator types a URL that the SERVER then
 // fetches, carrying an API key. On the desktop that is exactly the point — the
-// operator IS the machine's owner, and http://localhost:11434 has to work for
-// Ollama and LM Studio. In a hosted deployment it is a server-side request
+// operator IS the machine's owner, and a loopback address has to keep working
+// for a local model server. In a hosted deployment it is a server-side request
 // forgery primitive: the same field would reach cloud metadata services
 // (169.254.169.254) and anything else inside the deployment's network.
 //
@@ -60,7 +60,7 @@ function isPortable() {
 // metadata service on AWS/GCP/Azure, which is the single most valuable SSRF
 // target there is. Refused in every runtime, desktop included, rather than
 // being lumped in with "private" (which the desktop deliberately permits so
-// Ollama and a LAN box keep working).
+// a local model server and a LAN box keep working).
 function isLinkLocal(hostname) {
   const h = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
   return /^169\.254\./.test(h) || /^fe80:/.test(h);
@@ -358,7 +358,7 @@ async function discoverModels(provider, base_url, apiKey) {
     const name = e?.name === 'TimeoutError' || /abort/i.test(e?.name || '') ? 'timeout' : (e?.cause?.code || e?.code || '');
     if (name === 'timeout') return { error: 'That address took too long to respond. Check it is correct and the server is running.' };
     if (name === 'ENOTFOUND' || name === 'EAI_AGAIN') return { error: 'No server found at that address — check the Base URL for a typo.' };
-    if (name === 'ECONNREFUSED') return { error: 'Nothing is listening at that address. If this is Ollama or LM Studio, make sure it is running.' };
+    if (name === 'ECONNREFUSED') return { error: 'Nothing is listening at that address. If the service runs on this computer, make sure it is started.' };
     if (name === 'CERT_HAS_EXPIRED' || /CERT|SSL|TLS/i.test(String(name))) return { error: 'That server\'s security certificate could not be verified.' };
     return { error: 'Could not reach that address. Check the Base URL and your connection.' };
   }
