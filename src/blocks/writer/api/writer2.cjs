@@ -143,10 +143,17 @@ module.exports = (app, deps) => {
     const fp = `${id}.md`;
     if (!fs.existsSync(fp)) return res.status(404).json({ error: 'Not found' });
     const title = docTitle(id);
-    const body = mdToHtml(fs.readFileSync(fp, 'utf8'));
+    const raw = fs.readFileSync(fp, 'utf8');
+    // The editor is WYSIWYG now, so stored content is HTML — but the store is
+    // mixed, with pre-WYSIWYG documents still in markdown. Running mdToHtml over
+    // HTML escapes every < and >, so Word opened the file showing literal
+    // "<h2>" as body text. Branch on what the document actually is.
+    const isHtml = /<(p|div|h[1-6]|ul|ol|li|br|span|b|i|u|s|strong|em|blockquote|hr|a|pre)\b/i.test(raw);
+    const body = isHtml ? raw : mdToHtml(raw);
     const html = `<html xmlns:w="urn:schemas-microsoft-com:office:word"><head><meta charset="utf-8"><title>${esc(title)}</title>
 <style>body{font-family:Calibri,Georgia,serif;font-size:12pt;line-height:1.6;max-width:7in;margin:1in auto;color:#111}
 h1{font-size:20pt}h2{font-size:15pt;color:#1f3763}h3{font-size:13pt}blockquote{border-left:3pt solid #999;margin-left:0;padding-left:12pt;color:#555}
+u{text-decoration:underline}s,strike{text-decoration:line-through}
 code{font-family:Consolas,monospace;background:#f2f2f2;padding:1pt 4pt}</style></head>
 <body><h1>${esc(title)}</h1>${body}</body></html>`;
     res.setHeader('Content-Type', 'application/msword');

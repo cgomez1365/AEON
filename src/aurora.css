@@ -7,7 +7,10 @@
 
 /* Inter is offered by Settings → Theme Builder → Font and was never loaded,
    so choosing it fell through to whatever the system happened to have. */
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap');
+/* JetBrains Mono was loaded without a 700 face, so every `font-weight: bold`
+   on mono text fell back to 600 or a synthesized faux-bold — the reason Bold
+   in the Writer was nearly invisible. 700 added. */
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap');
 
 /* ── AURORA TOKENS — "Aurora" clear glass on gradient glow ──────────── */
 :root {

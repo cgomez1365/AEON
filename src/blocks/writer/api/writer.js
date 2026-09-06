@@ -69,6 +69,24 @@ module.exports = (app, deps) => {
     return `\n\nWRITING STYLE PROFILE (match this author's voice):\n${profile.summary}\nKey traits: ${profile.traits.join(' · ')}`;
   }
 
+  // The editor is WYSIWYG: its documents are HTML, and whatever comes back here
+  // is assigned into the document. Both directions have to agree on one format
+  // or the model narrates tags it was never told about and returns markdown that
+  // shows up as literal asterisks.
+  const HTML_CONTRACT = `
+
+OUTPUT FORMAT — the document is HTML. Return valid HTML using only these tags: <p> <h1> <h2> <h3> <b> <i> <u> <s> <ul> <ol> <li> <a> <blockquote> <hr> <code> <pre>. Preserve any existing inline style attributes you are given. Wrap every paragraph in <p>. Do NOT return markdown, and do NOT wrap the response in a code fence.`;
+
+  // Strip tags for anything a model should read as prose rather than markup —
+  // style analysis, critique, and the Memory Core record.
+  const stripHtml = (s) => String(s || '')
+    .replace(/<(script|style)[^>]*>[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|h[1-6]|li|blockquote)>/gi, '\n')
+    .replace(/<[^>]*>/g, '')
+    .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
+    .replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+
   // Writer used to POST to its own server at /api/kernel/llm over loopback. That
   // request carried no session, so with the auth guard armed the kernel answered
   // 401 — and the old client never read resp.statusCode, so the error body parsed
@@ -194,7 +212,10 @@ module.exports = (app, deps) => {
       for (const d of docs.slice(0, 15)) {
         try {
           const fp = `${d.id}.md`;
-          const text = fs.readFileSync(fp, 'utf8');
+          // Strip BEFORE the length test and the slice, so the sample carries
+          // 2500 characters of actual writing rather than 2500 characters of
+          // markup. This profile is injected into every other prompt.
+          const text = stripHtml(fs.readFileSync(fp, 'utf8'));
           if (text.length > 80) samples.push({ title: d.title, text: text.slice(0, 2500) });
         } catch {}
       }
@@ -244,17 +265,20 @@ Return ONLY valid JSON.\n\nSamples:\n${corpus}`
       let system, userMsg;
 
       if (mode === 'braindump') {
-        system = `You are an expert writer. The user has given you a raw brain dump. Restructure into coherent, well-organized prose. Preserve every idea. Add structure, clarity, and flow.${styleSystemSnippet(profile)}\nReturn ONLY the restructured prose.`;
+        system = `You are an expert writer. The user has given you a raw brain dump. Restructure into coherent, well-organized prose. Preserve every idea. Add structure, clarity, and flow.${styleSystemSnippet(profile)}\nReturn ONLY the restructured prose.${HTML_CONTRACT}`;
         userMsg = prompt;
       } else if (mode === 'continue') {
-        system = `You are a writing collaborator. Continue the provided draft naturally — match its tone and direction exactly. Pick up where it left off.${styleSystemSnippet(profile)}\nReturn ONLY the continuation.`;
+        system = `You are a writing collaborator. Continue the provided draft naturally — match its tone and direction exactly. Pick up where it left off.${styleSystemSnippet(profile)}\nReturn ONLY the continuation.${HTML_CONTRACT}`;
         userMsg = draft || prompt;
       } else if (mode === 'stylecheck') {
         if (!profile) return res.json({ content: 'No Writing DNA profile found. Use "Analyze My Writing" first.' });
+        // Feedback is read by a human, not written back into the document, so
+        // this one stays prose — but the draft is stripped before it is shown
+        // to the model so it critiques the writing, not the markup.
         system = 'You are a literary editor. Compare text against the style profile and give specific feedback. Bullet points preferred.';
-        userMsg = `Style profile:\n${profile.summary}\nTraits: ${profile.traits.join(', ')}\n\nText to check:\n\n${draft || prompt}`;
+        userMsg = `Style profile:\n${profile.summary}\nTraits: ${profile.traits.join(', ')}\n\nText to check:\n\n${stripHtml(draft || prompt)}`;
       } else {
-        system = `You are an expert writer. Write in a ${tone || 'clear and professional'} tone. Aim for ${length || 'medium'} length.${styleSystemSnippet(profile)}\nReturn only the written content.`;
+        system = `You are an expert writer. Write in a ${tone || 'clear and professional'} tone. Aim for ${length || 'medium'} length.${styleSystemSnippet(profile)}\nReturn only the written content.${HTML_CONTRACT}`;
         userMsg = prompt;
       }
 
@@ -284,11 +308,25 @@ Return ONLY valid JSON.\n\nSamples:\n${corpus}`
       // llm() throws rather than returning '' — previously a failure here
       // returned { content: '' } with no error key, and the editor wrote that
       // over the whole document. Never return empty content from this route.
-      if (selection && selection.trim() && text.includes(selection)) {
-        const rewritten = (await llm(`${instr}${styleNote}\n\nReturn ONLY the rewritten fragment:\n\n${selection}`)).trim();
+      if (selection && selection.trim()) {
+        // `text` is HTML; `selection` is the plain-text form the browser gives
+        // for the highlighted range. Any selection crossing a tag or block
+        // boundary therefore fails this match — and the old code fell straight
+        // through to rewriting the WHOLE document, silently, when the user had
+        // asked for one paragraph. Refuse instead of escalating.
+        if (!text.includes(selection)) {
+          return res.status(409).json({
+            error: 'That selection spans formatting, so it cannot be rewritten on its own. Select text within a single paragraph, or clear the selection to rewrite the whole document.',
+          });
+        }
+        const rewritten = (await llm(`${instr}${styleNote}\n\nReturn ONLY the rewritten fragment, as HTML, with no code fence:\n\n${selection}`)).trim();
         return res.json({ content: text.replace(selection, rewritten), selectionReplaced: true });
       }
-      const content = await llm(`${instr}${styleNote}\n\nReturn ONLY the result:\n\n${text}`);
+      // Critique is read by a human and never written into the document, so it
+      // gets stripped prose in and prose out; everything else round-trips HTML.
+      const isCritique = action === 'critique';
+      const body = isCritique ? stripHtml(text) : text;
+      const content = await llm(`${instr}${styleNote}${isCritique ? '' : HTML_CONTRACT}\n\nReturn ONLY the result:\n\n${body}`);
       res.json({ content });
     } catch (e) { aiError(res, e); }
   });
@@ -403,7 +441,12 @@ ${styleNote}${draftNote}`;
       if (!fs.existsSync(fp)) return res.status(404).json({ ok: false, reason: 'doc_not_found', error: 'Document not found.' });
       const doc = loadDocs().find(d => d.id === req.params.id);
       const title = doc?.title || 'Writer Draft';
-      const raw = fs.readFileSync(fp, 'utf8').trim();
+      // Strip before measuring and before truncating. Memory Core embeds and
+      // indexes this text, and mirrors it to the vault where aeon_matrix walks
+      // it — markup here pollutes retrieval across the whole system, and counting
+      // tags against the limit truncates a short draft mid-sentence. The refs
+      // entry still points at the formatted original on disk.
+      const raw = stripHtml(fs.readFileSync(fp, 'utf8')).trim();
       // Memory Core rejects text under 6 chars; say so here rather than let it
       // come back as an opaque 400.
       if (raw.length < 6) {
