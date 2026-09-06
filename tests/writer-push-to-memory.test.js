@@ -4,7 +4,7 @@
 // <data>/aeon_notes.json (the Notes block's file) and then answered
 // `{ ok: true }` unconditionally — the only write sat inside a bare `catch {}`
 // and NOTES_FILE was frequently absent. Writer said "✓ Saved to Memory";
-// Memory Core, which reads Vault/Agents/vp/memory/memories.json, said
+// Memory Core, which reads Vault/Agents/Aeon/memory/memories.json, said
 // 0 MEMORIES. Both were telling the truth about different files.
 //
 // Three assertions carry the fix:
@@ -42,7 +42,9 @@ delete process.env.VERCEL;
 const mountWriter = require('../src/blocks/writer/api/writer.js');
 const createMemoryRouter = require('../src/blocks/memory_core/api/memory.cjs');
 
-const MEM_REL = path.join('Agents', 'vp', 'memory');
+// The master persona folder was renamed vp → Aeon; the vault path is derived
+// from that directory name, so this path moved with it.
+const MEM_REL = path.join('Agents', 'Aeon', 'memory');
 
 function makeEnv(name) {
   const dir = fs.mkdtempSync(path.join(TMP_ROOT, `${name}-`));

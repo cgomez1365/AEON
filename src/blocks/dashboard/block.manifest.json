@@ -153,6 +153,26 @@
       "method": "GET",
       "path": "/api/terminal-stream",
       "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/terminal/sessions",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/terminal/sessions",
+      "auth": true
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/terminal/sessions/:id",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/terminal/sessions/:id",
+      "auth": true
     }
   ],
   "env": [
