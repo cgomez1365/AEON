@@ -240,7 +240,7 @@ module.exports = function ingestFactory(deps) {
     const windows = chunkText(text);
     const rec = { model: null, chunks: [] };
     for (const w of windows) {
-      const { vector, model } = await embedFn(text.slice(w.s, w.e));
+      const { vector, model } = await embedFn(text.slice(w.s, w.e), { kind: 'document' });
       rec.model = rec.model || model;
       rec.chunks.push({ s: w.s, e: w.e, v: compact(vector) });
     }
@@ -261,7 +261,7 @@ module.exports = function ingestFactory(deps) {
     };
     try {
       const embedFn = injectedEmbed || embed;
-      const { vector, model } = await embedFn(summary);
+      const { vector, model } = await embedFn(summary, { kind: 'document' });
       entry.embedding = vector;
       entry.embeddingModel = model;
       const rec = await buildChunks(text, embedFn);
@@ -322,6 +322,13 @@ module.exports = function ingestFactory(deps) {
     const files = walk(BRAIN_DIR);
     const seen = new Set();
 
+    // The space the active embedder writes into. Vectors tagged with any other
+    // space are re-embedded below rather than compared against (R08). Learned
+    // once per scan with one throwaway embed; no embedder means no migration
+    // this pass, and no error — the vector backfill already covers that case.
+    let currentSpace = null;
+    try { ({ model: currentSpace } = await (injectedEmbed || embed)('aeon space probe', { kind: 'document' })); } catch { currentSpace = null; }
+
     // Persists manifest + index + status after every file so a cancel/crash
     // mid-run never loses progress and never redoes already-completed work.
     const checkpoint = () => {
@@ -348,7 +355,7 @@ module.exports = function ingestFactory(deps) {
           const existing = index.documents[relPosix];
           if (existing && !Array.isArray(existing.embedding) && existing.summary) {
             try {
-              const { vector, model } = await embed(existing.summary);
+              const { vector, model } = await embed(existing.summary, { kind: 'document' });
               existing.embedding = vector;
               existing.embeddingModel = model;
               existing.updatedAt = Date.now();
@@ -357,6 +364,23 @@ module.exports = function ingestFactory(deps) {
               if (results.ingested % 10 === 0) checkpoint();
               continue;
             } catch { /* still no embedder — stay vector-less */ }
+          }
+          // Space migration: a vector from a different embedding space than
+          // the active embedder writes (a different model, or the same model
+          // before task prefixes) is re-embedded in place. Comparing across
+          // spaces is meaningless; refusing to search until the operator
+          // re-indexes by hand is a chore the scan can do itself.
+          if (existing && Array.isArray(existing.embedding) && currentSpace
+              && existing.embeddingModel && existing.embeddingModel !== currentSpace) {
+            try {
+              const text = await extractText(full);
+              const fresh = await buildEntry(full, relPosix, text, stat);
+              index.documents[relPosix] = fresh;
+              results.ingested++;
+              onEvent({ file: relPosix, action: 'space-migrate', from: existing.embeddingModel, to: currentSpace });
+              if (results.ingested % 10 === 0) checkpoint();
+              continue;
+            } catch { /* unreadable or no embedder — leave it, try next scan */ }
           }
           // Chunk backfill: indexed before windows existed, or too short to
           // have needed them. Costs a re-extract; that is the price of not

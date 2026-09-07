@@ -24,7 +24,7 @@ const retrieval = require('../retrieval.cjs');
 // meaningless. One embedder, resolved one way.
 async function embedLocal(text) {
   const { kernelEmbed } = require('../embed.cjs');
-  const { vector } = await kernelEmbed(text);
+  const { vector } = await kernelEmbed(text, { kind: 'query' });
   return vector;
 }
 

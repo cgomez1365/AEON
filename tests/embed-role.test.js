@@ -252,3 +252,17 @@ describe('portable mode never reaches for a hosted embedder', () => {
     }
   });
 });
+
+describe('task prefixes follow the model, not the provider', () => {
+  const { taskPrefix } = require('../src/kernel/embed.cjs');
+  it('nomic gets the prefixes its card requires', () => {
+    expect(taskPrefix('nomic-embed-text-q8', 'document')).toBe('search_document: ');
+    expect(taskPrefix('nomic-embed-text-q8', 'query')).toBe('search_query: ');
+    expect(taskPrefix('nomic-embed-text-v1.5', 'query')).toBe('search_query: ');
+  });
+  it('other embedders get none', () => {
+    expect(taskPrefix('text-embedding-3-small', 'query')).toBe('');
+    expect(taskPrefix('text-embedding-004', 'document')).toBe('');
+    expect(taskPrefix(null, 'query')).toBe('');
+  });
+});

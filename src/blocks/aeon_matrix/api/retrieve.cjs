@@ -40,6 +40,7 @@ const { loadExtractors, extractText, embed, cosineSimilarity, EMBED_MODEL } = re
 const DEFAULT_K        = 5;
 const MATCH_THRESHOLD   = 0.35; // cosine similarity floor
 const MAX_DOC_CHARS     = 2000; // cap per-document content injected into context
+const RELATIVE_MARGIN   = 0.06; // "matched" = within this of the best score, not above the absolute floor
 
 // The recall gate used to live here too — a third, uncalled copy. It is
 // src/kernel/context.cjs now (Doctrine R05: one policy, one place); this block
@@ -115,7 +116,7 @@ module.exports = function retrieveFactory(deps) {
       // Injectable for the same reason ingest's is (BO-SHIP P10): a test of
       // ranking must not need a model, and query and index must share one
       // embedder or the comparison is meaningless.
-      ({ vector: queryEmbedding, model: queryModel } = await (deps?.embed || embed)(query));
+      ({ vector: queryEmbedding, model: queryModel } = await (deps?.embed || embed)(query, { kind: 'query' }));
     } catch (e) {
       console.warn('[RETRIEVE] query embed failed:', e.code || 'error', e.message);
       // The kernel owns the remedy: it knows whether nothing is assigned, the
@@ -176,9 +177,14 @@ module.exports = function retrieveFactory(deps) {
       return { d, score, passage };
     });
     const above = scored.filter(r => r.score >= MATCH_THRESHOLD).sort((a, b) => b.score - a.score);
-    // How many cleared the floor, before the cut to k. The caller renders
-    // "showing k of N" and refuses a counting question over a subset (R02).
-    const matched = above.length;
+    // How many are as good as what is being shown, before the cut to k. The
+    // caller renders "showing k of N" and refuses a counting question over a
+    // subset (R02). RELATIVE, not the absolute floor: summary embeddings sit
+    // in a narrow band, so an absolute floor counts nearly the whole corpus —
+    // measured live, 1,467 of 1,473 "matched" a single question, which is
+    // true of the floor and meaningless to the operator.
+    const best = above.length ? above[0].score : 0;
+    const matched = above.filter(r => r.score >= best - RELATIVE_MARGIN).length;
     const ranked = above.slice(0, k);
 
     loadExtractors();

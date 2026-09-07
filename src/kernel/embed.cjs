@@ -114,7 +114,24 @@ async function embedGeminiTransport(text, { base_url, apiKey, model }) {
  * Embed one string using whatever the operator assigned to the `embed` role.
  * @returns {Promise<{vector: number[], model: string, provider: string}>}
  */
-async function kernelEmbed(text, { supabase = null } = {}) {
+/**
+ * The task prefix an embedding model expects, if any.
+ *
+ * nomic-embed-text — the model AEON ships in its catalog — is trained with
+ * instruction prefixes and its own card says retrieval quality degrades
+ * without them: documents are embedded as `search_document: …` and queries
+ * as `search_query: …`. AEON sent neither. Measured live on a 1,473-document
+ * corpus: the right file ranked, the right WINDOW of it did not, and nearly
+ * every document cleared the similarity floor. Keyed on the model name, not
+ * the provider, because the same model served from a hosted endpoint needs
+ * the same prefix; other models get none.
+ */
+function taskPrefix(model, kind) {
+  if (!/nomic-embed/i.test(String(model || ''))) return '';
+  return kind === 'query' ? 'search_query: ' : 'search_document: ';
+}
+
+async function kernelEmbed(text, { supabase = null, kind = 'document' } = {}) {
   if (typeof text !== 'string' || !text.trim()) {
     throw embedError('empty_input', 'Nothing to embed.');
   }
@@ -128,8 +145,15 @@ async function kernelEmbed(text, { supabase = null } = {}) {
     );
   }
 
+  const prefix = taskPrefix(r.model, kind);
+  const input = prefix + text;
+  // A prefixed embedding is a different SPACE from an unprefixed one of the
+  // same model (R08: vectors are tagged and never mixed). The tag carries it,
+  // so an index built before prefixes existed is migrated rather than compared.
+  const space = prefix ? `${r.model}#task` : r.model;
+
   if (r.provider === 'local') {
-    return { vector: await embedLocal(text), model: r.model, provider: 'local' };
+    return { vector: await embedLocal(input), model: space, provider: 'local' };
   }
 
   // Cloud: pace against the SAME per-address budget chat uses, before the call.
@@ -137,10 +161,10 @@ async function kernelEmbed(text, { supabase = null } = {}) {
 
   const style = (endpoints.PROVIDER_TRANSPORT[r.provider] || {}).style || 'openai';
   const vector = style === 'gemini'
-    ? await embedGeminiTransport(text, r)
-    : await embedOpenAICompatible(text, r);
+    ? await embedGeminiTransport(input, r)
+    : await embedOpenAICompatible(input, r);
 
-  return { vector, model: r.model, provider: r.provider };
+  return { vector, model: space, provider: r.provider };
 }
 
 /** Can embedding run right now? Sync, local registry only — mirrors the badge path. */
@@ -148,4 +172,4 @@ function embedReadiness() {
   return endpoints.describeRoleLocal(EMBED_ROLE);
 }
 
-module.exports = { kernelEmbed, embedReadiness, embedError };
+module.exports = { kernelEmbed, embedReadiness, embedError, taskPrefix };

@@ -149,10 +149,11 @@ describe('one scan at a time', () => {
     expect(b).toBe(a);                                   // same result object — it joined
     expect(events.some(e => e.joined)).toBe(true);
     expect(a.ingested).toBe(6);
-    // Every document embedded once (summary + windows), not twice.
+    // Every document embedded once (summary + windows), not twice — plus the
+    // single probe embed the scan spends learning the active embedding space.
     const side = JSON.parse(fs.readFileSync(path.join(dataRoot, 'vault_chunks.json'), 'utf8'));
     const windows = Object.values(side).reduce((n, r) => n + r.chunks.length, 0);
-    expect(embeds).toBe(6 + windows);
+    expect(embeds).toBe(6 + windows + 1);
   });
 });
 
@@ -275,14 +276,55 @@ describe('retrieval finds a sentence deep inside a long document', () => {
     expect(top.content).not.toMatch(/Canonical reference/);
   });
 
-  it('reports how many matched before the cut to k', async () => {
+  it('reports how many matched as well as what is shown, before the cut to k', async () => {
     for (let i = 0; i < 7; i++) write(`note-${i}.md`, `# Note ${i}\n\nvault keyslot master key recovery notes number ${i}.`);
+    // A weak relative: clears the absolute floor on shared filler words, but
+    // is nowhere near the seven near-identical notes. It must NOT count.
+    write('far.md', `# Far\n\nvault ${filler(3)}`);
     await scan();
     const retrieve = await mountRetrieve();
     const out = await retrieve('vault keyslot master key recovery', 3);
     expect(out.documents.length).toBe(3);
-    expect(out.matched).toBeGreaterThanOrEqual(7);
+    expect(out.matched).toBe(7);
     expect(out.k).toBe(3);
+  });
+
+  it('the query and the documents are embedded with their own task kinds', async () => {
+    const kinds = [];
+    const spy = async (t, opts) => { kinds.push(opts?.kind || 'unset'); return bow(t); };
+    const router = ingestMod({ isVercel: false, VAULT_ROOT: vault, DATA_ROOT: dataRoot, embed: spy });
+    write('a.md', filler(30));
+    await router.runSecondBrainScan();
+    expect(new Set(kinds)).toEqual(new Set(['document']));
+    kinds.length = 0;
+    const app = express(); app.use(express.json());
+    app.use('/api', retrieveFactory({ isVercel: false, VAULT_ROOT: vault, DATA_ROOT: dataRoot, embed: spy, kernelLLM: null }));
+    const h = await listen(app); servers.push(h.server);
+    await fetch(`http://127.0.0.1:${h.port}/api/crn/second-brain/retrieve`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query: 'quarterly logistics' }) });
+    expect(kinds).toEqual(['query']);
+  });
+});
+
+describe('R08 — a vector from another space is migrated, not compared', () => {
+  it('re-embeds documents whose tag differs from the active embedder', async () => {
+    write('a.md', filler(30)); write('b.md', filler(35));
+    // Index with an "old" embedder first.
+    const oldSpace = async (t) => ({ ...(await bow(t)), model: 'bow-stub' });
+    await ingestMod({ isVercel: false, VAULT_ROOT: vault, DATA_ROOT: dataRoot, embed: oldSpace }).runSecondBrainScan();
+    ingestMod._resetStores();
+    // Same model, now with task prefixes: a new space.
+    const newSpace = async (t) => ({ ...(await bow(t)), model: 'bow-stub#task' });
+    const events = [];
+    const r = await ingestMod({ isVercel: false, VAULT_ROOT: vault, DATA_ROOT: dataRoot, embed: newSpace }).runSecondBrainScan((e) => events.push(e));
+    expect(r.ingested).toBe(2);
+    expect(events.filter(e => e.action === 'space-migrate').length).toBe(2);
+    const idx = JSON.parse(fs.readFileSync(path.join(dataRoot, 'vault_index.json'), 'utf8'));
+    expect(idx.documents['a.md'].embeddingModel).toBe('bow-stub#task');
+    expect(idx.documents['b.md'].embeddingModel).toBe('bow-stub#task');
+    // Steady state: nothing to migrate, nothing re-embedded.
+    ingestMod._resetStores();
+    const again = await ingestMod({ isVercel: false, VAULT_ROOT: vault, DATA_ROOT: dataRoot, embed: newSpace }).runSecondBrainScan();
+    expect(again.ingested).toBe(0);
   });
 });
 
