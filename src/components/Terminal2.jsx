@@ -23,7 +23,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Send, Loader, Cpu, Clock, Zap, ChevronRight, ChevronDown, ShieldAlert, Paperclip, Square, X as XIcon, Archive, History, Plus, Trash2 } from 'lucide-react';
+import { Send, Loader, Cpu, Clock, Zap, ChevronRight, ChevronDown, ShieldAlert, Paperclip, Square, X as XIcon, Archive, History, Plus, Trash2, Pencil, BookmarkPlus, Check } from 'lucide-react';
 import { describeStreamFailure } from '../utils/interceptorPolicy.js';
 import { describeDispatchOutcome, describeDenial, describeCommandOutput } from '../utils/commandOutcome.js';
 
@@ -116,8 +116,14 @@ const Terminal2 = ({ onUsageUpdate }) => {
   const [sessions, setSessions] = useState([]);         // list metadata
   const [showSessions, setShowSessions] = useState(false);
   const [sessionSaving, setSessionSaving] = useState(false);
+  // Which saved session this feed IS. Without it every save minted a new id, so
+  // save-after-load forked the conversation and the unload beacon wrote a fresh
+  // record on every refresh — one chat became a pile of near-duplicates.
+  const currentSessionId = useRef(null);
+  const [renaming, setRenaming] = useState(null);   // { id, value }
   const feedRef = useRef(feed); // always-fresh ref for unload handlers
   useEffect(() => { feedRef.current = feed; }, [feed]);
+  const sessionIdRef = currentSessionId;
 
   const fetchSessions = useCallback(async () => {
     try {
@@ -135,9 +141,21 @@ const Terminal2 = ({ onUsageUpdate }) => {
     try {
       const r = await fetch('/api/terminal/sessions', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, messages: feedRef.current, autoSaved }),
+        body: JSON.stringify({ id: currentSessionId.current, name, messages: feedRef.current, autoSaved }),
       });
       const d = await r.json();
+      if (d?.id) {
+        currentSessionId.current = d.id;
+        // Ask the model for a better title, once, in the background. The
+        // deterministic title is already in place, so this never blocks and a
+        // failure changes nothing. The server refuses if the operator has
+        // renamed this chat (R10), which is why it is safe to call on any save.
+        if (d.nameSetBy === 'auto') {
+          fetch(`/api/terminal/sessions/${d.id}/name`, { method: 'POST' })
+            .then(() => fetchSessions())
+            .catch(() => {});
+        }
+      }
       await fetchSessions();
       return d;
     } catch { return null; } finally { setSessionSaving(false); }
@@ -152,6 +170,8 @@ const Terminal2 = ({ onUsageUpdate }) => {
         feedId.current = nextId;
         setFeed([...d.messages, { id: nextId, type: 'msg', role: 'system', content: `📂 Loaded: ${d.name}` }]);
         feedId.current = nextId + 1;
+        // Adopt the session so the next save updates it instead of forking.
+        currentSessionId.current = d.id;
         setShowSessions(false);
       }
     } catch (e) {
@@ -163,8 +183,46 @@ const Terminal2 = ({ onUsageUpdate }) => {
     e.stopPropagation();
     try {
       await fetch(`/api/terminal/sessions/${id}`, { method: 'DELETE' });
+      if (currentSessionId.current === id) currentSessionId.current = null;
       await fetchSessions();
     } catch {}
+  }, [fetchSessions]);
+
+  // Rename. The operator's word is final — the server marks the title
+  // operator-set and the naming route refuses to touch it afterwards (R10).
+  const renameSession = useCallback(async (id, name) => {
+    const next = String(name || '').trim();
+    if (!next) { setRenaming(null); return; }
+    try {
+      await fetch(`/api/terminal/sessions/${id}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: next }),
+      });
+      await fetchSessions();
+    } catch {}
+    setRenaming(null);
+  }, [fetchSessions]);
+
+  // Put this conversation into the Second Brain, on purpose (R09). Saved chats
+  // are deliberately NOT indexed automatically; this is the decision. Only the
+  // operator's own turns are stored, so the model's words never become a source
+  // a later answer can cite.
+  const rememberSession = useCallback(async (id, e) => {
+    e.stopPropagation();
+    try {
+      const r = await fetch(`/api/terminal/sessions/${id}/remember`, { method: 'POST' });
+      const d = await r.json();
+      setFeed(prev => [...prev, {
+        id: feedId.current++, type: 'msg',
+        role: d.ok ? 'system' : 'error',
+        content: d.ok
+          ? `🧠 Added to the Second Brain — ${d.ingested} of your turns are now searchable.`
+          : `[REMEMBER] ${d.error}${d.remedy ? ` — ${d.remedy}` : ''}`,
+      }]);
+      await fetchSessions();
+    } catch (err) {
+      setFeed(prev => [...prev, { id: feedId.current++, type: 'msg', role: 'error', content: `[REMEMBER] ${err.message}` }]);
+    }
   }, [fetchSessions]);
 
   // New chat — save current, start fresh
@@ -172,6 +230,7 @@ const Terminal2 = ({ onUsageUpdate }) => {
     await saveSession({ autoSaved: true });
     setFeed([{ ...BOOT_MSG, content: 'AEON Operator Console — new session started.' }]);
     feedId.current = 1;
+    currentSessionId.current = null;   // the next save is a NEW record, on purpose
     setShowSessions(false);
   }, [saveSession]);
 
@@ -183,7 +242,7 @@ const Terminal2 = ({ onUsageUpdate }) => {
       // sendBeacon is fire-and-forget and survives page unload.
       // Must use a Blob with application/json so the express JSON parser picks it up.
       const blob = new Blob(
-        [JSON.stringify({ messages: feedRef.current, autoSaved: true })],
+        [JSON.stringify({ id: sessionIdRef.current, messages: feedRef.current, autoSaved: true })],
         { type: 'application/json' }
       );
       navigator.sendBeacon('/api/terminal/sessions', blob);
@@ -753,11 +812,45 @@ const Terminal2 = ({ onUsageUpdate }) => {
               onMouseEnter={e => e.currentTarget.style.background = 'rgba(0,242,255,0.04)'}
               onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 11.5, color: '#c8d6e8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</div>
+                {renaming?.id === s.id ? (
+                  <input
+                    autoFocus
+                    value={renaming.value}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={(e) => setRenaming({ id: s.id, value: e.target.value })}
+                    onKeyDown={(e) => {
+                      e.stopPropagation();
+                      if (e.key === 'Enter') renameSession(s.id, renaming.value);
+                      if (e.key === 'Escape') setRenaming(null);
+                    }}
+                    onBlur={() => renameSession(s.id, renaming.value)}
+                    aria-label="Rename chat"
+                    style={{ width: '100%', background: '#0d1420', border: '1px solid #00f2ff44', color: '#c8d6e8', fontSize: 11.5, fontFamily: 'inherit', padding: '2px 6px', borderRadius: 2 }}
+                  />
+                ) : (
+                  <div style={{ fontSize: 11.5, color: '#c8d6e8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</div>
+                )}
                 <div style={{ fontSize: 9.5, color: '#3a5070', marginTop: 1 }}>
                   {s.autoSaved ? 'AUTO · ' : 'SAVED · '}{s.messageCount} msgs · {new Date(s.savedAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                  {s.inRecord && <span style={{ color: '#00f2ff' }}> · IN RECORD</span>}
                 </div>
               </div>
+              <button onClick={(e) => { e.stopPropagation(); setRenaming({ id: s.id, value: s.name }); }}
+                aria-label="Rename chat"
+                title="Rename — your title is never overwritten"
+                style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#3a5070', padding: 2, lineHeight: 1 }}
+                onMouseEnter={e => e.currentTarget.style.color = '#00f2ff'}
+                onMouseLeave={e => e.currentTarget.style.color = '#3a5070'}>
+                <Pencil size={12} />
+              </button>
+              <button onClick={(e) => rememberSession(s.id, e)}
+                aria-label={s.inRecord ? 'Already in the Second Brain' : 'Add this chat to the Second Brain'}
+                title={s.inRecord ? 'Already in the Second Brain — adding again refreshes it' : 'Add to the Second Brain (your turns only)'}
+                style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: s.inRecord ? '#00f2ff' : '#3a5070', padding: 2, lineHeight: 1 }}
+                onMouseEnter={e => e.currentTarget.style.color = '#00f2ff'}
+                onMouseLeave={e => e.currentTarget.style.color = s.inRecord ? '#00f2ff' : '#3a5070'}>
+                {s.inRecord ? <Check size={12} /> : <BookmarkPlus size={12} />}
+              </button>
               <button onClick={(e) => deleteSession(s.id, e)}
                 aria-label="Delete session"
                 style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#3a5070', padding: 2, lineHeight: 1 }}
