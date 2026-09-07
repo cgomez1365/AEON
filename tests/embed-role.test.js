@@ -169,6 +169,61 @@ describe('the embed-model predicate', () => {
   });
 });
 
+describe('an installed local embedder serves the role without a registry entry', () => {
+  // The no_embed_model error says "install one in Cookbook" is the cheapest
+  // remedy. On a fresh clone that remedy was NOT sufficient: the model was
+  // installed, nothing was assigned, and the boot scan indexed 1,375 documents
+  // without a single vector. Found live, 2026-09-07.
+  const lrPath = require.resolve('../services/local-runtime/index.cjs');
+  // Async-safe: resolveForRole awaits the registry BEFORE it consults the
+  // runtime, so the stub must outlive the promise — a synchronous `finally`
+  // restored the real module first and the test passed for the wrong reason.
+  const withLocalStatus = (status, fn) => {
+    const prev = require.cache[lrPath];
+    require.cache[lrPath] = { id: lrPath, filename: lrPath, loaded: true, exports: { status: () => status } };
+    const restore = () => { if (prev) require.cache[lrPath] = prev; else delete require.cache[lrPath]; };
+    let out;
+    try { out = fn(); } catch (e) { restore(); throw e; }
+    if (out && typeof out.then === 'function') return out.finally(restore);
+    restore();
+    return out;
+  };
+  const INSTALLED = { available: true, readyModels: [
+    { id: 'nomic-embed-text-q8', capabilities: ['embed'] },
+    { id: 'qwen3-1.7b-q8', capabilities: ['chat'] },
+  ] };
+
+  it('resolves to the local model when nothing is assigned', async () => {
+    writeRegistry({ endpoints: [], roles: {} });
+    const r = await withLocalStatus(INSTALLED, () => endpoints.resolveForRole('embed'));
+    expect(r.ok).toBe(true);
+    expect(r.provider).toBe('local');
+    expect(r.model).toBe('nomic-embed-text-q8');
+  });
+
+  it('readiness agrees, with no registry file at all', () => {
+    const d = withLocalStatus(INSTALLED, () => endpoints.describeRoleLocal('embed'));
+    expect(d).toMatchObject({ ok: true, provider: 'local', model: 'nomic-embed-text-q8' });
+  });
+
+  it('an explicit assignment still wins over the installed local model', async () => {
+    writeRegistry({
+      endpoints: [EMBED_ENDPOINT],
+      roles: { embed: { endpoint_id: 'ep-embed', model: 'text-embedding-3-small' } },
+    });
+    const r = await withLocalStatus(INSTALLED, () => endpoints.resolveForRole('embed'));
+    expect(r.model).toBe('text-embedding-3-small');
+  });
+
+  it('a chat-only local install still reports no_embed_model', async () => {
+    writeRegistry({ endpoints: [], roles: {} });
+    const chatOnly = { available: true, readyModels: [{ id: 'qwen3-1.7b-q8', capabilities: ['chat'] }] };
+    const r = await withLocalStatus(chatOnly, () => endpoints.resolveForRole('embed'));
+    expect(r.ok).toBe(false);
+    expect(r.code).toBe('no_embed_model');
+  });
+});
+
 describe('portable mode never reaches for a hosted embedder', () => {
   it('returns no_embed_model, and makes zero outbound requests', async () => {
     // Portable mode's whole promise is that it does not phone home. An embed

@@ -444,6 +444,15 @@ function isEmbedModelName(name) {
   return EMBED_MODEL_RE.test(String(name || ''));
 }
 
+/** The id of an installed, ready, embed-capable local model — or null. */
+function localEmbedModel() {
+  try {
+    const st = require('../../services/local-runtime/index.cjs').status();
+    const m = (st?.readyModels || []).find(x => (x.capabilities || []).includes('embed'));
+    return m ? m.id : null;
+  } catch { return null; }
+}
+
 /** Auto-pick an embedding model from a discovered list. null when none looks like one. */
 function pickEmbedModel(models) {
   if (!Array.isArray(models)) return null;
@@ -526,6 +535,18 @@ async function resolveForRole(role, supabase) {
   // freshly added connection works immediately, with no separate wiring step.
   // (Honors "add a key → it just works." Explicit role assignments still win.)
   if (!mapping) {
+    // An INSTALLED local embedder serves the embed role without a registry
+    // entry. The no_embed_model error names "install one in Cookbook" as the
+    // cheapest remedy, so that remedy has to be sufficient on its own — found
+    // on a fresh clone where the model was installed and the boot scan still
+    // indexed 1,375 documents without a single vector. An explicit assignment
+    // above still wins; this only fills the gap when nothing is assigned.
+    if (role === EMBED_ROLE) {
+      const local = localEmbedModel();
+      if (local) {
+        return { ok: true, provider: 'local', model: local, base_url: null, apiKey: null, via: 'direct', endpoint_id: 'local-runtime', rpm_limit: null, role };
+      }
+    }
     const reachable = reg.endpoints.filter(e => e.reachable_from.includes(runtime));
     const candidate = reachable.find(e => e.auth_ref) || reachable[0];
     if (!candidate) return { ok: false, code: role === EMBED_ROLE ? 'no_embed_model' : undefined, role, error: `No model assigned for role "${role}"` };
@@ -668,7 +689,10 @@ function describeRoleLocal(role) {
     // ENV_PROVIDER_FALLBACK names CHAT models only — every entry is a chat
     // model on a chat transport. Answering an embed enquiry from it would
     // report ready and then hand the indexer a model that cannot embed.
-    if (role === EMBED_ROLE) return { ok: false, reason: 'no_embed_model' };
+    if (role === EMBED_ROLE) {
+      const local = localEmbedModel();
+      return local ? { ok: true, provider: 'local', model: local } : { ok: false, reason: 'no_embed_model' };
+    }
     const env = describeRoleFromEnv();
     return env || { ok: false, reason: 'no_providers_configured' };
   }
@@ -679,6 +703,10 @@ function describeRoleLocal(role) {
     ? ((reg.roles || {})[EMBED_ROLE] || null)
     : ((reg.roles || {})[role] || (reg.roles || {})['chat']);
   if (!mapping) {
+    if (role === EMBED_ROLE) {
+      const local = localEmbedModel();
+      if (local) return { ok: true, provider: 'local', model: local };
+    }
     const reachable = reg.endpoints.filter(e => (e.reachable_from || []).includes(runtime));
     const candidate = reachable.find(e => e.auth_ref) || reachable[0];
     if (!candidate) return { ok: false, reason: role === EMBED_ROLE ? 'no_embed_model' : 'no_reachable_endpoint' };
