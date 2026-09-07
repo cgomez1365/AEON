@@ -55,6 +55,7 @@ const write = (rel, body) => {
 const filler = (n) => Array.from({ length: n }, (_, i) => `Paragraph ${i} discusses quarterly logistics scheduling and warehouse throughput planning for the regional team.`).join('\n\n');
 
 beforeEach(() => {
+  ingestMod._resetStores();
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'aeon-chunks-'));
   vault = path.join(root, 'Vault');
   dataRoot = path.join(root, 'data');
@@ -123,6 +124,10 @@ describe('the index carries windows for long documents only', () => {
     delete idx.documents['long.md'].chunks;
     fs.writeFileSync(idxPath, JSON.stringify(idx));
     fs.rmSync(path.join(dataRoot, 'vault_chunks.json'));
+    // Stores are process-wide per data root, so an on-disk edit is invisible
+    // until the process forgets what it loaded — which is what a restart onto
+    // a newer AEON does.
+    ingestMod._resetStores();
     const r = await scan();
     expect(r.ingested).toBe(1);   // the backfill, not a re-index
     const side = JSON.parse(fs.readFileSync(path.join(dataRoot, 'vault_chunks.json'), 'utf8'));
@@ -205,6 +210,36 @@ describe('a targeted ingest is not lost, whichever starts first', () => {
     expect(idx.documents['late.md'].chunks).toBeGreaterThan(0);
     // And the scan's own work is intact too.
     expect(Object.keys(idx.documents).filter(k => k.startsWith('doc-')).length).toBe(12);
+  });
+});
+
+describe('two factory instances over one data root share one index', () => {
+  // The live failure: the boot sync ran in one instance of the ingest router and
+  // an HTTP ingest landed in another. Each held its own copy; the scan's
+  // checkpoint erased the ingested document. Instance count must not matter.
+  it('a document ingested through instance B survives a scan run by instance A', async () => {
+    for (let i = 0; i < 10; i++) write(`doc-${i}.md`, filler(40));
+    let embeds = 0;
+    const slow = async (t) => { embeds++; await new Promise(r => setTimeout(r, 6)); return bow(t); };
+    const A = ingestMod({ isVercel: false, VAULT_ROOT: vault, DATA_ROOT: dataRoot, embed: slow });
+    const B = ingestMod({ isVercel: false, VAULT_ROOT: vault, DATA_ROOT: dataRoot, embed: slow });
+    const app = express(); app.use(express.json()); app.use('/api', B);
+    const h = await listen(app); servers.push(h.server);
+
+    const scanning = A.runSecondBrainScan();            // A loads its copy first
+    while (embeds < 2) await new Promise(r => setTimeout(r, 2));
+    write('viaB.md', `# Via B\n\n${filler(30)}\n\nThe vault master key and keyslot file are two halves.`);
+    const r = await fetch(`http://127.0.0.1:${h.port}/api/crn/second-brain/ingest/document`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ file_path: 'viaB.md' }),
+    });
+    expect(r.status).toBe(200);
+    await scanning;
+
+    const idx = JSON.parse(fs.readFileSync(path.join(dataRoot, 'vault_index.json'), 'utf8'));
+    expect(idx.documents['viaB.md'], 'ingested through B, erased by A').toBeTruthy();
+    expect(idx.documents['viaB.md'].chunks).toBeGreaterThan(0);
+    const side = JSON.parse(fs.readFileSync(path.join(dataRoot, 'vault_chunks.json'), 'utf8'));
+    expect(side['viaB.md']?.chunks?.length).toBeGreaterThan(0);
   });
 });
 

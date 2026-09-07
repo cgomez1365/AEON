@@ -28,6 +28,7 @@ import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 const ingestFactory = require('../src/blocks/aeon_matrix/api/ingest.cjs');
+beforeEach(() => { ingestFactory._resetStores(); });
 const createChatRouter = require('../src/blocks/dashboard/api/chat.cjs');
 
 let root, vault, dataRoot, servers;

@@ -111,6 +111,21 @@ function deriveTags(relPosix) {
   return parts;
 }
 
+// ── Process-wide stores, keyed by data root ──────────────────────────────────
+//
+// The index, the manifest, the chunk sidecar and the scan mutex must have ONE
+// owner per data root for the whole process — not one per factory instance.
+// Found live: the boot sync ran in one instance and an HTTP ingest landed in
+// another, so two "singletons" held two copies of the index and the scan's
+// checkpoint erased the ingested document. A closure-scoped singleton is only
+// a singleton if the factory is called once, which nothing guarantees.
+const STORES = new Map();
+function storesFor(dataRoot) {
+  const key = path.resolve(dataRoot);
+  if (!STORES.has(key)) STORES.set(key, { index: null, manifest: null, chunks: null, inFlight: null });
+  return STORES.get(key);
+}
+
 // ── Factory ──────────────────────────────────────────────────────────────────
 
 module.exports = function ingestFactory(deps) {
@@ -152,13 +167,14 @@ module.exports = function ingestFactory(deps) {
   // The manifest gets the same single owner as the index: a route's entry
   // written between two scan checkpoints was overwritten by the scan's private
   // copy, and the document was re-ingested from scratch on the next scan.
-  let manifestStore = null;
   function readManifest() {
-    if (manifestStore) return manifestStore;
-    if (!fs.existsSync(MANIFEST_FILE)) { manifestStore = {}; return manifestStore; }
-    try { manifestStore = JSON.parse(fs.readFileSync(MANIFEST_FILE, 'utf8')); } catch { manifestStore = {}; }
-    if (!manifestStore || typeof manifestStore !== 'object') manifestStore = {};
-    return manifestStore;
+    if (shared.manifest) return shared.manifest;
+    let m;
+    if (!fs.existsSync(MANIFEST_FILE)) m = {};
+    else { try { m = JSON.parse(fs.readFileSync(MANIFEST_FILE, 'utf8')); } catch { m = {}; } }
+    if (!m || typeof m !== 'object') m = {};
+    shared.manifest = m;
+    return shared.manifest;
   }
   function writeManifest(m) {
     fs.mkdirSync(path.dirname(MANIFEST_FILE), { recursive: true });
@@ -180,33 +196,35 @@ module.exports = function ingestFactory(deps) {
   // started held a copy the scan never saw, and the scan's next checkpoint
   // erased the document from the index entirely. An in-flight-only fix did
   // not cover that ordering; a single owner does.
-  let indexStore = null;
+  const shared = storesFor(DATA_ROOT);
   function readIndex() {
-    if (indexStore) return indexStore;
-    if (!fs.existsSync(INDEX_FILE)) { indexStore = { generatedAt: null, documents: {} }; return indexStore; }
-    try { indexStore = JSON.parse(fs.readFileSync(INDEX_FILE, 'utf8')); }
-    catch { indexStore = { generatedAt: null, documents: {} }; }
-    if (!indexStore || typeof indexStore !== 'object') indexStore = { generatedAt: null, documents: {} };
-    if (!indexStore.documents || typeof indexStore.documents !== 'object') indexStore.documents = {};
-    return indexStore;
+    if (shared.index) return shared.index;
+    let idx;
+    if (!fs.existsSync(INDEX_FILE)) idx = { generatedAt: null, documents: {} };
+    else { try { idx = JSON.parse(fs.readFileSync(INDEX_FILE, 'utf8')); } catch { idx = { generatedAt: null, documents: {} }; } }
+    if (!idx || typeof idx !== 'object') idx = { generatedAt: null, documents: {} };
+    if (!idx.documents || typeof idx.documents !== 'object') idx.documents = {};
+    shared.index = idx;
+    return shared.index;
   }
   // The chunk sidecar: { [relPosix]: { model, chunks: [{ s, e, v }] } }.
   // Loaded once per process and written through writeIndex(), so the two files
   // cannot describe different states of the vault.
   const CHUNKS_FILE = path.join(DATA_ROOT, 'vault_chunks.json');
-  let chunkStore = null;
   const chunks = () => {
-    if (chunkStore) return chunkStore;
-    try { chunkStore = fs.existsSync(CHUNKS_FILE) ? JSON.parse(fs.readFileSync(CHUNKS_FILE, 'utf8')) : {}; }
-    catch { chunkStore = {}; }
-    if (!chunkStore || typeof chunkStore !== 'object') chunkStore = {};
-    return chunkStore;
+    if (shared.chunks) return shared.chunks;
+    let c;
+    try { c = fs.existsSync(CHUNKS_FILE) ? JSON.parse(fs.readFileSync(CHUNKS_FILE, 'utf8')) : {}; }
+    catch { c = {}; }
+    if (!c || typeof c !== 'object') c = {};
+    shared.chunks = c;
+    return shared.chunks;
   };
   function flushChunks() {
-    if (!chunkStore) return;
+    if (!shared.chunks) return;
     fs.mkdirSync(path.dirname(CHUNKS_FILE), { recursive: true });
     const tmp = `${CHUNKS_FILE}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(chunkStore), 'utf8');
+    fs.writeFileSync(tmp, JSON.stringify(shared.chunks), 'utf8');
     fs.renameSync(tmp, CHUNKS_FILE);   // atomic: a crash mid-write leaves the old file intact
   }
   function writeIndex(idx) {
@@ -267,14 +285,13 @@ module.exports = function ingestFactory(deps) {
   // sync and an operator-triggered scan overlapped on a fresh clone, and the
   // slower one's chunk backfill was overwritten by the faster one's snapshot.
   // A second caller joins the run in flight and gets its result.
-  let inFlight = null;
   async function runScan(onEvent = () => {}) {
-    if (inFlight) {
+    if (shared.inFlight) {
       onEvent({ joined: true, message: 'a scan is already running — waiting for it to finish' });
-      return inFlight;
+      return shared.inFlight;
     }
-    inFlight = _runScan(onEvent).finally(() => { inFlight = null; });
-    return inFlight;
+    shared.inFlight = _runScan(onEvent).finally(() => { shared.inFlight = null; });
+    return shared.inFlight;
   }
 
   async function _runScan(onEvent = () => {}) {
@@ -602,5 +619,8 @@ module.exports = function ingestFactory(deps) {
 
 // Exposed for tests — chunking must be provable without a vault.
 module.exports.chunkText = chunkText;
+// Test seam: forget every in-memory store so the next factory reloads from
+// disk — the only way to simulate "an index written by an older AEON".
+module.exports._resetStores = () => STORES.clear();
 module.exports.CHUNK_CHARS = CHUNK_CHARS;
 module.exports.CHUNK_CAP = CHUNK_CAP;

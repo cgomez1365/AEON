@@ -18,7 +18,7 @@
  * (CEO decision P0-07, 2026-08-16). Pruning the parent would delete a feature
  * and call it a security fix.
  */
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -27,6 +27,7 @@ import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 const ingestFactory = require('../src/blocks/aeon_matrix/api/ingest.cjs');
+beforeEach(() => { ingestFactory._resetStores(); });
 const secondBrainFactory = require('../src/blocks/aeon_matrix/api/index.cjs');
 
 const temps = [];
