@@ -149,9 +149,16 @@ module.exports = function ingestFactory(deps) {
     return resolved;
   }
 
+  // The manifest gets the same single owner as the index: a route's entry
+  // written between two scan checkpoints was overwritten by the scan's private
+  // copy, and the document was re-ingested from scratch on the next scan.
+  let manifestStore = null;
   function readManifest() {
-    if (!fs.existsSync(MANIFEST_FILE)) return {};
-    try { return JSON.parse(fs.readFileSync(MANIFEST_FILE, 'utf8')); } catch { return {}; }
+    if (manifestStore) return manifestStore;
+    if (!fs.existsSync(MANIFEST_FILE)) { manifestStore = {}; return manifestStore; }
+    try { manifestStore = JSON.parse(fs.readFileSync(MANIFEST_FILE, 'utf8')); } catch { manifestStore = {}; }
+    if (!manifestStore || typeof manifestStore !== 'object') manifestStore = {};
+    return manifestStore;
   }
   function writeManifest(m) {
     fs.mkdirSync(path.dirname(MANIFEST_FILE), { recursive: true });
@@ -371,9 +378,13 @@ module.exports = function ingestFactory(deps) {
       }
     }
 
-    // Deletions: manifest entries whose file no longer exists on disk
+    // Deletions: manifest entries whose file no longer exists on disk. Checked
+    // against the DISK, not only against this scan's walk — the manifest is now
+    // shared with the single-document routes, so an entry can appear after the
+    // walk for a file that very much exists. Treating "not in my walk" as
+    // "deleted" erased a document that had been ingested mid-scan.
     for (const rel of Object.keys(manifest)) {
-      if (!seen.has(rel)) {
+      if (!seen.has(rel) && !fs.existsSync(path.join(BRAIN_DIR, rel))) {
         const relPosix = rel.replace(/\\/g, '/');
         delete manifest[rel];
         delete index.documents[relPosix];

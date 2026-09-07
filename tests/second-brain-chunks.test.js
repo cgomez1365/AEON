@@ -154,17 +154,25 @@ describe('one scan at a time', () => {
 describe('a targeted ingest is not lost, whichever starts first', () => {
   it('ingest/document BEFORE the scan starts survives the scan checkpointing', async () => {
     for (let i = 0; i < 12; i++) write(`doc-${i}.md`, filler(40));
-    const slow = async (t) => { await new Promise(r => setTimeout(r, 6)); return bow(t); };
+    let embeds = 0;
+    const slow = async (t) => { embeds++; await new Promise(r => setTimeout(r, 6)); return bow(t); };
     const router = ingestMod({ isVercel: false, VAULT_ROOT: vault, DATA_ROOT: dataRoot, embed: slow });
     const app = express(); app.use(express.json()); app.use('/api', router);
     const h = await listen(app); servers.push(h.server);
 
     write('early.md', `# Early\n\n${filler(30)}\n\nThe vault master key and keyslot file are two halves.`);
-    // The route holds the index while the scan begins — the live failure.
+    // The route has READ the index (its first embed call proves it —
+    // readIndex() precedes buildEntry()) before the scan starts. Stated
+    // plainly: this test does NOT fail against the previous per-caller-copy
+    // code, because the scan's own walk finds early.md on disk and ingests it
+    // itself — so the live loss (a document erased between two checkpoints)
+    // is not reproduced here. It stands as a regression guard on the single
+    // owner design, not as proof of the old defect. The earlier commit message
+    // that said otherwise was wrong.
     const early = fetch(`http://127.0.0.1:${h.port}/api/crn/second-brain/ingest/document`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ file_path: 'early.md' }),
     });
-    await new Promise(r => setTimeout(r, 10));
+    while (embeds < 1) await new Promise(r => setTimeout(r, 2));
     const scanning = router.runSecondBrainScan();
     expect((await early).status).toBe(200);
     await scanning;
