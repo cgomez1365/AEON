@@ -25,6 +25,7 @@ const ROLE_DEFAULTS = {
   agent_heavy: { label: 'Agent — Planner/Auditor', desc: 'Mission Runner: plans subtasks and audits the final report against evidence.', icon: '🧭' },
   agent_final: { label: 'Agent — Final Output', desc: 'Set this to Claude for the polished final answer while worker/planner stay on free tiers.', icon: '🎯' },
   agent_final_advisor: { label: 'Agent — Final Advisor (optional)', desc: 'Only used when Agent — Final Output is Claude. Set a stronger Claude model here (e.g. claude-opus-4-8) and it can consult that model mid-answer for hard judgment calls. Leave the model blank to disable.', icon: '🧭' },
+  embed: { label: 'Embedding (semantic search)', desc: 'Turns documents into vectors so the Aeon Matrix can search by meaning. An installed local embedder (Cookbook → nomic-embed-text, ~150 MB, CPU) serves this on its own; assign an endpoint here only to override it.', icon: '🧭' },
   vision: { label: 'Vision (image reading)', desc: 'Reads images for the terminal upload and the agent\'s read_image tool. Needs a vision-capable model — Groq Llama 4 Scout (free), Gemini, or Claude.', icon: '👁️' },
 };
 function deriveRoles(settingsModels) {
@@ -318,6 +319,34 @@ function ProviderCard({ id, label, connected, onTest, providerRegistry }) {
         <Activity size={11} />
         <span>{testing ? 'Testing...' : result ? `${result.latency_ms}ms` : 'Test'}</span>
       </button>
+    </div>
+  );
+}
+
+// ── Embedding readiness ─────────────────────────────────────────────
+// BO-EMB T3. The embed role is the one an operator most often never assigns:
+// an installed local embedder serves it on its own. So this is a readiness
+// line, not a dial — it reads the same predicate the resolver uses and says
+// either what is serving semantic search or what to do about it.
+function EmbedReadiness() {
+  const [state, setState] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    fetch('/core/provider-health').then(r => r.json()).then(d => { if (alive) setState(d?.embed || { ok: false, reason: 'unknown' }); }).catch(() => { if (alive) setState({ ok: false, reason: 'unreachable' }); });
+    return () => { alive = false; };
+  }, []);
+  if (!state) return null;
+  const remedy = {
+    no_embed_model: 'Install nomic-embed-text in Cookbook (about 150 MB, runs on CPU), or assign an endpoint that serves embeddings to the Embedding role.',
+    model_not_on_endpoint: state.detail || 'The assigned endpoint does not serve that model. Pick another in the Embedding role.',
+    unreachable: 'The server did not answer. Is AEON running?',
+  }[state.reason] || (state.reason ? `Semantic search is off (${String(state.reason).replace(/_/g, ' ')}).` : null);
+  return (
+    <div className="agent-tools-desc" style={{ marginBottom: 10, display: 'flex', alignItems: 'center', gap: 8, color: state.ok ? 'var(--text)' : '#ffaa00' }}>
+      <span aria-hidden="true">🧭</span>
+      {state.ok
+        ? <span>Semantic search: <b>{state.model}</b> ({state.provider}{state.provider === 'local' ? ', installed — nothing to assign' : ''})</span>
+        : <span>Semantic search is <b>off</b> — {remedy}</span>}
     </div>
   );
 }
@@ -2927,6 +2956,7 @@ export default function SystemSettings() {
             Pick a model for each job. Every block uses these — set once, done.
             {' '}Don't have cloud keys? Choose a local runtime model and run free.
           </div>
+          <EmbedReadiness />
           {deriveRoles(settings.models).map(role => (
             <RoleCard
               key={role.key}

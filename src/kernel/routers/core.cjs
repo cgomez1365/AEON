@@ -18,9 +18,16 @@ module.exports = function createCoreRouter(deps) {
   // GET /api/system/provider-health — cooldown state per LLM provider, for
   // Settings and the terminal to show WHY a request degraded.
   router.get('/provider-health', (_req, res) => {
+    // BO-EMB T3. Readiness for the embed role, from the same predicate the
+    // resolver uses — so the badge cannot promise what retrieval will not
+    // deliver. `ok` with provider 'local' means an installed embedder is
+    // serving the role with nothing assigned; a reason names the remedy.
+    let embed = { ok: false, reason: 'unknown' };
+    try { embed = require('../endpoints.cjs').describeRoleLocal('embed'); } catch (e) { embed = { ok: false, reason: 'error', detail: e.message }; }
     res.json({
       providers: getProviderHealth ? getProviderHealth() : {},
       keyPools: getKeyPoolInfo ? getKeyPoolInfo() : {},
+      embed,
     });
   });
 
