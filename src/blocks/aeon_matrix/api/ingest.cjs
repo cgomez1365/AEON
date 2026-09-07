@@ -22,10 +22,10 @@ const fs      = require('fs');
 const { loadExtractors, extractText, embed } = require('./_lib.cjs');
 
 const NIGHTLY_HOUR  = 3; // local hour to auto re-index, once per day
-const INDEXABLE_EXT = /\.(md|txt|json|pdf|docx)$/i;
+const INDEXABLE_EXT = /\.(md|txt|json|pdf|docx|html?)$/i;
 // Paths the automatic scan must never walk.
 //
-// BO-MEM T1. Saved conversations live at Agents/Aeon/chat_sessions/*.json,
+// BO-MEM T1. Saved conversations live under Agents/Aeon/chat_sessions/ as .json,
 // INDEXABLE_EXT matches .json, and the boot scan runs on every start — so every
 // saved chat, INCLUDING the assistant's own turns, was being embedded into the
 // operator's record automatically. Second Brain Doctrine R09 forbids exactly
@@ -43,6 +43,47 @@ const NON_INDEXED_VAULT_PATHS = new Set([
   'Agents/Aeon/chat_sessions',
 ]);
 const SUMMARY_CHARS = 280;
+
+// ── Chunk-level vectors (BO-CHUNK) ──────────────────────────────────────────
+//
+// One vector per document, made from a 280-character summary, means anything
+// past the opening of a file is invisible to meaning-search. Measured live:
+// "what must move together to avoid a vault lockout" retrieved three wrong
+// documents and the model honestly refused — the sentence that answers it sits
+// 4 KB into a file whose summary is its header.
+//
+// Each document over CHUNK_CHARS also gets windows embedded individually, kept
+// in a sidecar (vault_chunks.json) so the Table of Contents stays small. At
+// query time a document scores by its BEST window, and the model is handed
+// that passage rather than the file's first 2,000 characters.
+const CHUNK_CHARS   = 1200;   // window size, in extracted-text characters
+const CHUNK_OVERLAP = 150;    // so a sentence split by a boundary still lands whole in one window
+const CHUNK_CAP     = 64;     // ~77 KB of coverage per document; beyond that the tail is summary-only
+
+/** Split extracted text into overlapping windows, preferring paragraph and sentence breaks. */
+function chunkText(text) {
+  const t = String(text || '');
+  const out = [];
+  let pos = 0;
+  while (pos < t.length && out.length < CHUNK_CAP) {
+    let end = Math.min(t.length, pos + CHUNK_CHARS);
+    if (end < t.length) {
+      const window = t.slice(pos, end);
+      const floor = Math.floor(CHUNK_CHARS * 0.6);
+      const para = window.lastIndexOf('\n\n');
+      const sent = Math.max(window.lastIndexOf('. '), window.lastIndexOf('.\n'));
+      const cut = para >= floor ? para : (sent >= floor ? sent + 1 : -1);
+      if (cut > 0) end = pos + cut;
+    }
+    out.push({ s: pos, e: end });
+    if (end >= t.length) break;
+    pos = Math.max(end - CHUNK_OVERLAP, pos + 1);
+  }
+  return out;
+}
+
+/** Four decimals is plenty for cosine ranking and halves the sidecar on disk. */
+const compact = (v) => Array.from(v, (x) => Math.round(x * 1e4) / 1e4);
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -128,10 +169,43 @@ module.exports = function ingestFactory(deps) {
     if (!fs.existsSync(INDEX_FILE)) return { generatedAt: null, documents: {} };
     try { return JSON.parse(fs.readFileSync(INDEX_FILE, 'utf8')); } catch { return { generatedAt: null, documents: {} }; }
   }
+  // The chunk sidecar: { [relPosix]: { model, chunks: [{ s, e, v }] } }.
+  // Loaded once per process and written through writeIndex(), so the two files
+  // cannot describe different states of the vault.
+  const CHUNKS_FILE = path.join(DATA_ROOT, 'vault_chunks.json');
+  let chunkStore = null;
+  const chunks = () => {
+    if (chunkStore) return chunkStore;
+    try { chunkStore = fs.existsSync(CHUNKS_FILE) ? JSON.parse(fs.readFileSync(CHUNKS_FILE, 'utf8')) : {}; }
+    catch { chunkStore = {}; }
+    if (!chunkStore || typeof chunkStore !== 'object') chunkStore = {};
+    return chunkStore;
+  };
+  function flushChunks() {
+    if (!chunkStore) return;
+    fs.mkdirSync(path.dirname(CHUNKS_FILE), { recursive: true });
+    const tmp = `${CHUNKS_FILE}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(chunkStore), 'utf8');
+    fs.renameSync(tmp, CHUNKS_FILE);   // atomic: a crash mid-write leaves the old file intact
+  }
   function writeIndex(idx) {
     idx.generatedAt = new Date().toISOString();
     fs.mkdirSync(path.dirname(INDEX_FILE), { recursive: true });
     fs.writeFileSync(INDEX_FILE, JSON.stringify(idx, null, 2), 'utf8');
+    flushChunks();
+  }
+
+  /** Embed a document's windows. Returns the sidecar record, or null for a short document. */
+  async function buildChunks(text, embedFn) {
+    if (!text || text.length <= CHUNK_CHARS) return null;
+    const windows = chunkText(text);
+    const rec = { model: null, chunks: [] };
+    for (const w of windows) {
+      const { vector, model } = await embedFn(text.slice(w.s, w.e));
+      rec.model = rec.model || model;
+      rec.chunks.push({ s: w.s, e: w.e, v: compact(vector) });
+    }
+    return rec.chunks.length ? rec : null;
   }
 
   let embedWarnedOnce = false;
@@ -147,9 +221,13 @@ module.exports = function ingestFactory(deps) {
       updatedAt: Date.now(),
     };
     try {
-      const { vector, model } = await (injectedEmbed || embed)(summary);
+      const embedFn = injectedEmbed || embed;
+      const { vector, model } = await embedFn(summary);
       entry.embedding = vector;
       entry.embeddingModel = model;
+      const rec = await buildChunks(text, embedFn);
+      if (rec) { chunks()[relPosix] = rec; entry.chunks = rec.chunks.length; }
+      else { delete chunks()[relPosix]; entry.chunks = 0; }
     } catch (e) {
       if (!embedWarnedOnce) {
         embedWarnedOnce = true;
@@ -226,6 +304,22 @@ module.exports = function ingestFactory(deps) {
               continue;
             } catch { /* still no embedder — stay vector-less */ }
           }
+          // Chunk backfill: indexed before windows existed, or too short to
+          // have needed them. Costs a re-extract; that is the price of not
+          // re-indexing 1,377 documents from scratch.
+          if (existing && Array.isArray(existing.embedding) && existing.chunks === undefined) {
+            try {
+              const text = await extractText(full);
+              const rec = await buildChunks(text, injectedEmbed || embed);
+              if (rec) { chunks()[relPosix] = rec; existing.chunks = rec.chunks.length; }
+              else existing.chunks = 0;
+              existing.updatedAt = Date.now();
+              results.ingested++;
+              onEvent({ file: relPosix, action: 'chunk-backfill', chunks: existing.chunks });
+              if (results.ingested % 10 === 0) checkpoint();
+              continue;
+            } catch { /* no embedder, or unreadable — try again next scan */ }
+          }
           results.skipped++;
           continue;
         }
@@ -253,6 +347,7 @@ module.exports = function ingestFactory(deps) {
         const relPosix = rel.replace(/\\/g, '/');
         delete manifest[rel];
         delete index.documents[relPosix];
+        delete chunks()[relPosix];
         results.deleted++;
         onEvent({ file: relPosix, deleted: true });
         checkpoint();
@@ -463,3 +558,8 @@ module.exports = function ingestFactory(deps) {
 
   return router;
 };
+
+// Exposed for tests — chunking must be provable without a vault.
+module.exports.chunkText = chunkText;
+module.exports.CHUNK_CHARS = CHUNK_CHARS;
+module.exports.CHUNK_CAP = CHUNK_CAP;

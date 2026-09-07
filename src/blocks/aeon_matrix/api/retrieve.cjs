@@ -60,6 +60,21 @@ module.exports = function retrieveFactory(deps) {
     return isInside(VAULT_ROOT, full, { allowRoot: true }) ? full : null;
   }
 
+  // Chunk sidecar, cached by mtime — it is read on every recall and can be
+  // tens of MB on a real corpus.
+  const CHUNKS_FILE = path.join(DATA_ROOT, 'vault_chunks.json');
+  let chunkCache = { mtime: -1, data: {} };
+  function readChunks() {
+    try {
+      if (!fs.existsSync(CHUNKS_FILE)) return {};
+      const mtime = fs.statSync(CHUNKS_FILE).mtimeMs;
+      if (mtime !== chunkCache.mtime) {
+        chunkCache = { mtime, data: JSON.parse(fs.readFileSync(CHUNKS_FILE, 'utf8')) || {} };
+      }
+      return chunkCache.data;
+    } catch { return {}; }
+  }
+
   function readIndex() {
     if (!fs.existsSync(INDEX_FILE)) return { documents: {} };
     try { return JSON.parse(fs.readFileSync(INDEX_FILE, 'utf8')); } catch { return { documents: {} }; }
@@ -97,7 +112,10 @@ module.exports = function retrieveFactory(deps) {
 
     let queryEmbedding, queryModel;
     try {
-      ({ vector: queryEmbedding, model: queryModel } = await embed(query));
+      // Injectable for the same reason ingest's is (BO-SHIP P10): a test of
+      // ranking must not need a model, and query and index must share one
+      // embedder or the comparison is meaningless.
+      ({ vector: queryEmbedding, model: queryModel } = await (deps?.embed || embed)(query));
     } catch (e) {
       console.warn('[RETRIEVE] query embed failed:', e.code || 'error', e.message);
       // The kernel owns the remedy: it knows whether nothing is assigned, the
@@ -141,31 +159,58 @@ module.exports = function retrieveFactory(deps) {
       };
     }
 
-    const ranked = comparable
-      .map(d => ({ d, score: cosineSimilarity(queryEmbedding, d.embedding) }))
-      .filter(r => r.score >= MATCH_THRESHOLD)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, k);
+    // BO-CHUNK — a document scores by its BEST window, not its header. The
+    // summary vector still counts, so a short document (no windows) ranks as
+    // before; a long one can now be found by a sentence 40 KB in.
+    const chunkIdx = readChunks();
+    const scored = comparable.map(d => {
+      let score = cosineSimilarity(queryEmbedding, d.embedding);
+      let passage = null;
+      const rec = chunkIdx[d.path];
+      if (rec && rec.model === queryModel && Array.isArray(rec.chunks)) {
+        for (const c of rec.chunks) {
+          const cs = cosineSimilarity(queryEmbedding, c.v);
+          if (cs > score) { score = cs; passage = { s: c.s, e: c.e }; }
+        }
+      }
+      return { d, score, passage };
+    });
+    const above = scored.filter(r => r.score >= MATCH_THRESHOLD).sort((a, b) => b.score - a.score);
+    // How many cleared the floor, before the cut to k. The caller renders
+    // "showing k of N" and refuses a counting question over a subset (R02).
+    const matched = above.length;
+    const ranked = above.slice(0, k);
 
     loadExtractors();
     const results = [];
-    for (const { d: meta, score } of ranked) {
+    for (const { d: meta, score, passage } of ranked) {
       const full = resolveIndexedPath(meta.path);
       if (!full || !fs.existsSync(full)) continue;
       try {
         const text = await extractText(full);
         if (!text) continue;
+        // Hand the model the passage that matched, with room on either side,
+        // rather than the first 2,000 characters of the file.
+        let content;
+        if (passage) {
+          const pad = Math.max(0, Math.floor((MAX_DOC_CHARS - (passage.e - passage.s)) / 2));
+          const s0 = Math.max(0, passage.s - pad);
+          const e0 = Math.min(text.length, passage.e + pad);
+          content = `${s0 > 0 ? '…' : ''}${text.slice(s0, e0)}${e0 < text.length ? '…' : ''}`;
+        } else {
+          content = text.slice(0, MAX_DOC_CHARS);
+        }
         results.push({
           id: meta.path,
-          content: text.slice(0, MAX_DOC_CHARS),
+          content,
           similarity: score,
-          metadata: { source: meta.title, source_type: 'document', source_id: meta.path, tags: meta.tags },
+          metadata: { source: meta.title, source_type: 'document', source_id: meta.path, path: meta.path, tags: meta.tags, passage },
         });
       } catch { /* skip unreadable file, don't fail the whole request */ }
     }
     // A genuine empty result — the index was searchable and nothing scored
     // above the threshold. No `unavailable`, because nothing is broken.
-    return { documents: results };
+    return { documents: results, matched, k };
   }
 
   // POST /api/search was mounted here until 2026-08-16 and is DELETED (§21).
@@ -360,13 +405,15 @@ module.exports = function retrieveFactory(deps) {
     if (!query) return res.status(400).json({ error: 'query required' });
 
     try {
-      const { documents, unavailable } = await retrieve(query, k || DEFAULT_K);
+      const { documents, unavailable, matched, k: kUsed } = await retrieve(query, k || DEFAULT_K);
       // `unavailable` rides alongside the (empty) documents rather than
       // replacing them with an error status: retrieval is best-effort for its
       // callers — the terminal must not fail a chat turn because the index is
       // cold — but a caller that wants to tell the operator why they got
       // nothing now has something to tell them.
-      res.json({ documents, count: documents.length, ...(unavailable ? { unavailable } : {}) });
+      // `matched` is how many cleared the floor before the cut to k — the
+      // caller's only way to know it is looking at a sample (R02).
+      res.json({ documents, count: documents.length, matched: matched ?? documents.length, k: kUsed ?? (k || DEFAULT_K), ...(unavailable ? { unavailable } : {}) });
     } catch (err) {
       console.error('[RETRIEVE] error:', err.message);
       res.status(500).json({ error: err.message });

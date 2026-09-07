@@ -87,7 +87,7 @@ const commands = {
     if (meta.recallError) bits.push(`recall ${meta.recallError.replace(/^recall_/, '').replace(/_/g, ' ')}`);
     else if (meta.recallUnavailable) bits.push(`recall unavailable: ${meta.recallUnavailable.replace(/_/g, ' ')}`);
     else if (meta.recallRan) bits.push(`recall ${meta.recall} doc${meta.recall === 1 ? '' : 's'}`);
-    if (citations.length) bits.push(citations.map(ct => `[${ct.n}] ${ct.title}`).join('  '));
+    if (citations.length) bits.push(citations.map(ct => `[${ct.n}] ${ct.title}${ct.path && ct.path !== ct.title ? c.dim(` ${String(ct.path).split('/').slice(-2).join('/')}`) : ''}`).join('  '));
     if (bits.length) console.log(`\n${c.dim(bits.join('  ·  '))}`);
   },
 

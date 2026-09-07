@@ -116,7 +116,7 @@ async function start({ json = false } = {}) {
     if (meta.recallError) bits.push(c.yellow(`recall ${meta.recallError.replace(/^recall_/, '').replace(/_/g, ' ')}`));
     else if (meta.recallUnavailable) bits.push(c.yellow(`recall unavailable: ${meta.recallUnavailable.replace(/_/g, ' ')}`));
     else if (meta.recallRan) bits.push(`recall ${meta.recall} doc${meta.recall === 1 ? '' : 's'}${meta.recallDropped ? ` (${meta.recallDropped} did not fit)` : ''}`);
-    if (citations.length) bits.push(citations.map(ct => `[${ct.n}] ${ct.title}`).join('  '));
+    if (citations.length) bits.push(citations.map(ct => `[${ct.n}] ${ct.title}${ct.path && ct.path !== ct.title ? c.dim(` ${String(ct.path).split('/').slice(-2).join('/')}`) : ''}`).join('  '));
     if (bits.length) console.log(`\n  ${c.dim(bits.join('  ·  '))}`);
     console.log('');
 

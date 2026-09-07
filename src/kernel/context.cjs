@@ -45,7 +45,19 @@ const RECALL_PATTERNS = Object.freeze([
   /\b(aeon )?matrix\b/i,
   /\b(vault|reading library)\b/i,
   /\b(collected|on file|our (data|records|knowledge)|existing (data|notes|documentation))\b/i,
+  // How people actually ask about their own material. Measured live: "what
+  // did I write about the deletion protocol in the bible" and "how many build
+  // orders did I write in my reports" both missed every pattern above, so the
+  // vault was never consulted and the model answered from nothing.
+  /\b(what|which|when|where|how|why|who) (did|do|have) i\b/i,
+  /\b(my|our) (bible|doctrine|reports?|build orders?|eod|session logs?|records?|logs?|memos?|decisions?|documents?)\b/i,
+  /\b(in|from|per|according to|based on) (my|the|our) (bible|doctrine|reports?|notes?|vault|build orders?|records?|logs?|files?|docs?|documents?)\b/i,
 ]);
+
+// A question whose answer is a NUMBER over the corpus. Retrieval returns k of
+// N; answering "how many" from k is the silent-wrong-answer class the doctrine
+// forbids outright (R02): "3" when the truth is 47, with citations.
+const COUNTING_RE = /\b(how many|how much|count|total( number)?|number of|list (all|every)|all (of )?(my|the|our)|every)\b/i;
 
 const FORCE_PREFIX = '/matrix ';
 
@@ -150,7 +162,11 @@ function fitDocuments(docs, budgetTokens) {
   let used = 0;
   let dropped = 0;
   for (const d of docs) {
-    const line = `[${d?.metadata?.source || 'document'}] ${d?.content || ''}`;
+    const title = d?.metadata?.source || d?.id || 'document';
+    const p = d?.metadata?.path || d?.metadata?.source_id || d?.id || '';
+    // Title AND path: two files with the same heading were rendering as
+    // identical citations, and the model could not tell them apart either.
+    const line = `[${title}${p && p !== title ? ` — ${p}` : ''}] ${d?.content || ''}`;
     const cost = estimateTokens(line);
     // `continue`, not `break` — one long document must not evict every
     // shorter one behind it.
@@ -250,6 +266,7 @@ async function buildRecallContext(message, {
     const citations = kept.map((k, i) => ({
       n: i + 1,
       title: k.doc?.metadata?.source || k.doc?.id || 'document',
+      path: k.doc?.metadata?.path || k.doc?.metadata?.source_id || k.doc?.id || null,
       similarity: typeof k.doc?.similarity === 'number' ? Number(k.doc.similarity.toFixed(3)) : null,
     }));
     // R03 — when the budget truncates, the model is told, so it cannot present
@@ -257,10 +274,22 @@ async function buildRecallContext(message, {
     const truncationNote = dropped
       ? `\n\n${dropped} further matching document${dropped === 1 ? ' was' : 's were'} found but did not fit this turn's context budget. If the answer depends on completeness, say so rather than answering from the documents below alone.`
       : '';
+    // How many cleared the floor versus how many are shown. The retriever cuts
+    // to k; the model must know it is looking at a sample.
+    const matched = Number.isFinite(data.matched) ? Number(data.matched) : docs.length;
+    const subsetNote = matched > kept.length
+      ? `\n\nShowing ${kept.length} of ${matched} matching documents.`
+      : '';
+    // R02 — never answer a counting question from a subset. Said to the model
+    // in so many words, because the alternative is "3" with citations when the
+    // truth is 47.
+    const countingNote = COUNTING_RE.test(query)
+      ? `\n\nThis is a COUNTING question. You were given ${kept.length} of ${matched} matching documents — a sample, not the whole record. Do NOT state a total or an exact number. Say the count cannot be determined from a sample, name what you did see, and suggest the operator narrow the question or use a filter over the index.`
+      : '';
     return {
       query, forced, ran: true, ok: true,
-      count: kept.length, dropped, citations, tokensUsed,
-      context: `\n\n[AEON SECOND BRAIN CONTEXT]\nRelevant indexed knowledge — cite the source file when you use it. If nothing here is relevant, ignore it:\n\n${kept.map(k => k.line).join('\n\n')}${truncationNote}`,
+      count: kept.length, dropped, matched, citations, tokensUsed,
+      context: `\n\n[AEON SECOND BRAIN CONTEXT]\nRelevant indexed knowledge — cite the source file when you use it. If nothing here is relevant, ignore it:\n\n${kept.map(k => k.line).join('\n\n')}${subsetNote}${truncationNote}${countingNote}`,
     };
   }
 
@@ -444,6 +473,7 @@ async function assembleContext(message, {
       wake: memory.wake,
       autoMemory: memory.autoMemoryEnabled,
       recall: recall.count,
+      recallMatched: recall.matched ?? null,
       recallDropped: recall.dropped,
       recallRan: recall.ran,
       recallOk: recall.ok,
@@ -457,6 +487,7 @@ async function assembleContext(message, {
 
 module.exports = {
   RECALL_PATTERNS,
+  COUNTING_RE,
   FORCE_PREFIX,
   WAKE_RE,
   composePrompt,

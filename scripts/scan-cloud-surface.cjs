@@ -70,9 +70,15 @@ function scan() {
     if (SKIP_PATH_RE.test(rel)) continue;
     if (rel === SHIM_REL || rel === SELF_REL) continue;
 
+    // ONE left-to-right pass over both comment forms. Stripping block comments
+    // first let a `/*` inside a line comment — a glob like `chat_sessions/*.json`
+    // in prose — open a phantom block that swallowed 200 lines of real code up
+    // to the next `*/`, and two isVercel uses with it. The ratchet then
+    // recorded a shrink that never happened. In an alternation, whichever
+    // comment starts first is consumed whole, so a `//` protects everything
+    // to its end of line and a `/*` protects everything to its `*/`.
     const src = fs.readFileSync(file, 'utf8')
-      .replace(/\/\*[\s\S]*?\*\//g, '')
-      .replace(/^\s*\/\/.*$/gm, '');
+      .replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, '');
 
     const e = (src.match(READ_RE) || []).length;
     const f = (src.match(FLAG_RE) || []).length;

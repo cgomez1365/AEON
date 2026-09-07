@@ -106,7 +106,7 @@ describe('a conversational turn carries both tiers', () => {
     expect(retrieveCalls).toHaveLength(1);
     expect(r.body.meta.recallRan).toBe(true);
     expect(r.body.meta.recall).toBe(1);
-    expect(r.body.citations).toEqual([{ n: 1, title: 'phishing-2026-03.md', similarity: 0.81 }]);
+    expect(r.body.citations).toMatchObject([{ n: 1, title: 'phishing-2026-03.md', similarity: 0.81 }]);
     expect(kernelLLM.mock.calls[0][0]).toMatch(/SECOND BRAIN CONTEXT/);
     expect(kernelLLM.mock.calls[0][0]).toMatch(/credential harvest/);
   });
