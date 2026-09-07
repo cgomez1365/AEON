@@ -41,19 +41,9 @@ const DEFAULT_K        = 5;
 const MATCH_THRESHOLD   = 0.35; // cosine similarity floor
 const MAX_DOC_CHARS     = 2000; // cap per-document content injected into context
 
-// Lightweight intent classifier — no LLM needed, zero tokens
-const RECALL_PATTERNS = [
-  /\b(remember|told|said|mentioned|last time|earlier|before|yesterday|history|historical|conversation|we discussed|i asked)\b/i,
-  /\b(my notes?|my docs?|my files?|second brain|brain|knowledge base|what do i know)\b/i,
-  /\b(find|search|look up|retrieve|recall|pull up)\b/i,
-  /\b(aeon )?matrix\b/i,
-  /\b(vault|reading library)\b/i,
-  /\b(collected|on file|our (data|records|knowledge)|existing (data|notes|documentation))\b/i,
-];
-
-function isRecallQuery(query) {
-  return RECALL_PATTERNS.some(p => p.test(query));
-}
+// The recall gate used to live here too — a third, uncalled copy. It is
+// src/kernel/context.cjs now (Doctrine R05: one policy, one place); this block
+// serves retrieval and does not decide whether a turn warrants it.
 
 module.exports = function retrieveFactory(deps) {
   const router = express.Router();
@@ -185,12 +175,9 @@ module.exports = function retrieveFactory(deps) {
   // {"documents":[],"skipped":true} — so this removed a genuinely mounted
   // route, not a stale line. Gate: tests/no-api-search.test.js.
   //
-  // The recall gate and the "/matrix " bypass it carried are NOT lost, but they
-  // do NOT survive here: dashboard/api/chat.cjs:152-170 re-implements both
-  // locally ("mirrors retrieve.cjs's isRecallQuery"), and that is the path a
-  // terminal turn actually takes. Consequence worth knowing: isRecallQuery()
-  // above now has no caller in this file either — see TASKS.md, deliberately
-  // left for its own scoped commit rather than folded into this one.
+  // The recall gate and the "/matrix " bypass now live in ONE place,
+  // src/kernel/context.cjs, consumed by both dashboard chat paths. The copy
+  // that used to sit at the top of this file had no caller and is gone.
 
   // ── POST /crn/second-brain/ask — the last hop ─────────────────────────────
   //
@@ -367,7 +354,7 @@ module.exports = function retrieveFactory(deps) {
   });
 
   // POST /crn/second-brain/retrieve — block-namespaced, same logic, no intent filter
-  // (caller is expected to gate on isRecallQuery/explicit trigger before calling)
+  // (the caller gates the turn via src/kernel/context.cjs before calling)
   router.post('/crn/second-brain/retrieve', async (req, res) => {
     const { query, k } = req.body || {};
     if (!query) return res.status(400).json({ error: 'query required' });

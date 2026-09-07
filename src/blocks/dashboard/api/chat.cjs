@@ -224,7 +224,16 @@ module.exports = function createChatRouter(deps) {
       if (!name || name.length < 2 || name.split(/\s+/).length > 10) {
         return res.json({ ok: true, name: record.name, nameSetBy: record.nameSetBy, unchanged: true, reason: 'unusable_title' });
       }
-      const saved = writeSession({ ...record, name, nameSetBy: 'model', updatedAt: new Date().toISOString() });
+      // Re-read before writing. The model call above takes a second or more,
+      // and the unload beacon can land a newer transcript in that window;
+      // spreading the record read BEFORE the call would write the old messages
+      // back over it. Naming changes the name; it must not lose a turn.
+      const fresh = readSession(record.id) || record;
+      if (fresh.nameSetBy === 'operator') {
+        return res.status(409).json({ ok: false, code: 'operator_named', name: fresh.name,
+          error: 'This chat was named by you while a title was being generated, so the generated one is discarded.' });
+      }
+      const saved = writeSession({ ...fresh, name, nameSetBy: 'model', updatedAt: new Date().toISOString() });
       res.json({ ok: true, id: saved.id, name: saved.name, nameSetBy: 'model' });
     } catch (e) {
       // Naming is a nicety. It must never fail a save or block the operator.

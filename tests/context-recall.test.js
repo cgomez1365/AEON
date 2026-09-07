@@ -79,6 +79,18 @@ describe('a refused search is never reported as an empty vault', () => {
     expect(r.context).toMatch(/could not be reached/i);
   });
 
+  it('survives a 200 whose body is not an object', async () => {
+    // Valid JSON, not an object. Reading `.documents` off null threw into the
+    // catch and reported the index as unreachable — a different claim.
+    for (const body of [null, [], 'ok', 42]) {
+      const fetchImpl = stubFetch(ok(body));
+      const r = await ctx.buildRecallContext('/matrix anything', { fetchImpl });
+      expect(r.ok, `body ${JSON.stringify(body)}`).toBe(true);
+      expect(r.ran).toBe(true);
+      expect(r.count).toBe(0);
+    }
+  });
+
   it('distinguishes a search that ran and found nothing from one that never ran', async () => {
     const fetchImpl = stubFetch(ok({ documents: [] }));
     const r = await ctx.buildRecallContext('/matrix anything', { fetchImpl });

@@ -160,6 +160,10 @@ async function buildRecallContext(message, {
     });
     status = r.status;
     data = await r.json().catch(() => ({}));
+    // `null`, an array, a bare string — all valid JSON, none an object. Reading
+    // `.documents` off null throws into the catch below and reports the index
+    // as unreachable, which is a different claim from "answered nonsense".
+    if (!data || typeof data !== 'object' || Array.isArray(data)) data = {};
 
     // A non-200 is NOT an empty result. This is the distinction whose absence
     // turned a 401 into "your vault has nothing in it" (§08, R-05).

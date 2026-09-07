@@ -22,10 +22,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import express from 'express';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 const ingestFactory = require('../src/blocks/aeon_matrix/api/ingest.cjs');
+const secondBrainFactory = require('../src/blocks/aeon_matrix/api/index.cjs');
 
 const temps = [];
 afterEach(() => {
@@ -109,6 +111,24 @@ describe('R09 — a conversation is not in the record until the operator says so
     // would remove that feature while appearing to tighten security.
     const { docs } = await scan(seedVault());
     expect(docs).toContain('Agents/Aeon/memory/notes-from-council.md');
+  });
+});
+
+describe('the graph does not draw conversations either', () => {
+  // The scan prune alone is not enough: the graph route walks the directory
+  // itself and used a bare-name exclusion list that never contained Agents —
+  // while its own comment claimed agent memory was "never graph nodes".
+  it('omits chat_sessions and keeps the rest of Agents/', async () => {
+    const { vault, dataRoot } = seedVault();
+    const app = express();
+    app.use('/api', secondBrainFactory({ VAULT_ROOT: vault, DATA_ROOT: dataRoot }));
+    const server = await new Promise(res => { const s = app.listen(0, '127.0.0.1', () => res(s)); });
+    try {
+      const r = await fetch(`http://127.0.0.1:${server.address().port}/api/crn/second-brain/graph`);
+      const raw = JSON.stringify(await r.json());
+      expect(raw).not.toMatch(/chat_sessions/);
+      expect(raw).toMatch(/notes-from-council/);
+    } finally { server.close(); }
   });
 });
 

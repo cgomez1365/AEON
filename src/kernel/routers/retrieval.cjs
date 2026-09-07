@@ -16,9 +16,16 @@ const express = require('express');
 const citationGate = require('../citationGate.cjs');
 const retrieval = require('../retrieval.cjs');
 
+// BO-EMB. This router embedded queries by calling the local runtime directly,
+// bypassing the `embed` role the rest of the kernel resolves through. That is
+// an R08 hazard, not a style point: if the operator's index was built through
+// the role (say, a hosted embedder) and a query here was embedded locally, the
+// two vectors live in different spaces and the comparison is silently
+// meaningless. One embedder, resolved one way.
 async function embedLocal(text) {
-  const lr = require('../../services/local-runtime/index.cjs');
-  return lr.embed(text);
+  const { kernelEmbed } = require('../embed.cjs');
+  const { vector } = await kernelEmbed(text);
+  return vector;
 }
 
 module.exports = function createRetrievalRouter(deps) {
