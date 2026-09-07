@@ -151,7 +151,31 @@ describe('one scan at a time', () => {
   });
 });
 
-describe('a targeted ingest during a scan is not lost at the next checkpoint', () => {
+describe('a targeted ingest is not lost, whichever starts first', () => {
+  it('ingest/document BEFORE the scan starts survives the scan checkpointing', async () => {
+    for (let i = 0; i < 12; i++) write(`doc-${i}.md`, filler(40));
+    const slow = async (t) => { await new Promise(r => setTimeout(r, 6)); return bow(t); };
+    const router = ingestMod({ isVercel: false, VAULT_ROOT: vault, DATA_ROOT: dataRoot, embed: slow });
+    const app = express(); app.use(express.json()); app.use('/api', router);
+    const h = await listen(app); servers.push(h.server);
+
+    write('early.md', `# Early\n\n${filler(30)}\n\nThe vault master key and keyslot file are two halves.`);
+    // The route holds the index while the scan begins — the live failure.
+    const early = fetch(`http://127.0.0.1:${h.port}/api/crn/second-brain/ingest/document`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ file_path: 'early.md' }),
+    });
+    await new Promise(r => setTimeout(r, 10));
+    const scanning = router.runSecondBrainScan();
+    expect((await early).status).toBe(200);
+    await scanning;
+
+    const idx = JSON.parse(fs.readFileSync(path.join(dataRoot, 'vault_index.json'), 'utf8'));
+    expect(idx.documents['early.md'], 'the early ingest was erased by the scan').toBeTruthy();
+    expect(idx.documents['early.md'].chunks).toBeGreaterThan(0);
+    const side = JSON.parse(fs.readFileSync(path.join(dataRoot, 'vault_chunks.json'), 'utf8'));
+    expect(side['early.md']?.chunks?.length).toBeGreaterThan(0);
+  });
+
   it('ingest/document lands in the in-flight index and survives the scan finishing', async () => {
     for (let i = 0; i < 12; i++) write(`doc-${i}.md`, filler(40));
     const slow = async (t) => { await new Promise(r => setTimeout(r, 8)); return bow(t); };
