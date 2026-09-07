@@ -67,7 +67,7 @@ async function start({ json = false } = {}) {
     historySize: HISTORY_LIMIT,
     prompt: c.neon('aeon> '),
     completer(line) {
-      const builtins = ['help', 'status', 'blocks', 'login', 'logout', 'clear', 'exit', 'quit', 'refresh', 'agent '];
+      const builtins = ['help', 'status', 'blocks', 'login', 'logout', 'clear', 'exit', 'quit', 'refresh', 'agent ', 'ask '];
       const pool = [...builtins, ...commands.map((s) => s.cmd), ...commands.map((s) => s.id)];
       const hits = pool.filter((c0) => c0.startsWith(line));
       return [hits.length ? hits : pool, line];
@@ -76,6 +76,53 @@ async function start({ json = false } = {}) {
 
   // Last result, so a follow-up turn can refer to it.
   let last = null;
+
+  // The recent turns of THIS shell session, sent with a conversational turn so
+  // "and on a USB install?" resolves against what was just said. Session
+  // state, in memory, gone on exit — the terminal never holds memory of record
+  // (Doctrine R04). Memory and the vault are the kernel's.
+  const turns = [];
+  const TURNS_KEPT = 12;
+
+  // A conversational turn. Free text that matches no command lands here
+  // instead of "nothing matched" — that dead end was the whole reason the
+  // terminal could not use the second brain. `ask <text>` and `? <text>` reach
+  // it directly, skipping the router.
+  const converse = async (text) => {
+    if (!status.connected) {
+      console.log(`\n  ${c.yellow('!')} talking to AEON needs a running server — ${c.dim('npm run server')}\n`);
+      return;
+    }
+    const spin = render.spinner('thinking');
+    let res;
+    try { res = await client.converse(text, { history: turns.slice(-TURNS_KEPT) }); }
+    finally { spin.stop(); }
+
+    if (!res.ok) {
+      const err = res.data?.error || `failed (${res.status})`;
+      console.log(`\n  ${c.red('✗')} ${err}${res.data?.remedy ? `\n  ${c.dim(res.data.remedy)}` : ''}\n`);
+      return;
+    }
+
+    const { text: answer = '', meta = {}, citations = [] } = res.data || {};
+    console.log('');
+    console.log(render.markdown(answer));
+
+    // Provenance, every time (R01/R03). "memory 3 of 12 · 2 documents" is the
+    // operator's answer to "did it actually look?" — and a refused or
+    // unavailable search says so rather than hiding behind a fluent reply.
+    const bits = [];
+    if (meta.memory != null) bits.push(`memory ${meta.memory}${meta.memoryConsidered ? ` of ${meta.memoryConsidered}` : ''}${meta.memoryDropped ? ` (${meta.memoryDropped} dropped)` : ''}`);
+    if (meta.recallError) bits.push(c.yellow(`recall ${meta.recallError.replace(/^recall_/, '').replace(/_/g, ' ')}`));
+    else if (meta.recallUnavailable) bits.push(c.yellow(`recall unavailable: ${meta.recallUnavailable.replace(/_/g, ' ')}`));
+    else if (meta.recallRan) bits.push(`recall ${meta.recall} doc${meta.recall === 1 ? '' : 's'}${meta.recallDropped ? ` (${meta.recallDropped} did not fit)` : ''}`);
+    if (citations.length) bits.push(citations.map(ct => `[${ct.n}] ${ct.title}`).join('  '));
+    if (bits.length) console.log(`\n  ${c.dim(bits.join('  ·  '))}`);
+    console.log('');
+
+    turns.push({ role: 'user', content: text }, { role: 'assistant', content: answer });
+    while (turns.length > TURNS_KEPT * 2) turns.shift();
+  };
 
   const builtin = {
     async help() {
@@ -152,6 +199,10 @@ async function start({ json = false } = {}) {
     const bi = builtin[input.toLowerCase()];
     if (bi) return bi();
 
+    // `ask <text>` / `? <text>` — talk, do not route.
+    const askMatch = input.match(/^(?:ask\s+|\?\s*)(.+)$/is);
+    if (askMatch) return converse(askMatch[1].trim());
+
     // `agent <goal>` — multi-step. Single-command routing (below) handles one
     // action; this handles goals that need several, reading each result before
     // choosing the next. Confirmation for dangerous steps is asked here, per
@@ -191,13 +242,13 @@ async function start({ json = false } = {}) {
     finally { spin.stop(); }
 
     if (!route || route.ok === false) {
-      console.log(`\n  ${c.yellow('?')} nothing matched ${c.dim(`"${input}"`)}`);
+      // Not a command — so it is a question. Suggestions still print, because
+      // a near-miss on a command name is worth a line; then the model answers
+      // with memory and the vault behind it.
       if (route?.suggestions?.length) {
-        console.log(`\n  ${c.dim('did you mean:')}`);
-        for (const s of route.suggestions) console.log(`    ${c.neon(s.cmd.padEnd(18))} ${c.dim(s.title)}`);
+        console.log(`\n  ${c.dim('did you mean:')} ${route.suggestions.slice(0, 3).map(s0 => c.neon(s0.cmd)).join('  ')}`);
       }
-      console.log(`\n  ${c.dim('`help` lists everything available.')}\n`);
-      return;
+      return converse(input);
     }
 
     console.log(`  ${c.dim('→')} ${c.bold(route.blockLabel)} ${c.dim('/')} ${route.cmd}${route.via === 'llm' ? c.dim('  (routed)') : ''}`);

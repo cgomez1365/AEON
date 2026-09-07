@@ -34,6 +34,12 @@ const { inputBudgets, estimateTokens } = require('./tokens.cjs');
 // because an ordinary message must not pay for a vault round-trip.
 const RECALL_PATTERNS = Object.freeze([
   /\b(remember|told|said|mentioned|last time|earlier|before|yesterday|history|historical|conversation|we discussed|i asked)\b/i,
+  // The record-keeping verbs. The named workload is an analyst LOGGING
+  // incidents offline; "what did I log about the DocuSign lure" is the exact
+  // question the second brain exists to answer, and none of these words were
+  // in the gate. A false positive costs one vault round-trip; a miss answers
+  // from training data with a straight face.
+  /\b(record(?:ed)?|log(?:ged)?|noted|wrote down|filed)\b/i,
   /\b(my notes?|my docs?|my files?|second brain|brain|knowledge base|what do i know)\b/i,
   /\b(find|search|look up|retrieve|recall|pull up)\b/i,
   /\b(aeon )?matrix\b/i,
@@ -42,6 +48,35 @@ const RECALL_PATTERNS = Object.freeze([
 ]);
 
 const FORCE_PREFIX = '/matrix ';
+
+// The wake phrase. Was a private const in chat-stream.cjs; the terminal needs
+// the same one, and two copies of a trigger phrase drift exactly like two
+// copies of a gate do.
+const WAKE_RE = /\bvp[,!]?\s+(?:come\s+)?online\b/i;
+
+/**
+ * Everything a single-prompt transport needs, as one string.
+ *
+ * POST /api/ai takes `{prompt, role}` and nothing else — no messages array, no
+ * system turn. So the assembled context has to travel INSIDE the prompt: the
+ * standing identity, then working memory, then the recent turns of THIS
+ * session (supplied by the caller — the terminal holds session state and
+ * nothing else, R04), then the operator's line with any retrieved documents
+ * riding beside it. Documents sit with the question, not above it, so they
+ * read as material for this turn rather than as instructions that outrank it.
+ */
+function composePrompt({ identity, memoryText, history = [], query, recallContext = '' }) {
+  const turns = (Array.isArray(history) ? history : [])
+    .filter(t => t && typeof t.content === 'string' && t.content.trim())
+    .slice(-8)
+    .map(t => `${t.role === 'assistant' ? 'AEON' : 'Operator'}: ${t.content.trim()}`)
+    .join('\n');
+  return [
+    identity + (memoryText || ''),
+    turns ? `\n## RECENT TURNS (this session)\n${turns}` : '',
+    `\n## OPERATOR\n${query}${recallContext || ''}`,
+  ].join('\n');
+}
 
 /** Would this message trigger a vault lookup on its own? */
 function isRecallQuery(text) {
@@ -423,6 +458,8 @@ async function assembleContext(message, {
 module.exports = {
   RECALL_PATTERNS,
   FORCE_PREFIX,
+  WAKE_RE,
+  composePrompt,
   isRecallQuery,
   parseRecallInput,
   buildRecallContext,

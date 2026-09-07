@@ -65,6 +65,32 @@ function printLint(result, dir) {
 }
 
 const commands = {
+  // aeon ask "<text>" — one conversational turn, with memory and the vault
+  // behind it, no shell session needed.
+  async ask() {
+    const client = require('./terminal/client.cjs');
+    const render = require('./terminal/renderers.cjs');
+    const { c } = client;
+    const text = process.argv.slice(3).join(' ').trim();
+    if (!text) { console.error('usage: aeon ask "<question>"'); process.exit(1); }
+    const live = await client.ping();
+    if (!live.connected) { console.error(`${c.yellow('!')} aeon ask needs a running server — npm run server`); process.exit(1); }
+    const res = await client.converse(text);
+    if (!res.ok) {
+      console.error(`${c.red('✗')} ${res.data?.error || `failed (${res.status})`}${res.data?.remedy ? `\n  ${res.data.remedy}` : ''}`);
+      process.exit(1);
+    }
+    const { text: answer = '', meta = {}, citations = [] } = res.data || {};
+    console.log(render.markdown(answer));
+    const bits = [];
+    if (meta.memory != null) bits.push(`memory ${meta.memory}${meta.memoryConsidered ? ` of ${meta.memoryConsidered}` : ''}`);
+    if (meta.recallError) bits.push(`recall ${meta.recallError.replace(/^recall_/, '').replace(/_/g, ' ')}`);
+    else if (meta.recallUnavailable) bits.push(`recall unavailable: ${meta.recallUnavailable.replace(/_/g, ' ')}`);
+    else if (meta.recallRan) bits.push(`recall ${meta.recall} doc${meta.recall === 1 ? '' : 's'}`);
+    if (citations.length) bits.push(citations.map(ct => `[${ct.n}] ${ct.title}`).join('  '));
+    if (bits.length) console.log(`\n${c.dim(bits.join('  ·  '))}`);
+  },
+
   lint() {
     const dir = resolveBlockDir(arg);
     if (!dir) { console.error(`block not found: ${arg} (looked in staging/, src/blocks/, and as a path)`); process.exit(1); }
@@ -400,6 +426,7 @@ ${c.neon(c.bold('aeon'))} ${c.dim('— AEON terminal')}
 
 ${c.bold('CONSOLE')} ${c.dim('(operate a running AEON, no browser)')}
   aeon ${c.dim('"<natural language>"')}   route by intent, model as fallback
+  aeon ask ${c.dim('"<question>"')}     one turn, with memory and the vault behind it
   aeon shell                interactive REPL — history, tab complete, context
   aeon status               server, vault, model, portable state
   aeon commands             every command the manifests declare

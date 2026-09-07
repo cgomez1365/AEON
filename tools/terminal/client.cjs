@@ -103,6 +103,18 @@ async function request(method, route, body, { timeout = 120000, raw = false } = 
 }
 
 /**
+ * A conversational turn, with memory and recall assembled by the kernel.
+ *
+ * The terminal sends the line and the recent turns of THIS session — session
+ * state, which is the only state it is allowed to hold (Doctrine R04). Working
+ * memory and the vault are the kernel's to consult, and it reports what it
+ * consulted so the answer can be shown with its sources.
+ */
+async function converse(message, { history = [], timeout = 180000 } = {}) {
+  return request('POST', '/api/ai/converse', { message, history }, { timeout });
+}
+
+/**
  * Liveness probe. /api/ping is mounted ahead of the auth gate precisely so
  * this answers while the vault is locked — otherwise a locked server looks
  * identical to no server, and the CLI would wrongly pick Standalone.
@@ -293,7 +305,7 @@ async function dispatch(cmdOrId, arg = '', { confirmed = false, timeout = 120000
 
 module.exports = {
   c, ROOT, baseUrl,
-  request, ping, requireConnected,
+  request, converse, ping, requireConnected,
   loadSession, saveSession, clearSession, login, withAuth, prompt,
   getCommands, scanManifests, dispatch, normalizeCommand,
 };
