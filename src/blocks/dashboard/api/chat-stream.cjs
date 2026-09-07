@@ -16,6 +16,7 @@ const path = require('path');
 const settingsAuthority = require('../../../../services/settings.js');
 const tokens = require('../../../kernel/tokens.cjs');
 const memoryPolicy = require('../../../kernel/memory-policy.cjs');
+const kernelContext = require('../../../kernel/context.cjs');
 
 module.exports = function ({ getLocalFile, GEMINI_KEY_POOL, _trackLLM, writeOSAudit, VAULT_ROOT, DEFAULT_LOCAL_MODEL, defaultLocalModel }) {
   const localModel = (defaultLocalModel ? defaultLocalModel() : null) || DEFAULT_LOCAL_MODEL || null;
@@ -41,84 +42,23 @@ module.exports = function ({ getLocalFile, GEMINI_KEY_POOL, _trackLLM, writeOSAu
   // ordinary message never pays for a retrieval round-trip. Same patterns and
   // same route as chat.cjs, deliberately: two copies of a recall policy that
   // drift apart is how this endpoint came to have none.
-  const SB_RECALL_PATTERNS = [
-    /\b(remember|told|said|mentioned|last time|earlier|before|yesterday|history|historical|conversation|we discussed|i asked)\b/i,
-    /\b(my notes?|my docs?|my files?|second brain|brain|knowledge base|what do i know)\b/i,
-    /\b(find|search|look up|retrieve|recall|pull up)\b/i,
-    /\b(aeon )?matrix\b/i,
-    /\b(vault|reading library)\b/i,
-    /\b(collected|on file|our (data|records|knowledge)|existing (data|notes|documentation))\b/i,
-  ];
-
-  /**
-   * @returns {{query: string, context: string, count: number, forced: boolean}}
-   *   `query` is the message with any /matrix prefix stripped, so the model
-   *   never sees the command itself.
-   */
-  async function buildSecondBrainContext(message) {
-    const lower = String(message || '').toLowerCase();
-    const forced = lower.startsWith('/matrix ');
-    let query = message;
-    if (forced) query = message.slice(8).trim().replace(/^"(.*)"$/, '$1');
-
-    if (!forced && !SB_RECALL_PATTERNS.some(p => p.test(lower))) {
-      return { query, context: '', count: 0, forced };
-    }
-
-    try {
-      // Loopback, never the Host header. The retrieve route is served by THIS
-      // process, so the address is known; deriving it from a request header
-      // would let a caller send `Host: evil.com` and have the kernel POST the
-      // operator's own query — and their vault content — to that host
-      // instead. chat.cjs builds this URL from the header because on Vercel
-      // it has no other way to address itself; this endpoint is desktop-only
-      // and has no such excuse.
-      const base = process.env.AEON_KERNEL_URL || `http://127.0.0.1:${process.env.PORT || 3001}`;
-      const r = await fetch(`${base}/api/crn/second-brain/retrieve`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query }),
-        signal: AbortSignal.timeout(8000),
-      });
-      const data = await r.json();
-      const docs = Array.isArray(data.documents) ? data.documents : [];
-      if (docs.length) {
-        const body = docs.map(d => `[${d.metadata?.source || 'document'}] ${d.content}`).join('\n\n');
-        return {
-          query,
-          count: docs.length,
-          forced,
-          context: `\n\n[AEON SECOND BRAIN CONTEXT]\nRelevant indexed knowledge — cite the source file when you use it. If nothing here is relevant, ignore it:\n\n${body}`,
-        };
-      }
-
-      // The index could not be searched — no embedding model, nothing indexed
-      // yet, or an index built in a different vector space. The model is told
-      // the remedy verbatim so it can hand the operator something to DO,
-      // rather than reporting an absence of documents that were never
-      // actually consulted. This is the answer to "why does my vault seem
-      // empty": it was never a matter of relevance.
-      if (data.unavailable) {
-        return {
-          query, count: 0, forced, unavailable: data.unavailable.reason,
-          context: `\n\n[AEON SECOND BRAIN CONTEXT]\nThe operator's document index COULD NOT BE SEARCHED for this request. Reason: ${data.unavailable.message} Remedy: ${data.unavailable.action}\nTell the operator this plainly before answering. Do not claim their documents are irrelevant or missing — they were never searched. Answer from general knowledge only if that is still useful, and say that is what you are doing.`,
-        };
-      }
-
-      // Only say "nothing found" when the operator explicitly asked. On a
-      // pattern-triggered lookup they did not ask for a search, so reporting
-      // an empty one would be noise — but on /matrix, silence would read as
-      // an answer from documents that were never consulted (§08).
-      if (forced) {
-        return {
-          query, count: 0, forced,
-          context: `\n\n[AEON SECOND BRAIN CONTEXT]\nNo relevant indexed documents were found for this request — say so plainly rather than inventing sources.`,
-        };
-      }
-    } catch { /* best-effort — never block a chat turn on the index being down */ }
-
-    return { query, context: '', count: 0, forced };
-  }
+  // ── Second Brain recall ─────────────────────────────────────────────
+  //
+  // BO-MEM M1. The gate, the loopback transport, the failure taxonomy and the
+  // budget moved to src/kernel/context.cjs. Three copies of this policy
+  // existed — here, in chat.cjs, and in aeon_matrix/api/retrieve.cjs — and
+  // they had already drifted in eight ways. Doctrine R05: one recall policy,
+  // in one place.
+  //
+  // Two defects went with them:
+  //   * this call carried no credentials onto a route that declares auth:true,
+  //     so with the guard on it 401'd, and a 401 body has neither `documents`
+  //     nor `unavailable` — the operator was told "no relevant indexed
+  //     documents were found" for a search that never ran;
+  //   * retrieved documents were the only context block outside the token
+  //     budget, worth up to four times the memory allowance.
+  const buildSecondBrainContext = (message, auth, budgetTokens) =>
+    kernelContext.buildRecallContext(message, { auth, budgetTokens });
 
   // ── Memory injection ───────────────────────────────────────────────
   // Pinned + recent memories ride along on every message (brain_settings
@@ -379,7 +319,13 @@ module.exports = function ({ getLocalFile, GEMINI_KEY_POOL, _trackLLM, writeOSAu
           })()) || 8192)
         : 8192;
       const mem = buildMemoryContext(message, settings, contextTokens);
-      const sb = await buildSecondBrainContext(message);
+      // The caller's credentials are forwarded onto the internal retrieve call.
+      // Without this the guard refuses it and the refusal reads as an empty vault.
+      const sb = await buildSecondBrainContext(
+        message,
+        { authorization: req.headers.authorization, cookie: req.headers.cookie },
+        mem.budgets?.recallTokens,
+      );
       const messages = [
         // AEON is a tool, not a staff member. This prompt used to cast the
         // assistant as "VP (VP of Operations), the operator's autonomous
@@ -408,8 +354,14 @@ module.exports = function ({ getLocalFile, GEMINI_KEY_POOL, _trackLLM, writeOSAu
         // found nothing is an answer, and the operator should be able to tell
         // it apart from one that never ran.
         recall: sb.count,
-        recallRan: sb.forced || sb.count > 0 || !!sb.unavailable,
+        // Reported by the search itself, not inferred from its results. The
+        // inference here read `forced || count > 0 || unavailable`, which
+        // called a forced search that was REFUSED a search that ran.
+        recallRan: sb.ran,
+        recallDropped: sb.dropped,
         recallUnavailable: sb.unavailable || null,
+        recallError: sb.error || null,
+        citations: sb.citations,
       });
 
       const buildGenerator = async (provider, model) => {
@@ -513,9 +465,20 @@ module.exports = function ({ getLocalFile, GEMINI_KEY_POOL, _trackLLM, writeOSAu
       });
 
       // ── Auto-extract memory (fire-and-forget, non-blocking) ────────
+      //
+      // BO-MEM P0-2. This block read a bare `SETTINGS_FILE` that is declared
+      // NOWHERE — not in module scope, not in the deps destructure above, not
+      // a global. It threw ReferenceError on its first line, into the bare
+      // `catch {}` that closes this try. So the whole auto-memory path below
+      // — the third-person extract prompt, the /api/ai call, the /memory/add
+      // writes, and every console.warn added to stop it failing silently —
+      // has never executed once on the streaming route, which is the route the
+      // operator actually uses. The R-05 plumbing was itself unreachable.
+      //
+      // Settings come from the authority the rest of this file already uses,
+      // not a hand-built path re-read per request.
       try {
-        const settingsRaw = fs.readFileSync(SETTINGS_FILE, 'utf8');
-        const brainPrefs = JSON.parse(settingsRaw).prefs?.brain_settings;
+        const brainPrefs = loadSettings()?.prefs?.brain_settings;
         if (brainPrefs?.auto_memory && message && fullText) {
           setImmediate(async () => {
             try {

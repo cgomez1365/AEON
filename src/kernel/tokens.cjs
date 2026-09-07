@@ -66,10 +66,21 @@ function inputBudgets(contextTokens, opts = {}) {
   const ctx = Math.max(512, Number(contextTokens) || 4096);
   const memoryFraction = opts.memoryFraction ?? (opts.wake ? 0.25 : 0.12);
   const skillFraction = opts.skillFraction ?? (opts.wake ? 0.12 : 0.06);
+  // BO-MEM. Retrieved documents were the ONLY context block outside this
+  // split: up to 5 documents x 2000 chars lands ~2,500-4,000 tokens on the
+  // user turn, unbudgeted and uncounted — as much as four times the memory
+  // budget, in the same window, with no eviction accounting. A budget that
+  // does not cover the largest consumer is not a budget.
+  //
+  // Recall gets the largest share because a cited document is the thing that
+  // makes an answer checkable, and it is deliberately NOT raised by `wake`:
+  // wake is about loading who the operator is, not about searching harder.
+  const recallFraction = opts.recallFraction ?? 0.25;
   return {
     contextTokens: ctx,
     memoryTokens: Math.floor(ctx * memoryFraction),
     skillTokens: Math.floor(ctx * skillFraction),
+    recallTokens: Math.floor(ctx * recallFraction),
   };
 }
 

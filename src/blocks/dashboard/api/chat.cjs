@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const { loadSettings } = require('../../../../services/settings.js');
 const { isCloud: _isCloud } = require('../../../kernel/runtime.cjs');
+const kernelContext = require('../../../kernel/context.cjs');
 
 module.exports = function createChatRouter(deps) {
   const router = express.Router();
@@ -230,45 +231,25 @@ module.exports = function createChatRouter(deps) {
         // shadowed by another block; both claimants are resolved now and
         // tests/route-collisions keeps it that way — but naming the route you
         // actually mean is still the better habit.)
-        const SB_RECALL_PATTERNS = [
-          /\b(remember|told|said|mentioned|last time|earlier|before|yesterday|history|historical|conversation|we discussed|i asked)\b/i,
-          /\b(my notes?|my docs?|my files?|second brain|brain|knowledge base|what do i know)\b/i,
-          /\b(find|search|look up|retrieve|recall|pull up)\b/i,
-          /\b(aeon )?matrix\b/i,
-          /\b(vault|reading library)\b/i,
-          /\b(collected|on file|our (data|records|knowledge)|existing (data|notes|documentation))\b/i,
-        ];
-        const isMatrixCommand = lowerContent.startsWith('/matrix ');
-        let sbQuery = content || prompt;
-        if (isMatrixCommand) {
-          sbQuery = content.slice(8).trim().replace(/^"(.*)"$/, '$1');
-          modifiedPrompt = sbQuery; // strip the "/matrix " prefix out of what the model sees
-        }
-        if (isMatrixCommand || SB_RECALL_PATTERNS.some(p => p.test(lowerContent))) {
-          try {
-            const host = _isCloud() && req.headers.host ? `https://${req.headers.host}` : (process.env.AEON_KERNEL_URL || `http://localhost:${process.env.PORT || 3001}`);
-            const sbRes = await fetch(`${host}/api/crn/second-brain/retrieve`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ query: sbQuery }),
-            });
-            const sbData = await sbRes.json();
-            if (sbData.documents && sbData.documents.length) {
-              const sbContext = sbData.documents
-                .map(d => `[${d.metadata.source}] ${d.content}`)
-                .join('\n\n');
-              modifiedPrompt = `${modifiedPrompt}\n\n[AEON SECOND BRAIN CONTEXT]\nRelevant indexed knowledge — cite the source file when you use it. If nothing here is relevant, ignore it:\n\n${sbContext}`;
-            } else if (sbData.unavailable) {
-              // The index could not be searched at all — no embedding model,
-              // nothing indexed, or an index in a different vector space.
-              // Distinct from "searched and found nothing", and the only one
-              // of the two with a remedy the operator can act on.
-              modifiedPrompt = `${modifiedPrompt}\n\n[AEON SECOND BRAIN CONTEXT]\nThe operator's document index COULD NOT BE SEARCHED. Reason: ${sbData.unavailable.message} Remedy: ${sbData.unavailable.action}\nTell the operator this plainly. Do not claim their documents are irrelevant — they were never searched.`;
-            } else if (isMatrixCommand) {
-              modifiedPrompt = `${modifiedPrompt}\n\n[AEON SECOND BRAIN CONTEXT]\nNo relevant indexed documents were found for this request — say so plainly rather than inventing sources.`;
-            }
-          } catch (e) { /* best-effort — never block chat on Second Brain being unavailable */ }
-        }
+        // BO-MEM M1. This was a verbatim second copy of the gate in
+        // chat-stream.cjs, and it had drifted in ways that made it worse than
+        // useless on this route:
+        //   * it gated on `content` but queried with `content || prompt`, and
+        //     both live callers send only `prompt` — so the gate could never
+        //     fire here for any real request;
+        //   * it read `d.metadata.source` unguarded, throwing into a bare catch
+        //     on any document without metadata;
+        //   * it passed no timeout, so a wedged index hung the turn;
+        //   * it built its base URL from the Host header, which lets a caller
+        //     choose where the operator's query and vault content are sent;
+        //   * it carried no credentials, so with the guard on it 401'd and the
+        //     refusal read as "your vault is empty".
+        // One policy, one place (Doctrine R05).
+        const sbRecall = await kernelContext.buildRecallContext(content || prompt, {
+          auth: { authorization: req.headers.authorization, cookie: req.headers.cookie },
+        });
+        if (sbRecall.forced) modifiedPrompt = sbRecall.query;
+        if (sbRecall.context) modifiedPrompt = `${modifiedPrompt}${sbRecall.context}`;
 
         if (currentCost >= KILL_SWITCH_THRESHOLD && activeModel !== localModel) {
           console.warn(`[KILL SWITCH ACTIVATED] Local server burned $${currentCost.toFixed(4)}. Forcing Local Enclave.`);
