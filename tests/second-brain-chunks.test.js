@@ -130,6 +130,27 @@ describe('the index carries windows for long documents only', () => {
   });
 });
 
+describe('one scan at a time', () => {
+  it('a second scan joins the one in flight instead of racing it', async () => {
+    for (let i = 0; i < 6; i++) write(`doc-${i}.md`, filler(40));
+    let embeds = 0;
+    const slow = async (t) => { embeds++; await new Promise(r => setTimeout(r, 5)); return bow(t); };
+    const router = ingestMod({ isVercel: false, VAULT_ROOT: vault, DATA_ROOT: dataRoot, embed: slow });
+    const events = [];
+    const [a, b] = await Promise.all([
+      router.runSecondBrainScan(),
+      router.runSecondBrainScan((e) => events.push(e)),
+    ]);
+    expect(b).toBe(a);                                   // same result object — it joined
+    expect(events.some(e => e.joined)).toBe(true);
+    expect(a.ingested).toBe(6);
+    // Every document embedded once (summary + windows), not twice.
+    const side = JSON.parse(fs.readFileSync(path.join(dataRoot, 'vault_chunks.json'), 'utf8'));
+    const windows = Object.values(side).reduce((n, r) => n + r.chunks.length, 0);
+    expect(embeds).toBe(6 + windows);
+  });
+});
+
 describe('retrieval finds a sentence deep inside a long document', () => {
   const needle = 'The vault master key and the keyslot file are two halves; move both or neither.';
 

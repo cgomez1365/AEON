@@ -240,7 +240,23 @@ module.exports = function ingestFactory(deps) {
   // ── Core incremental scan — walks BRAIN_DIR, diffs against the manifest (hash
   //    only, no chunk bookkeeping), updates vault_index.json for new/changed
   //    files, removes entries for deleted files. onEvent(evt) streams progress.
+  // One scan at a time. Three callers — the boot sync, the nightly timer and
+  // POST scan-docs — could all be walking the vault at once, each checkpointing
+  // the WHOLE in-memory index over the others' writes. Seen live: the boot
+  // sync and an operator-triggered scan overlapped on a fresh clone, and the
+  // slower one's chunk backfill was overwritten by the faster one's snapshot.
+  // A second caller joins the run in flight and gets its result.
+  let inFlight = null;
   async function runScan(onEvent = () => {}) {
+    if (inFlight) {
+      onEvent({ joined: true, message: 'a scan is already running — waiting for it to finish' });
+      return inFlight;
+    }
+    inFlight = _runScan(onEvent).finally(() => { inFlight = null; });
+    return inFlight;
+  }
+
+  async function _runScan(onEvent = () => {}) {
     const results = { ingested: 0, skipped: 0, deleted: 0, errors: [] };
     if (isVercel) {
       const r = { ...results, reason: 'cloud env — vault lives on the local filesystem only' };
