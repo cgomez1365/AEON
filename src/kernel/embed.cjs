@@ -53,7 +53,20 @@ async function embedOpenAICompatible(text, { base_url, apiKey, model }) {
     signal: AbortSignal.timeout(30000),
   });
   if (!res.ok) {
+    // The remote body is LOGGED, never propagated.
+    //
+    // An embed failure message travels: embed.cjs -> retrieve.cjs
+    // (`unavailable.message`) -> context.cjs, which renders it inside the
+    // [AEON SECOND BRAIN CONTEXT] block wrapped in imperative framing ("Tell
+    // the operator this plainly"). Splicing a third party's response body into
+    // that string puts bytes from someone else's server into the model's turn,
+    // positioned as AEON's own context — a prompt-injection channel that opens
+    // the moment an operator points the embed role at an endpoint they do not
+    // control, which the README explicitly invites. The gemini transport below
+    // already declined to forward the body; the two disagreed about what was
+    // safe to pass on.
     const body = (await res.text().catch(() => '')).slice(0, 200);
+    if (body) console.warn(`[EMBED] endpoint ${res.status}: ${body.replace(/\s+/g, ' ')}`);
     if (res.status === 401 || res.status === 403) {
       throw embedError('embed_auth', 'This endpoint rejected the key assigned to the Embedding role.', 'Check the key in Settings → Connections.');
     }
@@ -62,7 +75,11 @@ async function embedOpenAICompatible(text, { base_url, apiKey, model }) {
       e.rateLimited = true;
       throw e;
     }
-    throw embedError('embed_failed', `Embedding endpoint returned ${res.status}. ${body}`);
+    throw embedError(
+      'embed_failed',
+      `The embedding endpoint answered ${res.status}.`,
+      'Check the endpoint address and key in Settings → Connections, or install a local embedding model in Cookbook. The endpoint\u2019s own message is in the server log.',
+    );
   }
   const vector = (await res.json())?.data?.[0]?.embedding;
   if (!Array.isArray(vector)) throw embedError('embed_failed', 'Embedding endpoint returned no vector.');

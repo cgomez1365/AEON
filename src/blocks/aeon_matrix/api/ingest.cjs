@@ -302,10 +302,29 @@ module.exports = function ingestFactory(deps) {
 
     if (!userTurns.length) return res.json({ ok: true, ingested: 0, reason: 'no user turns' });
 
+    // The session id becomes a filename. Its two sibling routes below both run
+    // resolveVaultPath() and 403 on escape; this one interpolated the caller's
+    // string straight into path.join, so `../../..` walked out of the Vault and
+    // fs.appendFileSync wrote caller text anywhere the process could reach —
+    // then read the whole file back, embedded it, and indexed it, making the
+    // same call a read primitive for any .md on the machine.
+    //
+    // Pre-existing, and harmless only while nothing called this route. BO-MEM
+    // made it the sanctioned way a conversation enters the record and gave it
+    // its first live caller, so it is closed here. Two checks, not one: the
+    // shape, and then the resolved path, because a shape rule is easy to widen
+    // later and containment is the property that actually matters (R-04).
+    if (!/^[a-zA-Z0-9-]{1,128}$/.test(String(session_id))) {
+      return res.status(400).json({ error: 'Invalid session_id' });
+    }
+
     try {
       const chatDir = path.join(BRAIN_DIR, 'Chat_History');
       fs.mkdirSync(chatDir, { recursive: true });
       const full = path.join(chatDir, `${session_id}.md`);
+      if (resolveVaultPath(path.relative(BRAIN_DIR, full)) !== path.resolve(full)) {
+        return res.status(403).json({ error: 'Access denied' });
+      }
       const block = `\n\n---\n${new Date().toISOString()}\n\n${userTurns.join('\n\n')}\n`;
       fs.appendFileSync(full, block, 'utf8');
 

@@ -45,11 +45,24 @@ module.exports = function createChatRouter(deps) {
   const readSession = (id) => {
     const f = sessionPath(id);
     if (!f || !fs.existsSync(f)) return null;
-    try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return null; }
+    let record;
+    try { record = JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return null; }
+    // The filename and the `id` inside it must agree. Nothing enforced that,
+    // and another authenticated route can write a file into this directory —
+    // so a record could carry an id the read path had never validated, which
+    // the write path below then turned into a filename.
+    if (!record || record.id !== id) return null;
+    return record;
   };
   const writeSession = (record) => {
+    // Validated again on the way OUT, not only on the way in. Every write path
+    // (rename, name, remember) goes through here, and the id it uses comes from
+    // the record rather than from the URL — so the check that guards the read
+    // path was absent on all three writes.
+    const f = sessionPath(record && record.id);
+    if (!f) throw new Error('Invalid session id');
     ensureSessionsDir();
-    fs.writeFileSync(path.join(SESSIONS_DIR, `${record.id}.json`), JSON.stringify(record, null, 2));
+    fs.writeFileSync(f, JSON.stringify(record, null, 2));
     return record;
   };
 
