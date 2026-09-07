@@ -769,6 +769,30 @@ const Terminal2 = ({ onUsageUpdate }) => {
                     <span><Cpu size={9} style={{ verticalAlign: -1 }} /> {entry.meta.model}</span>
                     {entry.meta.latencyMs != null && <span><Clock size={9} style={{ verticalAlign: -1 }} /> {entry.meta.latencyMs}ms</span>}
                     {entry.meta.tokens != null && <span><Zap size={9} style={{ verticalAlign: -1 }} /> {entry.meta.tokens} tok</span>}
+                    {/* What this turn consulted. These counters were emitted on every
+                        stream and read by nobody — the operator's answer to "did it
+                        actually look?" existed only in the network tab (§08, R01, R03). */}
+                    {entry.meta.memory != null && (
+                      <span title={`${entry.meta.memory} of ${entry.meta.memoryConsidered ?? '?'} memories injected${entry.meta.memoryDropped ? `, ${entry.meta.memoryDropped} dropped for space` : ''}`}>
+                        🧠 {entry.meta.memory}{entry.meta.memoryConsidered != null ? `/${entry.meta.memoryConsidered}` : ''}
+                      </span>
+                    )}
+                    {entry.meta.recallError && (
+                      <span style={{ color: '#ffaa00' }} title={`Recall did not run: ${entry.meta.recallError}`}>vault: {String(entry.meta.recallError).replace(/^recall_/, '').replace(/_/g, ' ')}</span>
+                    )}
+                    {!entry.meta.recallError && entry.meta.recallUnavailable && (
+                      <span style={{ color: '#ffaa00' }} title="The index could not be searched">vault: {String(entry.meta.recallUnavailable).replace(/_/g, ' ')}</span>
+                    )}
+                    {!entry.meta.recallError && !entry.meta.recallUnavailable && entry.meta.recallRan && (
+                      <span title={entry.meta.recallMatched > entry.meta.recall ? `showing ${entry.meta.recall} of ${entry.meta.recallMatched} matching documents` : 'documents consulted'}>
+                        📚 {entry.meta.recall}{entry.meta.recallMatched > entry.meta.recall ? `/${entry.meta.recallMatched}` : ''}
+                      </span>
+                    )}
+                    {Array.isArray(entry.meta.citations) && entry.meta.citations.length > 0 && (
+                      <span style={{ color: '#3a5070' }} title={entry.meta.citations.map(ct => `[${ct.n}] ${ct.path || ct.title}`).join('\n')}>
+                        {entry.meta.citations.slice(0, 3).map(ct => `[${ct.n}] ${ct.title}`).join('  ')}{entry.meta.citations.length > 3 ? ` +${entry.meta.citations.length - 3}` : ''}
+                      </span>
+                    )}
                   </div>
                 )}
               </div>

@@ -104,6 +104,16 @@ const GUIDE_PAGES = [
       "Offload — splitting the model between GPU and regular RAM when it doesn't fully fit in VRAM.",
     ],
   },
+  {
+    title: 'Embeddings — the model that lets search find meaning',
+    body: [
+      "A chat model writes answers. An embedding model does something smaller and stranger: it turns a piece of text into a list of numbers, so that two texts about the same thing end up with similar numbers — even when they share no words. That is what lets the Aeon Matrix find \"the note about the vault lockout\" when you asked about \"keys that have to move together\".",
+      "Embedding models are tiny compared to chat models. The one AEON ships in its catalog, nomic-embed-text, is about 150 MB and runs happily on a CPU — no GPU, no fit check, no waiting. Install it here and the Matrix uses it on its own; nothing to assign.",
+      "Two things to know. First, every document is embedded once, at index time, and again only when it changes — so the first /index-brain over a big vault takes a while, and after that it is cheap. Second, vectors from two different embedding models cannot be compared. If you ever switch embedders, run /index-brain again; AEON will tell you if you forgot.",
+      "If you would rather not install anything, you can point the Embedding role at a hosted endpoint in Settings → Connections instead. It works, but every document and every search becomes a network call on a rate-limited tier, and it stops working on a plane. Local first is the honest default.",
+    ],
+    callout: "About 150 MB, runs on CPU, works offline. Install it once and semantic search across your whole vault just works.",
+  },
 ];
 
 function GuideTab() {
