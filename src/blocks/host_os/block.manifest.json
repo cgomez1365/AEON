@@ -75,13 +75,6 @@
     },
     "commands": [
       {
-        "cmd": "/scan",
-        "desc": "Scan matrix & sync to Supabase",
-        "method": "POST",
-        "route": "/api/system/scan",
-        "mode": "instant"
-      },
-      {
         "cmd": "/read",
         "desc": "Read a document — txt, md, pdf, docx, html — and summarize it",
         "method": "POST",

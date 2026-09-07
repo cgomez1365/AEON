@@ -139,7 +139,6 @@ layer above it.
 
 | Command | Route | Notes |
 |---|---|---|
-| `/scan` | `POST /api/system/scan` | Implemented in this block (`system.cjs`). |
 
 ## Deployment targets
 

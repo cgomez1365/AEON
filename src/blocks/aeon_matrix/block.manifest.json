@@ -87,6 +87,13 @@
         "mode": "instant"
       },
       {
+        "cmd": "/scan",
+        "desc": "Index the vault — new, changed and deleted files (same as /index-brain)",
+        "method": "POST",
+        "route": "/api/crn/second-brain/ingest/scan-docs",
+        "mode": "instant"
+      },
+      {
         "cmd": "/vault-push",
         "desc": "Mirror Second Brain docs to Supabase for mobile",
         "method": "POST",
