@@ -62,41 +62,12 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   // that actually burst — Council fans out ~8 concurrent calls — pass a provider
   // and model directly and never touch resolveForRole. Keyed by address so two
   // custom endpoints get independent budgets instead of poisoning each other.
-  const _buckets = new Map(); // key -> { stamps: number[], rpm }
-
-  const _paceKey = (baseUrl, provider) => {
-    try { const u = new URL(baseUrl); return `${u.protocol}//${u.host}`; }
-    catch { return provider || 'unknown'; }
-  };
-
-  /**
-   * Wait until this endpoint's budget allows another call. Delays rather than
-   * rejecting, so an agent slows down instead of failing — but never waits
-   * unboundedly: past the cap it throws a flagged error the caller can report.
-   */
-  const _pace = async (key, rpm) => {
-    if (!rpm || rpm <= 0) return;
-    const MAX_WAIT_MS = 60_000;
-    const started = Date.now();
-    for (;;) {
-      const b = _buckets.get(key) || { stamps: [] };
-      const cutoff = Date.now() - 60_000;
-      b.stamps = b.stamps.filter(t => t > cutoff);
-      if (b.stamps.length < rpm) {
-        b.stamps.push(Date.now());
-        _buckets.set(key, b);
-        return;
-      }
-      _buckets.set(key, b);
-      const waitFor = Math.max(250, (b.stamps[0] + 60_000) - Date.now());
-      if (Date.now() - started + waitFor > MAX_WAIT_MS) {
-        const err = new Error('This endpoint is at its requests-per-minute limit. Wait a moment and try again, or raise the limit in Settings → Connections.');
-        err.localThrottle = true; // structural — never scraped from message text
-        throw err;
-      }
-      await new Promise(r => setTimeout(r, Math.min(waitFor, 2000)));
-    }
-  };
+  //
+  // BO-EMB: the bucket itself now lives in src/kernel/pacing.cjs, because
+  // embedding an entire Vault bursts against the same addresses chat uses. Two
+  // buckets would each grant the full quota and the endpoint would answer with
+  // the 429 this exists to prevent.
+  const { pace: _pace, paceKey: _paceKey } = require('../src/kernel/pacing.cjs');
 
   // ── Provider health tracker ──────────────────────────────────────────────
   // Every 429/402 marks the provider "in cooldown" for a computed duration so

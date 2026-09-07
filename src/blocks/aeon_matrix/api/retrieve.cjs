@@ -109,26 +109,32 @@ module.exports = function retrieveFactory(deps) {
     try {
       ({ vector: queryEmbedding, model: queryModel } = await embed(query));
     } catch (e) {
-      console.warn('[RETRIEVE] query embed failed (native runtime not ready and no Gemini keys):', e.message);
+      console.warn('[RETRIEVE] query embed failed:', e.code || 'error', e.message);
+      // The kernel owns the remedy: it knows whether nothing is assigned, the
+      // key was rejected, or the endpoint is pacing. Naming a vendor here would
+      // be this block guessing at a decision it does not make (§14).
       return {
         documents: [],
         unavailable: {
-          reason: 'no_embedding_model',
-          message: 'Searching your documents by meaning needs an embedding model, and none is available — the local runtime has no embedding model loaded and there is no Gemini key to fall back on.',
-          action: 'Add an embedding model in Cookbook (nomic-embed-text is the small default), or add a Gemini key in Settings → Connections.',
+          reason: e.code === 'no_embed_model' ? 'no_embedding_model' : (e.code || 'no_embedding_model'),
+          message: e.embedFailure
+            ? e.message
+            : 'Searching your documents by meaning needs an embedding model, and none is available.',
+          action: e.action
+            || 'Install an embedding model in Cookbook — about 150 MB, runs on CPU — or assign one to the Embedding role in Settings → Model Assignment.',
         },
       };
     }
 
     // Vectors from different embedding models aren't comparable — only score
-    // docs embedded in the same space. Legacy untagged entries predate the
-    // Gemini fallback and were embedded by the native local runtime.
+    // docs embedded in the same space. Legacy untagged entries predate
+    // per-vector tagging and were embedded by the native local runtime.
     const comparable = docs.filter(d => (d.embeddingModel || EMBED_MODEL) === queryModel);
 
     // Every document is in a different space from the query. This is the
     // silent-zero-results case: the index was built with one embedder (say
     // the local nomic model) and the query is being embedded with another
-    // (Gemini, because the local runtime is not up this session). Scoring is
+    // (a hosted endpoint, because the local runtime is not up this session). Scoring is
     // mathematically meaningless across spaces, so the filter above correctly
     // discards everything — but discarding everything and reporting "no
     // matches" told the operator their documents were irrelevant when in fact

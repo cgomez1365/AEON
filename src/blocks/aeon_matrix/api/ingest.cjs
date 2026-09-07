@@ -63,7 +63,7 @@ module.exports = function ingestFactory(deps) {
     //
     // buildEntry() calls embed() for every indexed document. embed() loads the
     // native local runtime and, failing that, makes a REAL network request to
-    // Google's embedding API using whatever GEMINI_* keys are in the
+    // a hosted embedding endpoint using whatever keys are in the
     // environment. A test asserting which paths get indexed was therefore
     // making live API calls on any configured machine, and timing out under
     // worker contention on any machine at all — the 1-in-4 intermittent in
@@ -135,7 +135,7 @@ module.exports = function ingestFactory(deps) {
     } catch (e) {
       if (!embedWarnedOnce) {
         embedWarnedOnce = true;
-        console.warn('[SECOND BRAIN] Embedding unavailable (native runtime not ready AND no Gemini keys?) — entries will index without vectors:', e.message);
+        console.warn('[SECOND BRAIN] Embedding unavailable (no model assigned to the embed role) — entries will index without vectors:', e.message);
       }
     }
     return entry;
@@ -193,7 +193,7 @@ module.exports = function ingestFactory(deps) {
         const hash = fileHash(stat);
         if (manifest[rel] && manifest[rel].hash === hash) {
           // Backfill: docs ingested while no embedder was available have no
-          // vector — give them one now (native runtime or Gemini fallback) without
+          // vector — give them one now, via whatever serves the embed role, without
           // re-extracting the file.
           const existing = index.documents[relPosix];
           if (existing && !Array.isArray(existing.embedding) && existing.summary) {

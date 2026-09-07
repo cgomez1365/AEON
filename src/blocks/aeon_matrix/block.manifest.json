@@ -19,14 +19,10 @@
   "widget": null,
   "requires": {
     "apis": [
-      "gemini",
       "local",
       "supabase"
     ],
     "env": [
-      "GEMINI_PAID_KEY",
-      "GEMINI_API_KEY",
-      "GEMINI_FREE_KEY_1",
       "AEON_LLM_BACKEND",
       "SUPABASE_URL",
       "SUPABASE_SERVICE_ROLE_KEY"
@@ -404,9 +400,6 @@
     }
   ],
   "env": [
-    "GEMINI_PAID_KEY",
-    "GEMINI_API_KEY",
-    "GEMINI_FREE_KEY_1",
     "AEON_LLM_BACKEND",
     "SUPABASE_URL",
     "SUPABASE_SERVICE_ROLE_KEY"

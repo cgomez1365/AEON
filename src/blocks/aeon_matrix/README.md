@@ -101,15 +101,20 @@ entirely by environment variables (below) plus two constants in
 
 ## Dependencies
 
-- **Bundled local runtime** (free, private, no daemon) — an embedding model
-  such as `nomic-embed-text-q8`, installed through Cookbook and managed inside
-  AEON's own data root. Required for the query side of retrieval to work well;
-  without it, indexing and search fall back to Gemini.
-- **Gemini embedding fallback** — `text-embedding-004`, used when no local
-  embedding model is installed. Rotates across `GEMINI_PAID_KEY`, `GEMINI_API_KEY`, and any
-  `GEMINI_FREE_KEY_1..N` on 429s. Vectors from different embedding models
-  are never compared against each other (tagged per-entry via
-  `embeddingModel`).
+- **An embedding model, assigned to the `embed` role.** This block does not
+  choose one and names no provider — it calls `kernelEmbed()` and the kernel
+  resolves role → endpoint → model (§14).
+  - *Local* (recommended): a GGUF such as `nomic-embed-text-q8` — about 150 MB,
+    runs on CPU, works offline. Installed through Cookbook into AEON's own data
+    root. The only option in portable mode, which never reaches the network.
+  - *Hosted*: any endpoint the operator connects that serves embeddings.
+    Rate-limited by the shared per-address budget in `src/kernel/pacing.cjs`,
+    because indexing embeds once per document.
+  - With neither assigned, `/recall` and `/ask` return `no_embed_model` with the
+    remedy. `/tree`, `/doc` and text search are unaffected.
+  - Vectors are tagged per-entry with the model that produced them
+    (`embeddingModel`) and are never compared across two tags. Switching
+    embedders means re-running `/index-brain`.
 - **Supabase** (optional) — `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY`,
   used only by `vault-push` (cloud mirror) and `api/sync.cjs`'s generic
   block sync. Everything else works fully offline.

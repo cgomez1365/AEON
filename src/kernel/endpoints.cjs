@@ -32,6 +32,9 @@ const REG_ROW_ID = 1;
 // Single source of truth for the local LM Studio host (env-overridable). Settings
 // and the transport profile below both resolve through this, so the default lives
 // in exactly one place instead of being hardcoded per call site. (BO7)
+// The one role that must never be served by a substitute. See resolveForRole().
+const EMBED_ROLE = 'embed';
+
 function lmStudioHost() {
   return process.env.LMSTUDIO_HOST || 'http://localhost:1234';
 }
@@ -421,6 +424,32 @@ function isProviderConfigured(provider) {
  */
 const NON_CHAT_MODEL_RE = /whisper|(^|[-_/])tts([-_]|$)|text-to-speech|embed|guard|moderation|rerank|stable-diffusion|sdxl|flux|dall-?e/i;
 
+/**
+ * Is this model name an embedding model?
+ *
+ * Chat selection uses a DENY-list of families that cannot chat, because an
+ * allow-list of ones that can is unmaintainable (§14). Embedding is the
+ * opposite shape: the set is tiny, the naming convention is near-universal
+ * across providers, and the cost of a false positive is not a bad answer but a
+ * silent wrong-space one — a chat model asked to embed returns no vector, or a
+ * vector that cosine-compares against nothing.
+ *
+ * So this is a HINT for auto-pick only. An explicit operator assignment is
+ * never filtered through it: if someone knows their endpoint serves embeddings
+ * under a name we do not recognise, their assignment stands.
+ */
+const EMBED_MODEL_RE = /embed|embedding/i;
+
+function isEmbedModelName(name) {
+  return EMBED_MODEL_RE.test(String(name || ''));
+}
+
+/** Auto-pick an embedding model from a discovered list. null when none looks like one. */
+function pickEmbedModel(models) {
+  if (!Array.isArray(models)) return null;
+  return models.find(isEmbedModelName) || null;
+}
+
 function pickChatModel(models) {
   const list = (Array.isArray(models) ? models : []).filter(m => typeof m === 'string' && m);
   // First model that is not a known non-chat family; else fall back to the
@@ -445,10 +474,32 @@ async function resolveForRole(role, supabase) {
   // portable mode promises not to do.
   if (isPortable()) {
     const lrStatus = (() => { try { return require('../../services/local-runtime/index.cjs').status(); } catch { return null; } })();
+    const ready = lrStatus?.readyModels || [];
+
+    // A portable install never reaches for the network — that is the whole
+    // promise of the mode. So an embed role that has no LOCAL embedder is
+    // unserved, and says so; it must not silently borrow the chat model.
+    if (role === EMBED_ROLE) {
+      const local = ready.find(m => (m.capabilities || []).includes('embed'));
+      if (!local) {
+        return {
+          ok: false,
+          code: 'no_embed_model',
+          role,
+          error: 'No embedding model is installed on this drive. Install one in Cookbook — '
+               + 'a portable install cannot fall back to a hosted embedder.',
+        };
+      }
+      return {
+        ok: true, provider: 'local', model: local.id, base_url: null, apiKey: null,
+        via: 'direct', endpoint_id: 'portable-local', role,
+      };
+    }
+
     return {
       ok: true,
       provider: 'local',
-      model: lrStatus?.readyModels?.[0]?.id || null,
+      model: ready[0]?.id || null,
       base_url: null,
       apiKey: null,
       via: 'direct',
@@ -458,7 +509,18 @@ async function resolveForRole(role, supabase) {
   }
 
   const reg = await load(supabase);
-  let mapping = reg.roles[role] || reg.roles['chat'];
+
+  // `embed` NEVER falls through to the chat mapping.
+  //
+  // Every other role degrades sensibly to chat: a creative or grading request
+  // served by the chat model is a worse answer, not a wrong one. Embedding does
+  // not degrade — a chat model returns no vector, and a vector from the wrong
+  // model lives in a space nothing else can be compared against. That surfaces
+  // as an empty search reported as success, the silent-wrong-answer class §08
+  // exists to forbid. Unassigned is an honest failure; borrowed is not.
+  let mapping = role === EMBED_ROLE
+    ? (reg.roles[EMBED_ROLE] || null)
+    : (reg.roles[role] || reg.roles['chat']);
 
   // No explicit role mapping yet → auto-pick a reachable, keyed endpoint so a
   // freshly added connection works immediately, with no separate wiring step.
@@ -466,9 +528,25 @@ async function resolveForRole(role, supabase) {
   if (!mapping) {
     const reachable = reg.endpoints.filter(e => e.reachable_from.includes(runtime));
     const candidate = reachable.find(e => e.auth_ref) || reachable[0];
-    if (!candidate) return { ok: false, error: `No model assigned for role "${role}"` };
-    // Prefer a chat-capable model over transcription/guard models.
-    mapping = { endpoint_id: candidate.id, model: pickChatModel(candidate.models) };
+    if (!candidate) return { ok: false, code: role === EMBED_ROLE ? 'no_embed_model' : undefined, role, error: `No model assigned for role "${role}"` };
+
+    if (role === EMBED_ROLE) {
+      // Auto-pick only over models that LOOK like embedders. Guessing here is
+      // the wrong-space bug with extra steps.
+      const picked = pickEmbedModel(candidate.models);
+      if (!picked) {
+        return {
+          ok: false,
+          code: 'no_embed_model',
+          role,
+          error: `No embedding model is available. Install one in Cookbook, or assign an endpoint that serves embeddings to the Embedding role in Settings → Model Assignment.`,
+        };
+      }
+      mapping = { endpoint_id: candidate.id, model: picked };
+    } else {
+      // Prefer a chat-capable model over transcription/guard models.
+      mapping = { endpoint_id: candidate.id, model: pickChatModel(candidate.models) };
+    }
   }
   if (!mapping.model) return { ok: false, error: `No model available on endpoint for role "${role}"` };
 
@@ -566,7 +644,14 @@ function describeRoleLocal(role) {
     const st = (() => {
       try { return require('../../services/local-runtime/index.cjs').status(); } catch { return null; }
     })();
-    const model = st?.readyModels?.[0]?.id || null;
+    const ready = st?.readyModels || [];
+    if (role === EMBED_ROLE) {
+      const local = ready.find(m => (m.capabilities || []).includes('embed'));
+      return local
+        ? { ok: true, provider: 'local', model: local.id }
+        : { ok: false, provider: 'local', reason: 'no_embed_model' };
+    }
+    const model = ready[0]?.id || null;
     return model
       ? { ok: true, provider: 'local', model }
       : { ok: false, provider: 'local', reason: 'no_local_model' };
@@ -580,17 +665,30 @@ function describeRoleLocal(role) {
     // broken that had put its keys in .env instead, which is the documented
     // way to configure one. The registry is the richer source; the environment
     // is the older one, and it still counts.
+    // ENV_PROVIDER_FALLBACK names CHAT models only — every entry is a chat
+    // model on a chat transport. Answering an embed enquiry from it would
+    // report ready and then hand the indexer a model that cannot embed.
+    if (role === EMBED_ROLE) return { ok: false, reason: 'no_embed_model' };
     const env = describeRoleFromEnv();
     return env || { ok: false, reason: 'no_providers_configured' };
   }
 
   const runtime = isVercel ? 'cloud' : 'local';
-  let mapping = (reg.roles || {})[role] || (reg.roles || {})['chat'];
+  // Mirrors resolveForRole exactly: `embed` never borrows the chat mapping.
+  let mapping = role === EMBED_ROLE
+    ? ((reg.roles || {})[EMBED_ROLE] || null)
+    : ((reg.roles || {})[role] || (reg.roles || {})['chat']);
   if (!mapping) {
     const reachable = reg.endpoints.filter(e => (e.reachable_from || []).includes(runtime));
     const candidate = reachable.find(e => e.auth_ref) || reachable[0];
-    if (!candidate) return { ok: false, reason: 'no_reachable_endpoint' };
-    mapping = { endpoint_id: candidate.id, model: pickChatModel(candidate.models) };
+    if (!candidate) return { ok: false, reason: role === EMBED_ROLE ? 'no_embed_model' : 'no_reachable_endpoint' };
+    if (role === EMBED_ROLE) {
+      const picked = pickEmbedModel(candidate.models);
+      if (!picked) return { ok: false, reason: 'no_embed_model' };
+      mapping = { endpoint_id: candidate.id, model: picked };
+    } else {
+      mapping = { endpoint_id: candidate.id, model: pickChatModel(candidate.models) };
+    }
   }
   if (!mapping.model) return { ok: false, reason: 'no_model_on_endpoint' };
 
@@ -635,6 +733,9 @@ module.exports = {
   lmStudioHost, isPortable, describeRoleLocal, describeRoleFromEnv,
   // Exported so the gate tests the REAL predicate rather than re-implementing it.
   pickChatModel, NON_CHAT_MODEL_RE, isProviderConfigured,
+  // Embedding role — exported so Settings, Cookbook and the gate test share one
+  // predicate rather than three drifting copies.
+  EMBED_ROLE, isEmbedModelName, pickEmbedModel,
   // Egress policy — the settings block validates the operator's address with
   // the same predicate the kernel enforces, so the two cannot drift.
   checkBaseUrl, isPrivateHost,

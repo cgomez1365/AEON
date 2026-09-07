@@ -4,7 +4,7 @@ const path = require('path');
 
 module.exports = function createSyncRouter(deps) {
   const router = express.Router();
-  const { supabase, isVercel, getLocalFile, validateSDI, geminiRequest, writeOSAudit } = deps;
+  const { supabase, isVercel, getLocalFile, validateSDI, writeOSAudit } = deps;
 
   const BLOCK_CONFIG = {
     inventory:        { file: getLocalFile('inventory.json'),            table: 'aeon_blocks', tag: 'inventory' },

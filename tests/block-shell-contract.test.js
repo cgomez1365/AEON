@@ -45,7 +45,6 @@ const BLOCKS = path.join(ROOT, 'src', 'blocks');
  */
 const BASELINE = new Set([
   // Literal requires — the form that took memory_core's mount down.
-  'aeon_matrix/api/_lib.cjs',
   'council/api/index.cjs',
   'dashboard/api/chat-stream.cjs',
   'dashboard/api/chat.cjs',

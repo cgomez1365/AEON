@@ -27,61 +27,32 @@ async function extractText(fullPath) {
   return fs.readFileSync(fullPath, 'utf8');
 }
 
-// ── Lightweight local embeddings (native runtime) ─────────────────────────
+// ── Embedding — resolved by the kernel, never by this block ───────────────
+//
+// BO-EMB. This file used to hold a second embedder: it named one vendor's
+// embedding API, read that vendor's keys straight out of the environment, and
+// ran its own rotation loop. That is a block naming a provider (§14) and a key
+// path that never passed through the vault.
+//
+// The block now asks for the `embed` role. Which model serves it — a local
+// GGUF, a hosted OpenAI-compatible endpoint, anything else the operator
+// connects — is the kernel's decision and the operator's choice.
+const { kernelEmbed } = require('../../../kernel/embed.cjs');
+
+// Legacy tag only. Documents indexed before vectors carried an embeddingModel
+// were embedded by the native local runtime, and retrieve.cjs reads this as
+// their implied tag. It is NOT a default embedder and nothing selects a model
+// from it.
 const EMBED_MODEL = process.env.AEON_EMBED_MODEL || 'nomic-embed-text-q8';
 
-async function embedLocal(text) {
-  const lr = require('../../../../services/local-runtime/index.cjs');
-  return lr.embed(text);
-}
-
-// ── API-key embedding fallback (Gemini text-embedding-004) ───────────────
-// Same key pool the kernel uses (vault-hydrated at boot). Rotates on 429.
-// IMPORTANT: vectors from different models live in different spaces —
-// callers must only compare embeddings tagged with the same model name.
-function getGeminiKeys() {
-  // Unbounded: GEMINI_PAID_KEY, GEMINI_API_KEY, GEMINI_FREE_KEY_1..N.
-  const keys = [process.env.GEMINI_PAID_KEY, process.env.GEMINI_API_KEY];
-  Object.keys(process.env)
-    .filter(n => /^GEMINI_FREE_KEY_\d+$/.test(n))
-    .sort((a, b) => Number(a.slice(16)) - Number(b.slice(16)))
-    .forEach(n => keys.push(process.env[n]));
-  return [...new Set(keys.filter(Boolean))];
-}
-
-async function embedGemini(text) {
-  const keys = getGeminiKeys();
-  if (!keys.length) throw new Error('no Gemini keys configured');
-  for (const key of keys) {
-    try {
-      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key=${key}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: { parts: [{ text: String(text).slice(0, 8000) }] } }),
-        signal: AbortSignal.timeout(15000),
-      });
-      if (r.ok) {
-        const values = (await r.json())?.embedding?.values;
-        if (Array.isArray(values)) return values;
-      } else if (r.status !== 429) {
-        console.warn(`[EMBED] Gemini embed error ${r.status}`);
-      }
-      // 429 → try next key
-    } catch (e) { console.warn(`[EMBED] Gemini key ***${key.slice(-4)} failed:`, e.message); }
-  }
-  throw new Error('all Gemini keys exhausted for embedding');
-}
-
-// Work-with-what-you-have embedder: native local runtime first (free, private),
-// Gemini API fallback when native runtime has no embed model.
+/**
+ * Embed one string.
+ * @returns {Promise<{vector: number[], model: string}>} `model` is the model
+ * the kernel actually used, so the caller can tag the vector with its space.
+ */
 async function embed(text) {
-  try {
-    const vector = await embedLocal(text);
-    return { vector, model: EMBED_MODEL };
-  } catch (e) {
-    const vector = await embedGemini(text);
-    return { vector, model: 'text-embedding-004' };
-  }
+  const { vector, model } = await kernelEmbed(text);
+  return { vector, model };
 }
 
 function cosineSimilarity(a, b) {
@@ -96,4 +67,4 @@ function cosineSimilarity(a, b) {
   return dot / (Math.sqrt(magA) * Math.sqrt(magB));
 }
 
-module.exports = { loadExtractors, extractText, embedLocal, embedGemini, embed, cosineSimilarity, EMBED_MODEL };
+module.exports = { loadExtractors, extractText, embed, cosineSimilarity, EMBED_MODEL };
