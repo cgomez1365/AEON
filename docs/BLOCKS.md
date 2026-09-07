@@ -87,7 +87,7 @@ receives only what it declares.
 - **Route:** `/host`
 - **Targets:** desktop only
 - **Memory mode:** `summary`
-- **Declared capabilities:** `filesystem:write`, `network:internal`, `shell`
+- **Declared capabilities:** `ai`, `filesystem:write`, `network:internal`, `shell`
 - **API files:** `fs.cjs`, `os.cjs`, `system.cjs`
 
 ### Master

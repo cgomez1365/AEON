@@ -46,7 +46,7 @@
       "network": "internal",
       "secrets": false,
       "shell": true,
-      "ai": false
+      "ai": true
     },
     "storage": {
       "type": "json",
@@ -112,7 +112,7 @@
       },
       {
         "cmd": "/read",
-        "desc": "Read a file from the workspace",
+        "desc": "Read a document — txt, md, pdf, docx, html — and summarize it",
         "method": "POST",
         "route": "/api/fs/read",
         "param": "filePath",

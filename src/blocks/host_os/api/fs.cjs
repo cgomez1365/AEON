@@ -4,7 +4,8 @@ const path = require('path');
 
 module.exports = function createFsRouter(deps) {
   const router = express.Router();
-  const { isVercel, WORKSPACE, upload, VAULT_ROOT, getDataFile, HOME_ROOT } = deps;
+  const { isVercel, WORKSPACE, upload, VAULT_ROOT, getDataFile, HOME_ROOT, kernelLLM } = deps;
+  const extract = require('../../../kernel/extract.cjs');
 
   // ── Path containment ──────────────────────────────────────────────
   // Every route below took a path straight from the request body and handed
@@ -201,8 +202,8 @@ module.exports = function createFsRouter(deps) {
   // Relative paths now resolve against the workspace, which makes that
   // description true. Absolute paths are untouched: the File Manager
   // deliberately browses the whole disk (see /fs/list).
-  router.post('/fs/read', (req, res) => {
-    const { filePath } = req.body || {};
+  router.post('/fs/read', async (req, res) => {
+    const { filePath, summarize } = req.body || {};
     const requested = typeof filePath === 'string' ? filePath.trim() : '';
     if (!requested) {
       return res.status(400).json({
@@ -217,8 +218,76 @@ module.exports = function createFsRouter(deps) {
     const resolved = verdict.path;
 
     try {
-      const content = fs.readFileSync(resolved, 'utf8');
-      res.json({ success: true, path: resolved, content, lines: content.split('\n').length });
+      // A document is read through the kernel's extractor — a PDF comes back
+      // as its words, not as decoded binary reported as success. A format the
+      // extractor cannot read is refused with a remedy rather than "read".
+      const kind = extract.kindOf(resolved);
+      if (kind === 'binary') {
+        return res.status(415).json({
+          correlation_id: req.correlationId || 'AEON-SYS',
+          error: `/read returns text, and ${path.extname(resolved) || 'this file'} is not a text or document format.`,
+          remedy: 'Open it in the File Manager, or convert it to PDF, DOCX, HTML or text first.',
+          path: resolved,
+        });
+      }
+      if (!fs.existsSync(resolved)) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      let content;
+      try {
+        content = await extract.extractText(resolved);
+      } catch (e) {
+        // A document the extractor choked on is not a server fault and not a
+        // success — say what happened and what to do (§08).
+        return res.status(422).json({
+          correlation_id: req.correlationId || 'AEON-SYS',
+          error: `Could not read ${path.basename(resolved)}: ${e.message}`,
+          remedy: 'The file may be damaged or password-protected. Open it in a viewer and export it again as PDF, or copy its text into a .md file.',
+          path: resolved,
+        });
+      }
+      if (content == null) {
+        return res.status(415).json({
+          correlation_id: req.correlationId || 'AEON-SYS',
+          error: `This install cannot read ${path.extname(resolved)} files — the extractor for that format is not installed.`,
+          remedy: 'Run npm install in the AEON folder, or convert the file to text.',
+          path: resolved,
+        });
+      }
+
+      // Summarise when a model is available. "read + document" is one
+      // command: the operator gets the point of the file first, and the text
+      // behind it. Absent a model the text alone is still the answer, and the
+      // response says why there is no summary.
+      const PREVIEW = 8000, SUMMARY_INPUT = 14000;
+      let summary = null, summaryReason = null;
+      if (summarize !== false && typeof kernelLLM === 'function' && content.trim()) {
+        try {
+          const body = content.length > SUMMARY_INPUT
+            ? `${content.slice(0, SUMMARY_INPUT)}\n\n[… ${content.length - SUMMARY_INPUT} more characters not shown]`
+            : content;
+          summary = String(await kernelLLM(
+            `Summarize the following document for its owner in plain English: what it is, what it says, and anything they need to act on. Be concrete; quote exact figures, names and dates where they appear. 5 to 10 sentences.\n\nFILE: ${path.basename(resolved)}\n\n${body}`,
+            { role: 'chat' },
+          ) || '').trim() || null;
+          if (!summary) summaryReason = 'the model returned nothing';
+        } catch (e) { summaryReason = e.message; }
+      } else if (summarize !== false) {
+        summaryReason = typeof kernelLLM === 'function' ? 'the document is empty' : 'no model is assigned to the chat role';
+      }
+
+      const preview = content.length > PREVIEW ? `${content.slice(0, PREVIEW)}\n\n[… ${content.length - PREVIEW} more characters — ask about it, or open the file]` : content;
+      res.json({
+        success: true,
+        path: resolved,
+        kind,
+        summary,
+        ...(summaryReason ? { summaryReason } : {}),
+        // What the terminal prints: the summary when there is one, else the text.
+        text: summary ? `${summary}\n\n— ${path.basename(resolved)} · ${content.length.toLocaleString()} characters · ${content.split('\n').length} lines` : preview,
+        content: preview,
+        chars: content.length,
+        lines: content.split('\n').length,
+        truncated: content.length > PREVIEW,
+      });
     } catch (error) {
       // §08 — say WHERE it looked. "Not found" without the path it tried is
       // what sent the operator hunting for a file that was never missing.
