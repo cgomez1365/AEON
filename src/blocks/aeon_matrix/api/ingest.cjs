@@ -247,12 +247,18 @@ module.exports = function ingestFactory(deps) {
   // slower one's chunk backfill was overwritten by the faster one's snapshot.
   // A second caller joins the run in flight and gets its result.
   let inFlight = null;
+  // The scan's in-memory index, while a scan is running. The single-document
+  // routes (ingest/document, ingest/chat, delete) write into THIS object rather
+  // than a fresh read, because the scan checkpoints its own copy every ten
+  // documents and would otherwise overwrite theirs — a targeted ingest during a
+  // long backfill silently vanished at the next checkpoint.
+  let inFlightIndex = null;
   async function runScan(onEvent = () => {}) {
     if (inFlight) {
       onEvent({ joined: true, message: 'a scan is already running — waiting for it to finish' });
       return inFlight;
     }
-    inFlight = _runScan(onEvent).finally(() => { inFlight = null; });
+    inFlight = _runScan(onEvent).finally(() => { inFlight = null; inFlightIndex = null; });
     return inFlight;
   }
 
@@ -280,7 +286,8 @@ module.exports = function ingestFactory(deps) {
     };
 
     const manifest = readManifest();
-    const index = readIndex();
+    const index = inFlightIndex || readIndex();
+    inFlightIndex = index;
     const files = walk(BRAIN_DIR);
     const seen = new Set();
 
@@ -442,7 +449,7 @@ module.exports = function ingestFactory(deps) {
       const text = fs.readFileSync(full, 'utf8');
       const stat = fs.statSync(full);
       const relPosix = vaultRelative(full);
-      const index = readIndex();
+      const index = inFlightIndex || readIndex();
       index.documents[relPosix] = await buildEntry(full, relPosix, text, stat);
       writeIndex(index);
 
@@ -479,7 +486,7 @@ module.exports = function ingestFactory(deps) {
     try {
       const stat = fs.statSync(resolved);
       const relPosix = vaultRelative(resolved);
-      const index = readIndex();
+      const index = inFlightIndex || readIndex();
       index.documents[relPosix] = await buildEntry(resolved, relPosix, text, stat);
       writeIndex(index);
 
@@ -517,7 +524,7 @@ module.exports = function ingestFactory(deps) {
       const relPosix = vaultRelative(resolved);
 
       if (text && text.trim().length >= 20) {
-        const index = readIndex();
+        const index = inFlightIndex || readIndex();
         index.documents[relPosix] = await buildEntry(resolved, relPosix, text, stat);
         writeIndex(index);
 
@@ -539,7 +546,7 @@ module.exports = function ingestFactory(deps) {
     const { file_path } = req.body || {};
     if (!file_path) return res.status(400).json({ error: 'file_path required' });
     try {
-      const index = readIndex();
+      const index = inFlightIndex || readIndex();
       delete index.documents[file_path];
       writeIndex(index);
 

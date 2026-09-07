@@ -151,6 +151,31 @@ describe('one scan at a time', () => {
   });
 });
 
+describe('a targeted ingest during a scan is not lost at the next checkpoint', () => {
+  it('ingest/document lands in the in-flight index and survives the scan finishing', async () => {
+    for (let i = 0; i < 12; i++) write(`doc-${i}.md`, filler(40));
+    const slow = async (t) => { await new Promise(r => setTimeout(r, 8)); return bow(t); };
+    const router = ingestMod({ isVercel: false, VAULT_ROOT: vault, DATA_ROOT: dataRoot, embed: slow });
+    const app = express(); app.use(express.json()); app.use('/api', router);
+    const h = await listen(app); servers.push(h.server);
+
+    const scanning = router.runSecondBrainScan();
+    await new Promise(r => setTimeout(r, 60));                 // scan is mid-loop
+    write('late.md', `# Late\n\n${filler(30)}\n\nThe vault master key and keyslot file are two halves.`);
+    const r = await fetch(`http://127.0.0.1:${h.port}/api/crn/second-brain/ingest/document`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ file_path: 'late.md' }),
+    });
+    expect(r.status).toBe(200);
+    await scanning;
+
+    const idx = JSON.parse(fs.readFileSync(path.join(dataRoot, 'vault_index.json'), 'utf8'));
+    expect(idx.documents['late.md'], 'the targeted ingest was overwritten by the scan checkpoint').toBeTruthy();
+    expect(idx.documents['late.md'].chunks).toBeGreaterThan(0);
+    // And the scan's own work is intact too.
+    expect(Object.keys(idx.documents).filter(k => k.startsWith('doc-')).length).toBe(12);
+  });
+});
+
 describe('retrieval finds a sentence deep inside a long document', () => {
   const needle = 'The vault master key and the keyslot file are two halves; move both or neither.';
 
