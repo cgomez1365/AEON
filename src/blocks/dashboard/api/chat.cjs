@@ -13,6 +13,9 @@ module.exports = function createChatRouter(deps) {
     KILL_SWITCH_THRESHOLD, GEMINI_PRICE_PER_TOKEN, GROQ_PRICE_PER_TOKEN,
     geminiRequest, groqRequest, writeOSAudit, fetchDuckDuckGo,
     aeonTerminalStream, TERMINAL_HISTORY_FILE, DEFAULT_LOCAL_MODEL, defaultLocalModel,
+    // Naming a chat is a model call; the block declares permissions.ai, so the
+    // loader hands it kernelLLM rather than the block reaching for a provider.
+    kernelLLM,
     VAULT_ROOT,
   } = deps;
 
@@ -30,6 +33,42 @@ module.exports = function createChatRouter(deps) {
   );
   const ensureSessionsDir = () => { try { if (!fs.existsSync(SESSIONS_DIR)) fs.mkdirSync(SESSIONS_DIR, { recursive: true }); } catch {} };
 
+  // A session id becomes a filename, so it is validated before it touches a
+  // path — the same shape deep_research validates on every route that takes
+  // one (SESSION_ID_RE, deep_research/api/index.cjs:18). GET and DELETE
+  // interpolated req.params.id straight into a path and DELETE then unlinked.
+  const SESSION_ID_RE = /^[a-zA-Z0-9-]{1,128}$/;
+  const sessionPath = (id) => {
+    if (!SESSION_ID_RE.test(String(id || ''))) return null;
+    return path.join(SESSIONS_DIR, `${id}.json`);
+  };
+  const readSession = (id) => {
+    const f = sessionPath(id);
+    if (!f || !fs.existsSync(f)) return null;
+    try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return null; }
+  };
+  const writeSession = (record) => {
+    ensureSessionsDir();
+    fs.writeFileSync(path.join(SESSIONS_DIR, `${record.id}.json`), JSON.stringify(record, null, 2));
+    return record;
+  };
+
+  /**
+   * A title before any model is asked.
+   *
+   * Doctrine R10 tier 1: deterministic, free, always available — the title
+   * exists the moment the chat is saved, offline, with no embedder and no chat
+   * model. The model only ever REFINES this, and only while nobody has renamed
+   * the chat by hand.
+   */
+  const deterministicTitle = (messages) => {
+    const first = (Array.isArray(messages) ? messages : [])
+      .find(m => m && m.role === 'user' && typeof m.content === 'string' && m.content.trim());
+    if (!first) return null;
+    const flat = first.content.replace(/\s+/g, ' ').trim();
+    return flat.length <= 48 ? flat : `${flat.slice(0, 47).trimEnd()}…`;
+  };
+
   // GET /api/terminal/sessions — list saved sessions, newest first
   router.get('/terminal/sessions', (req, res) => {
     try {
@@ -39,7 +78,17 @@ module.exports = function createChatRouter(deps) {
         .map(f => {
           try {
             const raw = JSON.parse(fs.readFileSync(path.join(SESSIONS_DIR, f), 'utf8'));
-            return { id: raw.id, name: raw.name, savedAt: raw.savedAt, autoSaved: !!raw.autoSaved, messageCount: raw.messageCount || 0 };
+            return {
+              id: raw.id, name: raw.name, savedAt: raw.savedAt,
+              updatedAt: raw.updatedAt || raw.savedAt,
+              autoSaved: !!raw.autoSaved,
+              // Who chose this name. The UI needs it to show an operator title
+              // as settled rather than provisional, and the naming route needs
+              // it to refuse to overwrite one (R10).
+              nameSetBy: raw.nameSetBy || 'auto',
+              inRecord: !!raw.inRecord,
+              messageCount: raw.messageCount || 0,
+            };
           } catch { return null; }
         })
         .filter(Boolean)
@@ -50,51 +99,191 @@ module.exports = function createChatRouter(deps) {
     }
   });
 
-  // POST /api/terminal/sessions — save a session
+  // POST /api/terminal/sessions — save a session, or update the one named by `id`.
+  //
+  // Without the update path this route minted a fresh id on EVERY call
+  // (`const id = new Date()...`), so save-after-load forked the conversation
+  // and the unload beacon wrote a brand-new record on every page refresh. One
+  // conversation became a pile of near-duplicates, each of which the operator
+  // then had to tell apart by timestamp.
   router.post('/terminal/sessions', (req, res) => {
     try {
       ensureSessionsDir();
-      const { name, messages, autoSaved } = req.body || {};
+      const { id: incomingId, name, messages, autoSaved } = req.body || {};
       if (!Array.isArray(messages) || messages.length === 0) {
         return res.status(400).json({ error: 'messages required' });
       }
-      const id = new Date().toISOString().replace(/[:.]/g, '-');
-      const record = {
+
+      const existing = incomingId ? readSession(incomingId) : null;
+      if (incomingId && !existing) {
+        return res.status(404).json({ error: 'Session not found', id: incomingId });
+      }
+
+      const now = new Date().toISOString();
+      const id = existing ? existing.id : now.replace(/[:.]/g, '-');
+
+      // R10 — an operator-set name is never overwritten, not even by a later
+      // save that happens to carry a different one.
+      let resolvedName = existing?.name;
+      let nameSetBy = existing?.nameSetBy || 'auto';
+      if (name && nameSetBy !== 'operator') {
+        resolvedName = name;
+        nameSetBy = 'operator';
+      } else if (!resolvedName) {
+        resolvedName = deterministicTitle(messages)
+          || `Chat — ${new Date(now).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`;
+        nameSetBy = 'auto';
+      }
+
+      const record = writeSession({
+        ...(existing || {}),
         id,
-        name: name || `Chat — ${new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`,
-        savedAt: new Date().toISOString(),
+        name: resolvedName,
+        nameSetBy,
+        savedAt: existing?.savedAt || now,
+        updatedAt: now,
         autoSaved: !!autoSaved,
         messageCount: messages.length,
         messages,
-      };
-      fs.writeFileSync(path.join(SESSIONS_DIR, `${id}.json`), JSON.stringify(record, null, 2));
-      res.json({ ok: true, id, name: record.name });
+      });
+      res.json({ ok: true, id, name: record.name, nameSetBy: record.nameSetBy, updated: !!existing });
     } catch (e) {
       res.status(500).json({ error: e.message });
+    }
+  });
+
+  // PATCH /api/terminal/sessions/:id — rename. The operator's word is final.
+  router.patch('/terminal/sessions/:id', (req, res) => {
+    const record = readSession(req.params.id);
+    if (!record) return res.status(404).json({ error: 'Session not found' });
+    const name = String((req.body || {}).name || '').trim();
+    if (!name) return res.status(400).json({ error: 'name required. Send the new title as { name }.' });
+    if (name.length > 200) return res.status(400).json({ error: 'name must be 200 characters or fewer' });
+    try {
+      const saved = writeSession({ ...record, name, nameSetBy: 'operator', updatedAt: new Date().toISOString() });
+      res.json({ ok: true, id: saved.id, name: saved.name, nameSetBy: 'operator' });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // POST /api/terminal/sessions/:id/name — let the model propose a title.
+  //
+  // R10 tier 2. Deliberately a separate, opt-in route rather than something
+  // POST /sessions does on its own: naming costs a model call, and a chat the
+  // operator already named must never spend one. It REFUSES rather than
+  // overwrites, so the refusal is visible instead of the rename being lost.
+  router.post('/terminal/sessions/:id/name', async (req, res) => {
+    const record = readSession(req.params.id);
+    if (!record) return res.status(404).json({ error: 'Session not found' });
+    if (record.nameSetBy === 'operator') {
+      return res.status(409).json({
+        ok: false, code: 'operator_named',
+        error: 'This chat was named by you, so it is left alone. Rename it yourself to change it.',
+        name: record.name,
+      });
+    }
+    if (typeof kernelLLM !== 'function') {
+      return res.status(503).json({
+        ok: false, code: 'no_model',
+        error: 'No model is assigned to name chats.',
+        remedy: 'Assign a model to the chat role in Settings → Model Assignment, or rename the chat yourself.',
+        name: record.name,
+      });
+    }
+
+    const turns = (record.messages || [])
+      .filter(m => m && m.role === 'user' && typeof m.content === 'string')
+      .slice(0, 3)
+      .map(m => m.content.replace(/\s+/g, ' ').slice(0, 300))
+      .join('\n');
+    if (!turns) return res.json({ ok: true, name: record.name, nameSetBy: record.nameSetBy, unchanged: true });
+
+    try {
+      const raw = await kernelLLM(
+        `Title this conversation in 2 to 6 words. Reply with the title alone: no quotes, no punctuation at the end, no preamble.\n\n${turns}`,
+        { role: 'naming' },
+      );
+      const name = String(raw || '').trim().split('\n')[0].replace(/^["'“]|["'”.]$/g, '').slice(0, 80).trim();
+      // A model that answers with a sentence, an apology, or nothing usable
+      // leaves the existing title alone. The deterministic title is already
+      // serviceable, so a bad refinement must never make things worse.
+      if (!name || name.length < 2 || name.split(/\s+/).length > 10) {
+        return res.json({ ok: true, name: record.name, nameSetBy: record.nameSetBy, unchanged: true, reason: 'unusable_title' });
+      }
+      const saved = writeSession({ ...record, name, nameSetBy: 'model', updatedAt: new Date().toISOString() });
+      res.json({ ok: true, id: saved.id, name: saved.name, nameSetBy: 'model' });
+    } catch (e) {
+      // Naming is a nicety. It must never fail a save or block the operator.
+      res.status(200).json({ ok: true, name: record.name, nameSetBy: record.nameSetBy, unchanged: true, reason: e.message });
+    }
+  });
+
+  // POST /api/terminal/sessions/:id/remember — put this conversation INTO the
+  // indexed record, on purpose.
+  //
+  // Doctrine R09. Conversations are pruned from the automatic scan precisely so
+  // that entering the record is a decision. This is that decision, and it
+  // routes to the block that owns the record rather than writing the index
+  // here. ingest/chat stores OPERATOR turns only — the model's own words do not
+  // become a source a later answer can cite.
+  router.post('/terminal/sessions/:id/remember', async (req, res) => {
+    const record = readSession(req.params.id);
+    if (!record) return res.status(404).json({ error: 'Session not found' });
+    const messages = (record.messages || []).filter(m => m && m.role === 'user');
+    if (!messages.length) {
+      return res.status(400).json({ error: 'This conversation has nothing of yours to remember yet.' });
+    }
+    try {
+      const base = process.env.AEON_KERNEL_URL || `http://127.0.0.1:${process.env.PORT || 3001}`;
+      const r = await fetch(`${base}/api/crn/second-brain/ingest/chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          // Same lesson as the recall path: an internal call carries no session
+          // unless it is forwarded, and the ingest route is guarded.
+          ...(req.headers.authorization ? { Authorization: req.headers.authorization } : {}),
+          ...(req.headers.cookie ? { Cookie: req.headers.cookie } : {}),
+        },
+        body: JSON.stringify({ session_id: record.id, messages }),
+        signal: AbortSignal.timeout(20000),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        return res.status(r.status).json({
+          ok: false,
+          error: data.error || `The record could not be written (${r.status}).`,
+          remedy: r.status === 401 || r.status === 403
+            ? 'Unlock the vault and try again.'
+            : 'Check that the Aeon Matrix block is mounted.',
+        });
+      }
+      writeSession({ ...record, inRecord: true, rememberedAt: new Date().toISOString() });
+      res.json({ ok: true, ingested: data.ingested || 0, file: data.file || null });
+    } catch (e) {
+      res.status(502).json({ ok: false, error: e.message });
     }
   });
 
   // GET /api/terminal/sessions/:id — load one session
   router.get('/terminal/sessions/:id', (req, res) => {
-    try {
-      const file = path.join(SESSIONS_DIR, `${req.params.id}.json`);
-      if (!fs.existsSync(file)) return res.status(404).json({ error: 'Session not found' });
-      res.json(JSON.parse(fs.readFileSync(file, 'utf8')));
-    } catch (e) {
-      res.status(500).json({ error: e.message });
-    }
+    const record = readSession(req.params.id);
+    if (!record) return res.status(404).json({ error: 'Session not found' });
+    res.json(record);
   });
 
   // DELETE /api/terminal/sessions/:id — delete one session
   router.delete('/terminal/sessions/:id', (req, res) => {
+    const file = sessionPath(req.params.id);
+    if (!file) return res.status(400).json({ error: 'Invalid session id' });
     try {
-      const file = path.join(SESSIONS_DIR, `${req.params.id}.json`);
       if (fs.existsSync(file)) fs.unlinkSync(file);
       res.json({ ok: true });
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
   });
+
   const localModel = (defaultLocalModel ? defaultLocalModel() : null) || DEFAULT_LOCAL_MODEL || null;
 
   // GET /api/chat — retrieve chat history

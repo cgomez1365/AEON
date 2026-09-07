@@ -173,6 +173,21 @@
       "method": "GET",
       "path": "/api/terminal/sessions/:id",
       "auth": true
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/terminal/sessions/:id",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/terminal/sessions/:id/name",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/terminal/sessions/:id/remember",
+      "auth": true
     }
   ],
   "env": [
