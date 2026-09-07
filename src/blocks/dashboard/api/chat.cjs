@@ -17,7 +17,13 @@ module.exports = function createChatRouter(deps) {
   } = deps;
 
   // ── Chat session persistence (Vault/Agents/Aeon/chat_sessions/) ──────────
-  // Sessions saved here appear as nodes in the AEON Matrix graph.
+  //
+  // These are the operator's saved conversations. They are NOT part of the
+  // indexed record: aeon_matrix prunes this directory from both the scan and
+  // the graph (BO-MEM T1), because a saved feed carries the assistant's own
+  // turns and R09 forbids those entering the record automatically — a model
+  // turn stored as an ordinary document becomes a source a later answer can
+  // cite. A conversation joins the record only when the operator says so.
   const SESSIONS_DIR = path.join(
     VAULT_ROOT || path.join(__dirname, '..', '..', 'aeon_matrix', 'data', 'Vault'),
     'Agents', 'Aeon', 'chat_sessions'

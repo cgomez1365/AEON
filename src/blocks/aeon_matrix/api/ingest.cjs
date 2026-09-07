@@ -23,7 +23,25 @@ const { loadExtractors, extractText, embed } = require('./_lib.cjs');
 
 const NIGHTLY_HOUR  = 3; // local hour to auto re-index, once per day
 const INDEXABLE_EXT = /\.(md|txt|json|pdf|docx)$/i;
-const NON_INDEXED_VAULT_PATHS = new Set(['blocks/security']);
+// Paths the automatic scan must never walk.
+//
+// BO-MEM T1. Saved conversations live at Agents/Aeon/chat_sessions/*.json,
+// INDEXABLE_EXT matches .json, and the boot scan runs on every start — so every
+// saved chat, INCLUDING the assistant's own turns, was being embedded into the
+// operator's record automatically. Second Brain Doctrine R09 forbids exactly
+// that: an assistant turn stored as an ordinary document becomes a source a
+// later answer can cite, which is a fabrication laundered into the record.
+//
+// Deliberately narrow. Agents/ as a whole STAYS indexed: council debates, VP's
+// memories and fleet missions are written into the shared Vault on purpose so
+// the Second Brain can find them (CEO decision P0-07, 2026-08-16). Pruning the
+// parent would remove a feature, not secure one. Only conversations are pruned,
+// and they re-enter through an explicit operator action —
+// POST /crn/second-brain/ingest/chat, which stores operator turns only.
+const NON_INDEXED_VAULT_PATHS = new Set([
+  'blocks/security',
+  'Agents/Aeon/chat_sessions',
+]);
 const SUMMARY_CHARS = 280;
 
 // ── Helpers ─────────────────────────────────────────────────────────────────

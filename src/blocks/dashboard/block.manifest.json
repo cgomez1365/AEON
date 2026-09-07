@@ -91,7 +91,7 @@
         {
           "file": "api/chat-stream.cjs",
           "scope": "vault",
-          "reason": "The streaming chat path writes the same shared transcript as the non-streaming one."
+          "reason": "Reads the shared memory store at Agents/Aeon/memory/memories.json to inject working memory into a turn. It writes nothing — the previous reason claimed it wrote the shared transcript, which was never true of this file (BO-MEM T1)."
         }
       ]
     },

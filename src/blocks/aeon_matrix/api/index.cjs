@@ -374,6 +374,11 @@ module.exports = function secondBrainFactory(deps) {
     // Infrastructure folders blocks auto-create (state mirrors, agent memory).
     // They are plumbing, not knowledge — never graph nodes.
     const INFRA_NAMES = new Set(['blocks', '.git', 'node_modules']);
+    // BO-MEM T1 — saved conversations are not knowledge until the operator says
+    // so (R09). Matched on the relative path, not the bare name, because
+    // Agents/ itself must stay in the graph: agent memories and council
+    // debates are written to the shared Vault deliberately (P0-07).
+    const INFRA_PATHS = new Set(['Agents/Aeon/chat_sessions']);
     for (const [section, dir] of Object.entries(sections)) {
       if (!fs.existsSync(dir)) continue;
       const walk = (d, depth = 0) => {
@@ -382,6 +387,8 @@ module.exports = function secondBrainFactory(deps) {
           return fs.readdirSync(d)
             .filter(name => !(section === 'Vault' && depth === 0 && NESTED_SECTION_NAMES.has(name)))
             .filter(name => !INFRA_NAMES.has(name) && !name.startsWith('.'))
+            .filter(name => !INFRA_PATHS.has(
+              path.relative(BRAIN_DIR, path.join(d, name)).split(path.sep).join('/')))
             .map(name => {
               const full = path.join(d, name);
               const stat = fs.statSync(full);
