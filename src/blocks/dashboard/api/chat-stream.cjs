@@ -74,69 +74,44 @@ module.exports = function ({ getLocalFile, GEMINI_KEY_POOL, _trackLLM, writeOSAu
   const MEMORY_FILE = path.join(VAULT_ROOT || path.join(__dirname, '..', '..', 'aeon_matrix', 'data', 'Vault'), 'Agents', 'Aeon', 'memory', 'memories.json');
   const WAKE_RE = /\bvp[,!]?\s+(?:come\s+)?online\b/i;
 
+  /**
+   * Working memory for this turn.
+   *
+   * BO-MEM M1, second half. The recall tier moved to src/kernel/context.cjs and
+   * this one did not, which left the change written to enforce "one policy, one
+   * place" with two memory builders in the tree — R05 broken again, one tier
+   * later. What stays here is only what is genuinely the dashboard's: its
+   * prefs, its wake phrase, its window. Ranking, budget accounting, the skills
+   * cap and the honest counts all come from the kernel.
+   *
+   * The old wake block also announced the raw store length while the line
+   * beneath it stated the real injected count — two contradictory numbers in
+   * one system prompt, with the model explicitly ordered to state one of them.
+   * The kernel states the count it actually injected.
+   */
   function buildMemoryContext(message, settings, contextTokens = 8192) {
     const prefs = settings.prefs?.brain_settings || {};
-    if (prefs.memory_in_context === false) return { text: '', wake: false, count: 0 };
-    let all = [];
-    try { all = JSON.parse(fs.readFileSync(MEMORY_FILE, 'utf8')); } catch {}
     const wake = WAKE_RE.test(message || '');
-    const pinned = all.filter(m => m.pinned);
-    const maxN = wake ? all.length : Math.max(prefs.memory_max_context || 25, pinned.length);
-
-    // D1f — budgeted in TOKENS against the live window, not in characters
-    // against nothing. The old CHAR_BUDGET (4500 / 10000 on wake) was the
-    // same on an 8k window and a 32k one, and a 4,500-character block is
-    // 1,100 tokens of prose or 1,800 of code — a spread nothing reconciled.
     const budgets = tokens.inputBudgets(contextTokens, { wake });
 
-    // D2a — ranking, precedence and eviction accounting all live in
-    // src/kernel/memory-policy.cjs, which memory_core's /memory/context also
-    // consumes. Two inline copies of this had already drifted apart, and
-    // neither could be tested without standing up an HTTP route.
-    const selection = memoryPolicy.selectForInjection({
-      memories: all,
-      budgetTokens: budgets.memoryTokens,
-      wake,
-      query: message || '',
-      maxCount: maxN,
-    });
-    const dropped = selection.dropped;
-
-    // Approved skills (brain_skills prefs), capped by count and budget
     const skills = (settings.prefs?.brain_skills || [])
-      .filter(s => s.status === 'approved' && s.body)
+      .filter(sk => sk.status === 'approved' && sk.body)
       .slice(0, prefs.skill_max_injected || 30);
-    let skillText = '';
-    let skillBudget = budgets.skillTokens;
-    let skillsDropped = 0;
-    for (const s of skills) {
-      const block = `\n### ${s.title}\n${String(s.body).slice(0, 1500)}`;
-      const cost = tokens.estimateTokens(block);
-      if (cost > skillBudget) { skillsDropped++; continue; }
-      skillText += block;
-      skillBudget -= cost;
-    }
 
-    let text = selection.text;
-    if (skillText) text += `\n\n## SKILLS (standing procedures — follow these)${skillText}`;
-    if (wake) text += `\n\n## WAKE\nThe operator just said the wake phrase. You are VP, AEON's operations agent. All ${all.length} memories are loaded above. Confirm you are online, state the memory count, restate the prime directive, and ask for the mission. Do not ask what "VP" means.`;
-
-    // D2a #8 — the model is told what memory can actually do this turn, so
-    // the honest answer is also the easy one. Without this it filled the
-    // silence with "User data saved" while Memory Core read 0 MEMORIES.
-    text += `\n\n## MEMORY RULES\n${memoryPolicy.describeMemoryState({
+    const out = kernelContext.buildMemoryContext(message, {
+      vaultRoot: VAULT_ROOT,
+      budgetTokens: budgets.memoryTokens,
+      skillTokens: budgets.skillTokens,
+      skills,
+      wake,
+      // Wake lifts the count cap entirely; otherwise the operator's cap applies
+      // and memory-policy still keeps pinned memories ahead of it.
+      maxCount: wake ? 0 : Math.max(prefs.memory_max_context || 25, 0),
+      enabled: prefs.memory_in_context !== false,
       autoMemoryEnabled: !!prefs.auto_memory,
-      injected: selection.injected,
-      dropped,
-    })}`;
+    });
 
-    return {
-      text, wake,
-      count: selection.injected,
-      considered: selection.considered,
-      dropped, skillsDropped, budgets,
-      autoMemoryEnabled: !!prefs.auto_memory,
-    };
+    return { ...out, budgets };
   }
 
   // Resolve a provider's key from .env OR the vault (added via "Add connection"),

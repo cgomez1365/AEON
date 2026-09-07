@@ -306,6 +306,20 @@ describe('R05 — one recall policy, in one place', () => {
     expect(src).toMatch(/require\(['"]\.\.\/\.\.\/\.\.\/kernel\/context\.cjs['"]\)/);
   });
 
+  it('no block re-implements memory selection either', () => {
+    // Recall was unified first and memory was left behind, which put two memory
+    // builders in the tree — R05 broken again, one tier later. A block supplies
+    // its own prefs, wake phrase and window; ranking and budget accounting come
+    // from the kernel.
+    const guilty = [];
+    for (const rel of OFFENDERS) {
+      const full = path.join(ROOT, rel);
+      if (!fs.existsSync(full)) continue;
+      if (/selectForInjection\s*\(/.test(fs.readFileSync(full, 'utf8'))) guilty.push(rel);
+    }
+    expect(guilty, `these call memory-policy directly instead of src/kernel/context.cjs: ${guilty.join(', ')}`).toEqual([]);
+  });
+
   it('the streaming path no longer reads an undeclared SETTINGS_FILE', () => {
     // It threw ReferenceError into a bare catch, so the entire auto-memory
     // extraction path had never executed once on the route the operator uses.
