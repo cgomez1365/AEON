@@ -140,10 +140,6 @@ layer above it.
 | Command | Route | Notes |
 |---|---|---|
 | `/scan` | `POST /api/system/scan` | Implemented in this block (`system.cjs`). |
-| `/autopilot-status` | `GET /api/autopilot/status` | Implemented in `tools/autopilot-daemon.cjs`, mounted directly by `server/server.js` (`setupAutopilot(app)`) — **not** a file under this block's own `api/` folder. Declared here because command ownership/naming was migrated into manifests block-by-block; the runtime route itself lives outside `src/blocks/host_os/`. |
-| `/autopilot-start` | `POST /api/autopilot/start` | Same as above. Marked `dangerous: true`. |
-| `/autopilot-stop` | `POST /api/autopilot/stop` | Same as above. |
-| `/upload` | `POST /api/autopilot/upload-now` | Same as above. |
 
 ## Deployment targets
 

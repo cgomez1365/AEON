@@ -82,35 +82,6 @@
         "mode": "instant"
       },
       {
-        "cmd": "/autopilot-status",
-        "desc": "Auto-Pilot daemon status",
-        "method": "GET",
-        "route": "/api/autopilot/status",
-        "mode": "instant"
-      },
-      {
-        "cmd": "/autopilot-start",
-        "desc": "Start the Auto-Pilot daemon",
-        "method": "POST",
-        "route": "/api/autopilot/start",
-        "mode": "instant",
-        "dangerous": true
-      },
-      {
-        "cmd": "/autopilot-stop",
-        "desc": "Stop the Auto-Pilot daemon",
-        "method": "POST",
-        "route": "/api/autopilot/stop",
-        "mode": "instant"
-      },
-      {
-        "cmd": "/upload",
-        "desc": "Auto-Pilot: upload now",
-        "method": "POST",
-        "route": "/api/autopilot/upload-now",
-        "mode": "instant"
-      },
-      {
         "cmd": "/read",
         "desc": "Read a document — txt, md, pdf, docx, html — and summarize it",
         "method": "POST",

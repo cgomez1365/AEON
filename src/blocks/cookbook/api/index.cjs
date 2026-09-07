@@ -511,6 +511,62 @@ module.exports = function createCookbookRouter(deps) {
       : { ok: false, error: `"${input}" is not a HuggingFace repository (org/repo).`, suggestions: [] };
   };
 
+  /**
+   * Install a catalogue model (and the llama.cpp engine first, if absent)
+   * through the local-runtime installers, as a tracked Cookbook task.
+   * Shared by POST /model/download (the /model-pull command) and
+   * POST /cookbook/local/install (the Cookbook button).
+   */
+  function startLocalInstall(modelId) {
+    // Injectable (deps.localInstallers) so a test of the ROUTING never moves
+    // a byte over the network; production resolves the real installers.
+    let RI = deps.localInstallers?.runtime || null, MI = deps.localInstallers?.model || null;
+    if (!RI) { try { RI = require(path.join(__dirname, '..', '..', '..', '..', 'services', 'local-runtime', 'runtime-installer.cjs')); } catch { /* unavailable on this deploy */ } }
+    if (!MI) { try { MI = require(path.join(__dirname, '..', '..', '..', '..', 'services', 'local-runtime', 'model-installer.cjs')); } catch { /* unavailable on this deploy */ } }
+    const { getLocalRuntimeRegistry } = deps;
+    const reg = getLocalRuntimeRegistry ? getLocalRuntimeRegistry() : null;
+    if (!RI || !MI || !reg || !reg.file) {
+      return { ok: false, status: 503, error: 'The local model installer is not available on this install.', remedy: 'Run npm install in the AEON folder and restart.' };
+    }
+    const dataRoot = path.resolve(reg.file, '..', '..');
+    const entry = (Array.isArray(modelCatalog) ? modelCatalog : (modelCatalog.models || [])).find(m => m.id === modelId);
+    const size = entry?.bytes ? (entry.bytes >= 1e9 ? `${(entry.bytes / 1e9).toFixed(1)} GB` : `${Math.round(entry.bytes / 1e6)} MB`) : 'unknown size';
+    const needsRuntime = !reg.activeRuntime();
+
+    const sessionId = `local-install-${crypto.randomBytes(4).toString('hex')}`;
+    fs.mkdirSync(LOGS_DIR, { recursive: true });
+    const logFile = path.join(LOGS_DIR, `${sessionId}.log`);
+    const logStream = fs.createWriteStream(logFile, { flags: 'a' });
+    activeTasks[sessionId] = { type: 'model-install', status: 'running', query: modelId, started_at: Date.now(), logFile, pct: 0, log: null, error: null };
+    const status = (msg) => { logStream.write(`[STATUS] ${msg}\n`); const t = activeTasks[sessionId]; if (t) t.log = msg; if (typeof global.broadcastTerminalEvent === 'function') global.broadcastTerminalEvent('LOCAL_MODEL_INSTALL', `[${modelId}] ${msg}`); };
+    const progress = (pct) => { logStream.write(`[PROGRESS] ${pct}%\n`); const t = activeTasks[sessionId]; if (t) t.pct = pct; };
+
+    (async () => {
+      if (needsRuntime) {
+        status('Setting up the local AI engine first…');
+        await RI.installRuntime({ dataRoot, onProgress: progress, onStatus: status });
+        status('Local AI engine ready.');
+      }
+      await MI.installModel({ dataRoot, modelId, onStatus: status, onProgress: progress });
+    })().then(() => {
+      logStream.write('LOCAL_MODEL_INSTALL_OK\n'); logStream.end();
+      const t = activeTasks[sessionId]; if (t) { t.status = 'done'; t.pct = 100; }
+    }).catch((e) => {
+      logStream.write(`ERROR: ${e.message}\nLOCAL_MODEL_INSTALL_FAILED\n`); logStream.end();
+      const t = activeTasks[sessionId]; if (t) { t.status = 'failed'; t.error = e.message; }
+    });
+
+    return {
+      ok: true,
+      session_id: sessionId,
+      model: modelId,
+      needsRuntime,
+      // What the terminal prints. The download runs in the background; this
+      // says what is happening, how big it is, and where to watch it.
+      text: `Downloading ${entry?.displayName || modelId} (${size})${needsRuntime ? ' — installing the local AI engine first' : ''}. Verified by SHA-256 when it lands. Watch progress in Cookbook, or run /models in a minute.`,
+    };
+  }
+
   router.post('/model/download', async (req, res) => {
     const { repo_id: requested, backend, include, hf_token, local_dir, allowNonGguf } = req.body;
     if (!requested) return res.status(400).json({ ok: false, error: 'repo_id is required' });
@@ -533,6 +589,18 @@ module.exports = function createCookbookRouter(deps) {
       });
     }
     const repo_id = resolution.repoId;
+
+    // A CATALOGUE model — the thing /model-pull's own description advertises —
+    // installs through AEON's own installer: the same SHA-256-verified path the
+    // Cookbook's "Local models" button uses, needing no huggingface-cli and no
+    // Python. Found by the CEO: `/model-pull qwen3-1.7b-q8` resolved the id
+    // correctly and then 503'd for want of a tool the local installer never
+    // needed. Only a raw org/repo still goes through Hugging Face tooling.
+    if (resolution.matched) {
+      const started = startLocalInstall(resolution.matched);
+      if (!started.ok) return res.status(started.status || 503).json(started);
+      return res.json(started);
+    }
 
     // BO-H3a — a repo the runtime cannot open is a format problem, not a
     // download problem. Say so before gigabytes move, not after. The same
