@@ -39,8 +39,26 @@ const { loadExtractors, extractText, embed, cosineSimilarity, EMBED_MODEL } = re
 
 const DEFAULT_K        = 5;
 const MATCH_THRESHOLD   = 0.35; // cosine similarity floor
-const MAX_DOC_CHARS     = 2000; // cap per-document content injected into context
+const MAX_DOC_CHARS     = 2600; // cap per-document content injected into context (room for two windows)
 const RELATIVE_MARGIN   = 0.06; // "matched" = within this of the best score, not above the absolute floor
+// Hybrid window scoring. Measured live: for "what does Principle 06 say an
+// engine is", the window that literally contains "Principle 06 An engine is a
+// block" ranked BELOW a table from another section on cosine alone. Summary
+// embeddings compress a homogeneous corpus into a narrow band (see the
+// measurement in /ask below), so a cheap lexical signal does the work cosine
+// cannot: the fraction of the query's meaningful terms that appear in the
+// window. Zero tokens, no model, deterministic.
+const CANDIDATES        = 20;   // docs re-scored lexically, from the top of the cosine ranking
+const LEX_WEIGHT        = 0.15; // full lexical overlap is worth this much cosine
+const WINDOWS_PER_DOC   = 2;    // passages handed over per document
+const STOP = new Set(['the','and','for','are','but','not','you','all','any','can','her','was','one','our','out','who','get','has','him','his','how','its','new','now','old','see','two','way','why','did','does','what','when','where','with','from','this','that','they','them','then','than','have','will','your','about','into','over','some','more','most','such','only','also','been','were','said','says','make','made','like','just','know','take','according','say','does','did']);
+const terms = (t) => new Set((String(t).toLowerCase().match(/[a-z][a-z0-9]{2,}/g) || []).filter(w => !STOP.has(w)));
+function lexicalOverlap(queryTerms, text) {
+  if (!queryTerms.size) return 0;
+  const have = terms(text);
+  let n = 0; for (const q of queryTerms) if (have.has(q)) n++;
+  return n / queryTerms.size;
+}
 
 // The recall gate used to live here too — a third, uncalled copy. It is
 // src/kernel/context.cjs now (Doctrine R05: one policy, one place); this block
@@ -164,18 +182,39 @@ module.exports = function retrieveFactory(deps) {
     // summary vector still counts, so a short document (no windows) ranks as
     // before; a long one can now be found by a sentence 40 KB in.
     const chunkIdx = readChunks();
-    const scored = comparable.map(d => {
+    const cosineScored = comparable.map(d => {
       let score = cosineSimilarity(queryEmbedding, d.embedding);
-      let passage = null;
       const rec = chunkIdx[d.path];
+      const windows = [];
       if (rec && rec.model === queryModel && Array.isArray(rec.chunks)) {
         for (const c of rec.chunks) {
           const cs = cosineSimilarity(queryEmbedding, c.v);
-          if (cs > score) { score = cs; passage = { s: c.s, e: c.e }; }
+          windows.push({ s: c.s, e: c.e, cos: cs });
+          if (cs > score) score = cs;
         }
       }
-      return { d, score, passage };
-    });
+      return { d, score, windows };
+    }).sort((a, b) => b.score - a.score);
+
+    // Lexical re-score of the top of the cosine ranking. Reads each candidate
+    // once; the extraction is reused for the passage below.
+    loadExtractors();
+    const qTerms = terms(query);
+    const scored = [];
+    for (const cand of cosineScored.slice(0, CANDIDATES)) {
+      const full = resolveIndexedPath(cand.d.path);
+      let text = null;
+      try { text = (full && fs.existsSync(full)) ? await extractText(full) : null; } catch { text = null; }
+      if (!text) { scored.push({ ...cand, text: null, passages: [], score: cand.score }); continue; }
+      let best = cosineSimilarity(queryEmbedding, cand.d.embedding) + LEX_WEIGHT * lexicalOverlap(qTerms, cand.d.summary || text.slice(0, 400));
+      const ranked = cand.windows
+        .map(w => ({ ...w, score: w.cos + LEX_WEIGHT * lexicalOverlap(qTerms, text.slice(w.s, w.e)) }))
+        .sort((a, b) => b.score - a.score);
+      if (ranked.length && ranked[0].score > best) best = ranked[0].score;
+      scored.push({ d: cand.d, score: best, text, passages: ranked.slice(0, WINDOWS_PER_DOC) });
+    }
+    for (const cand of cosineScored.slice(CANDIDATES)) scored.push({ ...cand, text: null, passages: [] });
+
     const above = scored.filter(r => r.score >= MATCH_THRESHOLD).sort((a, b) => b.score - a.score);
     // How many are as good as what is being shown, before the cut to k. The
     // caller renders "showing k of N" and refuses a counting question over a
@@ -187,25 +226,34 @@ module.exports = function retrieveFactory(deps) {
     const matched = above.filter(r => r.score >= best - RELATIVE_MARGIN).length;
     const ranked = above.slice(0, k);
 
-    loadExtractors();
     const results = [];
-    for (const { d: meta, score, passage } of ranked) {
-      const full = resolveIndexedPath(meta.path);
-      if (!full || !fs.existsSync(full)) continue;
+    for (const { d: meta, score, passages, text: pre } of ranked) {
       try {
-        const text = await extractText(full);
+        let text = pre;
+        if (text == null) {
+          const full = resolveIndexedPath(meta.path);
+          if (!full || !fs.existsSync(full)) continue;
+          text = await extractText(full);
+        }
         if (!text) continue;
-        // Hand the model the passage that matched, with room on either side,
-        // rather than the first 2,000 characters of the file.
+        // Hand the model the passages that matched — up to two, in document
+        // order, each with room either side — rather than the file's head. A
+        // second window is what stops the right file with the wrong window
+        // from reading as "the document does not say".
         let content;
-        if (passage) {
-          const pad = Math.max(0, Math.floor((MAX_DOC_CHARS - (passage.e - passage.s)) / 2));
-          const s0 = Math.max(0, passage.s - pad);
-          const e0 = Math.min(text.length, passage.e + pad);
-          content = `${s0 > 0 ? '…' : ''}${text.slice(s0, e0)}${e0 < text.length ? '…' : ''}`;
+        const picks = (passages || []).filter(p => p && p.e > p.s).sort((a, b) => a.s - b.s);
+        if (picks.length) {
+          const per = Math.floor(MAX_DOC_CHARS / picks.length);
+          content = picks.map(pg => {
+            const pad = Math.max(0, Math.floor((per - (pg.e - pg.s)) / 2));
+            const s0 = Math.max(0, pg.s - pad);
+            const e0 = Math.min(text.length, pg.e + pad);
+            return `${s0 > 0 ? '…' : ''}${text.slice(s0, e0)}${e0 < text.length ? '…' : ''}`;
+          }).join('\n[…]\n');
         } else {
           content = text.slice(0, MAX_DOC_CHARS);
         }
+        const passage = picks.length ? { s: picks[0].s, e: picks[0].e, windows: picks.map(pg => ({ s: pg.s, e: pg.e })) } : null;
         results.push({
           id: meta.path,
           content,

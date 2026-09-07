@@ -289,7 +289,12 @@ async function buildRecallContext(message, {
     return {
       query, forced, ran: true, ok: true,
       count: kept.length, dropped, matched, citations, tokensUsed,
-      context: `\n\n[AEON SECOND BRAIN CONTEXT]\nRelevant indexed knowledge — cite the source file when you use it. If nothing here is relevant, ignore it:\n\n${kept.map(k => k.line).join('\n\n')}${subsetNote}${truncationNote}${countingNote}`,
+      // The instruction is stronger than "cite the source" because a cited
+      // source did not stop this: given the Bible with the wrong window, the
+      // model INVENTED a principle and attributed it to §07. A claim about what
+      // a document says must be a quotation from a passage below, or an
+      // admission that the passage does not contain it (R01, §08).
+      context: `\n\n[AEON SECOND BRAIN CONTEXT]\nRelevant passages from the operator's own documents. Answer ONLY from these passages. When you state what a document says, quote the sentence you rely on and name the file. If the passages do not contain the answer, say so plainly — never reconstruct it from a document's title, from memory of what such a document usually says, or from general knowledge. If nothing here is relevant, ignore it:\n\n${kept.map(k => k.line).join('\n\n')}${subsetNote}${truncationNote}${countingNote}`,
     };
   }
 

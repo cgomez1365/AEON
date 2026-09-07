@@ -328,6 +328,44 @@ describe('R08 — a vector from another space is migrated, not compared', () => 
   });
 });
 
+describe('a lexical signal finds the passage when cosine cannot', () => {
+  it('returns the window that literally contains the query terms, even under an uninformative embedder', async () => {
+    // A constant embedder: every vector identical, cosine 1.0 everywhere. Only
+    // the lexical overlap can tell the windows apart — which is the situation
+    // a compressed embedding space approximates on a homogeneous corpus.
+    const flat = async () => ({ vector: [1, 0, 0, 0], model: 'flat-stub' });
+    write('bible.md', `# Bible\n\n${filler(40)}\n\nPrinciple 06 An engine is a block. An intelligence engine arrives the same way every other capability does.\n\n${filler(40)}`);
+    write('other.md', `# Other\n\n${filler(50)}`);
+    await (async () => { const r = ingestMod({ isVercel: false, VAULT_ROOT: vault, DATA_ROOT: dataRoot, embed: flat }); return r.runSecondBrainScan(); })();
+    const app = express(); app.use(express.json());
+    app.use('/api', retrieveFactory({ isVercel: false, VAULT_ROOT: vault, DATA_ROOT: dataRoot, embed: flat, kernelLLM: null }));
+    const h = await listen(app); servers.push(h.server);
+    const out = await (await fetch(`http://127.0.0.1:${h.port}/api/crn/second-brain/retrieve`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: 'what does Principle 06 say an engine is', k: 2 }),
+    })).json();
+    expect(out.documents[0].id).toBe('bible.md');
+    expect(out.documents[0].content).toMatch(/An engine is a block/);
+  });
+
+  it('hands over up to two windows of one document, in document order', async () => {
+    write('long.md', `# Long\n\n${filler(40)}\n\nThe vault master key and keyslot file are two halves.\n\n${filler(60)}\n\nMove both or neither, or the vault locks out.\n\n${filler(30)}`);
+    await scan();
+    const app = express(); app.use(express.json());
+    app.use('/api', retrieveFactory({ isVercel: false, VAULT_ROOT: vault, DATA_ROOT: dataRoot, embed: bow, kernelLLM: null }));
+    const h = await listen(app); servers.push(h.server);
+    const out = await (await fetch(`http://127.0.0.1:${h.port}/api/crn/second-brain/retrieve`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: 'vault master key keyslot halves move both or neither locks out', k: 1 }),
+    })).json();
+    const c = out.documents[0].content;
+    expect(c).toMatch(/two halves/);
+    expect(c).toMatch(/Move both or neither/);
+    expect(c.indexOf('two halves')).toBeLessThan(c.indexOf('Move both or neither'));
+    expect(out.documents[0].metadata.passage.windows.length).toBe(2);
+  });
+});
+
 describe('HTML is indexable text', () => {
   it('strips markup and scripts, keeps the words', () => {
     const t = htmlToText('<html><head><style>.x{}</style><script>var a=1</script></head><body><h1>Title &amp; more</h1><p>The vault<br>needs <b>both</b> halves.</p></body></html>');

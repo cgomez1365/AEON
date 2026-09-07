@@ -189,6 +189,16 @@ describe('retrieved documents are budgeted, and truncation is stated', () => {
     expect(r.context).not.toMatch(/No relevant indexed documents were found/i);
   });
 
+  it('tells the model to quote, and to say when the passage does not contain it', async () => {
+    // A cited source did not stop a fabrication: given the right file and the
+    // wrong window, the model invented a principle and attributed it to §07.
+    const fetchImpl = stubFetch(ok({ documents: [doc('bible.html')] }));
+    const r = await ctx.buildRecallContext('what does my bible say about principle 06', { fetchImpl });
+    expect(r.context).toMatch(/Answer ONLY from these passages/);
+    expect(r.context).toMatch(/quote the sentence/);
+    expect(r.context).toMatch(/never reconstruct it from a document.s title/);
+  });
+
   it('carries citations for every document it did include (R01)', async () => {
     const fetchImpl = stubFetch(ok({ documents: [doc('notes.md'), doc('log.md')] }));
     const r = await ctx.buildRecallContext('recall my notes', { fetchImpl });
