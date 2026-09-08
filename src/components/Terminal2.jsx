@@ -106,6 +106,7 @@ const Terminal2 = ({ onUsageUpdate }) => {
   const [input, setInput] = useState('');
   const [pendingImage, setPendingImage] = useState(null); // { dataUri, name }
   const fileInputRef = useRef(null);
+  const docInputRef = useRef(null);   // /upload → native file picker (documents)
   const [feed, setFeed] = useState([BOOT_MSG]);
   const [isLoading, setIsLoading] = useState(false);
   const [commands, setCommands] = useState([]);
@@ -300,11 +301,12 @@ const Terminal2 = ({ onUsageUpdate }) => {
 
   // ── Drag & drop → vault placement recommendation ──
   const [dragOver, setDragOver] = useState(false);
-  const onDrop = async (e) => {
-    e.preventDefault(); setDragOver(false);
-    const file = e.dataTransfer?.files?.[0];
-    if (!file) return;
-    if (file.size > 25 * 1024 * 1024) { push({ type: 'msg', role: 'error', content: `[DROP] ${file.name} is over 25MB — use the Files block for large files.` }); return; }
+  // One intake for a dropped file and for /upload's picker: read the bytes in
+  // the browser, ask where it belongs, show the placement card. The operator
+  // never leaves the terminal to put a reference file into the Matrix.
+  const stageFile = async (file, via = 'drop') => {
+    const tag = via === 'upload' ? 'UPLOAD' : 'DROP';
+    if (file.size > 25 * 1024 * 1024) { push({ type: 'msg', role: 'error', content: `[${tag}] ${file.name} is over 25MB — use the Files block for large files.` }); return; }
     push({ type: 'msg', role: 'system', content: `📥 Reading ${file.name}… asking where it belongs in your Vault.` });
     const buf = await file.arrayBuffer();
     let binary = ''; const bytes = new Uint8Array(buf);
@@ -317,20 +319,38 @@ const Terminal2 = ({ onUsageUpdate }) => {
       });
       const d = await res.json();
       if (!d.ok) throw new Error(d.error || 'drop failed');
-      push({ type: 'filedrop', name: file.name, content: b64, recommendation: d.recommendation, folders: d.folders || [] });
-    } catch (err) { push({ type: 'msg', role: 'error', content: `[DROP] ${err.message}` }); }
+      push({ type: 'filedrop', name: file.name, content: b64, recommendation: d.recommendation, folders: d.folders || [], newFolder: '' });
+    } catch (err) { push({ type: 'msg', role: 'error', content: `[${tag}] ${err.message}` }); }
+  };
+  const onDrop = async (e) => {
+    e.preventDefault(); setDragOver(false);
+    const file = e.dataTransfer?.files?.[0];
+    if (file) await stageFile(file, 'drop');
+  };
+  const onDocSelected = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) { push({ type: 'msg', role: 'system', content: 'Upload cancelled — no file chosen.' }); return; }
+    await stageFile(file, 'upload');
   };
 
+  // Saving used to POST /console/file-save — a raw write into the vault that
+  // indexed nothing, so the file was invisible to /recall until the next scan.
+  // It now goes through the Matrix upload route: written, indexed, summarised.
   const saveDrop = async (entry, folder) => {
+    const dest = String(folder || '').trim();
+    if (!dest) { push({ type: 'msg', role: 'error', content: '[VAULT] Pick a folder, or type a new one.' }); return; }
     setFeed(prev => prev.filter(e => e.id !== entry.id));
+    const chipId = push({ type: 'chip', pid: nextPid(), kind: 'CMD', label: `/upload ${entry.name} → ${dest}`, status: 'running', expanded: false });
+    const t0 = Date.now();
     try {
-      const res = await fetch('/api/console/file-save', {
+      const res = await fetch('/api/crn/second-brain/upload', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: entry.name, content: entry.content, folder, encoding: 'base64' }),
+        body: JSON.stringify({ name: entry.name, contentBase64: entry.content, dest }),
       });
-      const d = await res.json();
-      push({ type: 'msg', role: d.ok ? 'system' : 'error', content: d.text || d.error });
-    } catch (e) { push({ type: 'msg', role: 'error', content: `[VAULT] ${e.message}` }); }
+      const d = await res.json().catch(() => ({}));
+      patch(chipId, { status: res.ok ? 'ok' : 'error', output: d.text || [d.error, d.remedy].filter(Boolean).join(' '), latencyMs: Date.now() - t0, expanded: true });
+    } catch (e) { patch(chipId, { status: 'error', output: `[VAULT] ${e.message}`, latencyMs: Date.now() - t0, expanded: true }); }
   };
 
   useEffect(() => { scrollRef.current?.scrollTo(0, scrollRef.current.scrollHeight); }, [feed]);
@@ -531,6 +551,14 @@ const Terminal2 = ({ onUsageUpdate }) => {
         type: 'msg', role: 'system',
         content: opening ? 'Model picker opened.' : 'Model picker closed.',
       });
+      return;
+    }
+    // /upload with no path opens the OS file picker; the placement card does the
+    // rest. `/upload <path>` (a file on the server's machine) goes to the bus.
+    if (cmdToken === '/upload' && !arg) {
+      if (!docInputRef.current) { push({ type: 'msg', role: 'error', content: 'File picker unavailable in this view.' }); return; }
+      push({ type: 'msg', role: 'system', content: 'Choose a document to put in the Second Brain (PDF, DOCX, HTML, Markdown, text)…' });
+      docInputRef.current.click();
       return;
     }
     if (cmdToken === '/open') {
@@ -752,6 +780,16 @@ const Terminal2 = ({ onUsageUpdate }) => {
                   <option value="" disabled>…or pick a folder</option>
                   {entry.folders.map(f => <option key={f} value={f}>{f}</option>)}
                 </select>
+                <input aria-label="New folder inside the vault" placeholder="…or a new folder, e.g. Reference/Phishing" value={entry.newFolder || ''}
+                  onChange={(e) => patch(entry.id, { newFolder: e.target.value })}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && entry.newFolder?.trim()) saveDrop(entry, entry.newFolder.trim()); }}
+                  style={{ background: '#0b0f19', color: '#c8d6e8', border: '1px solid #1e2d45', borderRadius: 2, fontSize: 11, padding: '3px 6px', fontFamily: 'inherit', minWidth: 220 }} />
+                {entry.newFolder?.trim() && (
+                  <button onClick={() => saveDrop(entry, entry.newFolder.trim())}
+                    style={{ background: 'rgba(0,242,255,0.1)', border: '1px solid #00f2ff', color: '#00f2ff', padding: '3px 14px', borderRadius: 2, cursor: 'pointer', fontSize: 11, fontFamily: 'inherit' }}>
+                    SAVE TO NEW FOLDER
+                  </button>
+                )}
                 <button onClick={() => setFeed(prev => prev.filter(e2 => e2.id !== entry.id))}
                   style={{ background: 'rgba(255,68,85,0.1)', border: '1px solid #ff4455', color: '#ff4455', padding: '3px 14px', borderRadius: 2, cursor: 'pointer', fontSize: 11, fontFamily: 'inherit' }}>
                   [N] CANCEL
@@ -922,6 +960,7 @@ const Terminal2 = ({ onUsageUpdate }) => {
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderTop: '1px solid #1e2d45' }}>
         <span style={{ color: sigilColor, fontSize: 14, width: 14, textAlign: 'center', textShadow: `0 0 8px ${sigilColor}` }}>{sigilGlyph}</span>
         <input ref={fileInputRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={onFileSelected} />
+        <input ref={docInputRef} type="file" accept=".pdf,.docx,.html,.htm,.md,.markdown,.txt,.csv,.json" style={{ display: 'none' }} onChange={onDocSelected} />
         <Paperclip size={14} style={{ cursor: 'pointer', color: pendingImage ? '#00f2ff' : '#4a5568', flexShrink: 0 }} onClick={() => fileInputRef.current?.click()} />
         <Cpu size={14} aria-label="Hotswap model" style={{ cursor: 'pointer', color: showModelPicker ? '#00f2ff' : '#4a5568', flexShrink: 0 }} onClick={() => setShowModelPicker(v => !v)} />
         <input

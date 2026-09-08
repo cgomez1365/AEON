@@ -163,7 +163,9 @@ module.exports = function ({ storage, kernelLLM, _blockRegistry, _blockReadiness
         : String(content);
       const sample = text.slice(0, 3000);
 
-      let recommendation = { folder: folders[0] || 'Inbox', reason: 'Default location.' };
+      // Without a model the first folder alphabetically was recommended —
+      // "Agents" for a phishing memo. The uploads folder is the honest default.
+      let recommendation = { folder: 'Reading_Library/Uploads', reason: 'Default location — no model assigned to recommend one.' };
       if (kernelLLM && folders.length) {
         try {
           const out = await kernelLLM(

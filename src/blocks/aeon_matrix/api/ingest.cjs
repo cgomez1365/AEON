@@ -530,38 +530,87 @@ module.exports = function ingestFactory(deps) {
   // install (removed 2026-09-07). The verb deserves its obvious meaning: copy a
   // document from anywhere under the operator's home into the vault, index it,
   // and say what it is. The intake counterpart of /read.
+  // GET /crn/second-brain/folders — the vault's folders, for the /upload
+  // destination picker. Directories only, relative POSIX paths, infra pruned.
+  router.get('/crn/second-brain/folders', (_req, res) => {
+    const out = [];
+    const walk = (dir, depth) => {
+      if (depth > 3) return;
+      let entries = [];
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+      for (const e of entries) {
+        if (!e.isDirectory() || e.name.startsWith('.') || e.name === 'node_modules') continue;
+        const rel = vaultRelative(path.join(dir, e.name));
+        if ([...NON_INDEXED_VAULT_PATHS].some(p => rel === p || rel.startsWith(`${p}/`))) continue;
+        out.push(rel); walk(path.join(dir, e.name), depth + 1);
+      }
+    };
+    walk(BRAIN_DIR, 0);
+    const def = 'Reading_Library/Uploads';
+    if (!out.includes(def)) out.unshift(def);
+    res.json({ root: BRAIN_DIR, default: def, folders: out.sort() });
+  });
+
+  // The browser cannot hand the server a path, so /upload from the terminal
+  // sends the bytes: { name, contentBase64, dest }. The CLI still sends a path.
+  const DEST_RE = /^[\w.\- ]+(?:\/[\w.\- ]+)*$/;
   router.post('/crn/second-brain/upload', async (req, res) => {
-    const { filePath } = req.body || {};
-    const requested = typeof filePath === 'string' ? filePath.trim() : '';
-    if (!requested) return res.status(400).json({ error: 'filePath is required. Usage: /upload <filePath>' });
-
-    const { isInside } = require('../../../kernel/pathContainment.cjs');
-    const roots = [deps?.HOME_ROOT, deps?.WORKSPACE].filter(Boolean).map(r => path.resolve(r));
-    const base = deps?.WORKSPACE || deps?.HOME_ROOT || null;
-    const source = path.isAbsolute(requested) ? path.resolve(requested) : (base ? path.resolve(base, requested) : null);
-    if (!source || !roots.some(r => isInside(r, source, { allowRoot: false }))) {
-      return res.status(403).json({ error: `/upload reads files under your home folder only. ${source || requested} is outside it.` });
-    }
-    if (!fs.existsSync(source) || !fs.statSync(source).isFile()) {
-      return res.status(404).json({ error: `Not found: ${source}`, hint: base ? `Relative paths resolve against ${base}.` : undefined });
-    }
+    const { filePath, name, contentBase64, dest: destFolder } = req.body || {};
     const extract = require('../../../kernel/extract.cjs');
-    if (extract.kindOf(source) === 'binary') {
-      return res.status(415).json({ error: `${path.extname(source) || 'That file'} is not a text or document format the second brain can index.`, remedy: 'Convert it to PDF, DOCX, HTML or text first.' });
+    const fromBytes = typeof contentBase64 === 'string' && contentBase64.length > 0;
+    const requested = typeof filePath === 'string' ? filePath.trim() : '';
+    if (!requested && !fromBytes) return res.status(400).json({ error: 'Nothing to upload. In the terminal, type /upload and pick a file; from the CLI: /upload <filePath>.' });
+
+    let source = null;            // path on this machine (CLI form)
+    let displayName;              // what the operator called the file
+    let bytes = null;             // browser form
+    if (fromBytes) {
+      displayName = path.basename(String(name || 'upload').replace(/\\/g, '/')).replace(/[^\w.\- ()]/g, '_');
+      if (!displayName || displayName === '.' || displayName === '..') displayName = 'upload';
+      if (extract.kindOf(displayName) === 'binary') {
+        return res.status(415).json({ error: `${path.extname(displayName) || 'That file'} is not a text or document format the second brain can index.`, remedy: 'Convert it to PDF, DOCX, HTML or text first.' });
+      }
+      try { bytes = Buffer.from(contentBase64, 'base64'); } catch { return res.status(400).json({ error: 'contentBase64 is not valid base64.' }); }
+      if (bytes.length > 25 * 1024 * 1024) return res.status(413).json({ error: `${displayName} is ${(bytes.length / 1048576).toFixed(1)} MB; the terminal uploads up to 25 MB.`, remedy: 'Copy it into the vault folder with File Manager and run /scan.' });
+    } else {
+      const { isInside } = require('../../../kernel/pathContainment.cjs');
+      const roots = [deps?.HOME_ROOT, deps?.WORKSPACE].filter(Boolean).map(r => path.resolve(r));
+      const base = deps?.WORKSPACE || deps?.HOME_ROOT || null;
+      source = path.isAbsolute(requested) ? path.resolve(requested) : (base ? path.resolve(base, requested) : null);
+      if (!source || !roots.some(r => isInside(r, source, { allowRoot: false }))) {
+        return res.status(403).json({ error: `/upload reads files under your home folder only. ${source || requested} is outside it.` });
+      }
+      if (!fs.existsSync(source) || !fs.statSync(source).isFile()) {
+        return res.status(404).json({ error: `Not found: ${source}`, hint: base ? `Relative paths resolve against ${base}.` : undefined });
+      }
+      if (extract.kindOf(source) === 'binary') {
+        return res.status(415).json({ error: `${path.extname(source) || 'That file'} is not a text or document format the second brain can index.`, remedy: 'Convert it to PDF, DOCX, HTML or text first.' });
+      }
+      displayName = path.basename(source);
     }
 
-    // Copy into the vault under Uploads/, never overwriting an earlier upload.
-    const uploads = path.join(BRAIN_DIR, 'Reading_Library', 'Uploads');
+    // Destination: a folder inside the vault, chosen by the operator; default
+    // Reading_Library/Uploads. Contained (no .., no absolute), created if new.
+    const rawFolder = typeof destFolder === 'string' ? destFolder.trim().replace(/\\/g, '/') : '';
+    // An absolute path is a request to write outside the vault — refuse it
+    // rather than quietly folding it in.
+    if (/^\/|^[A-Za-z]:/.test(rawFolder)) return res.status(400).json({ error: `"${destFolder}" is an absolute path. Give a folder inside the vault, like Reading_Library/Uploads.` });
+    const folderReq = rawFolder ? rawFolder.replace(/\/+$/g, '') : 'Reading_Library/Uploads';
+    if (!DEST_RE.test(folderReq) || folderReq.split('/').some(seg => seg === '.' || seg === '..')) {
+      return res.status(400).json({ error: `"${destFolder}" is not a folder inside the vault. Use a path like Reading_Library/Uploads.` });
+    }
+    const uploads = resolveVaultPath(folderReq);
+    if (!uploads) return res.status(403).json({ error: `"${destFolder}" is outside the vault.` });
     fs.mkdirSync(uploads, { recursive: true });
-    const ext = path.extname(source); const stem = path.basename(source, ext);
+    const ext = path.extname(displayName); const stem = path.basename(displayName, ext);
     let dest = path.join(uploads, `${stem}${ext}`);
     for (let n = 2; fs.existsSync(dest); n++) dest = path.join(uploads, `${stem}-${n}${ext}`);
-    fs.copyFileSync(source, dest);
+    if (bytes) fs.writeFileSync(dest, bytes); else fs.copyFileSync(source, dest);
 
     let text;
     try { text = await extract.extractText(dest); }
-    catch (e) { try { fs.unlinkSync(dest); } catch {} return res.status(422).json({ error: `Could not read ${path.basename(source)}: ${e.message}`, remedy: 'The file may be damaged or password-protected. Export it again and retry.' }); }
-    if (!text || text.trim().length < 20) { try { fs.unlinkSync(dest); } catch {} return res.status(422).json({ error: `${path.basename(source)} has no readable text to index.` }); }
+    catch (e) { try { fs.unlinkSync(dest); } catch {} return res.status(422).json({ error: `Could not read ${displayName}: ${e.message}`, remedy: 'The file may be damaged or password-protected. Export it again and retry.' }); }
+    if (!text || text.trim().length < 20) { try { fs.unlinkSync(dest); } catch {} return res.status(422).json({ error: `${displayName} has no readable text to index.` }); }
 
     try {
       const stat = fs.statSync(dest);
@@ -577,13 +626,13 @@ module.exports = function ingestFactory(deps) {
       if (typeof deps?.kernelLLM === 'function') {
         try {
           const body = text.length > 14000 ? `${text.slice(0, 14000)}\n\n[… ${text.length - 14000} more characters not shown]` : text;
-          summary = String(await deps.kernelLLM(`Summarize this document for its owner in plain English — what it is, what it says, anything to act on. Quote exact figures, names and dates. 4 to 8 sentences.\n\nFILE: ${path.basename(source)}\n\n${body}`, { role: 'chat' }) || '').trim() || null;
+          summary = String(await deps.kernelLLM(`Summarize this document for its owner in plain English — what it is, what it says, anything to act on. Quote exact figures, names and dates. 4 to 8 sentences.\n\nFILE: ${displayName}\n\n${body}`, { role: 'chat' }) || '').trim() || null;
         } catch { summary = null; }
       }
       const where = relPosix;
       res.json({
         ok: true, file: where, chars: text.length, indexed: true, summary,
-        text: `Added ${path.basename(source)} to the Second Brain as ${where} (${text.length.toLocaleString()} characters, indexed).${summary ? `\n\n${summary}` : '\n\nNo summary — no model is assigned to the chat role.'}`,
+        text: `Added ${displayName} to the Second Brain as ${where} (${text.length.toLocaleString()} characters, indexed).${summary ? `\n\n${summary}` : '\n\nNo summary — no model is assigned to the chat role.'}`,
       });
     } catch (err) {
       console.error('[UPLOAD] error:', err.message);

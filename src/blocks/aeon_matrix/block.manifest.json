@@ -156,6 +156,17 @@
         "mode": "instant",
         "dangerous": true,
         "when": "supabase"
+      },
+      {
+        "cmd": "/upload",
+        "desc": "Put a document into the Second Brain — opens a file picker, you choose the vault folder; indexed and summarized",
+        "method": "POST",
+        "route": "/api/crn/second-brain/upload",
+        "param": "filePath",
+        "mode": "instant",
+        "argRequired": false,
+        "argHint": "[file on this machine]",
+        "category": "content"
       }
     ],
     "filesystem": {
@@ -242,6 +253,11 @@
     {
       "method": "GET",
       "path": "/api/crn/second-brain/extract",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/crn/second-brain/folders",
       "auth": true
     },
     {

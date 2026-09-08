@@ -6,7 +6,7 @@
  * three cloud commands now declare `when: "supabase"`, the registry asks the
  * server for the live client, and an unlinked install gets a 409 that names the
  * dependency and the remedy (§08). /tree and /upload were removed in the same
- * pass — one never rendered, the other returned nothing.
+ * pass; /upload came back the same day as a file picker with a destination.
  */
 import { describe, expect, it } from 'vitest';
 import fs from 'fs';
@@ -33,10 +33,10 @@ async function mount(isCloudLinked) {
 }
 
 describe('cloud commands on a local install', () => {
-  it('/push /pull /vault-push declare the dependency; /tree and /upload are gone', () => {
+  it('/push /pull /vault-push declare the dependency; /tree is gone, /upload takes no argument', () => {
     for (const c of ['/push', '/pull', '/vault-push']) expect(cmds.find(x => x.cmd === c)?.when).toBe('supabase');
     expect(cmds.find(x => x.cmd === '/tree')).toBeUndefined();
-    expect(cmds.find(x => x.cmd === '/upload')).toBeUndefined();
+    expect(cmds.find(x => x.cmd === '/upload')?.argRequired).toBe(false); // picker form
   });
 
   it('unlinked: listed as unavailable, and running one says what is missing and how to fix it', async () => {
