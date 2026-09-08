@@ -31,3 +31,25 @@ folder → rename → restart → live. Folders starting with `_` are never moun
 1. The manifest is the only declaration — the kernel knows nothing not written here.
 2. New blocks go through `staging/` + `npm run aeon lint` before `src/blocks/`.
 3. Use the injected `blockStorage` dependency for all block-owned files. `writeData()` is for local operational state; `publishState()` and `writeMemoryDocument()` are for declared Vault memory. Never calculate a storage path yourself.
+
+## Where everything lives (paths from the repo root; `<id>` is your folder name)
+
+| Path | What |
+|---|---|
+| `src/blocks/<id>/` | Your block: `block.manifest.json`, `index.jsx`, `api/*.cjs` (optional), `README.md`. |
+| `staging/<id>/` | Where `npm run aeon new <id>` puts a copy of this folder. `aeon lint` → `aeon promote` moves it to `src/blocks/`. |
+| `public/brand/block-icons/<id>.svg` | **Your sidebar icon. Drop the file here — nothing to declare.** Square, single colour, no background. |
+| `public/brand/block-icons/png/<id>.png` | PNG fallback of the same icon. |
+| `public/brand/block-icons/sections/` | Section icons (finance, agent, work, content, tools, system). |
+| `src/kernel/blockStandard.cjs` | The kernel's NAV map. It **overwrites `manifest.nav` on every boot**; an unlisted block lands in SYSTEM at order 99 and can be dragged to any section on the Home dashboard. |
+| `src/kernel/blockRegistry.js` | Browser-side discovery — a **build-time** glob over `src/blocks/*/index.jsx`. |
+| `server/block-loader.js` | Server-side mounting of `api/*.cjs`, deps scoped by `contract.permissions`. |
+| `src/kernel/schema.json` · `src/kernel/staging.cjs` | The manifest schema and the lint that enforces it. |
+| `src/blocks/<id>/.aeon.runtime.json` | Written by the kernel at boot. Never edit, never commit. |
+
+## Make it appear — the step everyone misses
+
+`aeon new` → edit → `aeon lint` → `aeon promote` → **`npm run build` (or `npm run dev`)** → restart.
+The browser finds blocks through a build-time glob. A running production build cannot see a new
+folder until it is rebuilt, and nothing is logged — the block is simply absent. The Master block
+in the console has the full guide and a copyable AI prompt.
