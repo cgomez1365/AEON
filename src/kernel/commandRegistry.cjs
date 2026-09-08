@@ -45,6 +45,22 @@ function buildUsage(c) {
   return cmd;
 }
 
+/** Strip one layer of "…", '…' or <…> from a typed value. */
+function unwrap(v) {
+  const t = String(v ?? '').trim();
+  const m = t.match(/^(?:"(.*)"|'(.*)'|<(.*)>)$/s);
+  return m ? (m[1] ?? m[2] ?? m[3] ?? '').trim() : t;
+}
+
+/** Split typed arguments on whitespace, keeping quoted and <bracketed> groups whole and unwrapped. */
+function tokenizeArgs(text) {
+  const out = [];
+  const re = /"([^"]*)"|'([^']*)'|<([^>]*)>|(\S+)/g;
+  let m;
+  while ((m = re.exec(String(text || '')))) out.push((m[1] ?? m[2] ?? m[3] ?? m[4] ?? '').trim());
+  return out;
+}
+
 function scanCommands(readiness = {}) {
   const registry = new Map(); // "/cmd" → spec
   let folders = [];
@@ -298,7 +314,12 @@ module.exports = function ({ blockReadiness = {}, isVercel = false, writeOSAudit
       const names = spec.params
         .map((p) => (typeof p === 'string' ? p : p?.name))
         .filter(Boolean);
-      const parts = argText.split(/\s+/);
+      // Tokenise the way a person types: a value in "quotes", 'quotes' or
+      // <angle brackets> is ONE value even with spaces, and the wrapper is
+      // not part of it. The usage line prints placeholders as <filePath>;
+      // an operator who typed them literally got a folder named
+      // "<C:\\Users\\…" and an ENOENT from mkdir (2026-09-07).
+      const parts = tokenizeArgs(argText);
       if (names.length) {
         fields = {};
         names.forEach((n, i) => {
@@ -312,7 +333,8 @@ module.exports = function ({ blockReadiness = {}, isVercel = false, writeOSAudit
           return res.status(400).json({
             ok: false, id: spec.id, usage: spec.usage,
             error: `${spec.cmd} needs ${names.length} values (${names.join(', ')}); `
-              + `missing: ${missing.join(', ')}. Usage: ${spec.usage}`,
+              + `missing: ${missing.join(', ')}. Usage: ${spec.usage} — the angle brackets mark placeholders; `
+              + `type the values without them, and put quotes around a value that has spaces.`,
           });
         }
       }
@@ -339,7 +361,7 @@ module.exports = function ({ blockReadiness = {}, isVercel = false, writeOSAudit
       for (const [k, v] of qs) url += `${url.includes('?') ? '&' : '?'}${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`;
     } else {
       init.body = JSON.stringify(
-        fields || (spec.param ? { [spec.param]: arg } : (arg ? { arg } : {})),
+        fields || (spec.param ? { [spec.param]: unwrap(arg) } : (arg ? { arg } : {})),
       );
     }
 
