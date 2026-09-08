@@ -156,6 +156,14 @@ module.exports = ({ app, ROOT, isVercel, loadSettings, baseDeps }) => {
       console.warn('[BLOCK ROUTER] src/blocks/ not found.');
     } else {
       const { createBlockHost } = require('../src/kernel/blockHost.cjs');
+      // The registry and readiness maps are created HERE, after baseDeps was
+      // assembled — so kernel routers received them (server.js hands them to
+      // _routerDeps) and blocks never did. master's /blocks read
+      // deps._blockRegistry, got undefined, and reported "no blocks
+      // registered" on a running install with 17 blocks mounted (CEO,
+      // 2026-09-07). Same reference, so a rescan is visible to every block.
+      baseDeps._blockRegistry = _blockRegistry;
+      baseDeps._blockReadiness = _blockReadiness;
       _blockHost = createBlockHost({
         blocksDir, baseDeps, createScopedDeps,
         registry: _blockRegistry,
