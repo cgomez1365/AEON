@@ -70,21 +70,7 @@
       "vercel": true,
       "cloudflare": true
     },
-    "commands": [
-      {
-        "cmd": "/flush",
-        "desc": "Encrypt + sync sensitive stores to your own cloud now",
-        "method": "POST",
-        "route": "/api/security/flush"
-      },
-      {
-        "cmd": "/guard",
-        "desc": "Show protection status",
-        "method": "GET",
-        "route": "/api/security/policy",
-        "template": "Guard: {policy.guardEnabled} · every-launch: {policy.lockEveryLaunch} · idle: {policy.idleMinutes}min · shield: {policy.shield} · runtime: {runtime}"
-      }
-    ],
+    "commands": [],
     "filesystem": {
       "beyondNamespace": [
         {
