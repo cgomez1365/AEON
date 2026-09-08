@@ -43,6 +43,7 @@ import { Dna, Radio, LayoutGrid, RefreshCw } from 'lucide-react';
 // Paths are relative to the AEON repo root. <id> is your block's folder name.
 const PATHS = [
   ['src/blocks/<id>/', 'Your block. Four files: block.manifest.json, index.jsx, api/*.cjs (optional), README.md.'],
+  ['src/blocks/master/AEON_BLOCK_BUILDER.md', 'The Block Builder agent persona. Copy it from the card above, `/builder` in the terminal, or GET /api/master/agent.md. Edit the file, not the page.'],
   ['src/blocks/_template/', 'The working empty block. Copy it — or let `npm run aeon new <id>` copy it into staging/ for you. Folders starting with `_` never register.'],
   ['staging/<id>/', 'Where `aeon new` puts a block. `aeon lint <id>` checks it; `aeon promote <id>` moves it into src/blocks/ through the lint airlock.'],
   ['public/brand/block-icons/<id>.svg', 'Your sidebar icon. Drop the file here and the sidebar picks it up — nothing to declare.'],
@@ -84,6 +85,7 @@ const ANATOMY = [
   ['index.jsx', 'The UI. Default-export one React component. Use aurora primitives (Card, StatCard). Relative fetch() only.'],
   ['api/<id>.cjs', 'Optional backend: module.exports = (deps) => router. Mounted under /api/. deps carries only what contract.permissions declares.'],
   ['README.md', 'One paragraph: what it owns, what it reads, what it writes.'],
+  ['AEON_BLOCK_BUILDER.md', 'Master only: the agent that builds blocks. Not part of your block — the thing that writes it.'],
 ];
 
 const RULES = [

@@ -75,7 +75,16 @@
       "vercel": true,
       "cloudflare": true
     },
-    "commands": [],
+    "commands": [
+      {
+        "cmd": "/builder",
+        "desc": "Print the Block Builder agent persona — paste it into any AI to build a block start to finish",
+        "method": "GET",
+        "route": "/api/master/agent",
+        "mode": "instant",
+        "category": "content"
+      }
+    ],
     "filesystem": {
       "beyondNamespace": [
         {
@@ -104,6 +113,11 @@
     ]
   },
   "routes": [
+    {
+      "method": "GET",
+      "path": "/api/master/agent",
+      "auth": true
+    },
     {
       "method": "GET",
       "path": "/api/master/agent.md",

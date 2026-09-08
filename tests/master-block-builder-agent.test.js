@@ -68,3 +68,35 @@ describe('master serves it', () => {
     expect(page).toMatch(/Copy agent/);
   });
 });
+
+// ── Discoverable from inside the loaded block, every way in ────────────────
+// CEO: "ensure this file is discoverable inside the fully loaded master block."
+describe('discoverable from inside master', () => {
+  const page = fs.readFileSync(path.join(ROOT, 'src/blocks/master/index.jsx'), 'utf8');
+  const readme = fs.readFileSync(path.join(ROOT, 'src/blocks/master/README.md'), 'utf8');
+  const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'src/blocks/master/block.manifest.json'), 'utf8'));
+
+  it('the paths table and the anatomy list name the file', () => {
+    expect(page).toContain("'src/blocks/master/AEON_BLOCK_BUILDER.md'");
+    expect(page).toContain("['AEON_BLOCK_BUILDER.md'");
+  });
+  it('the README says "start here" and names all three ways in', () => {
+    expect(readme).toMatch(/AEON_BLOCK_BUILDER\.md/);
+    expect(readme).toMatch(/Copy agent/);
+    expect(readme).toMatch(/\/builder/);
+    expect(readme).toMatch(/\/api\/master\/agent\.md/);
+  });
+  it('the terminal has /builder, backed by a JSON route that carries the same text', async () => {
+    const cmd = manifest.contract.commands.find((c) => c.cmd === '/builder');
+    expect(cmd?.route).toBe('/api/master/agent');
+    const router = require('../src/blocks/master/api/master.cjs')({});
+    const app = express(); app.use('/api', router);
+    const s = await new Promise((r) => { const x = app.listen(0, '127.0.0.1', () => r(x)); });
+    try {
+      const d = await (await fetch(`http://127.0.0.1:${s.address().port}/api/master/agent`)).json();
+      expect(d.ok).toBe(true);
+      expect(d.text).toBe(md);
+      expect(d.file).toBe('src/blocks/master/AEON_BLOCK_BUILDER.md');
+    } finally { s.close(); }
+  });
+});

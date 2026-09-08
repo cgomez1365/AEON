@@ -5,6 +5,15 @@ new block builder — human or automated — can read **only this file** and
 correctly build a working block. If something here disagrees with the code,
 the code wins and this file is out of date; fix the file.
 
+## Start here — the Block Builder agent
+
+`AEON_BLOCK_BUILDER.md` in this folder is a looped agent persona: paste it into any AI that
+can run commands in this checkout, give it one sentence, and it scaffolds, lints, promotes,
+builds, mounts, verifies and reports a block — or says exactly where it stopped. Three ways
+to get it: the **Copy agent** button at the top of the Master page, `/builder` in the
+terminal, or `GET /api/master/agent.md`. Edit the file to change the agent; the page reads
+it at request time.
+
 ## Anatomy of a block
 
 | File | Purpose |

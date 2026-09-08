@@ -56,6 +56,14 @@ module.exports = (deps) => {
     } catch (e) { res.status(500).json({ error: `builder persona unavailable: ${e.message}` }); }
   });
 
+  // The same file for the terminal (/builder) and anything that wants JSON.
+  router.get('/master/agent', (_req, res) => {
+    try {
+      const text = fs.readFileSync(path.join(__dirname, '..', 'AEON_BLOCK_BUILDER.md'), 'utf8');
+      res.json({ ok: true, file: 'src/blocks/master/AEON_BLOCK_BUILDER.md', chars: text.length, text });
+    } catch (e) { res.status(500).json({ ok: false, error: `builder persona unavailable: ${e.message}` }); }
+  });
+
   // Health ping — cheapest possible readiness probe.
   router.get('/master/ping', (req, res) => res.json({ ok: true, block: 'master', ts: Date.now() }));
 
