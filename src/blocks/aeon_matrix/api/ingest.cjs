@@ -524,6 +524,73 @@ module.exports = function ingestFactory(deps) {
   // if content is given and no file exists yet, it's written to disk first so
   // the ToC entry always has a real, readable file behind it.
   // Also used by other blocks (autopilot, writer, etc.) to push produced content in.
+  // POST /crn/second-brain/upload — put a file INTO the second brain.
+  //
+  // `/upload <file>` was an Auto-Pilot cloud push that did nothing on a local
+  // install (removed 2026-09-07). The verb deserves its obvious meaning: copy a
+  // document from anywhere under the operator's home into the vault, index it,
+  // and say what it is. The intake counterpart of /read.
+  router.post('/crn/second-brain/upload', async (req, res) => {
+    const { filePath } = req.body || {};
+    const requested = typeof filePath === 'string' ? filePath.trim() : '';
+    if (!requested) return res.status(400).json({ error: 'filePath is required. Usage: /upload <filePath>' });
+
+    const { isInside } = require('../../../kernel/pathContainment.cjs');
+    const roots = [deps?.HOME_ROOT, deps?.WORKSPACE].filter(Boolean).map(r => path.resolve(r));
+    const base = deps?.WORKSPACE || deps?.HOME_ROOT || null;
+    const source = path.isAbsolute(requested) ? path.resolve(requested) : (base ? path.resolve(base, requested) : null);
+    if (!source || !roots.some(r => isInside(r, source, { allowRoot: false }))) {
+      return res.status(403).json({ error: `/upload reads files under your home folder only. ${source || requested} is outside it.` });
+    }
+    if (!fs.existsSync(source) || !fs.statSync(source).isFile()) {
+      return res.status(404).json({ error: `Not found: ${source}`, hint: base ? `Relative paths resolve against ${base}.` : undefined });
+    }
+    const extract = require('../../../kernel/extract.cjs');
+    if (extract.kindOf(source) === 'binary') {
+      return res.status(415).json({ error: `${path.extname(source) || 'That file'} is not a text or document format the second brain can index.`, remedy: 'Convert it to PDF, DOCX, HTML or text first.' });
+    }
+
+    // Copy into the vault under Uploads/, never overwriting an earlier upload.
+    const uploads = path.join(BRAIN_DIR, 'Reading_Library', 'Uploads');
+    fs.mkdirSync(uploads, { recursive: true });
+    const ext = path.extname(source); const stem = path.basename(source, ext);
+    let dest = path.join(uploads, `${stem}${ext}`);
+    for (let n = 2; fs.existsSync(dest); n++) dest = path.join(uploads, `${stem}-${n}${ext}`);
+    fs.copyFileSync(source, dest);
+
+    let text;
+    try { text = await extract.extractText(dest); }
+    catch (e) { try { fs.unlinkSync(dest); } catch {} return res.status(422).json({ error: `Could not read ${path.basename(source)}: ${e.message}`, remedy: 'The file may be damaged or password-protected. Export it again and retry.' }); }
+    if (!text || text.trim().length < 20) { try { fs.unlinkSync(dest); } catch {} return res.status(422).json({ error: `${path.basename(source)} has no readable text to index.` }); }
+
+    try {
+      const stat = fs.statSync(dest);
+      const relPosix = vaultRelative(dest);
+      const index = readIndex();
+      index.documents[relPosix] = await buildEntry(dest, relPosix, text, stat);
+      writeIndex(index);
+      const manifest = readManifest();
+      manifest[path.relative(BRAIN_DIR, dest)] = { hash: fileHash(stat), indexedAt: Date.now() };
+      writeManifest(manifest);
+
+      let summary = null;
+      if (typeof deps?.kernelLLM === 'function') {
+        try {
+          const body = text.length > 14000 ? `${text.slice(0, 14000)}\n\n[… ${text.length - 14000} more characters not shown]` : text;
+          summary = String(await deps.kernelLLM(`Summarize this document for its owner in plain English — what it is, what it says, anything to act on. Quote exact figures, names and dates. 4 to 8 sentences.\n\nFILE: ${path.basename(source)}\n\n${body}`, { role: 'chat' }) || '').trim() || null;
+        } catch { summary = null; }
+      }
+      const where = relPosix;
+      res.json({
+        ok: true, file: where, chars: text.length, indexed: true, summary,
+        text: `Added ${path.basename(source)} to the Second Brain as ${where} (${text.length.toLocaleString()} characters, indexed).${summary ? `\n\n${summary}` : '\n\nNo summary — no model is assigned to the chat role.'}`,
+      });
+    } catch (err) {
+      console.error('[UPLOAD] error:', err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   router.post('/crn/second-brain/ingest/document', async (req, res) => {
     const { file_path, content: bodyContent } = req.body || {};
     if (!file_path) return res.status(400).json({ error: 'file_path required' });

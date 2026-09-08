@@ -167,6 +167,17 @@
         "route": "/api/sync/bulk-pull",
         "mode": "instant",
         "dangerous": true
+      },
+      {
+        "cmd": "/upload",
+        "desc": "Put a document into the Second Brain — copies it into the vault, indexes it, and summarizes it",
+        "method": "POST",
+        "route": "/api/crn/second-brain/upload",
+        "param": "filePath",
+        "mode": "instant",
+        "argRequired": true,
+        "argHint": "<filePath>",
+        "category": "content"
       }
     ],
     "filesystem": {
@@ -323,6 +334,11 @@
     {
       "method": "GET",
       "path": "/api/crn/second-brain/tree",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/crn/second-brain/upload",
       "auth": true
     },
     {
