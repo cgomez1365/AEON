@@ -554,7 +554,8 @@ module.exports = function ingestFactory(deps) {
   // The browser cannot hand the server a path, so /upload from the terminal
   // sends the bytes: { name, contentBase64, dest }. The CLI still sends a path.
   const DEST_RE = /^[\w.\- ]+(?:\/[\w.\- ]+)*$/;
-  router.post('/crn/second-brain/upload', async (req, res) => {
+  // The app-wide JSON limit is 10 MB; a 25 MB document is ~34 MB as base64.
+  router.post('/crn/second-brain/upload', express.json({ limit: '36mb' }), async (req, res) => {
     const { filePath, name, contentBase64, dest: destFolder } = req.body || {};
     const extract = require('../../../kernel/extract.cjs');
     const fromBytes = typeof contentBase64 === 'string' && contentBase64.length > 0;

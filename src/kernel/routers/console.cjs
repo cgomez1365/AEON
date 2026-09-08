@@ -153,7 +153,7 @@ module.exports = function ({ storage, kernelLLM, _blockRegistry, _blockReadiness
   router.get('/vault/tree', (_req, res) => res.json({ ok: true, folders: vaultTree() }));
 
   // ── /god/file-drop — read the file, read the vault, recommend placement ────
-  router.post('/file-drop', async (req, res) => {
+  router.post('/file-drop', express.json({ limit: '36mb' }), async (req, res) => {
     try {
       const { name, content, encoding } = req.body || {};
       if (!name || content == null) return res.status(400).json({ ok: false, error: 'name and content required' });

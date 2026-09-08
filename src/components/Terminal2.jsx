@@ -320,7 +320,10 @@ const Terminal2 = ({ onUsageUpdate }) => {
       const d = await res.json();
       if (!d.ok) throw new Error(d.error || 'drop failed');
       push({ type: 'filedrop', name: file.name, content: b64, recommendation: d.recommendation, folders: d.folders || [], newFolder: '' });
-    } catch (err) { push({ type: 'msg', role: 'error', content: `[${tag}] ${err.message}` }); }
+    } catch (err) {
+      const msg = /failed to fetch|networkerror|load failed/i.test(err.message) ? 'The AEON server is not reachable. Start it (npm run dev / node server.cjs) and try again — nothing was written.' : err.message;
+      push({ type: 'msg', role: 'error', content: `[${tag}] ${msg}` });
+    }
   };
   const onDrop = async (e) => {
     e.preventDefault(); setDragOver(false);
@@ -350,7 +353,10 @@ const Terminal2 = ({ onUsageUpdate }) => {
       });
       const d = await res.json().catch(() => ({}));
       patch(chipId, { status: res.ok ? 'ok' : 'error', output: d.text || [d.error, d.remedy].filter(Boolean).join(' '), latencyMs: Date.now() - t0, expanded: true });
-    } catch (e) { patch(chipId, { status: 'error', output: `[VAULT] ${e.message}`, latencyMs: Date.now() - t0, expanded: true }); }
+    } catch (e) {
+      const msg = /failed to fetch|networkerror|load failed/i.test(e.message) ? 'The AEON server is not reachable. Start it and try again — nothing was written.' : e.message;
+      patch(chipId, { status: 'error', output: `[VAULT] ${msg}`, latencyMs: Date.now() - t0, expanded: true });
+    }
   };
 
   useEffect(() => { scrollRef.current?.scrollTo(0, scrollRef.current.scrollHeight); }, [feed]);
