@@ -344,6 +344,10 @@ try {
     // Injected rather than required inside the registry so a test can drive it
     // without a provider, and so the registry stays usable when AI is absent.
     kernelLLM: ai.kernelLLM,
+    // Cloud commands (/push /pull /vault-push) declare `when: "supabase"`.
+    // This is the same client every consumer fail-softs on — null when .env has
+    // no SUPABASE_URL + key — so the terminal says so instead of syncing nothing.
+    isCloudLinked: () => !!supabase,
   });
   app.use('/api', commandRegistry.router);
   _routerDeps.commandRescan = commandRegistry.rescan;

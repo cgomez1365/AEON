@@ -98,7 +98,8 @@
         "desc": "Mirror Second Brain docs to Supabase for mobile",
         "method": "POST",
         "route": "/api/crn/second-brain/vault-push",
-        "mode": "instant"
+        "mode": "instant",
+        "when": "supabase"
       },
       {
         "cmd": "/recall",
@@ -110,20 +111,6 @@
             "name": "query",
             "type": "string",
             "required": true
-          }
-        ],
-        "mode": "instant"
-      },
-      {
-        "cmd": "/tree",
-        "desc": "List the vault folder structure (Vault, Reading_Library, Saved_Artifacts)",
-        "method": "GET",
-        "route": "/api/crn/second-brain/tree",
-        "params": [
-          {
-            "name": "section",
-            "type": "string",
-            "required": false
           }
         ],
         "mode": "instant"
@@ -158,7 +145,8 @@
         "method": "POST",
         "route": "/api/sync/bulk-push",
         "mode": "instant",
-        "dangerous": true
+        "dangerous": true,
+        "when": "supabase"
       },
       {
         "cmd": "/pull",
@@ -166,18 +154,8 @@
         "method": "POST",
         "route": "/api/sync/bulk-pull",
         "mode": "instant",
-        "dangerous": true
-      },
-      {
-        "cmd": "/upload",
-        "desc": "Put a document into the Second Brain — copies it into the vault, indexes it, and summarizes it",
-        "method": "POST",
-        "route": "/api/crn/second-brain/upload",
-        "param": "filePath",
-        "mode": "instant",
-        "argRequired": true,
-        "argHint": "<filePath>",
-        "category": "content"
+        "dangerous": true,
+        "when": "supabase"
       }
     ],
     "filesystem": {

@@ -148,7 +148,9 @@ function renderTemplate(tpl, data) {
   });
 }
 
-module.exports = function ({ blockReadiness = {}, isVercel = false, writeOSAudit, kernelLLM = null } = {}) {
+module.exports = function ({ blockReadiness = {}, isVercel = false, writeOSAudit, kernelLLM = null, isCloudLinked = null } = {}) {
+  // Live, not cached: the operator can link Supabase in Settings without a restart.
+  const cloudLinked = () => { try { return typeof isCloudLinked === 'function' ? !!isCloudLinked() : false; } catch { return false; } };
   const router = express.Router();
   const narrator = require('./commandNarrator.cjs');
   let registry = scanCommands(blockReadiness);
@@ -162,7 +164,7 @@ module.exports = function ({ blockReadiness = {}, isVercel = false, writeOSAudit
       if (seen.has(spec.id)) continue;
       seen.add(spec.id);
       const ready = blockReadiness[spec.blockId]?.ready !== false;
-      list.push({ ...spec, available: ready && evalWhen(spec.when, { ready, runtime: isVercel ? 'cloud' : 'local' }) });
+      list.push({ ...spec, available: ready && evalWhen(spec.when, { ready, runtime: isVercel ? 'cloud' : 'local', supabase: cloudLinked() }) });
     }
     res.json({ ok: true, count: list.length, commands: list });
   });
@@ -208,7 +210,7 @@ module.exports = function ({ blockReadiness = {}, isVercel = false, writeOSAudit
 
     const readinessInfo = blockReadiness[spec.blockId] || {};
     const ready = readinessInfo.ready !== false;
-    if (!evalWhen(spec.when, { ready, runtime: isVercel ? 'cloud' : 'local' })) {
+    if (!evalWhen(spec.when, { ready, runtime: isVercel ? 'cloud' : 'local', supabase: cloudLinked() })) {
       // BO-SHIP P8e — this answered `"/push unavailable (when: null)"`: an
       // internal expression, printed at the operator, naming no cause and no
       // remedy. `when` is null for most commands, so the one thing the message
@@ -224,7 +226,12 @@ module.exports = function ({ blockReadiness = {}, isVercel = false, writeOSAudit
         ? `${spec.blockLabel} needs: ${missing.join(', ')}. Add them in Settings → Connections.`
         : !ready
           ? `${spec.blockLabel} is not ready.`
-          : `${spec.cmd} is unavailable in this runtime (requires: ${spec.when}).`;
+          : /\bsupabase\b/.test(String(spec.when || ''))
+            // A cloud command on a local install said "unavailable (when: …)"
+            // or, worse, ran and reported success having synced nothing. It
+            // names the dependency and the remedy, and says nothing is lost.
+            ? `${spec.cmd} syncs with Supabase, and this install is not linked to one. Add SUPABASE_URL and a key to .env and restart, or stay local — nothing is lost.`
+            : `${spec.cmd} is unavailable in this runtime (requires: ${spec.when}).`;
 
       return res.status(409).json({
         ok: false,
