@@ -46,6 +46,16 @@ module.exports = (deps) => {
     res.json({ ok: true, count: registry.length, blocks: registry, text: lines.join('\n') || 'no blocks registered' });
   });
 
+  // ── The builder persona, served raw ──────────────────────────────
+  // One file, src/blocks/master/AEON_BLOCK_BUILDER.md, is what the page
+  // shows and what "Copy agent" hands over — read at request time so an edit
+  // to the file is live without a rebuild.
+  router.get('/master/agent.md', (_req, res) => {
+    try {
+      res.type('text/markdown; charset=utf-8').send(fs.readFileSync(path.join(__dirname, '..', 'AEON_BLOCK_BUILDER.md'), 'utf8'));
+    } catch (e) { res.status(500).json({ error: `builder persona unavailable: ${e.message}` }); }
+  });
+
   // Health ping — cheapest possible readiness probe.
   router.get('/master/ping', (req, res) => res.json({ ok: true, block: 'master', ts: Date.now() }));
 

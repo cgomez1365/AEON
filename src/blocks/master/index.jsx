@@ -282,6 +282,58 @@ If neither exists, nav.icon (a lucide-react name or an emoji) is used.
    block is just absent. This is the step most people miss.
 6. restart the server — it syncs your manifest, mounts api/, and lists you at /blocks/registry.`;
 
+// ── The builder persona ──────────────────────────────────────────────────
+// A looped agent, as one Markdown file: paste it into any AI that can run
+// commands in the repo, give it one sentence, and it scaffolds, lints,
+// promotes, builds, mounts, verifies and reports — or says where it stopped.
+function AgentCard() {
+  const [md, setMd] = useState(null);
+  const [err, setErr] = useState(null);
+  const [copied, setCopied] = useState(false);
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    fetch('/api/master/agent.md')
+      .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`${r.status}`))))
+      .then(setMd)
+      .catch((e) => setErr(`Persona not served (${e.message}) — the file is src/blocks/master/AEON_BLOCK_BUILDER.md.`));
+  }, []);
+  const copy = () => {
+    if (!md) return;
+    navigator.clipboard.writeText(md).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
+  };
+  const phases = md ? (md.match(/^### Phase [A-I] — .+$/gm) || []).map((l) => l.replace(/^### /, '')) : [];
+  return (
+    <Card>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 10 }}>
+        <div>
+          <h3 style={{ marginTop: 0, marginBottom: 4 }}>Block Builder agent — a persona that runs the whole loop</h3>
+          <p style={{ margin: 0, ...DIM }}>
+            Paste this Markdown as the system prompt of any AI that can run commands in your AEON checkout — Claude Code, Cursor, Copilot Workspace, Aider.
+            Give it one sentence. It scaffolds, lints, promotes, builds, mounts, verifies and reports — and says exactly where it stopped if it could not finish.
+          </p>
+        </div>
+        <button onClick={copy} disabled={!md} aria-label="Copy the Block Builder agent persona"
+          style={{ flexShrink: 0, background: copied ? 'var(--ok, #3fb950)' : 'var(--pu, #a78bfa)', color: '#fff', border: 'none', borderRadius: 5, padding: '7px 14px', fontSize: 12, fontWeight: 600, cursor: md ? 'pointer' : 'default', opacity: md ? 1 : 0.5, whiteSpace: 'nowrap' }}>
+          {copied ? '✓ Copied' : 'Copy agent'}
+        </button>
+      </div>
+      {err && <p role="alert" style={{ color: 'var(--danger, #ff4455)', fontSize: 12.5, margin: '6px 0' }}>{err}</p>}
+      {phases.length > 0 && (
+        <ol style={{ paddingLeft: 20, margin: '6px 0 10px', columns: 2, columnGap: 24 }}>
+          {phases.map((p) => <li key={p} style={{ fontSize: 12.5, margin: '3px 0', breakInside: 'avoid' }}>{p.replace(/^Phase [A-I] — /, '')}</li>)}
+        </ol>
+      )}
+      <button onClick={() => setOpen((o) => !o)} aria-expanded={open}
+        style={{ background: 'none', border: '1px solid var(--line, #272d39)', color: 'var(--dim, #9aa3b2)', borderRadius: 4, padding: '4px 10px', fontSize: 11.5, cursor: 'pointer' }}>
+        {open ? 'Hide the file' : 'Read the file'} · {CODE('src/blocks/master/AEON_BLOCK_BUILDER.md')}
+      </button>
+      {open && md && (
+        <pre style={{ background: 'rgba(0,0,0,0.3)', borderRadius: 6, padding: 14, margin: '10px 0 0', fontSize: 11.5, lineHeight: 1.65, color: 'var(--text, #e6edf3)', overflowX: 'auto', maxHeight: 420, overflowY: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{md}</pre>
+      )}
+    </Card>
+  );
+}
+
 function ReferencePanel({ registry, onRefresh }) {
   const [copied, setCopied] = useState(false);
 
@@ -294,6 +346,8 @@ function ReferencePanel({ registry, onRefresh }) {
 
   return (
     <>
+      <AgentCard />
+
       {/* ── AI Prompt ──────────────────────────────────────────────────── */}
       <Card>
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 14 }}>
