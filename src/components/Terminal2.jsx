@@ -72,8 +72,12 @@ function EventChip({ ev, onToggle }) {
         <span style={{ color, fontSize: 10 }}>{statusText}</span>
       </div>
       {ev.expanded && (
-        <div style={{ padding: '6px 12px 8px 30px', fontSize: 11, color: '#8aa0b8', borderTop: `1px solid ${color}22`, whiteSpace: 'pre-wrap', maxHeight: 260, overflowY: 'auto' }}>
-          {ev.output || '(no output)'}
+        <div className="chip-output" style={{ padding: '6px 12px 8px 30px', fontSize: 11, color: '#8aa0b8', borderTop: `1px solid ${color}22`, whiteSpace: 'pre-wrap', maxHeight: 260, overflowY: 'auto' }}>
+          {/* Markdown, so a command that returns links returns LINKS. /orion
+              used to print its sources as raw JSON in this box. */}
+          {ev.output
+            ? <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: ({ node, ...props }) => <a {...props} target="_blank" rel="noopener noreferrer" style={{ color: '#00f2ff' }} />, p: ({ node, ...props }) => <p style={{ margin: '0 0 6px' }} {...props} /> }}>{ev.output}</ReactMarkdown>
+            : '(no output)'}
         </div>
       )}
     </div>

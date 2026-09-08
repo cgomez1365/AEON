@@ -42,7 +42,7 @@
       "network": "external",
       "secrets": false,
       "shell": false,
-      "ai": false
+      "ai": true
     },
     "storage": {
       "type": "none",
@@ -72,11 +72,12 @@
     "commands": [
       {
         "cmd": "/orion",
-        "desc": "Unified search: web + Second Brain + blocks",
+        "desc": "Search the web and the Second Brain, read the top hits, and answer with numbered sources",
         "method": "POST",
         "route": "/api/orion/search",
         "param": "query",
-        "mode": "instant"
+        "mode": "instant",
+        "display": "text"
       }
     ],
     "settings_keys": [],

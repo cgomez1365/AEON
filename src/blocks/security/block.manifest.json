@@ -72,13 +72,6 @@
     },
     "commands": [
       {
-        "cmd": "/lock",
-        "desc": "Lock AEON now — revoke every session (and sync if enabled)",
-        "method": "POST",
-        "route": "/api/security/lock",
-        "dangerous": true
-      },
-      {
         "cmd": "/flush",
         "desc": "Encrypt + sync sensitive stores to your own cloud now",
         "method": "POST",

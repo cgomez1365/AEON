@@ -148,10 +148,67 @@ module.exports = function (deps) {
       ...(brainNote ? { brain: brainNote } : {}),
     };
 
+    // ── Read the pages and answer, with numbered sources ──────────────
+    //
+    // /orion used to stop at the search and hand the terminal raw JSON — a list
+    // of titles and 300-character excerpts, nothing read, nothing answered, no
+    // links (CEO, 2026-09-07). The model does not browse; this block does:
+    // fetch the top web hits, extract their text through the kernel, and hand
+    // the model numbered sources it must cite. Second Brain hits ride along
+    // as sources too, so an answer can draw on the vault and the web at once.
+    const webHits = results.filter(r => r.source === 'web' && r.url).slice(0, 3);
+    const { htmlToText } = require('../../../kernel/extract.cjs');
+    const pageText = async (url) => {
+      try {
+        const r = await fetch(url, { signal: AbortSignal.timeout(8000), headers: { 'User-Agent': 'AEON/3 (+local)', Accept: 'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5' } });
+        if (!r.ok) return null;
+        const ct = r.headers.get('content-type') || '';
+        const body = await r.text();
+        const text = /html/i.test(ct) ? htmlToText(body) : body;
+        return text.replace(/\s+/g, ' ').trim().slice(0, 6000) || null;
+      } catch { return null; }
+    };
+    const pages = await Promise.all(webHits.map(h => pageText(h.url)));
+    const sources = [];
+    webHits.forEach((h, i) => sources.push({ n: sources.length + 1, title: h.title, url: h.url, text: pages[i] || h.excerpt || '', read: !!pages[i], kind: 'web' }));
+    for (const r of results.filter(r => r.source === 'brain').slice(0, 2)) sources.push({ n: sources.length + 1, title: r.title, url: null, text: r.excerpt || '', read: true, kind: 'vault' });
+
+    let answer = null, answerReason = null;
+    if (typeof deps.kernelLLM === 'function' && sources.some(s => s.text)) {
+      try {
+        const packet = sources.filter(s => s.text).map(s => `[${s.n}] ${s.title}${s.url ? ` — ${s.url}` : ' (Second Brain)'}\n${s.text}`).join('\n\n');
+        answer = String(await deps.kernelLLM(
+          `Answer the operator's question from the numbered sources below and nothing else. Cite every claim with its source number in square brackets, like [2]. If the sources do not answer it, say so plainly. Be concrete and brief.\n\nQUESTION: ${q}\n\nSOURCES:\n${packet}`,
+          { role: 'chat' },
+        ) || '').trim() || null;
+        if (!answer) answerReason = 'the model returned nothing';
+      } catch (e) { answerReason = e.message; }
+    } else if (typeof deps.kernelLLM !== 'function') {
+      answerReason = 'no model is assigned to the chat role';
+    } else {
+      answerReason = 'nothing could be read';
+    }
+
+    // What the terminal prints — markdown, so the links are links.
+    const lines = [];
+    if (answer) lines.push(answer);
+    else lines.push(`No synthesized answer — ${answerReason}.`);
+    if (sources.length) {
+      lines.push('', '**Sources**');
+      for (const s of sources) lines.push(s.url ? `${s.n}. [${s.title}](${s.url})${s.read ? '' : ' — could not be read; excerpt only'}` : `${s.n}. ${s.title} — Second Brain`);
+    }
+    const blockHits = results.filter(r => r.source === 'block');
+    if (blockHits.length) lines.push('', `Blocks: ${blockHits.map(b => b.title).join(', ')}`);
+    if (degraded.web) lines.push('', `Web search unavailable — ${degraded.web}`);
+    if (degraded.brain) lines.push('', `Second Brain: ${degraded.brain}`);
+
     res.json({
       ok: true, query: q,
       counts: { web: webBlocks.length, brain: brainDocs.length, block: (blocks || []).length },
       results,
+      answer, ...(answerReason ? { answerReason } : {}),
+      sources: sources.map(({ text, ...rest }) => rest),
+      text: lines.join('\n'),
       ...(Object.keys(degraded).length ? { degraded } : {}),
     });
   });

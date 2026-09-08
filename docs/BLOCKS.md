@@ -114,7 +114,7 @@ receives only what it declares.
 - **Route:** `/orion`
 - **Targets:** desktop + cloud
 - **Memory mode:** `none`
-- **Declared capabilities:** `filesystem:read`, `network:external`
+- **Declared capabilities:** `ai`, `filesystem:read`, `network:external`
 - **API files:** `orion.cjs`
 
 ### Quick Links

@@ -98,22 +98,6 @@
         "category": "system"
       },
       {
-        "cmd": "/catalog",
-        "desc": "List block cartridges available to install",
-        "method": "GET",
-        "route": "/api/store/catalog",
-        "mode": "instant",
-        "category": "system"
-      },
-      {
-        "cmd": "/queue",
-        "desc": "Show the build and install approval queue",
-        "method": "GET",
-        "route": "/api/build/queue",
-        "mode": "instant",
-        "category": "system"
-      },
-      {
         "cmd": "/data",
         "desc": "Read a block's saved data — /data cookbook  (omit block to list all)",
         "method": "GET",
