@@ -53,10 +53,19 @@ const INDEXING_CMDS = ['/scan', '/index-brain', '/upload'];
 async function mount(hasEmbedding) {
   const reg = createRegistry({ blockReadiness: { aeon_matrix: { ready: true } }, isVercel: false, isCloudLinked: () => false, hasEmbedding });
   const app = express(); app.use(express.json()); app.use('/api', reg.router);
+  app.use((_req, res) => res.status(404).json({ error: 'not found' }));
   const s = await new Promise(r => { const x = app.listen(0, '127.0.0.1', () => r(x)); });
   const base = `http://127.0.0.1:${s.address().port}/api`;
+  // The dispatcher forwards an admitted command to 127.0.0.1:${PORT}. Left
+  // unset that is 3001 — whatever server the operator happens to have running,
+  // with real keys and a real vault. Pin it to THIS app so an admitted /recall
+  // hits the 404 above and proves only what this suite is about: the gate.
+  const prevPort = process.env.PORT;
+  process.env.PORT = String(s.address().port);
   return {
-    close: () => s.close(),
+    // `= undefined` would store the STRING "undefined" and leak it to every
+    // later test in this worker; the unset case has to be a delete.
+    close: () => { if (prevPort === undefined) delete process.env.PORT; else process.env.PORT = prevPort; s.close(); },
     list: async () => (await (await fetch(`${base}/commands`)).json()).commands,
     run: async (cmd, arg = 'x') => { const r = await fetch(`${base}/commands/dispatch`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cmd, arg }) }); return { status: r.status, body: await r.json() }; },
   };

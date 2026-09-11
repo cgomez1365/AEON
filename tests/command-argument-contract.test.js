@@ -53,6 +53,16 @@ async function dispatch(body) {
   const server = createServer(app);
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   const { port } = server.address();
+  // The dispatcher forwards an admitted command to 127.0.0.1:${PORT}. Left
+  // unset that is 3001 — whatever server the operator happens to have running.
+  // On 2026-09-11 that was a live install with a Groq key, so "/read README.md"
+  // went there, was summarised by a model, took 11s and timed this test out at
+  // 10s — a test that, by its own comment, only means to prove the argument
+  // gate. Pinned to THIS app (same as command-args-typed does), an admitted
+  // command hits the 404 fallback below in milliseconds: 404 is not 400, and
+  // that is the whole assertion.
+  const prevPort = process.env.PORT;
+  process.env.PORT = String(port);
   try {
     const res = await fetch(`http://127.0.0.1:${port}/api/commands/dispatch`, {
       method: 'POST',
@@ -61,6 +71,7 @@ async function dispatch(body) {
     });
     return { status: res.status, body: await res.json().catch(() => ({})) };
   } finally {
+    if (prevPort === undefined) delete process.env.PORT; else process.env.PORT = prevPort;
     server.closeAllConnections?.();
     server.close();
   }
