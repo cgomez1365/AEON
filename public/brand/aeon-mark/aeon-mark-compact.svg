@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-labelledby="aeon-compact-title">
+  <title id="aeon-compact-title">AEON</title>
+  <!--
+    THE AEON MARK, SMALL-SIZE CUT - used for 16px and 24px only.
+
+    Not a different logo: the same A in the same ring, with the outer segmented
+    ring and its node circles removed and the glow dropped.
+
+    At 16px the whole icon is sixteen pixels across. The outer ring, its four
+    gaps and three node circles together occupy a band about one pixel wide, so
+    they cannot draw as themselves - they average into a grey halo that costs
+    contrast everywhere and, worse, shrinks the A to a smudge to make room.
+    Spending all sixteen pixels on the A and one ring is the only way the mark
+    survives. Size-specific cuts are ordinary in icon sets for exactly this
+    reason; this file is that cut, and tools/generate-aeon-brand-icons.mjs
+    selects it by size.
+
+    Geometry matches aeon-mark.svg exactly, so the two read as one mark: the
+    inner ring is scaled up to the space the outer ring vacated, and the A with
+    it, in the same proportion to that ring.
+  -->
+  <defs>
+    <radialGradient id="aeonGroundCompact" cx="50%" cy="42%" r="78%">
+      <stop offset="0%" stop-color="#0b1428"/>
+      <stop offset="62%" stop-color="#050a16"/>
+      <stop offset="100%" stop-color="#01030a"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="512" height="512" rx="112" fill="url(#aeonGroundCompact)"/>
+
+  <g fill="none">
+    <!-- The inner ring, grown from r118 to r186 to fill the frame the outer
+         ring used to occupy. Stroke grown in the same ratio. -->
+    <circle cx="256" cy="256" r="186" stroke="#7fb2ff" stroke-width="20"/>
+
+    <!-- The A, scaled about the centre by the same 186/118 factor, so its
+         proportion to its ring is identical to the full mark's. -->
+    <path d="M127 395 L256 115 L385 395" stroke="#ffffff" stroke-width="30" stroke-linejoin="miter"/>
+    <path d="M176 313 L337 313" stroke="#ffffff" stroke-width="30"/>
+  </g>
+</svg>

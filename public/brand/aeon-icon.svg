@@ -1,1 +1,84 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 1280" role="img" aria-labelledby="aeon-logo-title"><title id="aeon-logo-title">AEON primary logo</title><image href="/brand/aeon-primary-logo.png" width="1280" height="1280" preserveAspectRatio="xMidYMid meet"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-labelledby="aeon-mark-title">
+  <title id="aeon-mark-title">AEON</title>
+  <!--
+    THE AEON MARK — the source of truth for every icon size.
+
+    This file used to be 276 bytes of <image href="/brand/aeon-primary-logo.png">:
+    a wrapper around the 1256x1256 marketing poster. Every icon was therefore
+    the whole poster squeezed into a square - grid background, ~40% dead margin,
+    and the "AEON / MODULAR. LOCAL. YOURS. / INITIALIZE CONNECTION" text block.
+    At the sizes actually used - 16px and 22px in the sidebar, 32px favicon,
+    48px boot gate - that renders as a blue smudge (CEO, 2026-09-10).
+
+    The direction is now inverted: the vector is the source and the PNGs are
+    derived from it. tools/generate-aeon-brand-icons.mjs rasterises this file.
+
+    Geometry is MEASURED off the poster's emblem, not invented - these are its
+    own proportions, in half-widths from the centre:
+      outer segmented ring   r 0.80, stroke 0.055, four arcs with four gaps
+      inner ring             r 0.35
+      node circles           at 45, 180 and 315 degrees, sitting proud of the ring
+    One deliberate departure: the A is drawn larger than the poster's, which
+    treats it as a small detail inside a big HUD. An icon has one subject, and
+    below ~64px the A is the only element that still says AEON. What the poster
+    carries that cannot survive that scale - dashed rings, crosshair ticks,
+    slashed circles, corner sparkles - is left out rather than allowed to
+    average into grey haze and swallow the glyph.
+
+    Colours sampled from the poster: a white-hot core (#fcffff) blooming blue
+    on black.
+  -->
+  <defs>
+    <radialGradient id="aeonGround" cx="50%" cy="42%" r="78%">
+      <stop offset="0%" stop-color="#0b1428"/>
+      <stop offset="62%" stop-color="#050a16"/>
+      <stop offset="100%" stop-color="#01030a"/>
+    </radialGradient>
+
+    <!-- The bloom. Two passes: a wide soft halo under a tight bright core, which
+         is what makes the poster read as emitted light rather than blue paint.
+         Deliberately restrained - an earlier stdDeviation of 9 looked right at
+         512px and dissolved the glyph at 32px, because blur is in user units
+         and so scales down with everything else while perception does not. -->
+    <filter id="aeonGlow" x="-35%" y="-35%" width="170%" height="170%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="6" result="wide"/>
+      <feGaussianBlur in="SourceGraphic" stdDeviation="2" result="tight"/>
+      <feMerge>
+        <feMergeNode in="wide"/>
+        <feMergeNode in="tight"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Ground. Icons are composited on unknown backgrounds - a light sidebar, a
+       browser tab, a launcher - so the mark carries its own dark field rather
+       than assuming one. -->
+  <rect width="512" height="512" rx="112" fill="url(#aeonGround)"/>
+
+  <g filter="url(#aeonGlow)" fill="none" stroke-linecap="butt">
+    <!-- Outer segmented ring. Four 72-degree arcs with four 18-degree gaps;
+         circumference 2*pi*205 = 1288.05, so 257.61 on / 64.40 off. Rotated
+         -36 degrees so the gaps land on the diagonals, as the poster's do. -->
+    <circle cx="256" cy="256" r="205"
+            stroke="#bcd8ff" stroke-width="14"
+            stroke-dasharray="257.61 64.40"
+            transform="rotate(-36 256 256)"/>
+
+    <!-- Node circles: 315 (upper right), 45 (lower right), 180 (left).
+         r 218 = 0.85 half-widths, so they sit proud of the ring, as measured. -->
+    <circle cx="410.15" cy="101.85" r="24" stroke="#eaf3ff" stroke-width="10"/>
+    <circle cx="410.15" cy="410.15" r="24" stroke="#eaf3ff" stroke-width="10"/>
+    <circle cx="38"     cy="256"    r="24" stroke="#eaf3ff" stroke-width="10"/>
+
+    <!-- Inner ring -->
+    <circle cx="256" cy="256" r="118" stroke="#7fb2ff" stroke-width="6"/>
+
+    <!-- The A: apex, two legs, crossbar. Mitred apex - the sharp peak is the
+         glyph's signature and a round join blunts it at every size. The crossbar
+         sits high enough to leave a counter (the triangular hole) that survives
+         downscaling; dropped lower it closes up and the A reads as a triangle. -->
+    <path d="M174 344 L256 166 L338 344" stroke="#ffffff" stroke-width="19" stroke-linejoin="miter"/>
+    <path d="M205 292 L307 292" stroke="#ffffff" stroke-width="19"/>
+  </g>
+</svg>
