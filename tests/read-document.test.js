@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import express from 'express';
 import { createRequire } from 'module';
 
@@ -157,7 +158,7 @@ describe('the kernel extractor', () => {
     expect(extract.kindOf('a.png')).toBe('binary');
   });
   it('the Matrix uses the same extractor, not its own copy', () => {
-    const src = fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'src/blocks/aeon_matrix/api/_lib.cjs'), 'utf8');
+    const src = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src/blocks/aeon_matrix/api/_lib.cjs'), 'utf8');
     expect(src).toMatch(/require\('\.\.\/\.\.\/\.\.\/kernel\/extract\.cjs'\)/);
     expect(src).not.toMatch(/require\('pdf-parse'\)/);
   });

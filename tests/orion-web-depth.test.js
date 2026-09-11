@@ -12,10 +12,11 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
-const ROOT = path.join(path.dirname(new URL(import.meta.url).pathname), '..');
+const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const search = require('../services/search.js')({ writeOSAudit() {}, kernelLLM: async () => '' });
 
 describe('web search result count', () => {

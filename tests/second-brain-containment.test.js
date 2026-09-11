@@ -23,6 +23,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import express from 'express';
 import { createRequire } from 'module';
 
@@ -182,7 +183,7 @@ describe('an embedding endpoint cannot speak into the model’s context', () => 
   it('keeps the remote response body out of the operator-facing error', async () => {
     const embed = require('../src/kernel/embed.cjs');
     const src = fs.readFileSync(
-      path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'src/kernel/embed.cjs'),
+      path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src/kernel/embed.cjs'),
       'utf8',
     );
     // The failure message travels: embed.cjs -> retrieve.cjs unavailable.message

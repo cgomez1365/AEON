@@ -18,6 +18,7 @@ import express from 'express';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
 
 // Before any require that can reach endpoints.cjs — it creates its secrets dir
@@ -25,7 +26,7 @@ import { createRequire } from 'module';
 process.env.AEON_SECRETS_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'aeon-index-panel-'));
 
 const require = createRequire(import.meta.url);
-const ROOT = path.join(path.dirname(new URL(import.meta.url).pathname), '..');
+const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 // A vault and a data root of our own. The factory takes both by injection, so
 // nothing here can reach the install this suite runs from.

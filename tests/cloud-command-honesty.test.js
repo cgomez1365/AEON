@@ -11,11 +11,12 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import express from 'express';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
-const ROOT = path.join(path.dirname(new URL(import.meta.url).pathname), '..');
+const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const createRegistry = require('../src/kernel/commandRegistry.cjs');
 const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'src/blocks/aeon_matrix/block.manifest.json'), 'utf8'));
 const cmds = manifest.contract.commands;

@@ -22,6 +22,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import express from 'express';
 import { createRequire } from 'module';
 
@@ -136,7 +137,7 @@ describe('the graph does not draw conversations either', () => {
 describe('the prune is declared where a reader will find it', () => {
   it('names the conversation directory, not the whole Agents tree', () => {
     const src = fs.readFileSync(
-      path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'src/blocks/aeon_matrix/api/ingest.cjs'),
+      path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src/blocks/aeon_matrix/api/ingest.cjs'),
       'utf8',
     );
     expect(src).toMatch(/'Agents\/Aeon\/chat_sessions'/);

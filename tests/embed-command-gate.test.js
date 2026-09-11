@@ -30,6 +30,7 @@ import express from 'express';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
 
 // endpoints.cjs creates its secrets dir at MODULE SCOPE — set before any
@@ -38,7 +39,7 @@ import { createRequire } from 'module';
 process.env.AEON_SECRETS_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'aeon-embed-gate-'));
 
 const require = createRequire(import.meta.url);
-const ROOT = path.join(path.dirname(new URL(import.meta.url).pathname), '..');
+const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const createRegistry = require('../src/kernel/commandRegistry.cjs');
 const endpoints = require('../src/kernel/endpoints.cjs');
 const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'src/blocks/aeon_matrix/block.manifest.json'), 'utf8'));

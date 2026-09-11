@@ -10,8 +10,8 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'fs';
 import path from 'path';
-
-const ROOT = path.join(path.dirname(new URL(import.meta.url).pathname), '..');
+import { fileURLToPath } from 'url';
+const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const page = fs.readFileSync(path.join(ROOT, 'src/blocks/master/index.jsx'), 'utf8');
 const readme = fs.readFileSync(path.join(ROOT, 'src/blocks/_template/README.md'), 'utf8');
 

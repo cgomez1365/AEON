@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import express from 'express';
 import { createRequire } from 'module';
 
@@ -207,7 +208,7 @@ describe('the terminal client', () => {
 
 describe('R05 — one wake phrase', () => {
   it('the dashboard no longer declares its own', () => {
-    const src = fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'src/blocks/dashboard/api/chat-stream.cjs'), 'utf8');
+    const src = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src/blocks/dashboard/api/chat-stream.cjs'), 'utf8');
     expect(src).not.toMatch(/const WAKE_RE = \//);
     expect(src).toMatch(/WAKE_RE\s*\}\s*=\s*kernelContext/);
   });
