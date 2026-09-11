@@ -19,13 +19,10 @@
   "widget": null,
   "requires": {
     "apis": [
-      "local",
-      "supabase"
+      "local"
     ],
     "env": [
-      "AEON_LLM_BACKEND",
-      "SUPABASE_URL",
-      "SUPABASE_SERVICE_ROLE_KEY"
+      "AEON_LLM_BACKEND"
     ],
     "local": [],
     "blocks": []
@@ -81,7 +78,7 @@
     "commands": [
       {
         "cmd": "/index-brain",
-        "desc": "Rebuild the Second Brain index (new/changed/deleted files)",
+        "desc": "Rebuild the Second Brain index (new/changed/deleted files); embeds what it can",
         "method": "POST",
         "route": "/api/crn/second-brain/ingest/scan-docs",
         "mode": "instant"
@@ -113,7 +110,8 @@
             "required": true
           }
         ],
-        "mode": "instant"
+        "mode": "instant",
+        "when": "embed"
       },
       {
         "cmd": "/doc",
@@ -137,7 +135,8 @@
         "param": "query",
         "display": "answer",
         "mode": "instant",
-        "category": "content"
+        "category": "content",
+        "when": "embed"
       },
       {
         "cmd": "/push",

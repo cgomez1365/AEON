@@ -148,9 +148,49 @@ function renderTemplate(tpl, data) {
   });
 }
 
-module.exports = function ({ blockReadiness = {}, isVercel = false, writeOSAudit, kernelLLM = null, isCloudLinked = null } = {}) {
+module.exports = function ({ blockReadiness = {}, isVercel = false, writeOSAudit, kernelLLM = null, isCloudLinked = null, hasEmbedding = null } = {}) {
   // Live, not cached: the operator can link Supabase in Settings without a restart.
   const cloudLinked = () => { try { return typeof isCloudLinked === 'function' ? !!isCloudLinked() : false; } catch { return false; } };
+  // Live as well: the vault commands (/ask /recall /scan /index-brain /upload)
+  // declare `when: "embed"`. They used to vanish from the palette whenever
+  // their block was not ready and, when the block WAS ready but no embedding
+  // model existed, ran and died three layers down with "no_embed_model". The
+  // gate asks the same resolver the indexer uses, at request time, so the
+  // moment Cookbook finishes downloading nomic-embed the command is back —
+  // no restart, no rescan.
+  const embedReady = () => {
+    try {
+      if (typeof hasEmbedding === 'function') return !!hasEmbedding();
+      const ep = require('./endpoints.cjs');
+      return !!ep.describeRoleLocal(ep.EMBED_ROLE).ok;
+    } catch { return false; }
+  };
+  const ctxFor = (ready) => ({ ready, runtime: isVercel ? 'cloud' : 'local', supabase: cloudLinked(), embed: embedReady() });
+
+  // One sentence naming the cause AND the remedy. Shared by the palette (so an
+  // unavailable command is shown dimmed with its reason instead of hidden) and
+  // by dispatch (the 409). BO-SHIP P8e wrote the first two branches.
+  const explainUnavailable = (spec, readinessInfo, ready) => {
+    const missing = [
+      ...(readinessInfo.missingApis || []),
+      ...(readinessInfo.localMissing || []),
+    ];
+    const when = String(spec.when || '');
+    const why = !ready && missing.length
+      ? `${spec.blockLabel} needs: ${missing.join(', ')}. Add them in Settings → Connections.`
+      : !ready
+        ? `${spec.blockLabel} is not ready.`
+        : /\bsupabase\b/.test(when)
+          // A cloud command on a local install said "unavailable (when: …)"
+          // or, worse, ran and reported success having synced nothing. It
+          // names the dependency and the remedy, and says nothing is lost.
+          ? `${spec.cmd} syncs with Supabase, and this install is not linked to one. Add SUPABASE_URL and a key to .env and restart, or stay local — nothing is lost.`
+          : /\bembed\b/.test(when)
+            ? `${spec.cmd} needs an embedding model and none is available. Download one in Cookbook (nomic-embed, about 150 MB, runs on CPU), or assign an endpoint that serves embeddings to the Embedding role in Settings → Model Assignment.`
+            : `${spec.cmd} is unavailable in this runtime (requires: ${spec.when}).`;
+    return { why, missing };
+  };
+
   const router = express.Router();
   const narrator = require('./commandNarrator.cjs');
   let registry = scanCommands(blockReadiness);
@@ -163,8 +203,11 @@ module.exports = function ({ blockReadiness = {}, isVercel = false, writeOSAudit
     for (const spec of registry.values()) {
       if (seen.has(spec.id)) continue;
       seen.add(spec.id);
-      const ready = blockReadiness[spec.blockId]?.ready !== false;
-      list.push({ ...spec, available: ready && evalWhen(spec.when, { ready, runtime: isVercel ? 'cloud' : 'local', supabase: cloudLinked() }) });
+      const readinessInfo = blockReadiness[spec.blockId] || {};
+      const ready = readinessInfo.ready !== false;
+      const available = ready && evalWhen(spec.when, ctxFor(ready));
+      // `reason` rides along so the palette can SAY why, not just grey out.
+      list.push({ ...spec, available, reason: available ? null : explainUnavailable(spec, readinessInfo, ready).why });
     }
     res.json({ ok: true, count: list.length, commands: list });
   });
@@ -210,7 +253,7 @@ module.exports = function ({ blockReadiness = {}, isVercel = false, writeOSAudit
 
     const readinessInfo = blockReadiness[spec.blockId] || {};
     const ready = readinessInfo.ready !== false;
-    if (!evalWhen(spec.when, { ready, runtime: isVercel ? 'cloud' : 'local', supabase: cloudLinked() })) {
+    if (!evalWhen(spec.when, ctxFor(ready))) {
       // BO-SHIP P8e — this answered `"/push unavailable (when: null)"`: an
       // internal expression, printed at the operator, naming no cause and no
       // remedy. `when` is null for most commands, so the one thing the message
@@ -218,20 +261,7 @@ module.exports = function ({ blockReadiness = {}, isVercel = false, writeOSAudit
       //
       // checkReadiness() already computes exactly what is missing
       // (missingApis, localMissing) and the dispatcher already had it in hand.
-      const missing = [
-        ...(readinessInfo.missingApis || []),
-        ...(readinessInfo.localMissing || []),
-      ];
-      const why = !ready && missing.length
-        ? `${spec.blockLabel} needs: ${missing.join(', ')}. Add them in Settings → Connections.`
-        : !ready
-          ? `${spec.blockLabel} is not ready.`
-          : /\bsupabase\b/.test(String(spec.when || ''))
-            // A cloud command on a local install said "unavailable (when: …)"
-            // or, worse, ran and reported success having synced nothing. It
-            // names the dependency and the remedy, and says nothing is lost.
-            ? `${spec.cmd} syncs with Supabase, and this install is not linked to one. Add SUPABASE_URL and a key to .env and restart, or stay local — nothing is lost.`
-            : `${spec.cmd} is unavailable in this runtime (requires: ${spec.when}).`;
+      const { why, missing } = explainUnavailable(spec, readinessInfo, ready);
 
       return res.status(409).json({
         ok: false,

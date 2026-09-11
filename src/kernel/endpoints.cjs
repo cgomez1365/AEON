@@ -284,7 +284,14 @@ async function discoverModels(provider, base_url, apiKey) {
   }
   // Any address the operator typed is checked before it is fetched. A
   // provider's own built-in base is trusted and skips this.
-  if (base_url) {
+  //
+  // "Typed" means DIFFERENT from the built-in one. The Settings form prefills
+  // the Base URL field with the provider's default the moment a provider is
+  // picked and sends it back unchanged — so Gemini's own address arrived here
+  // as a "custom address" and every Gemini "Get model list" was refused with a
+  // sentence about something the operator never did (CEO, 2026-09-10).
+  const custom = !!base_url && base_url !== profile.base;
+  if (custom) {
     const check = checkBaseUrl(base_url);
     if (!check.ok) return { error: check.error };
     // A user-supplied host must never be paired with a transport that puts the
@@ -304,6 +311,9 @@ async function discoverModels(provider, base_url, apiKey) {
     if (profile.style === 'gemini') {
       const r = await Promise.race([fetch(`${base}/models?key=${apiKey}`), timeout(8000)]);
       const d = await r.json();
+      // Google answers a bad key with { error: { message } } and no models.
+      // That used to come back as an empty list — the same shape as success.
+      if (d.error) return { error: d.error.message || 'Gemini rejected the API key.' };
       return (d.models || []).map(m => m.name.replace('models/', ''));
     }
     if (profile.style === 'anthropic') {

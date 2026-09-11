@@ -131,6 +131,19 @@ function taskPrefix(model, kind) {
   return kind === 'query' ? 'search_query: ' : 'search_document: ';
 }
 
+/**
+ * The space tag a vector from `model` carries — the value stored as
+ * `embeddingModel` and compared against at search time.
+ *
+ * Exported because callers OUTSIDE the embed path need the same answer: the
+ * index panel has to say whether the vectors already on disk match what the
+ * active embedder would write, and deriving `${model}#task` a second time by
+ * hand is exactly how the two definitions drift apart.
+ */
+function embedSpace(model) {
+  return taskPrefix(model, 'document') ? `${model}#task` : String(model || '');
+}
+
 async function kernelEmbed(text, { supabase = null, kind = 'document' } = {}) {
   if (typeof text !== 'string' || !text.trim()) {
     throw embedError('empty_input', 'Nothing to embed.');
@@ -150,7 +163,7 @@ async function kernelEmbed(text, { supabase = null, kind = 'document' } = {}) {
   // A prefixed embedding is a different SPACE from an unprefixed one of the
   // same model (R08: vectors are tagged and never mixed). The tag carries it,
   // so an index built before prefixes existed is migrated rather than compared.
-  const space = prefix ? `${r.model}#task` : r.model;
+  const space = embedSpace(r.model);
 
   if (r.provider === 'local') {
     return { vector: await embedLocal(input), model: space, provider: 'local' };
@@ -172,4 +185,4 @@ function embedReadiness() {
   return endpoints.describeRoleLocal(EMBED_ROLE);
 }
 
-module.exports = { kernelEmbed, embedReadiness, embedError, taskPrefix };
+module.exports = { kernelEmbed, embedReadiness, embedError, taskPrefix, embedSpace };

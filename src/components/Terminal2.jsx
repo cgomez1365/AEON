@@ -102,6 +102,17 @@ function InterceptCard({ prompt, onAllow, onDeny }) {
 
 const BOOT_MSG = { id: 0, type: 'msg', role: 'system', content: 'AEON Operator Console — link established. Type / for commands.' };
 
+// The palette row has room for a clause, not the kernel's full sentence. The
+// full reason stays on the row's title (hover) and in /help, and dispatching
+// the command prints it in full — this is a preview, not a substitute.
+function shortReason(reason) {
+  const r = String(reason || '');
+  if (/embedding model/i.test(r)) return 'needs an embedding model — download one in Cookbook';
+  if (/Supabase/i.test(r)) return 'needs Supabase';
+  if (/needs: /.test(r)) return r.replace(/^.*needs: /, 'needs ').replace(/\. Add them.*$/, '');
+  return r.replace(/^\/\S+ /, '').split(/[.—]/)[0].trim() || 'unavailable';
+}
+
 const Terminal2 = ({ onUsageUpdate }) => {
   const [input, setInput] = useState('');
   const [pendingImage, setPendingImage] = useState(null); // { dataUri, name }
@@ -272,12 +283,19 @@ const Terminal2 = ({ onUsageUpdate }) => {
     setFeed(prev => prev.map(e => e.id === id ? { ...e, ...(typeof updates === 'function' ? updates(e) : updates) } : e));
   }, []);
 
-  // ── Boot: pull the command registry from the kernel ──
-  useEffect(() => {
+  // ── Pull the command registry from the kernel ──
+  //
+  // Unavailable commands are KEPT, not filtered. Filtering them made /ask,
+  // /recall and /scan disappear on any install without an embedding model,
+  // which read as "the command was removed" (CEO, 2026-09-10). They now show
+  // dimmed with the kernel's own reason (c.reason), and dispatching one
+  // returns the same sentence as a 409 — nothing is hidden, nothing lies.
+  const loadCommands = useCallback(() => {
     fetch('/api/commands').then(r => r.json())
-      .then(d => setCommands([...UI_COMMANDS, ...(d.commands || []).filter(c => c.available !== false)]))
-      .catch(() => setCommands([...UI_COMMANDS]));
+      .then(d => setCommands([...UI_COMMANDS, ...(d.commands || [])]))
+      .catch(() => setCommands(prev => prev.length ? prev : [...UI_COMMANDS]));
   }, []);
+  useEffect(() => { loadCommands(); }, [loadCommands]);
 
   // ── Model hotswap: providers grouped by key availability ──
   const [modelGroups, setModelGroups] = useState([]);
@@ -370,6 +388,10 @@ const Terminal2 = ({ onUsageUpdate }) => {
     if (input.startsWith('/')) { setShowPalette(true); setPaletteFilter(input.toLowerCase()); }
     else setShowPalette(false);
   }, [input]);
+  // Availability is live on the server (an embedding model downloaded in
+  // Cookbook, Supabase linked in Settings). Re-read it each time the palette
+  // opens so the terminal never needs a reload to notice — one small GET.
+  useEffect(() => { if (showPalette) loadCommands(); }, [showPalette, loadCommands]);
 
   const filteredCommands = useMemo(() =>
     commands.filter(c => c.cmd.startsWith(paletteFilter) || paletteFilter === '/'),
@@ -541,7 +563,10 @@ const Terminal2 = ({ onUsageUpdate }) => {
     // UI-only commands short-circuit
     if (cmdToken === '/clear') { setFeed([]); return; }
     if (cmdToken === '/help') {
-      push({ type: 'msg', role: 'system', content: commands.map(c => `${c.cmd} — ${c.desc || c.title || ''}`).join('\n') });
+      push({ type: 'msg', role: 'system', content: commands.map(c =>
+        c.available === false
+          ? `${c.cmd} — ${c.desc || c.title || ''}\n    ⚠ unavailable: ${c.reason || 'not ready'}`
+          : `${c.cmd} — ${c.desc || c.title || ''}`).join('\n') });
       return;
     }
 
@@ -851,17 +876,24 @@ const Terminal2 = ({ onUsageUpdate }) => {
 
       {showPalette && filteredCommands.length > 0 && (
         <div style={{ maxHeight: 180, overflowY: 'auto', borderTop: '1px solid #1e2d45', background: 'rgba(10,15,25,0.97)', padding: '6px 0' }}>
-          {filteredCommands.map(c => (
-            <div key={c.id || c.cmd} onClick={() => setInput(c.cmd + ' ')}
-              style={{ padding: '3px 16px', fontSize: 11.5, cursor: 'pointer', display: 'flex', gap: 10 }}
-              onMouseEnter={e => e.currentTarget.style.background = 'rgba(0,242,255,0.07)'}
-              onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-              <span style={{ color: '#39ff14', minWidth: 90 }}>{c.cmd}</span>
-              <span style={{ color: '#5a6a80', flex: 1 }}>{c.desc || c.title}</span>
-              {c.dangerous && <ShieldAlert size={11} color="#f59e0b" />}
-              {c.blockLabel && <span style={{ color: '#4a5568', fontSize: 9.5 }}>{c.blockLabel}</span>}
-            </div>
-          ))}
+          {filteredCommands.map(c => {
+            const off = c.available === false;
+            return (
+              <div key={c.id || c.cmd} onClick={() => setInput(c.cmd + ' ')} title={off ? c.reason || 'unavailable' : undefined}
+                data-unavailable={off ? 'true' : undefined}
+                style={{ padding: '3px 16px', fontSize: 11.5, cursor: 'pointer', display: 'flex', gap: 10, opacity: off ? 0.55 : 1 }}
+                onMouseEnter={e => e.currentTarget.style.background = 'rgba(0,242,255,0.07)'}
+                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                <span style={{ color: off ? '#8a9ab0' : '#39ff14', minWidth: 90 }}>{c.cmd}</span>
+                <span style={{ color: '#5a6a80', flex: 1 }}>
+                  {c.desc || c.title}
+                  {off && <span style={{ color: '#ffaa00', marginLeft: 8, fontSize: 10 }}>⚠ {shortReason(c.reason)}</span>}
+                </span>
+                {c.dangerous && <ShieldAlert size={11} color="#f59e0b" />}
+                {c.blockLabel && <span style={{ color: '#4a5568', fontSize: 9.5 }}>{c.blockLabel}</span>}
+              </div>
+            );
+          })}
         </div>
       )}
 

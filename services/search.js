@@ -5,9 +5,18 @@
 const express = require('express');
 const https = require('https');
 
+// How many hits a caller gets when it does not say. 5 is what the keyed
+// providers always returned; DDG returned 3. The ceiling bounds one scrape.
+const DEFAULT_COUNT = 5;
+const MAX_COUNT = 30;
+const clampCount = (n) => {
+  const v = Math.floor(Number(n));
+  return Number.isFinite(v) && v > 0 ? Math.min(v, MAX_COUNT) : DEFAULT_COUNT;
+};
+
 module.exports = ({ writeOSAudit, kernelLLM }) => {
 
-  const fetchDuckDuckGo = (query, correlationId) => {
+  const fetchDuckDuckGo = (query, correlationId, count = DEFAULT_COUNT) => {
     return new Promise((resolve) => {
       const url = 'https://lite.duckduckgo.com/lite/';
       const options = {
@@ -41,7 +50,7 @@ module.exports = ({ writeOSAudit, kernelLLM }) => {
           }
 
           const results = [];
-          for (let i = 0; i < Math.min(3, links.length, snippets.length); i++) {
+          for (let i = 0; i < Math.min(count, links.length, snippets.length); i++) {
             let actualUrl = links[i].url;
             if (actualUrl.includes('uddg=')) {
               const params = new URLSearchParams(actualUrl.split('?')[1]);
@@ -73,13 +82,13 @@ module.exports = ({ writeOSAudit, kernelLLM }) => {
   };
 
   // ── Brave Search API ────────────────────────────────────────────────────
-  const fetchBraveSearch = (query, correlationId) => {
+  const fetchBraveSearch = (query, correlationId, count = DEFAULT_COUNT) => {
     const apiKey = process.env.BRAVE_API_KEY;
     if (!apiKey) return Promise.resolve(null);
     return new Promise((resolve) => {
       const options = {
         hostname: 'api.search.brave.com',
-        path: `/res/v1/web/search?q=${encodeURIComponent(query)}&count=5`,
+        path: `/res/v1/web/search?q=${encodeURIComponent(query)}&count=${Math.min(count, 20)}`,
         method: 'GET',
         headers: { 'Accept': 'application/json', 'X-Subscription-Token': apiKey },
       };
@@ -89,7 +98,7 @@ module.exports = ({ writeOSAudit, kernelLLM }) => {
         res.on('end', () => {
           try {
             const json = JSON.parse(data);
-            const hits = (json.web?.results || []).slice(0, 5);
+            const hits = (json.web?.results || []).slice(0, count);
             if (!hits.length) return resolve(null);
             const results = hits.map(h =>
               `- **${h.title}**\n  ${h.description || ''}\n  Source: [${h.url}](${h.url})`
@@ -106,11 +115,11 @@ module.exports = ({ writeOSAudit, kernelLLM }) => {
   };
 
   // ── Serper (Google via serper.dev) ──────────────────────────────────
-  const fetchSerperSearch = (query, correlationId) => {
+  const fetchSerperSearch = (query, correlationId, count = DEFAULT_COUNT) => {
     const apiKey = process.env.SERPER_API_KEY;
     if (!apiKey) return Promise.resolve(null);
     return new Promise((resolve) => {
-      const body = JSON.stringify({ q: query, num: 5 });
+      const body = JSON.stringify({ q: query, num: count });
       const req = https.request({
         hostname: 'google.serper.dev',
         path: '/search',
@@ -122,7 +131,7 @@ module.exports = ({ writeOSAudit, kernelLLM }) => {
         res.on('end', () => {
           try {
             const json = JSON.parse(data);
-            const hits = (json.organic || []).slice(0, 5);
+            const hits = (json.organic || []).slice(0, count);
             if (!hits.length) return resolve(null);
             const results = hits.map(h =>
               `- **${h.title}**\n  ${h.snippet || ''}\n  Source: [${h.link}](${h.link})`
@@ -140,11 +149,11 @@ module.exports = ({ writeOSAudit, kernelLLM }) => {
   };
 
   // ── Tavily ──────────────────────────────────────────────────────────
-  const fetchTavilySearch = (query, correlationId) => {
+  const fetchTavilySearch = (query, correlationId, count = DEFAULT_COUNT) => {
     const apiKey = process.env.TAVILY_API_KEY;
     if (!apiKey) return Promise.resolve(null);
     return new Promise((resolve) => {
-      const body = JSON.stringify({ api_key: apiKey, query, max_results: 5, search_depth: 'basic' });
+      const body = JSON.stringify({ api_key: apiKey, query, max_results: Math.min(count, 20), search_depth: 'basic' });
       const req = https.request({
         hostname: 'api.tavily.com',
         path: '/search',
@@ -156,7 +165,7 @@ module.exports = ({ writeOSAudit, kernelLLM }) => {
         res.on('end', () => {
           try {
             const json = JSON.parse(data);
-            const hits = (json.results || []).slice(0, 5);
+            const hits = (json.results || []).slice(0, count);
             if (!hits.length) return resolve(null);
             const results = hits.map(h =>
               `- **${h.title}**\n  ${h.content || ''}\n  Source: [${h.url}](${h.url})`
@@ -176,20 +185,26 @@ module.exports = ({ writeOSAudit, kernelLLM }) => {
   // ── Unified search: best keyed provider, then DDG fallback ──────────
   // Priority: Tavily > Serper > Brave > DDG (Tavily returns answer+sources,
   // Serper hits Google, Brave is privacy-first — all better than DDG scraping)
-  const fetchWebSearch = async (query, correlationId) => {
+  //
+  // `count` is how many hits the caller wants. Every provider used to hardcode
+  // its own number (DDG 3, the keyed ones 5), so Orion's depth control — 8, 16,
+  // 24 — changed nothing: the page said "24" and showed 3 (CEO, 2026-09-10).
+  // Default stays 5 for callers that never asked.
+  const fetchWebSearch = async (query, correlationId, count = DEFAULT_COUNT) => {
+    count = clampCount(count);
     if (process.env.TAVILY_API_KEY) {
-      const r = await fetchTavilySearch(query, correlationId);
+      const r = await fetchTavilySearch(query, correlationId, count);
       if (r) return r;
     }
     if (process.env.SERPER_API_KEY) {
-      const r = await fetchSerperSearch(query, correlationId);
+      const r = await fetchSerperSearch(query, correlationId, count);
       if (r) return r;
     }
     if (process.env.BRAVE_API_KEY) {
-      const r = await fetchBraveSearch(query, correlationId);
+      const r = await fetchBraveSearch(query, correlationId, count);
       if (r) return r;
     }
-    return fetchDuckDuckGo(query, correlationId);
+    return fetchDuckDuckGo(query, correlationId, count);
   };
 
   // Router: GET /api/search-web
@@ -204,8 +219,10 @@ module.exports = ({ writeOSAudit, kernelLLM }) => {
     // 15s budget and reporting zero web hits. Let a caller decline the half it
     // does not want instead of paying for it and timing out.
     const synthesize = req.query.synthesize !== '0';
+    // `count` — how many hits to return; provider caps apply (Brave/Tavily 20).
+    const count = clampCount(req.query.count);
     try {
-      const results = await fetchWebSearch(q, req.correlationId);
+      const results = await fetchWebSearch(q, req.correlationId, count);
       if (!results) return res.json({ ok: false, query: q, results: '', answer: 'No web results found.' });
       if (!synthesize) return res.json({ ok: true, query: q, results, answer: null });
       let answer = results;
@@ -227,5 +244,5 @@ module.exports = ({ writeOSAudit, kernelLLM }) => {
     }
   });
 
-  return { fetchDuckDuckGo, fetchBraveSearch, fetchSerperSearch, fetchTavilySearch, fetchWebSearch, router };
+  return { fetchDuckDuckGo, fetchBraveSearch, fetchSerperSearch, fetchTavilySearch, fetchWebSearch, router, clampCount, DEFAULT_COUNT, MAX_COUNT };
 };

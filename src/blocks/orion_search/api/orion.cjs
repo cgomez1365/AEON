@@ -41,7 +41,10 @@ module.exports = function (deps) {
       // `answer`, so asking for prose cost 80-219s and guaranteed the 15s
       // budget below would abort. The budget stays at 15s deliberately —
       // raising it would have hidden the defect instead of removing it.
-      jfetch(`${base}/api/search-web?q=${encodeURIComponent(q)}&synthesize=0`),
+      // `count=k` — the depth control (8/16/24) used to stop here: the route
+      // was never told, so its provider default (3 on DDG) came back whatever
+      // the page said, and the slice below had nothing more to slice.
+      jfetch(`${base}/api/search-web?q=${encodeURIComponent(q)}&synthesize=0&count=${encodeURIComponent(k)}`),
       // Second Brain: RAG retrieve (returns passages with doc refs)
       jfetch(`${base}/api/crn/second-brain/retrieve`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -95,10 +98,16 @@ module.exports = function (deps) {
     const webError = web?.error || null;
     const webRaw = typeof web?.results === 'string' ? web.results : '';
     const webBlocks = webRaw.split(/\n\n+/).filter(b => b.trim().startsWith('- **'));
+    // Snippets arrive HTML-escaped from the engines ("Matt&#x27;s"); this is the
+    // one place they are turned into fields, so decode here, once.
+    const unescapeHtml = (s) => String(s || '')
+      .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+      .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
+      .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&');
     for (const block of webBlocks.slice(0, k)) {
-      const title = block.match(/-\s*\*\*(.+?)\*\*/)?.[1] || 'untitled';
+      const title = unescapeHtml(block.match(/-\s*\*\*(.+?)\*\*/)?.[1] || 'untitled');
       const url = block.match(/Source:\s*\[[^\]]*\]\((https?:\/\/[^)]+)\)/)?.[1] || null;
-      const excerpt = block.split('\n').slice(1).filter(l => !l.includes('Source:')).join(' ').trim().slice(0, 300);
+      const excerpt = unescapeHtml(block.split('\n').slice(1).filter(l => !l.includes('Source:')).join(' ').trim()).slice(0, 300);
       results.push({ title, url, excerpt, source: 'web' });
     }
 

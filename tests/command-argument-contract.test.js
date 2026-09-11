@@ -39,7 +39,9 @@ const createRegistry = require('../src/kernel/commandRegistry.cjs');
 
 let app;
 beforeAll(() => {
-  const { router } = createRegistry({ blockReadiness: {}, isVercel: false, writeOSAudit: () => {} });
+  // /scan declares `when: "embed"`; this suite is about the argument contract,
+  // which runs AFTER the availability gate, so the gate is held open here.
+  const { router } = createRegistry({ blockReadiness: {}, isVercel: false, writeOSAudit: () => {}, hasEmbedding: () => true });
   app = express();
   app.use(express.json());
   app.use('/api', router);

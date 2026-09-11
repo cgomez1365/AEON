@@ -348,6 +348,13 @@ try {
     // This is the same client every consumer fail-softs on — null when .env has
     // no SUPABASE_URL + key — so the terminal says so instead of syncing nothing.
     isCloudLinked: () => !!supabase,
+    // Vault commands (/ask /recall /scan /index-brain /upload) declare
+    // `when: "embed"`. Asked live, from the same resolver the indexer uses, so
+    // a model Cookbook finished downloading a second ago already counts.
+    hasEmbedding: () => {
+      try { const ep = require('../src/kernel/endpoints.cjs'); return !!ep.describeRoleLocal(ep.EMBED_ROLE).ok; }
+      catch { return false; }
+    },
   });
   app.use('/api', commandRegistry.router);
   _routerDeps.commandRescan = commandRegistry.rescan;
