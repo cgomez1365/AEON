@@ -19,7 +19,7 @@
 const express = require('express');
 const path    = require('path');
 const fs      = require('fs');
-const { loadExtractors, extractText, embed } = require('./_lib.cjs');
+const { loadExtractors, extractText, embed, EMBED_MODEL } = require('./_lib.cjs');
 
 const NIGHTLY_HOUR  = 3; // local hour to auto re-index, once per day
 const INDEXABLE_EXT = /\.(md|txt|json|pdf|docx|html?)$/i;
@@ -355,7 +355,12 @@ module.exports = function ingestFactory(deps) {
           const existing = index.documents[relPosix];
           if (existing && !Array.isArray(existing.embedding) && existing.summary) {
             try {
-              const { vector, model } = await embed(existing.summary, { kind: 'document' });
+              // The injected embedder, like the other three call sites in this
+              // scan. This branch alone called the real one, so the seam that
+              // exists to keep tests off the network was bypassed on precisely
+              // the path the Index panel's embed push drives. Production is
+              // unchanged — nothing injects there.
+              const { vector, model } = await (injectedEmbed || embed)(existing.summary, { kind: 'document' });
               existing.embedding = vector;
               existing.embeddingModel = model;
               existing.updatedAt = Date.now();
@@ -746,9 +751,57 @@ module.exports = function ingestFactory(deps) {
     try { res.end(); } catch { /* already gone */ }
   });
 
-  // GET /crn/second-brain/index-status — for Settings ▸ Installed blocks nervous-system view
+  // GET /crn/second-brain/index-status — for Settings ▸ Installed blocks
+  // nervous-system view, and for the Matrix ▸ Index panel.
+  //
+  // Indexing and EMBEDDING are two jobs on one run, and the old payload
+  // (lastRun, totalDocs, lastResult) could not tell them apart. An operator who
+  // indexed 400 files before installing a model saw "400 documents" and a
+  // recall that found nothing, with no surface anywhere saying why — the
+  // documents were there and the vectors were not.
+  //
+  // `embedding` answers three separate questions, because they have three
+  // separate remedies:
+  //   - is there an embedder at all right now?          → install one
+  //   - how many documents carry a vector?              → run the index
+  //   - do those vectors match the ACTIVE space?        → run the index
+  // `pending` is the sum of the last two: how many documents the next run
+  // would embed or re-embed. Zero with an embedder present means done.
   router.get('/crn/second-brain/index-status', (_req, res) => {
-    res.json(readStatus());
+    const status = readStatus();
+    let embedding = null;
+    try {
+      const { embedReadiness, embedSpace } = require('../../../kernel/embed.cjs');
+      const r = embedReadiness();
+      const activeSpace = r.ok ? embedSpace(r.model) : null;
+
+      const docs = Object.values(readIndex().documents || {});
+      const withVector = docs.filter(d => Array.isArray(d.embedding) && d.embedding.length);
+      // Untagged vectors predate per-vector tagging; retrieve.cjs reads them as
+      // EMBED_MODEL, so this must too or the two disagree about the same file.
+      const spaceOf = (d) => d.embeddingModel || EMBED_MODEL;
+      const stale = activeSpace ? withVector.filter(d => spaceOf(d) !== activeSpace) : [];
+
+      embedding = {
+        available: !!r.ok,
+        provider: r.ok ? r.provider : null,
+        model: r.ok ? r.model : null,
+        space: activeSpace,
+        reason: r.ok ? null : (r.reason || 'no_embed_model'),
+        documents: docs.length,
+        embedded: withVector.length,
+        missing: docs.length - withVector.length,
+        stale: stale.length,
+        // What the next run would work on. Without an embedder nothing can be
+        // embedded, so it is 0 — the remedy is a model, not another run.
+        pending: r.ok ? (docs.length - withVector.length) + stale.length : 0,
+        spaces: [...new Set(withVector.map(spaceOf))],
+      };
+    } catch (e) {
+      // R-05: a failure to MEASURE is reported, never rendered as "all good".
+      embedding = { available: false, reason: 'status_unavailable', error: e.message };
+    }
+    res.json({ ...status, running: !!shared.inFlight, embedding });
   });
 
   // Expose for internal callers (server.cjs boot check, other blocks)

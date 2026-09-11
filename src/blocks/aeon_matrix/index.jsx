@@ -5,7 +5,8 @@
  * Server routes stay in the /crn/second-brain/* namespace (URLs ≠ names).
  */
 import React, { lazy, Suspense, useState, useCallback } from 'react';
-import { Search, Loader, Network, FileText, Brain, Wrench, FolderKanban, BookOpen, Archive, HelpCircle } from 'lucide-react';
+import { Search, Loader, Network, FileText, Brain, Wrench, FolderKanban, BookOpen, Archive, HelpCircle, DatabaseZap } from 'lucide-react';
+import IndexPanel from './components/IndexPanel';
 
 // ── What the Matrix needs, and what it only *prefers* ──────────────────────
 //
@@ -40,7 +41,7 @@ const HELP_CARDS = [
       "An embedding model turns text into numbers that capture meaning, so \"how do I rotate credentials\" can match a note titled \"key lifecycle\" — different words, same idea.",
       "Without it, search still works: it falls back to matching words instead of meaning. You will find things, as long as you remember roughly what you wrote.",
     ],
-    callout: "Absent, it degrades quality. It never breaks anything. Install nomic-embed-text (0.15 GB) in Cookbook if you want meaning-based recall.",
+    callout: "Absent, it degrades quality. It never breaks anything. Install nomic-embed-text (0.15 GB) in Cookbook, then open the Index tab and push the embeddings — documents indexed before it arrived are backfilled in place.",
   },
   {
     title: 'Links — [[wikilinks]] and refs',
@@ -64,8 +65,8 @@ const HELP_CARDS = [
     title: 'If recall finds nothing',
     need: 'core',
     body: [
-      "Most often the index is simply stale — run /index-brain after adding files.",
-      "If you added files before installing an embedding model, those entries have no vector and meaning-based search skips them. Re-indexing backfills them automatically.",
+      "Most often the index is simply stale — open the Index tab and run it after adding files, or use /index-brain in the terminal.",
+      "If you added files before installing an embedding model, those entries have no vector and meaning-based search skips them. The Index tab counts them under NO VECTOR, and running it backfills them in place.",
     ],
   },
 ];
@@ -93,7 +94,7 @@ const FACETS = [
 ];
 
 export default function AeonMatrix() {
-  const [view, setView] = useState('search'); // 'search' | 'graph'
+  const [view, setView] = useState('search'); // 'search' | 'graph' | 'index' | 'help'
   const [query, setQuery] = useState('');
   const [results, setResults] = useState(null);
   const [facet, setFacet] = useState('all');
@@ -147,7 +148,7 @@ export default function AeonMatrix() {
           AGENT MEMORY LAYER
         </span>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
-          {[['search', 'Search', Search], ['graph', 'Graph', Network], ['help', 'Help', HelpCircle]].map(([id, label, Icon]) => (
+          {[['search', 'Search', Search], ['graph', 'Graph', Network], ['index', 'Index', DatabaseZap], ['help', 'Help', HelpCircle]].map(([id, label, Icon]) => (
             <button key={id} onClick={() => setView(id)} style={{
               display: 'flex', alignItems: 'center', gap: 5, padding: '6px 14px', borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: 'pointer',
               border: view === id ? '1px solid var(--accent)' : '1px solid var(--border)',
@@ -161,7 +162,9 @@ export default function AeonMatrix() {
         Every skill, project, memory, and document the agents can reach — one keyword away.
       </p>
 
-      {view === 'help' ? (
+      {view === 'index' ? (
+        <IndexPanel />
+      ) : view === 'help' ? (
         <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit,minmax(300px,1fr))', paddingBottom: 24 }}>
           {HELP_CARDS.map(card => (
             <div key={card.title} style={{
