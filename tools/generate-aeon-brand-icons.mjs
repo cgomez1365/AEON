@@ -222,6 +222,12 @@ export const SENTINELS = {
   stroke64: { size: 64, svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512"><defs><radialGradient id="g" cx="50%" cy="42%" r="78%"><stop offset="0%" stop-color="#0b1428"/><stop offset="62%" stop-color="#050a16"/><stop offset="100%" stop-color="#01030a"/></radialGradient></defs><rect width="512" height="512" rx="112" fill="url(#g)"/><circle cx="256" cy="256" r="180" fill="none" stroke="#7fb2ff" stroke-width="28"/><path d="M141 369 L256 155 L371 369 L333 369 L256 226 L179 369 Z" fill="#ffffff"/></svg>' },
   hairline16: { size: 16, svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512"><rect width="512" height="512" fill="#050a16"/><circle cx="256" cy="256" r="210" fill="none" stroke="#7fb2ff" stroke-width="28"/><circle cx="256" cy="256" r="120" fill="none" stroke="#ffffff" stroke-width="20"/></svg>' },
   blur128: { size: 128, svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512"><defs><filter id="f" x="-35%" y="-35%" width="170%" height="170%"><feGaussianBlur in="SourceGraphic" stdDeviation="6" result="wide"/><feGaussianBlur in="SourceGraphic" stdDeviation="2" result="tight"/><feMerge><feMergeNode in="wide"/><feMergeNode in="tight"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><rect width="512" height="512" fill="#01030a"/><g transform="translate(256 256) scale(0.8) translate(-256 -256)"><g filter="url(#f)" fill="none"><circle cx="256" cy="256" r="205" stroke="#bcd8ff" stroke-width="14" stroke-dasharray="257.61 64.40" transform="rotate(-36 256 256)"/><circle cx="410.15" cy="101.85" r="24" stroke="#eaf3ff" stroke-width="10"/></g></g></svg>' },
+  // 180 is not a power of two and lands the scaled group's blur on fractional
+  // device pixels. Its absence is why windows-latest reproduced the other three
+  // sentinels, was classed EXACT, and then differed on aeon-icon-maskable-180
+  // alone (CI run 34679256019, 2026-09-12). A sentinel set that misses a path
+  // the outputs use classes a machine exact that is not.
+  scaledBlur180: { size: 180, svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512"><defs><filter id="f" x="-35%" y="-35%" width="170%" height="170%"><feGaussianBlur in="SourceGraphic" stdDeviation="6" result="wide"/><feGaussianBlur in="SourceGraphic" stdDeviation="2" result="tight"/><feMerge><feMergeNode in="wide"/><feMergeNode in="tight"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><rect width="512" height="512" fill="#01030a"/><g transform="translate(256 256) scale(0.8) translate(-256 -256)"><g filter="url(#f)"><circle cx="256" cy="256" r="118" fill="none" stroke="#7fb2ff" stroke-width="9"/><path d="M183 328 L256 192 L329 328 L307 328 L256 233 L205 328 Z" fill="#ffffff"/></g></g></svg>' },
 };
 
 export async function probeHashes() {
@@ -307,8 +313,14 @@ export async function generate({ write = true, restamp = process.env.AEON_BRAND_
     const sources = { full: sha256(fullSvg), compact: sha256(compactSvg) };
     const prev = readStamp();
     const sameSources = prev?.sources && prev.sources.full === sources.full && prev.sources.compact === sources.compact;
-    const sameProbes = prev?.probes && Object.keys(SENTINELS).every((k) => prev.probes[k] === probes[k]);
-    if (prev && sameSources && !sameProbes && !restamp) {
+    // Compare only the sentinels the stamp already knows. A sentinel ADDED to
+    // the set (as scaledBlur180 was, 2026-09-12) is a change to the probe, not
+    // to the rasteriser: refusing there would make it impossible to extend the
+    // set without also declaring a machine change. A sentinel the stamp has and
+    // this machine renders differently is the real signal.
+    const shared = prev?.probes ? Object.keys(SENTINELS).filter((k) => k in prev.probes) : [];
+    const driftsOnShared = shared.length > 0 && shared.some((k) => prev.probes[k] !== probes[k]);
+    if (prev && sameSources && driftsOnShared && !restamp) {
       throw new Error(
         '[brand] refusing: the sources are unchanged but this rasteriser differs from the one that made the '
         + `committed icons (${prev.platform}/${prev.arch}, canvas ${prev.canvas}). Regenerating here would rewrite every `

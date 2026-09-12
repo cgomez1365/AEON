@@ -16,9 +16,9 @@
  * What is locked here, in order of how quietly each would otherwise revert:
  *   1. DERIVATION - every raster on disk is what the generator renders from the
  *      SVGs, block-icon fallbacks included: byte-exact on a machine that
- *      reproduces the three rasteriser sentinels in tools/aeon-brand.stamp.json
+ *      reproduces the four rasteriser sentinels in tools/aeon-brand.stamp.json
  *      (fixed drawings, so an edited SVG cannot demote the gate), else equal
- *      within one level in PREMULTIPLIED space - the space Skia drifts in;
+ *      within DRIFT_LEVELS in PREMULTIPLIED space - the space Skia drifts in;
  *      comparing un-premultiplied channels turns a one-level drift at a
  *      low-alpha corner pixel into twenty. .ico files are compared frame by
  *      frame, never by directory bytes, and every frame must be its sibling
@@ -43,14 +43,24 @@
  *   5. PROVENANCE - the pipeline reads the SVGs and nothing else; no served
  *      file points at the poster; only `npm run brand:icons` writes icons.
  *
- * Platform notes, dated 2026-09-11: the stamp is darwin/x64 (this Mac). No CI
- * leg is that machine (macos-latest is arm64), so CI always takes the tolerant
- * path; exactness is enforced here. Whether any CI rasteriser drifts by more
- * than one premultiplied level is UNMEASURED until the first run; a tolerant
- * failure names the pixel and its alpha. Safari's favicon choice is asserted
- * from its source, not observed. A tracked Windows shortcut, "AEON Command
- * Center.lnk", points its icon at Desktop\aeon3\AEON.ico, a sibling folder
- * nothing here writes; rebuilding it on the Windows box is the CEO's.
+ * Platform notes, MEASURED 2026-09-12 on CI run 34679256019 (icons generated on
+ * darwin/x64, canvas 1.0.2):
+ *   ubuntu-latest x64  reproduced every sentinel and every byte - exact.
+ *   windows-latest x64 reproduced every byte too. It first differed on
+ *                      aeon-icon-maskable-180.png alone, which is what added
+ *                      the scaledBlur180 sentinel: 180 is not a power of two
+ *                      and lands the scaled group's blur on fractional device
+ *                      pixels, a path the other three never touched.
+ *   macos-latest arm64 drifts. Up to 4 premultiplied levels at opaque pixels
+ *                      across ten files (worst aeon-icon-64.png at (43,39)).
+ *                      Apple Silicon's Skia NEON path, not tampering - the
+ *                      legibility probes pass on every leg, because 4/255 is
+ *                      invisible. Hence DRIFT_LEVELS = 8, with the margin and
+ *                      the reading written down beside it.
+ * Safari's favicon choice is asserted from its source, not observed. A tracked
+ * Windows shortcut, "AEON Command Center.lnk", points its icon at
+ * Desktop\aeon3\AEON.ico, a sibling folder nothing here writes; rebuilding it
+ * on the Windows box is the CEO's.
  */
 import { describe, it, expect } from 'vitest';
 import fs from 'fs';
@@ -108,23 +118,45 @@ const rasterSvg = (svgText, size) => decode(Buffer.from(sizedSvg(svgText, size))
 const rasterPng = (file) => decode(fs.readFileSync(file));
 
 /**
- * Two PNG buffers equal within one level in premultiplied space. getImageData
- * hands back un-premultiplied channels; the rasteriser drifts in premultiplied
- * ones and the encoder divides by alpha on the way out, so a one-level drift
- * at alpha 12 reads as 21 un-premultiplied. Returns null when within bound,
- * else a message naming the worst pixel.
+ * How far one rasteriser may sit from another before it stops being drift.
+ *
+ * MEASURED, not guessed (§23). CI run 34679256019, 2026-09-12, icons generated
+ * on darwin/x64 canvas 1.0.2: darwin/arm64 differed by at most 4 premultiplied
+ * levels (worst case aeon-icon-64.png at (43,39), alpha 255; 2-4 across ten
+ * files); ubuntu/x64 and win32/x64 reproduced every byte. The first bound was
+ * 1, a guess, and it called a 1.6%-of-full-scale difference tampering. 8 keeps
+ * a margin over the measured 4 and is still far below anything visible: a
+ * one-level edit to a gradient stop moves an antialiased edge pixel by 2, a
+ * 15-level edit by 13-15, and an upscaled raster by 255 - all caught.
+ *
+ * The differing-pixel COUNT is deliberately not bounded yet: nobody has
+ * measured it on arm64. It is reported below so the next CI run supplies the
+ * number, and a bound can be set from a reading instead of a guess.
  */
-async function pixelsWithinOne(aBuf, bBuf) {
+const DRIFT_LEVELS = 8;
+
+/**
+ * Two PNG buffers equal within DRIFT_LEVELS in premultiplied space.
+ * getImageData hands back un-premultiplied channels; the rasteriser drifts in
+ * premultiplied ones and the encoder divides by alpha on the way out, so a
+ * one-level drift at alpha 12 reads as 21 un-premultiplied. Returns null when
+ * within bound, else a message naming the worst pixel and the spread.
+ */
+async function pixelsWithinDrift(aBuf, bBuf) {
   const a = await decode(aBuf), b = await decode(bBuf);
   if (a.w !== b.w || a.h !== b.h) return `size ${a.w}x${a.h} vs ${b.w}x${b.h}`;
-  let worst = 0, where = null;
+  let worst = 0, where = null, differing = 0, total = 0;
   for (let i = 0; i < a.data.length; i += 4) {
     const aA = a.data[i + 3], bA = b.data[i + 3];
     let d = Math.abs(aA - bA);
     for (let c = 0; c < 3; c++) d = Math.max(d, Math.abs(Math.round(a.data[i + c] * aA / 255) - Math.round(b.data[i + c] * bA / 255)));
+    if (d) { differing++; total += d; }
     if (d > worst) { worst = d; where = { x: (i / 4) % a.w, y: Math.floor(i / 4 / a.w), alpha: aA }; }
   }
-  return worst <= 1 ? null : `premultiplied difference of ${worst} levels at (${where.x},${where.y}) alpha ${where.alpha}`;
+  const px = a.w * a.h;
+  const spread = `${differing} of ${px} pixels differ (${(100 * differing / px).toFixed(1)}%), mean ${(total / Math.max(1, differing)).toFixed(2)} levels`;
+  return worst <= DRIFT_LEVELS ? null
+    : `premultiplied difference of ${worst} levels at (${where.x},${where.y}) alpha ${where.alpha} - over the ${DRIFT_LEVELS}-level drift bound; ${spread}`;
 }
 
 /** The gate's mode on this machine, from the stamp: exact when the sentinels reproduce. */
@@ -177,12 +209,12 @@ describe('1. every icon on disk is what the generator renders from the SVGs', ()
         const want = parseIco(buf), have = parseIco(disk);
         if (want.length !== have.length || want.some((f, i) => f.size !== have[i].size)) { stale.push(`${rel}: frame set differs (${cause})`); continue; }
         for (let i = 0; i < want.length; i++) {
-          const msg = await pixelsWithinOne(want[i].png, have[i].png);
+          const msg = await pixelsWithinDrift(want[i].png, have[i].png);
           if (msg) stale.push(`${rel}: frame ${want[i].size} ${msg} (${cause})`);
         }
         continue;
       }
-      const msg = await pixelsWithinOne(buf, disk);
+      const msg = await pixelsWithinDrift(buf, disk);
       if (msg) stale.push(`${rel}: ${msg} (${cause})`);
     }
     expect(stale, `stale icons:\n  ${stale.join('\n  ')}`).toEqual([]);
@@ -222,7 +254,7 @@ describe('1. every icon on disk is what the generator renders from the SVGs', ()
     }
   }, 30000);
 
-  it('one writer: no script, hook or workflow regenerates icons except brand:icons, and the stamp lives outside public/', () => {
+  it('one writer: no script, hook or workflow regenerates icons except brand:icons, and the stamp lives outside public/', async () => {
     // A build on another machine would rewrite every PNG with that machine's
     // rasteriser and dirty the tree on every build. This test is the gate.
     const pkg = JSON.parse(read(path.join(ROOT, 'package.json')));
@@ -247,14 +279,21 @@ describe('1. every icon on disk is what the generator renders from the SVGs', ()
       .map(f => path.relative(ROOT, f));
     expect(importers, 'files importing the brand generator').toEqual([]);
     // And the generator itself refuses to write from any other npm script.
+    // In-process, not through a subprocess: the first version asserted on a
+    // spawned child's stderr and the ubuntu floor leg saw it empty (CI run
+    // 34679256019) - subprocess stream capture varies by platform and runner,
+    // the refusal does not.
     const gen = code(read(path.join(ROOT, 'tools', 'generate-aeon-brand-icons.mjs')));
     expect(gen).toMatch(/npm_lifecycle_event/);
-    expect(gen).toMatch(/refusing to write icons from/);
-    const r = spawnSync(process.execPath, ['tools/generate-aeon-brand-icons.mjs'], {
-      cwd: ROOT, env: { ...process.env, npm_lifecycle_event: 'build', AEON_BRAND_WRITE: undefined }, encoding: 'utf8',
-    });
-    expect(r.status, 'a write attempt from "build" must exit non-zero').not.toBe(0);
-    expect(r.stderr).toMatch(/refusing to write icons from "build"/);
+    const before = { ev: process.env.npm_lifecycle_event, w: process.env.AEON_BRAND_WRITE };
+    process.env.npm_lifecycle_event = 'build';
+    delete process.env.AEON_BRAND_WRITE;
+    try {
+      await expect(generate({ write: true })).rejects.toThrow(/refusing to write icons from "build"/);
+    } finally {
+      if (before.ev === undefined) delete process.env.npm_lifecycle_event; else process.env.npm_lifecycle_event = before.ev;
+      if (before.w === undefined) delete process.env.AEON_BRAND_WRITE; else process.env.AEON_BRAND_WRITE = before.w;
+    }
     expect(path.relative(ROOT, STAMP_FILE).startsWith('tools' + path.sep)).toBe(true);
     expect(fs.readdirSync(MARK).filter(f => f.endsWith('.json')), 'no stamp or json under public/brand/aeon-mark').toEqual([]);
   }, 30000);
@@ -634,7 +673,13 @@ describe('5. provenance: the SVGs in, nothing from the poster', () => {
     // probeHashes takes no arguments: it renders SENTINELS, never the sources.
     expect(gen).toMatch(/export async function probeHashes\(\)/);
     expect(gen).not.toMatch(/probeHashes\([^)]*(full|compact)/);
-    expect(Object.keys(SENTINELS)).toEqual(['stroke64', 'hairline16', 'blur128']);
+    // Every rasteriser path the outputs use must have a sentinel: an AA stroke
+    // over a gradient, a hairline at 16, a blur, and a blur inside a scaled
+    // group at a non-power-of-two size (the maskable-180 path, added after
+    // win32 was classed exact and then differed on that file alone).
+    expect(Object.keys(SENTINELS)).toEqual(['stroke64', 'hairline16', 'blur128', 'scaledBlur180']);
+    expect(SENTINELS.scaledBlur180.size).toBe(180);
+    expect(MASKABLE_SIZES).toContain(SENTINELS.scaledBlur180.size);
     for (const { svg } of Object.values(SENTINELS)) expect(svg).toMatch(/^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg" viewBox="0 0 512 512" width="512" height="512">/);
   });
 
