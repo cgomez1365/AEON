@@ -45,12 +45,13 @@
  *
  * Platform notes, MEASURED 2026-09-12 on CI run 34679256019 (icons generated on
  * darwin/x64, canvas 1.0.2):
- *   ubuntu-latest x64  reproduced every sentinel and every byte - exact.
- *   windows-latest x64 reproduced every byte too. It first differed on
- *                      aeon-icon-maskable-180.png alone, which is what added
- *                      the scaledBlur180 sentinel: 180 is not a power of two
- *                      and lands the scaled group's blur on fractional device
- *                      pixels, a path the other three never touched.
+ *   ubuntu-latest x64  reproduced every sentinel and every byte.
+ *   windows-latest x64 reproduced every sentinel - all four, including the one
+ *                      added for the scaled-blur path - and still differed on
+ *                      aeon-icon-maskable-180.png (34679256019, 34680891442).
+ *                      That is why exactness now needs the machine LABEL as
+ *                      well: a finite set of fixed drawings is a sufficient
+ *                      test for "a different rasteriser", never a complete one.
  *   macos-latest arm64 drifts. Up to 4 premultiplied levels at opaque pixels
  *                      across ten files (worst aeon-icon-64.png at (43,39)).
  *                      Apple Silicon's Skia NEON path, not tampering - the
@@ -159,7 +160,12 @@ async function pixelsWithinDrift(aBuf, bBuf) {
     : `premultiplied difference of ${worst} levels at (${where.x},${where.y}) alpha ${where.alpha} - over the ${DRIFT_LEVELS}-level drift bound; ${spread}`;
 }
 
-/** The gate's mode on this machine, from the stamp: exact when the sentinels reproduce. */
+const canvasVersion = () => {
+  try { return JSON.parse(read(path.join(ROOT, 'node_modules', '@napi-rs', 'canvas', 'package.json'))).version; }
+  catch { return null; }
+};
+
+/** The gate's mode: exact only on the generating machine, and only if it still reproduces the sentinels. */
 async function gateMode() {
   expect(fs.existsSync(STAMP_FILE), 'tools/aeon-brand.stamp.json is written by npm run brand:icons').toBe(true);
   const stamp = readStamp();
@@ -168,12 +174,21 @@ async function gateMode() {
   for (const k of ['full', 'compact']) expect(stamp.sources?.[k], `stamp malformed (source ${k}) - run npm run brand:icons`).toMatch(/^[0-9a-f]{64}$/);
   for (const k of ['platform', 'arch', 'canvas']) expect(stamp[k], `stamp malformed (${k})`).toBeTruthy();
   const here = await probeHashes();
-  const exact = Object.keys(SENTINELS).every(k => here[k] === stamp.probes[k]);
+  const sentinelsAgree = Object.keys(SENTINELS).every(k => here[k] === stamp.probes[k]);
+  // Both halves, for the reasons in the generator header: the label alone is
+  // blind to Rosetta and canvas bumps (the sentinels catch those), and the
+  // sentinels alone cannot license exactness (win32 matched all four and still
+  // differed on one output). Only the generating machine claims byte-exact.
+  const isGenerator = stamp.platform === process.platform && stamp.arch === process.arch
+    && stamp.canvas === canvasVersion();
+  const exact = sentinelsAgree && isGenerator;
   const src = sourceHashes();
   const edited = ['full', 'compact'].filter(k => src[k] !== stamp.sources[k]);
   const why = exact
-    ? 'exact (this machine reproduces the rasteriser sentinels)'
-    : `tolerant (generated on ${stamp.platform}/${stamp.arch} canvas ${stamp.canvas}; here ${process.platform}/${process.arch})`;
+    ? 'exact (this is the generating machine and it reproduces the sentinels)'
+    : !sentinelsAgree && isGenerator
+      ? `tolerant (this machine reports ${process.platform}/${process.arch} canvas ${stamp.canvas} like the stamp, but renders the sentinels differently - a Rosetta or CPU-feature difference)`
+      : `tolerant (generated on ${stamp.platform}/${stamp.arch} canvas ${stamp.canvas}; here ${process.platform}/${process.arch} canvas ${canvasVersion()})`;
   return { exact, edited, why };
 }
 

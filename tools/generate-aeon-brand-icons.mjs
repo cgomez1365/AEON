@@ -33,16 +33,28 @@
  * test on the stamp machine and is named as the cause everywhere.
  *
  * THE STAMP. tools/aeon-brand.stamp.json (outside public/, so it never ships)
- * records sha256 of three SENTINEL renders - fixed drawings embedded below
- * that exercise the rasteriser's paths (antialiased stroke over a gradient,
- * a hairline stroke at 16px, a blurred scaled group) and never change with
- * the mark - plus sha256 of the two source SVGs. Identical sentinels mean an
- * identical rasteriser, whatever the platform label says (Rosetta, CPU
- * feature sets and a bumped @napi-rs/canvas all change pixels without
- * changing the label). Re-running on a machine whose sentinels differ while
- * the sources are unchanged would re-rasterise every icon for no visual
- * reason and move the stamp there; that is refused unless
- * AEON_BRAND_RESTAMP=1 says it is meant.
+ * records what machine made the bytes: platform, arch, @napi-rs/canvas
+ * version, sha256 of four SENTINEL renders - fixed drawings embedded below
+ * that exercise the rasteriser's paths and never change with the mark - and
+ * sha256 of the two source SVGs.
+ *
+ * BYTE-EXACTNESS IS CLAIMED ONLY ON THE GENERATING MACHINE, and it takes both
+ * halves to claim it: the label (platform + arch + canvas version) AND the
+ * sentinels. Neither alone is enough, and both failure modes were measured.
+ * The label alone is blind - Rosetta, a CPU feature set or a bumped canvas
+ * change the pixels without changing the label - which is what the sentinels
+ * catch. But the sentinels alone cannot license exactness either: on CI run
+ * 34679256019 windows-latest reproduced every sentinel and still differed on
+ * aeon-icon-maskable-180.png, and adding a fourth sentinel for that path did
+ * not reproduce it (34680891442). A finite set of fixed drawings is a
+ * sufficient test for "a different rasteriser", never a complete one. So every
+ * machine that is not the generator is TOLERANT, which is the conservative
+ * direction and costs nothing: the drift bound in the test still catches
+ * anything a change of design could hide in.
+ *
+ * Re-running on a machine whose sentinels differ while the sources are
+ * unchanged would re-rasterise every icon for no visual reason and move the
+ * stamp there; that is refused unless AEON_BRAND_RESTAMP=1 says it is meant.
  *
  * Three renderings of ONE mark:
  *   aeon-mark.svg          the full mark - hollow chevron, inner ring, segmented
