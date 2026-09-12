@@ -1,5 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-labelledby="aeon-mark-title">
   <title id="aeon-mark-title">AEON</title>
+  <!-- GENERATED from aeon-mark.svg by tools/generate-aeon-brand-icons.mjs. Do not edit; edit the source. -->
   <!--
     THE AEON MARK — the source of truth for every icon size.
 
@@ -87,9 +88,9 @@
   <!-- Ground. Icons are composited on unknown backgrounds - a light sidebar, a
        browser tab, a launcher - so the mark carries its own dark field rather
        than assuming one. -->
-  <rect width="512" height="512" rx="112" fill="url(#aeonGround)"/>
+  <rect width="512" height="512" fill="url(#aeonGround)"/>
 
-  <g filter="url(#aeonGlow)" fill="none" stroke-linecap="butt">
+  <g transform="translate(256 256) scale(0.8) translate(-256 -256)"><g filter="url(#aeonGlow)" fill="none" stroke-linecap="butt">
     <!-- Outer segmented ring. Four 72-degree arcs with four 18-degree gaps;
          circumference 2*pi*205 = 1288.05, so 257.61 on / 64.40 off. Rotated
          -36 degrees so the gaps land on the diagonals, as the poster's do. -->
@@ -121,4 +122,5 @@
          the right silhouette - see aeon-mark-compact.svg for those sizes. -->
     <path d="M183 328 L256 192 L329 328 L307 328 L256 233 L205 328 Z" fill="#ffffff" stroke="none"/>
   </g>
+</g>
 </svg>

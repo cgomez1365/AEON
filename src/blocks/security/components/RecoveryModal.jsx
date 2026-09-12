@@ -146,7 +146,7 @@ export default function RecoveryModal({
           <button type="button" className="recovery-icon-button recovery-close" aria-label="Close recovery" title="Close" onClick={onClose}>
             <X aria-hidden="true" size={20} />
           </button>
-          <img className="recovery-mark" src="/brand/aeon-mark/aeon-icon-64.png" width="48" height="48" alt="" />
+          <img className="recovery-mark" src="/brand/aeon-mark/aeon-mark.svg" width="48" height="48" alt="" />
           <h1 id="recovery-title">Break-glass recovery</h1>
 
           {!release && questions.length === 0 && (

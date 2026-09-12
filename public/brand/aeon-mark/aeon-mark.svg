@@ -18,12 +18,45 @@
       outer segmented ring   r 0.80, stroke 0.055, four arcs with four gaps
       inner ring             r 0.35
       node circles           at 45, 180 and 315 degrees, sitting proud of the ring
-    One deliberate departure: the A is drawn larger than the poster's, which
-    treats it as a small detail inside a big HUD. An icon has one subject, and
-    below ~64px the A is the only element that still says AEON. What the poster
-    carries that cannot survive that scale - dashed rings, crosshair ticks,
-    slashed circles, corner sparkles - is left out rather than allowed to
-    average into grey haze and swallow the glyph.
+      the glyph              a HOLLOW CHEVRON - an outlined lambda, NOT an A.
+                             Least-squares fit on the poster's edge lines:
+                             outer apex y -0.185, inner apex y -0.065, flat feet
+                             at y +0.209, outer feet x +/-0.212, inner feet
+                             x +/-0.147. Both edges of each leg are parallel at a
+                             28.3 degree half-angle (apex 56.6 degrees), so the
+                             band is a constant 0.065 wide. Wider than tall.
+                             No crossbar. The first cut of this file drew one;
+                             it was invented - nothing in the emblem is there
+                             (the HUD's horizontal crosshair stops at the
+                             innermost circle and never crosses the glyph).
+                             CEO, 2026-09-11: "isn't really an A - more like a
+                             chevron". The wordmark under the emblem IS an A.
+                             A second cut then had the right shape and the wrong
+                             numbers (apex 51 degrees, tapering band): its
+                             "measurement" had captured the innermost circle's
+                             bounding box, not the chevron. Fixed by fitting
+                             the edges themselves.
+      the ring it sits in    the double ring at r 0.343 - drawn here as the
+                             single "inner ring". The poster also has a thin
+                             innermost circle at r 0.227 which the chevron's
+                             feet cross; it is omitted, it cannot survive icon
+                             sizes. Against the r 0.343 ring the chevron's apex
+                             sits at 0.54 r and its feet corners at 0.87 r,
+                             and that proportion is kept exactly.
+    One deliberate departure: the inner ring and the chevron inside it are
+    scaled up TOGETHER, 1.34x relative to the outer ring (r 0.343 -> 0.461 of
+    the half-width, i.e. 118 of 256). The poster treats the glyph as a small detail inside a big
+    HUD; an icon has one subject, and below ~64px the chevron is the only
+    element that still says AEON. What the poster carries that cannot survive
+    that scale - dashed rings, crosshair ticks, slashed circles, corner
+    sparkles, the innermost circle - is left out rather than allowed to average
+    into grey haze and swallow the glyph.
+    One known treatment change: the poster draws the chevron's band as two
+    thin edge lines with a dark interior (wireframe); this file fills the band.
+    Same six-vertex outline, filled - a double line cannot resolve below ~64px.
+    It reads heavier than the source at 256px and above; a stroked large-size
+    cut would restore the line-art character there and is the obvious next step
+    if that matters.
 
     Colours sampled from the poster: a white-hot core (#fcffff) blooming blue
     on black.
@@ -71,14 +104,21 @@
     <circle cx="410.15" cy="410.15" r="24" stroke="#eaf3ff" stroke-width="10"/>
     <circle cx="38"     cy="256"    r="24" stroke="#eaf3ff" stroke-width="10"/>
 
-    <!-- Inner ring -->
-    <circle cx="256" cy="256" r="118" stroke="#7fb2ff" stroke-width="6"/>
+    <!-- Inner ring. Stroke 9, not 6: 6/512 draws at 0.375px in the 32px
+         favicon and read at 25-40% luminance - barely a ring. -->
+    <circle cx="256" cy="256" r="118" stroke="#7fb2ff" stroke-width="9"/>
 
-    <!-- The A: apex, two legs, crossbar. Mitred apex - the sharp peak is the
-         glyph's signature and a round join blunts it at every size. The crossbar
-         sits high enough to leave a counter (the triangular hole) that survives
-         downscaling; dropped lower it closes up and the A reads as a triangle. -->
-    <path d="M174 344 L256 166 L338 344" stroke="#ffffff" stroke-width="19" stroke-linejoin="miter"/>
-    <path d="M205 292 L307 292" stroke="#ffffff" stroke-width="19"/>
+    <!-- The chevron. One FILLED polygon, six vertices: the outer edge up to the
+         apex and down, then the inner edge back, closed by the flat feet. Drawn
+         as a shape rather than a stroked line because the poster's glyph is an
+         outline with a hollow interior and flat feet, and a stroke gives neither.
+         The poster's numbers scaled by 118/115 onto this ring:
+           outer apex (256,192), outer feet (183,328)/(329,328)  slope 73/136 = 0.537
+           inner apex (256,233), inner feet (205,328)/(307,328)  slope 51/95  = 0.537
+         Parallel edges, 22-unit horizontal band, apex 56.5 degrees. The inner
+         apex is where the inward-shifted edges meet: outer apex + 22/0.537.
+         Below ~32px the hollow closes and it reads as a solid chevron, which is
+         the right silhouette - see aeon-mark-compact.svg for those sizes. -->
+    <path d="M183 328 L256 192 L329 328 L307 328 L256 233 L205 328 Z" fill="#ffffff" stroke="none"/>
   </g>
 </svg>

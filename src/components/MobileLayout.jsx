@@ -65,13 +65,22 @@ function TopBar({ view, onMenuToggle, menuOpen, groups }) {
       borderBottom: "1px solid rgba(255,255,255,0.07)",
       position: "sticky", top: 0, zIndex: 90,
     }}>
-      <img
-        src="/brand/aeon-mark/aeon-icon-64.png"
-        alt="AEON"
-        width="28"
-        height="28"
-        style={{ borderRadius: "5px", flexShrink: 0 }}
-      />
+      {/* 28 CSS px, chosen by DEVICE pixels: this layout is picked by window
+          width alone, so a narrow 1x desktop window or a 1x/1.5x tablet lands
+          here too, and 28 or 42 device px is under the 48 the full mark needs
+          (its inner ring is 0.5px there and reads as grey). Screens at 1.5x or
+          less get the compact cut; 2x and 3x rasterise the full mark at their
+          own size. */}
+      <picture>
+        <source media="(max-resolution: 1.5dppx)" srcSet="/brand/aeon-mark/aeon-mark-compact.svg" />
+        <img
+          src="/brand/aeon-mark/aeon-mark.svg"
+          alt="AEON"
+          width="28"
+          height="28"
+          style={{ borderRadius: "5px", flexShrink: 0 }}
+        />
+      </picture>
       <span style={{ fontSize: "13px", fontWeight: 600, color: "rgba(229,226,225,0.7)", letterSpacing: "0.01em" }}>
         {label}
       </span>

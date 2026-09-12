@@ -1,0 +1,16 @@
+{
+  "generatedBy": "npm run brand:icons",
+  "platform": "darwin",
+  "arch": "x64",
+  "node": "24.20.0",
+  "canvas": "1.0.2",
+  "probes": {
+    "stroke64": "b5aa386357714a30bb00f58c8db6e19ec01e02a1c8e8ddb7940e7cf2ed960427",
+    "hairline16": "cee516b2929363e62ecc51b0020165ba5159d6cb44ffaa9878e1df88a4067b5b",
+    "blur128": "9a318a29a2328a75c95e92cbfa48ba15a02469b40bae4a8666f66959a48e7021"
+  },
+  "sources": {
+    "full": "39d4a71daf31665918349fe4661d518e89f3bce92fd106ca874a34c7f0ec9b7c",
+    "compact": "9557be37bfbbdf1241de791f1ed40dedff497549de1069d89b58044941c0b3d8"
+  }
+}

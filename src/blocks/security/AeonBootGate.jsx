@@ -303,7 +303,7 @@ export default function AeonBootGate({ onAuthed }) {
         onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && ready) { e.preventDefault(); openAuth(); } }}
       />
       <div className={`aeon-boot-copy${ready ? ' ready' : ''}`}>
-        <img src="/brand/aeon-mark/aeon-icon-64.png" alt="" width="48" height="48" />
+        <img src="/brand/aeon-mark/aeon-mark.svg" alt="" width="48" height="48" />
         <div className="aeon-boot-brand">AEON</div>
         <div className="aeon-boot-tag">Modular. Local. Yours.</div>
         <button type="button" className="aeon-boot-enter" onClick={openAuth}>Initialize connection</button>

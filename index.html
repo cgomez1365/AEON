@@ -2,10 +2,25 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/x-icon" href="/favicon.ico" />
-    <link rel="icon" type="image/svg+xml" href="/brand/aeon-mark/aeon-mark.svg" />
-    <link rel="icon" type="image/png" sizes="32x32" href="/brand/aeon-mark/aeon-icon-32.png" />
-    <link rel="apple-touch-icon" href="/brand/aeon-mark/aeon-icon-192.png" />
+    <!-- Tab icon: the compact cut (chevron + ring, no outer ring) at every
+         scale; the full mark at 16-48 device px is a smudge. The three engines
+         pick differently, so the assets have to agree with all three:
+           Chrome  scores candidates by size fit and takes the first best -
+                   favicon.ico, listed first WITH its frame sizes, wins, and the
+                   16 x DPR frame is decoded: 16 on 1x, 32 on 2x, 48 on 3x.
+                   Every one of those frames is the compact cut.
+           Firefox takes an SVG favicon whenever one is linked, regardless of
+                   order - so the SVG here is the compact cut, rasterised at
+                   16 x DPR.
+           WebKit  sorts sized icons largest-first and ignores SVG favicons -
+                   with no loose sized PNG links it lands on favicon.ico.
+         Loose sizes="16x16"/"32x32" PNG links were no-ops in Chrome and made
+         Safari rank a shrunk 32px full mark ahead of the ico; they are gone.
+         apple-touch-icon gets the full-bleed maskable cut: iOS composites
+         transparent corners on black under its own mask. -->
+    <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
+    <link rel="icon" type="image/svg+xml" href="/brand/aeon-mark/aeon-mark-compact.svg" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/brand/aeon-mark/aeon-icon-maskable-180.png" />
     <!-- Zoom must stay enabled — WCAG 1.4.4; many AEON users are 75+ -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="apple-mobile-web-app-capable" content="yes" />

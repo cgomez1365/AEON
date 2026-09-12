@@ -172,7 +172,11 @@ function DesktopNav({ user, groups, iconOverrides }) {
   return (
     <div className="module-panel" style={{ height: "100%" }}>
       <div className="panel-header" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-        <img src="/brand/aeon-mark/aeon-icon-64.png" alt="" width="16" height="16" style={{ borderRadius: '3px', flexShrink: 0 }} />
+        {/* 16 CSS px: the compact cut, as a vector, so every device-pixel ratio
+            rasterises it at its own size. A PNG with a 2x srcSet handed 2x
+            screens the FULL mark at 32 device px, too fine for it; loading the
+            64px full mark and letting the browser shrink it gave a grey smudge. */}
+        <img src="/brand/aeon-mark/aeon-mark-compact.svg" alt="" width="16" height="16" style={{ borderRadius: '3px', flexShrink: 0 }} />
         AEON OS KERNEL
       </div>
       
@@ -342,7 +346,9 @@ export default function DesktopLayout({ chatHistory, auditLogs }) {
       {/* 1. TOP NAV (Span All) */}
       <div className="top-nav" style={{ gridColumn: "1 / -1" }}>
         <div className="nav-brand" style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <img src="/brand/aeon-mark/aeon-icon-64.png" alt="" width="22" height="22" style={{ borderRadius: '5px', flexShrink: 0 }} />
+          {/* 22 CSS px: the compact cut as a vector - at or under 24 CSS px the
+              full mark's outer ring is sub-pixel at every common DPR. */}
+          <img src="/brand/aeon-mark/aeon-mark-compact.svg" alt="" width="22" height="22" style={{ borderRadius: '5px', flexShrink: 0 }} />
           <button
             onClick={() => setMenuOpen(!menuOpen)}
             aria-label={menuOpen ? 'Hide navigation menu' : 'Show navigation menu'}
