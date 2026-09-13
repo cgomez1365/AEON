@@ -188,7 +188,7 @@
         {
           "file": "api/_extract.cjs",
           "scope": "vault",
-          "reason": "Text extraction from Vault documents (pdf, docx) for the Second Brain index."
+          "reason": "Text extraction from Vault documents (pdf, html, text) for the Second Brain index."
         },
         {
           "file": "api/cloudvault.cjs",

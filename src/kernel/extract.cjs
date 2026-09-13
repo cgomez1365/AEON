@@ -12,15 +12,20 @@
 const fs = require('fs');
 const path = require('path');
 
-let pdfParse = null, mammoth = null;
+let pdfParse = null;
 function loadExtractors() {
-  if (pdfParse || mammoth) return;
+  if (pdfParse) return;
   try { pdfParse = require('pdf-parse'); } catch { /* PDF support unavailable */ }
-  try { mammoth = require('mammoth'); } catch { /* DOCX support unavailable */ }
 }
 
 const TEXT_EXT = new Set(['.md', '.txt', '.json', '.csv', '.log', '.yml', '.yaml', '.xml', '.js', '.cjs', '.mjs', '.ts', '.jsx', '.tsx', '.py', '.sh', '.css', '.sql', '.toml', '.ini', '.env', '.markdown', '.rst']);
-const DOC_EXT  = new Set(['.pdf', '.docx', '.html', '.htm']);
+// .docx is deliberately absent (2026-09-12, CEO). Reading it needed mammoth,
+// which reaches @xmldom/xmldom and its eight high advisories - no upstream fix,
+// since every fixed xmldom is 0.9.x and mammoth still requires ^0.8.6, and
+// forcing 0.9 through an npm override breaks mammoth outright (measured). The
+// format was dropped rather than the advisories waived. A .docx now reads as
+// binary and is refused with a remedy; tests/docx-support-removed holds it.
+const DOC_EXT  = new Set(['.pdf', '.html', '.htm']);
 
 /**
  * PDF text via a CURRENT pdf.js (pdfjs-dist, Node legacy build), falling back
@@ -82,11 +87,6 @@ async function extractText(fullPath) {
   const ext = path.extname(fullPath).toLowerCase();
   loadExtractors();
   if (ext === '.pdf') return extractPdf(fullPath);
-  if (ext === '.docx') {
-    if (!mammoth) return null;
-    const result = await mammoth.extractRawText({ path: fullPath });
-    return result.value;
-  }
   if (ext === '.html' || ext === '.htm') return htmlToText(fs.readFileSync(fullPath, 'utf8'));
   if (kindOf(fullPath) === 'binary') return null;
   return fs.readFileSync(fullPath, 'utf8');

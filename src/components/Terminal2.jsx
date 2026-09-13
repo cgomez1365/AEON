@@ -588,7 +588,7 @@ const Terminal2 = ({ onUsageUpdate }) => {
     // rest. `/upload <path>` (a file on the server's machine) goes to the bus.
     if (cmdToken === '/upload' && !arg) {
       if (!docInputRef.current) { push({ type: 'msg', role: 'error', content: 'File picker unavailable in this view.' }); return; }
-      push({ type: 'msg', role: 'system', content: 'Choose a document to put in the Second Brain (PDF, DOCX, HTML, Markdown, text)…' });
+      push({ type: 'msg', role: 'system', content: 'Choose a document to put in the Second Brain (PDF, HTML, Markdown, text)…' });
       docInputRef.current.click();
       return;
     }
@@ -998,7 +998,7 @@ const Terminal2 = ({ onUsageUpdate }) => {
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderTop: '1px solid #1e2d45' }}>
         <span style={{ color: sigilColor, fontSize: 14, width: 14, textAlign: 'center', textShadow: `0 0 8px ${sigilColor}` }}>{sigilGlyph}</span>
         <input ref={fileInputRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={onFileSelected} />
-        <input ref={docInputRef} type="file" accept=".pdf,.docx,.html,.htm,.md,.markdown,.txt,.csv,.json" style={{ display: 'none' }} onChange={onDocSelected} />
+        <input ref={docInputRef} type="file" accept=".pdf,.html,.htm,.md,.markdown,.txt,.csv,.json" style={{ display: 'none' }} onChange={onDocSelected} />
         <Paperclip size={14} style={{ cursor: 'pointer', color: pendingImage ? '#00f2ff' : '#4a5568', flexShrink: 0 }} onClick={() => fileInputRef.current?.click()} />
         <Cpu size={14} aria-label="Hotswap model" style={{ cursor: 'pointer', color: showModelPicker ? '#00f2ff' : '#4a5568', flexShrink: 0 }} onClick={() => setShowModelPicker(v => !v)} />
         <input

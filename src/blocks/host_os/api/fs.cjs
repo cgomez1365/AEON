@@ -226,7 +226,7 @@ module.exports = function createFsRouter(deps) {
         return res.status(415).json({
           correlation_id: req.correlationId || 'AEON-SYS',
           error: `/read returns text, and ${path.extname(resolved) || 'this file'} is not a text or document format.`,
-          remedy: 'Open it in the File Manager, or convert it to PDF, DOCX, HTML or text first.',
+          remedy: 'Open it in the File Manager, or convert it to PDF, HTML or text first.',
           path: resolved,
         });
       }

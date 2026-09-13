@@ -139,9 +139,14 @@ async function extractText(resolved) {
   if (ext === 'html' || ext === 'htm') {
     result = { text: stripHtml(fs.readFileSync(resolved, 'utf8')), method: 'html' };
   } else if (ext === 'docx') {
-    const mammoth = require('mammoth');
-    const { value } = await mammoth.extractRawText({ path: resolved });
-    result = { text: (value || '').trim(), method: 'docx' };
+    // Removed 2026-09-12 (CEO). Reading .docx needed mammoth -> @xmldom/xmldom,
+    // eight high advisories with no upstream fix. Refused BY NAME rather than
+    // left to the unknown-binary branch below, so the operator learns why
+    // instead of receiving an empty result (§08, R-05).
+    throw Object.assign(
+      new Error('AEON no longer reads .docx files. Save it as PDF, HTML or text and add that instead.'),
+      { code: 'DOCX_UNSUPPORTED', status: 415 },
+    );
   } else if (ext === 'xlsx' || ext === 'pptx') {
     // Office XML formats are zips — pull the text-bearing XML parts and strip tags
     const AdmZip = require('adm-zip');

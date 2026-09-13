@@ -76,7 +76,7 @@
     "commands": [
       {
         "cmd": "/read",
-        "desc": "Read a document — txt, md, pdf, docx, html — and summarize it",
+        "desc": "Read a document — txt, md, pdf, html — and summarize it",
         "method": "POST",
         "route": "/api/fs/read",
         "param": "filePath",

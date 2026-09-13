@@ -46,8 +46,8 @@ backward compatibility — do not rename those route strings).
   block's own search and the Neural Terminal's semantic-recall step (which
   gates on an intent classifier so most chat turns skip the embed call).
 - **Universal text extraction** (`api/_extract.cjs`) — any file → plain text:
-  code/markdown/JSON/etc. read directly, HTML tag-stripped, DOCX via
-  `mammoth`, XLSX/PPTX via raw zip/XML parsing, PDFs via `pdf-parse` with a
+  code/markdown/JSON/etc. read directly, HTML tag-stripped, XLSX/PPTX via raw
+  zip/XML parsing (.docx is refused — see tests/docx-support-removed.test.js), PDFs via `pdf-parse` with a
   fallback to page-by-page OCR (`pdfjs-dist` + `@napi-rs/canvas` +
   `tesseract.js`) for scanned PDFs, images OCR'd directly. OCR results are
   cached on disk (`data/.extract-cache/`, capped at 100 entries).
@@ -118,7 +118,7 @@ entirely by environment variables (below) plus two constants in
 - **Supabase** (optional) — `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY`,
   used only by `vault-push` (cloud mirror) and `api/sync.cjs`'s generic
   block sync. Everything else works fully offline.
-- **pdf-parse, mammoth, adm-zip, pdfjs-dist, @napi-rs/canvas, tesseract.js**
+- **pdf-parse, adm-zip, pdfjs-dist, @napi-rs/canvas, tesseract.js**
   — document/OCR extraction pipeline (`api/_extract.cjs`, `api/_lib.cjs`).
   All are soft dependencies: extraction methods that need a missing package
   fail gracefully rather than crashing the router.

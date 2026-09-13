@@ -22,7 +22,11 @@ const fs      = require('fs');
 const { loadExtractors, extractText, embed, EMBED_MODEL } = require('./_lib.cjs');
 
 const NIGHTLY_HOUR  = 3; // local hour to auto re-index, once per day
-const INDEXABLE_EXT = /\.(md|txt|json|pdf|docx|html?)$/i;
+// .docx dropped 2026-09-12 (CEO) with mammoth and its eight @xmldom/xmldom
+// advisories. A Word file already in the vault stops being indexed and its
+// entry leaves the index on the next scan, which is correct: nothing can read
+// it any more, so claiming it is searchable would be a lie (§08).
+const INDEXABLE_EXT = /\.(md|txt|json|pdf|html?)$/i;
 // Paths the automatic scan must never walk.
 //
 // BO-MEM T1. Saved conversations live under Agents/Aeon/chat_sessions/ as .json,
@@ -574,7 +578,7 @@ module.exports = function ingestFactory(deps) {
       displayName = path.basename(String(name || 'upload').replace(/\\/g, '/')).replace(/[^\w.\- ()]/g, '_');
       if (!displayName || displayName === '.' || displayName === '..') displayName = 'upload';
       if (extract.kindOf(displayName) === 'binary') {
-        return res.status(415).json({ error: `${path.extname(displayName) || 'That file'} is not a text or document format the second brain can index.`, remedy: 'Convert it to PDF, DOCX, HTML or text first.' });
+        return res.status(415).json({ error: `${path.extname(displayName) || 'That file'} is not a text or document format the second brain can index.`, remedy: 'Convert it to PDF, HTML or text first.' });
       }
       try { bytes = Buffer.from(contentBase64, 'base64'); } catch { return res.status(400).json({ error: 'contentBase64 is not valid base64.' }); }
       if (bytes.length > 25 * 1024 * 1024) return res.status(413).json({ error: `${displayName} is ${(bytes.length / 1048576).toFixed(1)} MB; the terminal uploads up to 25 MB.`, remedy: 'Copy it into the vault folder with File Manager and run /scan.' });
@@ -590,7 +594,7 @@ module.exports = function ingestFactory(deps) {
         return res.status(404).json({ error: `Not found: ${source}`, hint: base ? `Relative paths resolve against ${base}.` : undefined });
       }
       if (extract.kindOf(source) === 'binary') {
-        return res.status(415).json({ error: `${path.extname(source) || 'That file'} is not a text or document format the second brain can index.`, remedy: 'Convert it to PDF, DOCX, HTML or text first.' });
+        return res.status(415).json({ error: `${path.extname(source) || 'That file'} is not a text or document format the second brain can index.`, remedy: 'Convert it to PDF, HTML or text first.' });
       }
       displayName = path.basename(source);
     }

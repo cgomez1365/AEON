@@ -33,7 +33,7 @@ User uploads file (Files block)
 - **Cloud sync:** Supabase `documents` table (content + metadata)
 - **Access:** `/api/brain_file?nodeId=...` returns file content
 - **Visual:** 3D force-directed graph (NeuronViewport component)
-- **Formats:** .md, .txt, .json, .pdf, .docx, .html, .css, .js
+- **Formats:** .md, .txt, .json, .pdf, .html, .css, .js
 
 ### 2. Memory Block (Structured Facts)
 - **Storage:** Local JSON via `/api/memory` + Supabase `aeon_blocks.memory`
@@ -50,7 +50,7 @@ User uploads file (Files block)
 
 ### Full Index (`npm run index`)
 - Walks entire `Data/Second_Brain/` tree recursively
-- Extracts text from .md, .txt, .json, .pdf (via pdf-parse), .docx (via mammoth)
+- Extracts text from .md, .txt, .json, .pdf (via pdf-parse), .html (tag-stripped). Word files are not read: mammoth was removed 2026-09-12 with its eight @xmldom/xmldom advisories.
 - Generates node graph with folder hierarchy
 - Outputs `src/brain-data.json`
 
