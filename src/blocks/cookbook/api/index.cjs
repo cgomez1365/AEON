@@ -30,6 +30,32 @@ module.exports = function createCookbookRouter(deps) {
   try { if (!fs.existsSync(COOKBOOK_DIR)) fs.mkdirSync(COOKBOOK_DIR, { recursive: true }); } catch {}
   try { if (!fs.existsSync(LOGS_DIR)) fs.mkdirSync(LOGS_DIR, { recursive: true }); } catch {}
 
+  /**
+   * A task log that cannot crash the process.
+   *
+   * fs.createWriteStream opens ASYNCHRONOUSLY, and an unhandled 'error' event on
+   * a stream throws. All four of these logs are opened alongside long-running
+   * installs and serves, so the window between opening and the first write is
+   * wide: a removed data directory, a full disk or a permission change lands in
+   * it. Measured on CI (run 34729764892, ubuntu 22.13, 2026-09-12): a test's
+   * temp root was cleaned while a model install was still running, the open
+   * failed with ENOENT, and the unhandled error took down the whole test file
+   * without an assertion ever failing. In production the same event would take
+   * down the server — a logging failure killing the thing it was logging.
+   *
+   * So the failure is reported and survivable (R-05): the directory is ensured
+   * at open time rather than only at boot, the error is named on the console,
+   * and later writes are dropped instead of throwing.
+   */
+  function openTaskLog(logFile) {
+    try { fs.mkdirSync(path.dirname(logFile), { recursive: true }); } catch { /* reported by the handler below */ }
+    const stream = fs.createWriteStream(logFile, { flags: 'a' });
+    stream.on('error', (e) => {
+      console.warn(`[COOKBOOK] task log unavailable (${logFile}): ${e.message}. The task itself continues.`);
+    });
+    return stream;
+  }
+
   // ── Model storage — INSIDE the AEON install by default ──────────
   // The bible's vision: "cookbook downloads local models inside it, so
   // Settings just reads cookbook." No hardcoded ~/.cache assumption —
@@ -536,7 +562,7 @@ module.exports = function createCookbookRouter(deps) {
     const sessionId = `local-install-${crypto.randomBytes(4).toString('hex')}`;
     fs.mkdirSync(LOGS_DIR, { recursive: true });
     const logFile = path.join(LOGS_DIR, `${sessionId}.log`);
-    const logStream = fs.createWriteStream(logFile, { flags: 'a' });
+    const logStream = openTaskLog(logFile);
     activeTasks[sessionId] = { type: 'model-install', status: 'running', query: modelId, started_at: Date.now(), logFile, pct: 0, log: null, error: null };
     const status = (msg) => { logStream.write(`[STATUS] ${msg}\n`); const t = activeTasks[sessionId]; if (t) t.log = msg; if (typeof global.broadcastTerminalEvent === 'function') global.broadcastTerminalEvent('LOCAL_MODEL_INSTALL', `[${modelId}] ${msg}`); };
     const progress = (pct) => { logStream.write(`[PROGRESS] ${pct}%\n`); const t = activeTasks[sessionId]; if (t) t.pct = pct; };
@@ -682,7 +708,7 @@ module.exports = function createCookbookRouter(deps) {
     }
 
     try {
-      const logStream = fs.createWriteStream(logFile, { flags: 'a' });
+      const logStream = openTaskLog(logFile);
       const proc = spawn(cmd, args, {
         env, stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true, detached: true,
@@ -851,7 +877,7 @@ module.exports = function createCookbookRouter(deps) {
     if (gpus) env.CUDA_VISIBLE_DEVICES = gpus;
 
     try {
-      const logStream = fs.createWriteStream(logFile, { flags: 'a' });
+      const logStream = openTaskLog(logFile);
       // No bash, no shell:true. Fixed executable, argument array.
       const proc = spawn(execFileName, serveArgs, {
         env, stdio: ['ignore', 'pipe', 'pipe'],
@@ -1447,7 +1473,7 @@ module.exports = function createCookbookRouter(deps) {
 
       const sessionId = `local-install-${crypto.randomBytes(4).toString('hex')}`;
       const logFile = path.join(LOGS_DIR, `${sessionId}.log`);
-      const logStream = fs.createWriteStream(logFile, { flags: 'a' });
+      const logStream = openTaskLog(logFile);
 
       // Register as a task. Previously the model installer wrote only to a log
       // file: /cookbook/local/status filters on type === 'runtime-install', so a
