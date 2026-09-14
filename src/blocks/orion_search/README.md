@@ -91,6 +91,18 @@ or server, and is wiped by clearing site data.
   manifest).
 
 ## Fixed in this pass
+- **Loopback legs dropped the session (2026-09-14)** — with a Security login
+  set up, every search showed *Web could not be searched — UNAUTHORIZED_SESSION*
+  and the same for Your Documents, while the block leg answered. The browser
+  authenticated `/api/orion/search`, but the block then re-entered the kernel
+  over loopback for `/api/search-web` and `/api/crn/second-brain/retrieve` with
+  a bare `fetch` — no `Cookie`, no `Authorization` — and the kernel guard, which
+  protects every `/api` path once an account exists, refused both. The block leg
+  never fetches, which is why only it worked, and the suite stayed green because
+  tests run with no account. `jfetch` now forwards the caller's own `Cookie` and
+  `Authorization` (the pattern `dashboard/api/chat.cjs` already used); it mints
+  nothing and bypasses nothing. Test: `tests/orion-session-forward.test.js`, a
+  fake kernel that 401s without a session — red on the old code, green now.
 - **README** — didn't exist; this is it.
 - **Hardcoded loopback host in `api/orion.cjs`** — the two self-fetch calls
   (`/api/search-web`, `/api/crn/second-brain/retrieve`) unconditionally

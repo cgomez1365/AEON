@@ -17,9 +17,21 @@ module.exports = function (deps) {
   const router = express.Router();
   const PORT = Number(process.env.PORT) || 3001;
 
-  const jfetch = async (url, init) => {
+  // The two loopback legs below are requests to our own kernel, and the kernel
+  // guards every /api path once a Security account exists. A bare fetch carries
+  // no session, so with a login set up both legs came back UNAUTHORIZED_SESSION
+  // while the in-process block leg kept working (CEO, 2026-09-14). Forward the
+  // caller's own credentials, the way dashboard/api/chat.cjs does — never mint
+  // or bypass anything here.
+  const sessionHeaders = (req) => ({
+    ...(req.headers?.cookie ? { Cookie: req.headers.cookie } : {}),
+    ...(req.headers?.authorization ? { Authorization: req.headers.authorization } : {}),
+  });
+
+  const jfetch = async (url, init = {}, req = null) => {
     try {
-      const r = await fetch(url, { ...init, signal: AbortSignal.timeout(15000) });
+      const headers = { ...(init.headers || {}), ...(req ? sessionHeaders(req) : {}) };
+      const r = await fetch(url, { ...init, headers, signal: AbortSignal.timeout(15000) });
       return await r.json();
     } catch (e) { return { error: e.message }; }
   };
@@ -44,12 +56,12 @@ module.exports = function (deps) {
       // `count=k` — the depth control (8/16/24) used to stop here: the route
       // was never told, so its provider default (3 on DDG) came back whatever
       // the page said, and the slice below had nothing more to slice.
-      jfetch(`${base}/api/search-web?q=${encodeURIComponent(q)}&synthesize=0&count=${encodeURIComponent(k)}`),
+      jfetch(`${base}/api/search-web?q=${encodeURIComponent(q)}&synthesize=0&count=${encodeURIComponent(k)}`, {}, req),
       // Second Brain: RAG retrieve (returns passages with doc refs)
       jfetch(`${base}/api/crn/second-brain/retrieve`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query: q, k }),
-      }),
+      }, req),
       // Blocks: match the live registry briefs (local, sync, no fetch)
       //
       // Matched on TERMS, not on the whole query as one substring. The old

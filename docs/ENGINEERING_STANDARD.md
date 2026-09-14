@@ -157,6 +157,14 @@ ever return an empty list. The comment above it read *"Must match exactly — sa
 store, same folder."* That is the hardest kind to catch, because the file tells
 you it is correct.
 
+**A block that calls its own server is a client of it.** Orion authenticated
+its route and then re-entered the kernel over loopback with a bare `fetch` for
+two of its three legs. The moment a login existed, the kernel refused both with
+`UNAUTHORIZED_SESSION` while the in-process leg kept working, and the suite
+stayed green because tests run with no account. Loopback is not a trusted
+channel; a self-fetch carries every obligation a browser request does, or it
+does not carry the session at all.
+
 **Reading the code and running it are different instruments.** A fourteen-agent
 audit found seven P0 defects by reading. Then *using* the product found eleven
 more that the audit, the suite and 1,094 tests had all missed — including three
