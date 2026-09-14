@@ -1,73 +1,83 @@
-# AEON — Production Deployment Runbook
+# AEON — Deployment
 
-Two supported targets. Pick by client requirement.
+AEON is built to run on the operator's own machine. That is the only target that is
+exercised: the launchers on Windows, macOS and Linux, and five CI legs on every push.
 
-| Target | Use when | Effort |
-|--------|----------|--------|
-| **Vercel** | Default cloud mirror, fast iteration | Lowest |
-| **Self-hosted (bare Node)** | Single box, full control, local models | Medium |
+| Target | Status | Use when |
+|--------|--------|----------|
+| **Local install** (launcher or Desktop icon) | Verified continuously | The normal way to run AEON |
+| **Self-hosted (bare Node)** | Supported, same code path as local | One always-on box you control |
+| **Vercel** (stateless cloud mirror) | **Never deployed — unverified** | See §2 before relying on it |
 
 ---
 
-## 0. Pre-flight (all targets)
+## 0. Pre-flight (any target)
 
 - [ ] `npm test` passes
+- [ ] `npm run scan:release-gate` and `npm run scan:audit` pass
 - [ ] `node --check server.cjs` passes
-- [ ] RLS migration applied: `npm run migrate -- --status` shows `001_enable_rls.sql` applied
-- [ ] Canary green: `npm run canary` → all tables LOCKED
-- [ ] All secrets set in the target's env store (never in code) — see [SECURITY.md](SECURITY.md)
-- [ ] `NODE_ENV=production` set in the target
-
-### Required env vars
-```
-SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY      # server DB access (service_role bypasses RLS)
-SUPABASE_ANON_KEY                            # canary + client
-AEON_VAULT_MASTER_KEY                        # 32-byte hex; decrypts secret vault
-AEON_MOBILE_SECRET                           # bearer for external API + shell endpoints
-GROQ_API_KEY / GEMINI_FREE_KEY_*             # LLM providers
-NODE_ENV=production
-AEON_ALLOWED_ORIGINS                         # comma-separated extra CORS origins
-```
+- [ ] If you use Supabase: `npm run migrate -- --status` shows `001_enable_rls.sql` applied, and `npm run canary` reports all tables LOCKED
+- [ ] Secrets live in the target's environment store, never in code — see [SECURITY.md](SECURITY.md)
+- [ ] `NODE_ENV=production` is set on any shared host
 
 ---
 
-## 1. Vercel
+## 1. Self-hosted (bare Node)
 
 ```bash
-# Set env in Vercel dashboard → Project → Settings → Environment Variables
-# (NOT in vercel.json — keep secrets out of the repo)
-vercel --prod
-```
-- Crons (`vercel.json`): `/api/sync/gas-backup` daily, `/api/cron/sweep` 02:00. Ensure both routes exist in `server.cjs`.
-- Serverless FS is read-only → vault pulls the encrypted blob from Supabase. Confirm `AEON_VAULT_MASTER_KEY` is set in Vercel env.
-- Logs are ephemeral: ship to an aggregator or rely on Pino JSON in the Vercel log drain.
-
-## 2. Self-hosted (bare Node)
-
-```bash
-npm ci --omit=dev
+npm ci
 npm run build
-NODE_ENV=production node server.cjs        # or under pm2/systemd
+NODE_ENV=production node server.cjs        # or under pm2 / systemd
 ```
-Recommended process manager (auto-restart picks up the new `uncaughtException` exit):
+
+The kernel serves the built frontend from `dist/` on port 3001. With a process manager,
+an uncaught exception exits non-zero and the manager restarts it:
+
 ```bash
 pm2 start server.cjs --name aeon --time
 pm2 save && pm2 startup
 ```
 
----
+Every writable root can live outside the install directory — see the storage table in
+[ARCHITECTURE.md](ARCHITECTURE.md).
+
+## 2. Vercel — unverified
+
+`vercel.json`, `.vercelignore` and `api/` describe a stateless cloud mirror, and the code
+carries cloud branches for it. **It has never been deployed from this repository:** every
+Vercel project on the account showed zero deployments from the repository's creation
+(2026-07-21) to 2026-09-14. Until a deployment has run and passed §3, treat this section
+as design, not a supported path.
+
+What is known to be required:
+
+- Vercel runs `npm run build`, which executes `scripts/gen-*.cjs` and writes
+  `docs/BLOCKS.md`. `.vercelignore` must therefore upload `scripts/` and `docs/` (fixed
+  2026-09-14; both were excluded before).
+- Set environment variables in the Vercel dashboard, never in `vercel.json`.
+- The serverless filesystem is read-only: the vault, local models, the Second Brain index
+  and the launcher do not exist there. Keys come from the environment
+  (`AEON_VAULT_MASTER_KEY`, provider keys) and data from Supabase.
+- `vercel.json` defines rewrites only — no cron jobs. Earlier revisions of this page listed
+  two crons that the file never contained.
+
+```bash
+vercel --prod
+```
 
 ## 3. Post-deploy verification
 
-- [ ] `curl https://<host>/` → `{"status":"ok"}`
-- [ ] `curl https://<host>/core/health` → kernel health + orphaned routes
-- [ ] Rate limit active: 121 rapid requests → a `429`
-- [ ] Security headers present: `curl -I https://<host>/` shows `x-content-type-options`, `x-frame-options`
-- [ ] Canary from outside: `npm run canary` → all LOCKED
-- [ ] Error responses in prod contain NO stack/`message` field
+- [ ] `curl https://<host>/api/ping` answers — it is mounted before the auth gate, so it
+      distinguishes "server locked" from "no server"
+- [ ] `curl https://<host>/core/health` returns kernel health
+- [ ] Rate limit active: 121 rapid requests to `/api/*` produce a `429`
+- [ ] Security headers present: `curl -I https://<host>/` shows `x-content-type-options` and `x-frame-options`
+- [ ] Error responses in production carry no stack trace
+- [ ] If you use Supabase: `npm run canary` from outside reports all tables LOCKED
 
 ## 4. Rollback
 
-- **Vercel:** `vercel rollback` or promote the previous deployment in the dashboard.
-- **DB:** migrations are additive (RLS enable). To roll back a policy, write a new
-  `00X_*.sql` — never edit an applied migration. See [DISASTER_RECOVERY.md](DISASTER_RECOVERY.md).
+- **Local / self-hosted:** check out the previous release tag and rebuild.
+- **Vercel:** `vercel rollback`, or promote the previous deployment in the dashboard.
+- **Database:** migrations are additive. To roll back a policy, write a new `00X_*.sql` —
+  never edit an applied migration. See [DISASTER_RECOVERY.md](DISASTER_RECOVERY.md).

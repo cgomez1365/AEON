@@ -4,7 +4,7 @@
 
 > Think Linux, for the AI era: a kernel that discovers self-contained blocks, a nervous system (Settings) every block reports to, a vault that encrypts your keys, a Second Brain that indexes your files and answers with sources, and one LLM layer that routes every AI call by role.
 
-<sub>**Measured 2026-09-14 on macOS, before v3.0.0** · 1,485 passing and 1 skipped (a real-PowerShell test that runs only on Windows) of 1,486 tests across 131 files · 17 blocks · 5 CI legs (Windows · Ubuntu 24 · Ubuntu 22.13 · macOS · security) · 0 undeclared block filesystem access. Every number here is a dated reading, not a property — see [Engineering standard](docs/ENGINEERING_STANDARD.md).</sub>
+<sub>**Measured 2026-09-14 on macOS, after the stale-file sweep** · 1,523 passing and 1 skipped (a real-PowerShell test that runs only on Windows) of 1,524 tests across 132 files · 17 blocks · 5 CI legs (Windows · Ubuntu 24 · Ubuntu 22.13 · macOS · security) · 0 undeclared block filesystem access. Every number here is a dated reading, not a property — see [Engineering standard](docs/ENGINEERING_STANDARD.md).</sub>
 
 ---
 
@@ -138,7 +138,7 @@ npm ci
 npm start               # vite dev server + kernel (hot reload)
 npm run build           # production frontend → dist/
 npm run server          # kernel only, serves dist/ at :3001
-npm test                # vitest — 1,486 tests
+npm test                # vitest — 1,524 tests (2026-09-14)
 npm run scan:release-gate   # runtime purity · path authority · cloud ratchet · block filesystem
 npm run scan:audit          # no unreviewed high/critical advisories
 ```

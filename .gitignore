@@ -5,7 +5,6 @@ node_modules/
 
 # Build output
 dist/
-dist-electron/
 build/
 
 # Environment (contains API keys — use .env.example as template)
@@ -13,7 +12,8 @@ build/
 .env.*
 !.env.example
 
-# Generated data (rebuild with: npm run index)
+# Legacy generated indexes (the pre-ingest.cjs indexer) — kept ignored so an
+# old checkout's leftovers never get staged
 src/brain-data.json
 .push-manifest.json
 .sync-manifest.json
@@ -103,7 +103,7 @@ vite.config.js.timestamp-*
 # Python cache
 __pycache__/
 
-# Electron packaging
+# Code-signing certificates (a signed installer's key must never be committed)
 *.pfx
 
 # Inbox (user content)
@@ -131,17 +131,12 @@ Data/
 tools/bin/cloudflared.exe
 
 # AEON 3 additions
-secrets/
-data/
 db/host-runtime.json
 # BO-D2g — the per-call LLM ledger. Operator telemetry: what was asked of
 # which model, when, and how long it took. Never committed.
 db/llm_calls.jsonl
-token_ledger.json
 src/aeon-settings.json
 src/blocks/*/data/
-src/blocks/*/.aeon.runtime.json
-*.log
 
 # Per-block runtime data stores — a fresh clone must start at zero.
 # activity_heatmap.json shipped one operator's request/token history to every

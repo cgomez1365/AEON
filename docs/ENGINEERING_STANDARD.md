@@ -177,7 +177,12 @@ documentation reported the suite as "1,100 / 1,106" — it had taken 1,100 as th
 total. The correction was published rather than quietly patched, because a
 number that was never right must be re-taken, not carried forward.
 
-**Current reading — 2026-09-14, macOS, the tree released as v3.0.0:** 1,485 passing
+**Current reading — 2026-09-14, macOS, after the stale-file sweep:** 1,523 passing
+and 1 skipped of 1,524 tests across 132 files, 0 failures. 58 dead files retired
+(no consumer, proven by scan and by hand; `tests/retired-files.test.js`). Gates and
+audit pass.
+
+**Previous reading — 2026-09-14, macOS, the tree released as v3.0.0:** 1,485 passing
 and 1 skipped of 1,486 tests across 131 files (the skip is a real-PowerShell test
 that runs only on Windows), 0 failures. 17 blocks. 0 undeclared block filesystem
 access, 23 declared and audited. Cloud conditionals 95 with 0 raw environment
