@@ -262,6 +262,27 @@ async function main() {
   }
   ok('Interface ready.');
 
+  // ── 6b. desktop icon ──────────────────────────────────────────────────────
+  // First run puts AEON on the Desktop (AEON.app on macOS, AEON.lnk on
+  // Windows) so the operator never has to find this launcher inside a cloned
+  // folder again. Skipped on USB/portable media and with
+  // AEON_NO_DESKTOP_ICON=1; an icon the operator deleted stays deleted until
+  // they run `node launch.js --desktop-icon`. Never allowed to stop a boot.
+  try {
+    const { ensureDesktopShortcut } = require(path.join(ROOT, 'tools', 'desktop-shortcut.cjs'));
+    const sc = ensureDesktopShortcut({
+      root: ROOT, platform: os.platform(), env: process.env,
+      force: process.argv.includes('--desktop-icon'),
+    });
+    if (sc.status === 'created') ok(`Desktop icon created — ${sc.path}. Open AEON from there next time.`);
+    else if (sc.status === 'updated') ok(`Desktop icon updated to this install — ${sc.path}`);
+    else if (sc.status === 'failed') warn(`Could not create the desktop icon: ${sc.reason}`);
+    else if (sc.reason === 'removed-by-user') info('Desktop icon was removed — run "node launch.js --desktop-icon" to bring it back.');
+    if (sc.warning) warn(sc.warning);
+  } catch (e) {
+    warn(`Desktop icon skipped: ${e.message}`);
+  }
+
   // ── 7. boot ───────────────────────────────────────────────────────────────
   p('');
   p('  ────────────────────────────────────────────────────────────', DG);

@@ -58,10 +58,10 @@
  *                      legibility probes pass on every leg, because 4/255 is
  *                      invisible. Hence DRIFT_LEVELS = 8, with the margin and
  *                      the reading written down beside it.
- * Safari's favicon choice is asserted from its source, not observed. A tracked
- * Windows shortcut, "AEON Command Center.lnk", points its icon at
- * Desktop\aeon3\AEON.ico, a sibling folder nothing here writes; rebuilding it
- * on the Windows box is the CEO's.
+ * Safari's favicon choice is asserted from its source, not observed. The tracked
+ * "AEON Command Center.lnk" (icon at Desktop\aeon3\AEON.ico, a folder nothing
+ * wrote) was retired 2026-09-13: launch.js now generates a per-machine desktop
+ * shortcut pointing at this install's own AEON.ico (tests/desktop-shortcut.test.js).
  */
 import { describe, it, expect } from 'vitest';
 import fs from 'fs';

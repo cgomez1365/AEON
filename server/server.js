@@ -475,7 +475,7 @@ try {
     setTimeout(() => {
       console.log(`[SECOND BRAIN] Boot auto-sync (${kind}) starting in background...`);
       sbIngest.runSecondBrainScan().then(r => {
-        console.log(`[SECOND BRAIN] Boot sync complete: ${r.ingested} ingested, ${r.skipped} skipped, ${r.deleted} deleted.`);
+        console.log(`[SECOND BRAIN] Boot sync complete: ${r.ingested} ingested, ${r.embedded ?? 0} embedded, ${r.skipped} unchanged, ${r.deleted} deleted.`);
       }).catch(e => console.error('[SECOND BRAIN] Boot sync failed (non-fatal):', e.message));
     }, 15000).unref();
   }

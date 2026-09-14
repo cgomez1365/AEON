@@ -17,6 +17,8 @@
    - **macOS** — double-click `launch.command`
    - **Linux** — run `./launch.sh`
 
+**After the first launch, AEON puts its own icon on your Desktop** (`AEON.app` on macOS, an `AEON` shortcut on Windows). Open AEON from there from then on — every open also picks up any new files in your Vault. Don't want the icon? Delete it and it stays gone (`node launch.js --desktop-icon` brings it back), or set `AEON_NO_DESKTOP_ICON=1`. USB/portable installs never create one.
+
 The launcher checks your computer, walks you through setup, and opens AEON in your browser. **Every question can be skipped by pressing Enter** — you can finish everything later inside AEON under **Settings**.
 
 ### Platform support, stated precisely
