@@ -21,6 +21,7 @@
     "server": "node server.cjs",
     "brand:icons": "node tools/generate-aeon-brand-icons.mjs",
     "brand:block-icons": "node tools/generate-block-icons.mjs",
+    "brand:banner": "node tools/generate-aeon-banner.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",

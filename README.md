@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="public/brand/aeon-banner.png" alt="AEON — Modular. Local. Yours." width="100%">
+</p>
+
 # AEON 3
 
 **A local-first AI workspace built from governed blocks.** Runs on your computer. Your data never leaves it unless you connect your own cloud.
