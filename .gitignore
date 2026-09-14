@@ -131,6 +131,8 @@ Data/
 tools/bin/cloudflared.exe
 
 # AEON additions
+# Pointer to the AEON home, written by the one-time migration (src/kernel/homeMigration.cjs)
+.aeon-home
 db/host-runtime.json
 # BO-D2g — the per-call LLM ledger. Operator telemetry: what was asked of
 # which model, when, and how long it took. Never committed.

@@ -37,6 +37,21 @@ function detectAeonRoot() {
 
 const ROOT = detectAeonRoot();
 
+// ── The AEON home ───────────────────────────────────────────────────────────
+// Every writable root defaults to a child of ONE folder outside the install
+// (~/AEON, or AEON_HOME), so a reinstall is `git pull` and the install can be
+// read-only. src/kernel/aeonHome.cjs is the authority; each per-root env var
+// below still wins on its own. Portable installs keep the in-install layout.
+const { roots: resolveHomeRoots } = require('../src/kernel/aeonHome.cjs');
+const ROOTS = Object.freeze(resolveHomeRoots({ appRoot: ROOT, env: process.env }));
+
+// Runtime state that used to sit in <install>/db beside the tracked *.sql
+// seeds. The seeds stay in the install; the state follows AEON_DB_DIR, the
+// same var src/kernel/{retrieval,runState,approvals,ideMode,citationGate}.cjs
+// honour, so all six writers agree on one folder.
+const DB_ROOT = ROOTS.db;
+const SECRETS_ROOT = ROOTS.secrets;
+
 const getLocalFile = (filename) => {
   if (_isCloud()) return path.join('/tmp', filename);
 
@@ -46,34 +61,30 @@ const getLocalFile = (filename) => {
   const scriptsFiles = ['01_INIT.bat', '02_RUN.bat'];
   const secretsFiles = ['aeon_master_import.json', 'aeon_master_memory.json'];
 
-  if (dbFiles.includes(filename)) return path.join(ROOT, 'db', filename);
+  // Tracked SQL seeds ship with the install; everything else in the db list is
+  // runtime state and lives in the home.
+  if (dbFiles.includes(filename)) return path.join(filename.endsWith('.sql') ? path.join(ROOT, 'db') : DB_ROOT, filename);
   if (docsFiles.includes(filename)) return path.join(ROOT, 'docs', filename);
   if (archiveFiles.includes(filename)) return path.join(ROOT, 'archive', filename);
   if (scriptsFiles.includes(filename)) return path.join(ROOT, 'scripts', filename);
-  if (secretsFiles.includes(filename)) return path.join(ROOT, 'secrets', filename);
+  if (secretsFiles.includes(filename)) return path.join(SECRETS_ROOT, filename);
 
-  // Anything not on a list above lands in the install's own runtime folder.
+  // Anything not on a list above lands in the data root's runtime folder.
   //
   // This used to be `path.join(ROOT, '..', filename)` — the PARENT of the
   // install. On a Desktop install that is the Desktop itself, so AEON's
   // scratch directories (temp_frames, staging, …) were created as siblings of
-  // the app, in the middle of the operator's own files. It also contradicted
-  // the workspace rule stated immediately below, which exists precisely so a
-  // consumer install stays inside its own folder.
-  //
-  // An install that already has data at the old location keeps reading it, so
-  // upgrading does not strand a file someone's work is in; only new paths are
-  // created in the contained place.
-  const legacy = path.join(ROOT, '..', filename);
-  try { if (fs.existsSync(legacy)) return legacy; } catch {}
-  return path.join(ROOT, 'data', 'runtime', filename);
+  // the app, in the middle of the operator's own files. The probe that kept
+  // reading such a sibling was retired with the move to the AEON home: those
+  // are scratch directories (temp frames, staging), never someone's work.
+  return path.join(DATA_ROOT, 'runtime', filename);
 };
 
-// Default workspace = the AEON install folder itself. The File Manager and
-// OS tools open HERE, not in the user's home directory — a consumer install
-// should never greet its owner with their entire C:\Users profile. Power
-// users widen the scope with AEON_WORKSPACE in .env.
-const WORKSPACE = process.env.AEON_WORKSPACE || ROOT;
+// Default workspace = the AEON home. The File Manager and OS tools open
+// HERE, not in the user's home directory — a consumer install should never
+// greet its owner with their entire C:\Users profile. Power users widen the
+// scope with AEON_WORKSPACE in .env. (Portable: the install folder, as before.)
+const WORKSPACE = process.env.AEON_WORKSPACE || ROOTS.workspace;
 
 // ── Vault (durable knowledge) + Data (ephemeral/regenerable state) ─────────
 // One canonical seam. Before this, 7+ files across aeon_matrix, council,
@@ -84,17 +95,16 @@ const WORKSPACE = process.env.AEON_WORKSPACE || ROOT;
 // remembered to update. Every block should now import VAULT_ROOT/DATA_ROOT
 // (or call getVaultFile()/getDataFile()) instead of hand-rolling the path.
 //
-// VAULT_ROOT still points at its current physical location on disk — this
-// is a refactor, not a data move. Relocating the Vault later (e.g. to a
-// clean top-level `Vault/` folder for a GitHub-portable install) becomes a
-// one-line env var change instead of a hunt across the whole codebase.
-const VAULT_ROOT = process.env.VAULT_PATH
-  || path.join(ROOT, 'src', 'blocks', 'aeon_matrix', 'data', 'Vault');
+// VAULT_ROOT defaults to <home>/Vault (2026-09-14; it was
+// src/blocks/aeon_matrix/data/Vault inside the install, and the first launch
+// after upgrading moves it — src/kernel/homeMigration.cjs). VAULT_PATH wins.
+const VAULT_ROOT = process.env.VAULT_PATH || ROOTS.vault;
 
 // Top-level, general-purpose bucket for EVERY block's ephemeral/regenerable
 // state — namespace by block id (getDataFile('deep_research/reports/x.json')).
-// Distinct from VAULT_ROOT: nothing here needs to survive a reinstall.
-const DATA_ROOT = process.env.DATA_PATH || path.join(ROOT, 'data');
+// Distinct from VAULT_ROOT: nothing here needs to survive a reinstall — but
+// the local models live here too, so it sits in the home, not the install.
+const DATA_ROOT = process.env.DATA_PATH || ROOTS.data;
 
 const getVaultFile = (relPath) => path.join(VAULT_ROOT, relPath);
 const getDataFile = (relPath) => {
@@ -141,7 +151,7 @@ const getLocalRuntimeRegistry = () => {
     const { createRegistry } = require('./local-runtime/registry.cjs');
     const { resolveDataRoot } = require('./local-runtime/paths.cjs');
     _localRuntimeRegistry = createRegistry(
-      resolveDataRoot({ appRoot: ROOT, dataRootSetting: process.env.DATA_PATH || null })
+      resolveDataRoot({ appRoot: ROOT, dataRootSetting: DATA_ROOT })
     );
   }
   return _localRuntimeRegistry;
@@ -221,8 +231,23 @@ const upload = multer({
   limits: UPLOAD_LIMITS
 });
 
+// `dest:` would mkdirSync the folder the moment this module is required —
+// which, now that the data root is the AEON home, meant `npm run build` and
+// every scanner created ~/AEON/data on the operator's machine before the
+// migration had run. Resolve and create it at upload time instead, like the
+// drag-and-drop uploader above.
 const videoUpload = multer({
-  dest: getLocalFile('temp_frames'),
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => {
+      try {
+        const dir = getLocalFile('temp_frames');
+        fs.mkdirSync(dir, { recursive: true });
+        cb(null, dir);
+      } catch (e) {
+        cb(new Error(`cannot write to upload target: ${e.message}`));
+      }
+    },
+  }),
   limits: { fileSize: 200 * 1024 * 1024, files: 1, parts: 20 }
 });
 
@@ -264,4 +289,5 @@ module.exports = {
   LOG_FILE, AUDIT_FILE, SDI_VIOLATION_LOG, TOKEN_LEDGER_FILE, TERMINAL_HISTORY_FILE, NOTES_FILE,
   VAULT_ROOT, DATA_ROOT, getVaultFile, getDataFile, getBlockVaultFile, getBlockDataFile,
   getLocalRuntimeRegistry,
+  ROOTS, DB_ROOT, SECRETS_ROOT, SETTINGS_FILE: ROOTS.settings,
 };

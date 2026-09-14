@@ -336,7 +336,9 @@ module.exports = (app, deps) => {
 
       const { createClient } = require('@supabase/supabase-js');
       const db = createClient(url, key);
-      const dbDir = path.join(ROOT, 'db');
+      // Runtime state (the *.json) lives in the AEON home's db/, not beside
+      // the tracked schema files in the install.
+      const dbDir = require('../../../kernel/aeonHome.cjs').roots({ appRoot: ROOT }).db;
 
       const jsonFiles = fs.existsSync(dbDir)
         ? fs.readdirSync(dbDir).filter(f => f.endsWith('.json') && !f.startsWith('block.schema'))

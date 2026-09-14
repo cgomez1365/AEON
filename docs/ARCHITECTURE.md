@@ -81,20 +81,34 @@ own.
 
 ## Storage
 
+Every writable root defaults to a child of the **AEON home** — `~/AEON` on every OS,
+or `AEON_HOME`. The install directory holds code and tracked seeds only, so it can be
+read-only and a reinstall is `git pull`.
+
 | Root | Default | Override | Holds |
 |---|---|---|---|
-| Vault | `src/blocks/aeon_matrix/data/Vault` | `VAULT_PATH` | documents, memories, block memory — durable |
-| Data | `data/` | `DATA_PATH` | indexes, models, block state — regenerable |
-| Secrets | `secrets/` | `AEON_SECRETS_DIR` | keyslots, endpoint registry |
-| `.env` | install root | `AEON_ENV_FILE` | master key, configuration |
-| Workspace | install root | `AEON_WORKSPACE` | what file tools may open |
+| Home | `~/AEON` | `AEON_HOME` (process environment only — `.env` lives inside it) | everything below |
+| Vault | `~/AEON/Vault` | `VAULT_PATH` | documents, memories, block memory — durable |
+| Data | `~/AEON/data` | `DATA_PATH` | indexes, models, block state — regenerable |
+| Secrets | `~/AEON/secrets` (mode 0700) | `AEON_SECRETS_DIR` | keyslots, endpoint registry |
+| `.env` | `~/AEON/.env` | `AEON_ENV_FILE` | master key, configuration |
+| db | `~/AEON/db` | `AEON_DB_DIR` | chat/audit logs, retrieval indexes, run state (the `*.sql` seeds stay in the install's `db/`) |
+| Settings | `aeon-settings.json` in `~/AEON` | `AEON_SETTINGS_FILE` | the nervous system's settings |
+| Workspace | `~/AEON` | `AEON_WORKSPACE` | what file tools may open |
 
-`services/storage.js` owns the Vault and Data roots and `src/kernel/envFile.cjs` owns the
-`.env` path — nothing else computes them. Because every writable root is redirectable, AEON
-runs from USB media and can run from a read-only install.
+`src/kernel/aeonHome.cjs` resolves the home and every root (and is the only module allowed
+to ask for the home directory); `services/storage.js` exposes the Vault and Data roots and
+`src/kernel/envFile.cjs` the `.env` path — nothing else computes them. A portable install
+(`AEON_PORTABLE=true`) keeps every default inside the install: the drive is the home.
+
+An install from before the home existed has its data inside the install directory.
+`src/kernel/homeMigration.cjs` moves it on the next launch — once, root by root, refusing a
+populated target rather than merging, and recording progress in `home.json` inside `~/AEON` so an
+interrupted run resumes. It runs at the top of both `launch.js` and `server/server.js`.
 
 Keys are encrypted at rest (AES-256-GCM, `src/kernel/vault.cjs`). The `.env` master key and
-`secrets/aeon-keyslots.json` are two halves of one protector: move both or neither.
+the keyslots file in `~/AEON/secrets` are two halves of one protector: move both or neither
+(the migration moves them as a pair).
 
 ## Cloud (optional)
 

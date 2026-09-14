@@ -19,7 +19,9 @@ const crypto = require('crypto');
 
 const isVercel = require('./runtime.cjs').isCloud();
 const APP_ROOT = path.join(__dirname, '..', '..');           // Command_Center_App
-const SECRETS_DIR = process.env.AEON_SECRETS_DIR || path.join(APP_ROOT, 'secrets');
+// Default: <AEON home>/secrets (src/kernel/aeonHome.cjs) — outside the install
+// since 2026-09-14. AEON_SECRETS_DIR still wins.
+const SECRETS_DIR = process.env.AEON_SECRETS_DIR || require('./aeonHome.cjs').roots({ appRoot: APP_ROOT }).secrets;
 try { if (!isVercel) fs.mkdirSync(SECRETS_DIR, { recursive: true }); } catch {}
 const VAULT_FILE = path.join(SECRETS_DIR, 'aeon-vault.json'); // local authoritative (desktop)
 const VAULT_ROW_ID = 1;                                       // singleton row in Supabase

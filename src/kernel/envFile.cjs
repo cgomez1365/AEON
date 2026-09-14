@@ -14,7 +14,11 @@
  * a vault key into its own bundle on first launch breaks its own signature the
  * first time it runs.
  *
- * Precedence: AEON_ENV_FILE -> <appRoot>/.env
+ * Precedence: AEON_ENV_FILE -> <AEON home>/.env   (src/kernel/aeonHome.cjs)
+ *
+ * 2026-09-14: the default moved out of the install into the AEON home
+ * (~/AEON, or AEON_HOME — process environment only, since .env lives inside
+ * the home). A portable install keeps <appRoot>/.env; see aeonHome.cjs.
  *
  * Two rules inherited from services/local-runtime/paths.cjs, for the same
  * reasons documented there:
@@ -30,6 +34,7 @@
 'use strict';
 
 const path = require('path');
+const { roots } = require('./aeonHome.cjs');
 
 /**
  * Resolve the .env path.
@@ -46,19 +51,16 @@ function envFilePath(ctx = {}) {
   }
 
   const env = ctx.env || process.env;
-  const raw = env.AEON_ENV_FILE;
 
   // A launcher that exports an unset variable hands us "" or "   ". Resolving
   // that would yield appRoot itself — a directory — and every read and write
-  // against it would fail in a way that reads like a corrupt install. Fall
-  // back to the default instead (R-05: no silent failure, and no garbage path).
-  const override = typeof raw === 'string' ? raw.trim() : '';
-  if (!override) return path.join(appRoot, '.env');
-
-  // join, not resolve: on Windows path.resolve fills a drive-less root's drive
-  // from process.cwd() ("\opt\aeon" became "D:\opt\aeon" on the CI runner) —
-  // the exact cwd dependence rule 1 forbids. Caught by the windows-latest leg.
-  return path.isAbsolute(override) ? override : path.join(appRoot, override);
+  // against it would fail in a way that reads like a corrupt install. The home
+  // authority treats blank as unset (R-05: no silent failure, no garbage path),
+  // and joins (not resolves) a relative override against appRoot: on Windows
+  // path.resolve fills a drive-less root's drive from process.cwd() ("\opt\aeon"
+  // became "D:\opt\aeon" on the CI runner) — the exact cwd dependence rule 1
+  // forbids. Caught by the windows-latest leg.
+  return roots({ appRoot, env }).envFile;
 }
 
 module.exports = { envFilePath };

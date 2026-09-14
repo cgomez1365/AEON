@@ -73,12 +73,22 @@ describe('.env has one path authority', () => {
     expect(typeof envFilePath).toBe('function');
   });
 
-  it('defaults to <appRoot>/.env when AEON_ENV_FILE is unset', async () => {
+  it('defaults to <AEON home>/.env when AEON_ENV_FILE is unset', async () => {
+    // 2026-09-14: the default left the install for the AEON home
+    // (src/kernel/aeonHome.cjs) — the install may be read-only, and the .env
+    // is the one file the first-run guard writes. AEON_HOME is injected so the
+    // assertion never depends on this machine's home directory.
     const mod = await import('../src/kernel/envFile.cjs');
     const { envFilePath } = mod.default || mod;
-    await withEnv({ AEON_ENV_FILE: null }, () => {
-      expect(envFilePath({ appRoot: '/opt/aeon' })).toBe(path.join('/opt/aeon', '.env'));
-    });
+    expect(envFilePath({ appRoot: '/opt/aeon', env: { AEON_HOME: '/opt/home' } })).toBe(path.join('/opt/home', '.env'));
+    // Never inside the install any more.
+    expect(envFilePath({ appRoot: '/opt/aeon', env: { AEON_HOME: '/opt/home' } }).startsWith('/opt/aeon')).toBe(false);
+  });
+
+  it('a portable install keeps <appRoot>/.env — the drive is the home', async () => {
+    const mod = await import('../src/kernel/envFile.cjs');
+    const { envFilePath } = mod.default || mod;
+    expect(envFilePath({ appRoot: '/opt/aeon', env: { AEON_PORTABLE: 'true' } })).toBe(path.join('/opt/aeon', '.env'));
   });
 
   it('honors AEON_ENV_FILE as an absolute path', async () => {
@@ -107,9 +117,8 @@ describe('.env has one path authority', () => {
     const mod = await import('../src/kernel/envFile.cjs');
     const { envFilePath } = mod.default || mod;
     for (const bad of ['', '   ']) {
-      await withEnv({ AEON_ENV_FILE: bad }, () => {
-        expect(envFilePath({ appRoot: '/opt/aeon' })).toBe(path.join('/opt/aeon', '.env'));
-      });
+      expect(envFilePath({ appRoot: '/opt/aeon', env: { AEON_ENV_FILE: bad, AEON_HOME: '/opt/home' } }))
+        .toBe(path.join('/opt/home', '.env'));
     }
   });
 

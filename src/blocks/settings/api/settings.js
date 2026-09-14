@@ -47,11 +47,15 @@ module.exports = (app, deps) => {
       return models.length ? models[0].id : null;
     } catch { return null; }
   };
-  // Coinbase CDP key lives inside the install (secrets/), not on the user's
-  // Desktop — that was a hardcoded personal convention. Desktop kept as a
-  // legacy fallback so existing setups don't break.
+  // The resolved secrets dir (<home>/secrets, or AEON_SECRETS_DIR) — probing
+  // <install>/secrets found nothing once the roots left the install.
+  const SECRETS_DIR = require(path.join(__dirname, '..', '..', '..', 'kernel', 'aeonHome.cjs'))
+    .roots({ appRoot: APP_ROOT }).secrets;
+  // Coinbase CDP key lives in the secrets dir, not on the user's Desktop —
+  // that was a hardcoded personal convention. Desktop kept as a legacy
+  // fallback so existing setups don't break.
   const cdpKeyExists = () =>
-    fs.existsSync(path.join(APP_ROOT, 'secrets', 'cdp_api_key.json')) ||
+    fs.existsSync(path.join(SECRETS_DIR, 'cdp_api_key.json')) ||
     fs.existsSync(path.join(process.env.USERPROFILE || process.env.HOME || '', 'Desktop', 'cdp_api_key.json')); // aeon-path-authority-allow
 
   // ── Settings file I/O ──────────────────────────────────────────────
@@ -1078,7 +1082,7 @@ module.exports = (app, deps) => {
     groupStatus.supabase.configured = cloudProviders.supabase.configured;
     // account status comes from the security block; models from settings file.
     let hasAccount = false;
-    try { hasAccount = fs.existsSync(path.join(__dirname, '..', '..', '..', '..', 'secrets', 'aeon-user.json')); } catch {}
+    try { hasAccount = fs.existsSync(path.join(SECRETS_DIR, 'aeon-user.json')); } catch {}
     const s = loadSettings();
     const hasModels = !!(s.models && Object.values(s.models).some(m => m && m.provider && m.model));
     // "Complete" = the machine can actually run AI. Account protection lives in

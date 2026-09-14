@@ -28,12 +28,13 @@ function writeFileAtomic(file, contents) {
   }
 }
 
-const ROOT = path.join(__dirname, '..');
-// The settings block API and the first-run guard both use src/aeon-settings.json.
-// This service MUST read the same file — it previously pointed at a nonexistent
+// The settings block API and the first-run guard both use this file. This
+// service MUST read the same one — it previously pointed at a nonexistent
 // root-level file, so the whole kernel ran on the hardcoded fallback below
-// (wrong roles, no prefs). Found 2026-07-16.
-const SETTINGS_FILE = path.join(ROOT, 'src', 'aeon-settings.json');
+// (wrong roles, no prefs). Found 2026-07-16. Since 2026-09-14 the file lives
+// in the AEON home (<home>/aeon-settings.json, AEON_SETTINGS_FILE to
+// override); storage resolves it, so every reader and the first-run copy agree.
+const SETTINGS_FILE = storage.SETTINGS_FILE;
 const SECURITY_VAULT_DIR = storage.getVaultFile(path.join('blocks', 'security'));
 const CLOUD_CREDENTIALS_FILE = path.join(SECURITY_VAULT_DIR, 'cloud_credentials.json');
 const PROVIDER_CREDENTIALS_FILE = path.join(SECURITY_VAULT_DIR, 'provider_credentials.json');
@@ -65,7 +66,7 @@ const loadSettings = () => {
   catch {
     let m = null;
     try {
-      const rt = JSON.parse(fs.readFileSync(path.join(process.env.DATA_PATH || path.join(ROOT, 'data'), 'local-runtime.json'), 'utf8'));
+      const rt = JSON.parse(fs.readFileSync(path.join(storage.DATA_ROOT, 'local-runtime.json'), 'utf8'));
       m = rt?.models?.find(x => x.ready !== false)?.id || null;
     } catch {}
     const role = { provider: 'local', model: m };

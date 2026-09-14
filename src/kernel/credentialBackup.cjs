@@ -43,15 +43,16 @@ function resolveSources(deps = {}) {
   const appRoot = deps.appRoot || APP_ROOT;
   const secretsDir = deps.secretsDir
     || process.env.AEON_SECRETS_DIR
-    || path.join(appRoot, 'secrets');
+    || require('./aeonHome.cjs').roots({ appRoot }).secrets;
 
   let securityVaultDir = null;
   try { securityVaultDir = getVaultFile(path.join('blocks', 'security')); } catch { /* unconfigured */ }
 
   return {
     // Shared authority — a backup that captures the install's .env while the
-    // vault reads a redirected one would restore nothing. Honors AEON_ENV_FILE.
-    '.env': require('./envFile.cjs').envFilePath({ appRoot }),
+    // vault reads a redirected one would restore nothing. Honors AEON_ENV_FILE
+    // and the AEON home (<home>/.env); injectable for tests like secretsDir.
+    '.env': deps.envFile || require('./envFile.cjs').envFilePath({ appRoot }),
     'secrets/aeon-keyslots.json': path.join(secretsDir, 'aeon-keyslots.json'),
     'vault/provider_credentials.json': securityVaultDir
       ? path.join(securityVaultDir, 'provider_credentials.json')
@@ -73,7 +74,7 @@ function exportBundle(deps = {}) {
   const bundle = {
     _artifact: 'AEON credential backup',
     _warning: 'Contains plaintext secrets. Store offline, never commit to git.',
-    _restore: 'On a fresh clone: copy .env to root, secrets/aeon-keyslots.json to secrets/, vault/provider_credentials.json to its vault path. Boot — vault auto-unlocks.',
+    _restore: 'On a fresh clone: copy .env into your AEON home (~/AEON, or AEON_HOME), aeon-keyslots.json into its secrets folder (~/AEON/secrets), vault/provider_credentials.json to its vault path. Boot — vault auto-unlocks.',
     exported_at: new Date().toISOString(),
     files: {},
   };

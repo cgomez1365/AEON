@@ -15,7 +15,7 @@ module.exports = function createSyncRouter(deps) {
     logistics:        { file: getLocalFile('logistics_ledger.json'),     table: 'aeon_blocks', tag: 'logistics' },
     compare:          { file: require('path').join(__dirname, '../src/blocks/compare/data/history.json'), table: 'aeon_blocks', tag: 'compare' },
     cookbook:          { file: require('path').join(__dirname, '../src/blocks/cookbook/data/cookbook_state.json'), table: 'aeon_blocks', tag: 'cookbook' },
-    activity:         { file: require('path').join(__dirname, '../db/activity_heatmap.json'),     table: 'aeon_blocks', tag: 'activity' },
+    activity:         { file: getLocalFile('activity_heatmap.json'),     table: 'aeon_blocks', tag: 'activity' },
     quick_links:      { file: getLocalFile('quick-links.json'),          table: 'aeon_blocks', tag: 'quick_links' },
   };
 

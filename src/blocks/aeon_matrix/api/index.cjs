@@ -13,15 +13,35 @@ const { isInside } = require('../../../kernel/pathContainment.cjs');
 module.exports = function secondBrainFactory(deps) {
   const router = express.Router();
 
-  const DATA_ROOT = path.join(__dirname, '..', 'data');
-  const BRAIN_DIR     = deps?.VAULT_ROOT || path.join(DATA_ROOT, 'Vault');
+  // Roots come from the storage seam through deps. Until 2026-09-14 this block
+  // created src/blocks/aeon_matrix/data unconditionally and resolved every
+  // document path against it, so with the Vault anywhere else (VAULT_PATH, a
+  // USB bundle, the AEON home) the routes below read a folder the Vault was
+  // not in. Only what the block needs is created, where it actually lives.
+  const BRAIN_DIR     = deps?.VAULT_ROOT || path.join(__dirname, '..', 'data', 'Vault');
   const LIBRARY_DIR   = path.join(BRAIN_DIR, 'Reading_Library');
   const ARTIFACTS_DIR = path.join(BRAIN_DIR, 'Saved_Artifacts');
+  // This block's own operational state (narrator progress, the OCR cache).
+  const BLOCK_DATA    = deps?.getDataFile ? deps.getDataFile('aeon_matrix') : path.join(__dirname, '..', 'data');
 
   // Guarantee data directories exist on boot — user's data must never 404.
-  for (const dir of [DATA_ROOT, BRAIN_DIR, LIBRARY_DIR, ARTIFACTS_DIR]) {
+  for (const dir of [BRAIN_DIR, LIBRARY_DIR, ARTIFACTS_DIR, BLOCK_DATA]) {
     try { if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true }); } catch {}
   }
+
+  // Document paths this API exchanges are "Vault/<relative>" — the shape the
+  // index, the graph and the terminal have always used. Resolve them against
+  // the Vault itself, contained there.
+  const vaultRel = (full) => 'Vault/' + path.relative(BRAIN_DIR, full).split(path.sep).join('/');
+  const resolveDoc = (p) => {
+    const rel = String(p).replace(/^[\\/]?Vault(?=[\\/])[\\/]/, '');
+    const full = path.resolve(BRAIN_DIR, rel);
+    // Containment, not a string prefix: startsWith() let a sibling directory
+    // through (…/data-backup passes a check against …/data).
+    return isInside(BRAIN_DIR, full, { allowRoot: true }) ? full : null;
+  };
+  const { setCacheDir } = require('./_extract.cjs');
+  setCacheDir(path.join(BLOCK_DATA, '.extract-cache'));
 
   // ─── Serve the 3D graph HTML (self-contained in the block) ─────
   router.get('/crn/second-brain/visualizer', (_req, res) => {
@@ -42,7 +62,7 @@ module.exports = function secondBrainFactory(deps) {
 
   // ─── Narrator progress (was a ghost route — frontend called it, nothing
   //     served it, so every PDF open threw [API FAILED] /api/narrator/state) ─
-  const NARRATOR_STATE = path.join(DATA_ROOT, 'narrator-state.json');
+  const NARRATOR_STATE = path.join(BLOCK_DATA, 'narrator-state.json');
   const _loadNarrator = () => { try { return JSON.parse(fs.readFileSync(NARRATOR_STATE, 'utf8')); } catch { return {}; } };
   router.get('/narrator/state', (req, res) => {
     const nodeId = String(req.query.nodeId || '');
@@ -107,13 +127,13 @@ module.exports = function secondBrainFactory(deps) {
           const stat = fs.statSync(full);
           if (stat.isDirectory()) { searchDir(full); continue; }
           if (name.toLowerCase().includes(q)) {
-            results.push({ file: path.relative(DATA_ROOT, full), match: 'filename' });
+            results.push({ file: vaultRel(full), match: 'filename' });
           } else if (/\.(md|txt|json)$/i.test(name) && stat.size < 500_000) {
             try {
               const content = fs.readFileSync(full, 'utf8');
               if (content.toLowerCase().includes(q)) {
                 const line = content.split('\n').find(l => l.toLowerCase().includes(q)) || '';
-                results.push({ file: path.relative(DATA_ROOT, full), match: 'content', snippet: line.trim().slice(0, 200) });
+                results.push({ file: vaultRel(full), match: 'content', snippet: line.trim().slice(0, 200) });
               }
             } catch {}
           }
@@ -133,10 +153,8 @@ module.exports = function secondBrainFactory(deps) {
     const filePath = req.query.path;
     if (!filePath) return res.status(400).json({ error: 'Missing ?path=' });
 
-    const resolved = path.resolve(DATA_ROOT, filePath);
-    // Containment, not a string prefix: startsWith() let a sibling directory
-    // through (…/data-backup passes a check against …/data).
-    if (!isInside(DATA_ROOT, resolved, { allowRoot: true })) return res.status(403).json({ error: 'Access denied' });
+    const resolved = resolveDoc(filePath);
+    if (!resolved) return res.status(403).json({ error: 'Access denied' });
     if (!fs.existsSync(resolved)) return res.status(404).json({ error: 'Not found' });
 
     const content = fs.readFileSync(resolved, 'utf8');
@@ -149,8 +167,8 @@ module.exports = function secondBrainFactory(deps) {
     const filePath = req.query.path || req.query.nodeId;
     if (!filePath) return res.status(400).json({ error: 'Missing ?path=' });
 
-    const resolved = path.resolve(DATA_ROOT, filePath);
-    if (!isInside(DATA_ROOT, resolved, { allowRoot: true })) return res.status(403).json({ error: 'Access denied' });
+    const resolved = resolveDoc(filePath);
+    if (!resolved) return res.status(403).json({ error: 'Access denied' });
     if (!fs.existsSync(resolved)) return res.status(404).json({ error: 'Not found' });
 
     const ext = (resolved.split('.').pop() || '').toLowerCase();
@@ -166,8 +184,8 @@ module.exports = function secondBrainFactory(deps) {
     const filePath = req.query.path || req.query.nodeId;
     if (!filePath) return res.status(400).json({ error: 'Missing ?path=' });
 
-    const resolved = path.resolve(DATA_ROOT, filePath);
-    if (!isInside(DATA_ROOT, resolved, { allowRoot: true })) return res.status(403).json({ error: 'Access denied' });
+    const resolved = resolveDoc(filePath);
+    if (!resolved) return res.status(403).json({ error: 'Access denied' });
     if (!fs.existsSync(resolved)) return res.status(404).json({ error: 'Not found' });
 
     try {
@@ -185,8 +203,8 @@ module.exports = function secondBrainFactory(deps) {
     const filePath = req.query.path || req.query.nodeId;
     if (!filePath) return res.status(400).json({ error: 'Missing ?path=' });
 
-    const resolved = path.resolve(DATA_ROOT, filePath);
-    if (!isInside(DATA_ROOT, resolved, { allowRoot: true })) return res.status(403).json({ error: 'Access denied' });
+    const resolved = resolveDoc(filePath);
+    if (!resolved) return res.status(403).json({ error: 'Access denied' });
     if (!fs.existsSync(resolved)) return res.status(404).json({ error: 'Not found' });
 
     try {
@@ -211,8 +229,8 @@ module.exports = function secondBrainFactory(deps) {
     const filePath = req.query.path || req.query.nodeId;
     if (!filePath) return res.status(400).json({ error: 'Missing ?path=' });
 
-    const resolved = path.resolve(DATA_ROOT, filePath);
-    if (!isInside(DATA_ROOT, resolved, { allowRoot: true })) return res.status(403).json({ error: 'Access denied' });
+    const resolved = resolveDoc(filePath);
+    if (!resolved) return res.status(403).json({ error: 'Access denied' });
     if (!fs.existsSync(resolved)) return res.status(404).send('PDF not found');
 
     res.setHeader('Content-Type', 'application/pdf');

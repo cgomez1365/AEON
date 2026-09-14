@@ -28,7 +28,7 @@ const crypto = require('crypto');
 
 module.exports = function createMemoryRouter(deps) {
   const router = express.Router();
-  const { kernelLLM, VAULT_ROOT } = deps;
+  const { kernelLLM, VAULT_ROOT, TERMINAL_HISTORY_FILE } = deps;
 
   const MEM_DIR = path.join(VAULT_ROOT || path.join(__dirname, '..', '..', 'aeon_matrix', 'data', 'Vault'), 'Agents', 'Aeon', 'memory');
   const STORE = path.join(MEM_DIR, 'memories.json');
@@ -196,8 +196,11 @@ module.exports = function createMemoryRouter(deps) {
     if (!transcript) {
       // Pull the tail of terminal history if none supplied
       try {
-        const HIST = path.join(__dirname, '..', '..', '..', '..', 'db', 'aeon_terminal_history.json');
-        const h = JSON.parse(fs.readFileSync(HIST, 'utf8'));
+        // The kernel resolves this file (storage.getLocalFile → <home>/db);
+        // a block-relative db/ path pointed at the install, which no longer
+        // holds it.
+        if (!TERMINAL_HISTORY_FILE) throw new Error('TERMINAL_HISTORY_FILE not injected');
+        const h = JSON.parse(fs.readFileSync(TERMINAL_HISTORY_FILE, 'utf8'));
         const msgs = Array.isArray(h) ? h : h.messages || [];
         transcript = msgs.slice(-30).map(m => `${m.role}: ${String(m.content).slice(0, 400)}`).join('\n');
         refs = [{ kind: 'terminal-history', file: 'db/aeon_terminal_history.json', span: `last-${Math.min(msgs.length, 30)}-turns`, at: new Date().toISOString() }];

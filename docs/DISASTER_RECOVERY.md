@@ -18,10 +18,16 @@ Objectives: **RTO ≤ 1 hour**, **RPO ≤ 24 hours** (last daily sync).
   it there is no automated copy. Earlier revisions of this page described a daily
   Google Apps Script backup on a Vercel cron; neither the cron nor the route ever
   existed in this repository.
-- **Vault master key**: store `AEON_VAULT_MASTER_KEY` in a password manager. It is
-  NOT in any backup and cannot be regenerated to decrypt existing data.
-- **Local JSON stores** (`db/*.json`): per-box, not authoritative. Mount a
-  volume or rely on Supabase sync.
+- **The AEON home**: copy `~/AEON` (or `AEON_HOME`) — that one folder holds the
+  Vault, the master key (`.env`), the keyslots and endpoint registry (`secrets`),
+  the local models and indexes (`data`), runtime state and logs (`db`) and the
+  settings file. A copy of it restored to a fresh install is a full local
+  restore; nothing AEON keeps for you lives in the install directory.
+- **Vault master key**: store `AEON_VAULT_MASTER_KEY` in a password manager as
+  well. It is NOT regenerable to decrypt existing data — a copy of `~/AEON`
+  without its `.env` is a copy you cannot open.
+- **Local JSON stores** (`~/AEON/db`): per-box, not authoritative. Back up the
+  home or rely on Supabase sync.
 
 ## Recovery drill (run quarterly)
 

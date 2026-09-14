@@ -23,7 +23,9 @@ const BATCH = 25;
 module.exports = function cloudVaultFactory(deps) {
   const router = express.Router();
 
-  const DATA_ROOT = path.join(__dirname, '..', 'data');
+  // The index ingest.cjs writes lives in the shared data root — reading it
+  // from the block folder found nothing once the roots moved out of the install.
+  const DATA_ROOT = deps?.DATA_ROOT || path.join(__dirname, '..', 'data');
   const INDEX_FILE = path.join(DATA_ROOT, 'vault_index.json');
   const STATE_FILE = path.join(DATA_ROOT, 'cloudvault_state.json');
   const VAULT_ROOT = deps?.VAULT_ROOT || path.join(DATA_ROOT, 'Vault');

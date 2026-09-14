@@ -42,6 +42,9 @@ const ALLOWED = new Set([
   'services/local-runtime/paths.cjs',
   // Pre-existing AEON storage seam — owns VAULT_ROOT/DATA_ROOT.
   'services/storage.js',
+  // The AEON home authority (~/AEON) — the one place that may ask for the
+  // home directory; every root default derives from it.
+  'src/kernel/aeonHome.cjs',
 ]);
 
 const RULES = [

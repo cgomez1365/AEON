@@ -39,7 +39,7 @@ function createSessionValidator(options = {}) {
   // Isolation that covers two of three write targets reads as isolation and
   // is not.
   const legacyUserFile = options.legacyUserFile === undefined
-    ? path.join(process.env.AEON_SECRETS_DIR || path.join(storage.ROOT, 'secrets'), 'aeon-user.json')
+    ? path.join(process.env.AEON_SECRETS_DIR || storage.SECRETS_ROOT, 'aeon-user.json')
     : options.legacyUserFile;
   const bootTime = options.bootTime || Date.now();
   const activity = new Map();

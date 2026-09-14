@@ -36,8 +36,16 @@ const path = require('path');
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aeon-suite-'));
 
-// Exactly the two roots that leaked, and no more. VAULT_PATH and
-// AEON_WORKSPACE were in an earlier draft and are deliberately NOT set:
+// FIRST: the AEON home. Since 2026-09-14 every root that is not individually
+// redirected defaults to a child of ~/AEON (src/kernel/aeonHome.cjs). Without
+// this line the Vault, db, .env and settings defaults of every module the
+// suite loads would resolve to the developer's REAL home — and the kernel
+// mkdirSyncs some of them at require time. `ls ~/AEON` must say "no such
+// file" after a full run; that is the check.
+process.env.AEON_HOME = path.join(root, 'home');
+
+// The two roots that leaked before the home existed, kept as explicit
+// redirects. VAULT_PATH and AEON_WORKSPACE are deliberately NOT set:
 // storage-contract.test.js asserts real Vault path SHAPE
 // (`Vault/blocks/<id>/…`), and redirecting it broke a correct test. The scope
 // of a fix should match the scope of the defect.

@@ -31,6 +31,8 @@ beforeEach(() => {
   fs.mkdirSync(path.join(root, 'Vault', 'blocks', 'security'), { recursive: true });
   deps = {
     appRoot: root,
+    // Injected like secretsDir: the default is <AEON home>/.env, not <appRoot>/.env.
+    envFile: path.join(root, '.env'),
     secretsDir: path.join(root, 'secrets'),
     getVaultFile: (rel) => path.join(root, 'Vault', rel),
   };

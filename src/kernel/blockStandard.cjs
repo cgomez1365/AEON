@@ -393,9 +393,9 @@ function checkReadiness(manifest, env) {
     const fileProbe = vars.find(v => v.startsWith('__FILE__'));
     if (fileProbe) {
       const fname = fileProbe.replace('__FILE__', '');
-      // Look inside the install first (secrets/), Desktop only as legacy.
+      // Look in the resolved secrets dir first, Desktop only as legacy.
       const ok = [
-        path.join(__dirname, '..', '..', 'secrets', fname),
+        path.join(require('./aeonHome.cjs').roots({ appRoot: path.join(__dirname, '..', '..') }).secrets, fname),
         path.join(process.env.USERPROFILE || process.env.HOME || '', 'Desktop', fname), // aeon-path-authority-allow
       ].some(p => { try { return fs.existsSync(p); } catch { return false; } });
       if (!ok) missing.push(a);

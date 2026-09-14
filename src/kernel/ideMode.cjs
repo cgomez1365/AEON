@@ -13,7 +13,7 @@ const path = require('path');
 const fs = require('fs');
 
 const ROOT = path.join(__dirname, '..', '..');
-const DB_DIR = process.env.AEON_DB_DIR || path.join(ROOT, 'db'); // env override = test isolation
+const DB_DIR = process.env.AEON_DB_DIR || require('./aeonHome.cjs').roots({ appRoot: ROOT }).db; // <home>/db by default; env override = test isolation
 const STATE_FILE = path.join(DB_DIR, 'aeon-ide-mode.json');
 const AUDIT_LOG = path.join(DB_DIR, 'ide_audit.log');
 

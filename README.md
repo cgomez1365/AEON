@@ -8,7 +8,7 @@
 
 > Think Linux, for the AI era: a kernel that discovers self-contained blocks, a nervous system (Settings) every block reports to, a vault that encrypts your keys, a Second Brain that indexes your files and answers with sources, and one LLM layer that routes every AI call by role.
 
-<sub>**Measured 2026-09-14 on macOS, after the stale-file sweep** · 1,525 passing and 1 skipped (a real-PowerShell test that runs only on Windows) of 1,526 tests across 133 files · 17 blocks (plus two `_` scaffolds the kernel skips) · 5 CI legs (Windows · Ubuntu on Node 24 · Ubuntu on the Node 22.13 floor · macOS · security) · 0 undeclared block filesystem access. Every number here is a dated reading, not a property — see [Engineering standard](docs/ENGINEERING_STANDARD.md).</sub>
+<sub>**Measured 2026-09-14 on macOS, after the stale-file sweep** · 1,560 passing and 1 skipped (a real-PowerShell test that runs only on Windows) of 1,561 tests across 135 files · 17 blocks (plus two `_` scaffolds the kernel skips) · 5 CI legs (Windows · Ubuntu on Node 24 · Ubuntu on the Node 22.13 floor · macOS · security) · 0 undeclared block filesystem access. Every number here is a dated reading, not a property — see [Engineering standard](docs/ENGINEERING_STANDARD.md).</sub>
 
 ---
 
@@ -22,6 +22,8 @@
    - **Linux** — run `./launch.sh`
 
 **After the first launch, AEON puts its own icon on your Desktop** (`AEON.app` on macOS, an `AEON` shortcut on Windows). Open AEON from there from then on — every open also picks up any new files in your Vault. Don't want the icon? Delete it and it stays gone (`node launch.js --desktop-icon` brings it back), or set `AEON_NO_DESKTOP_ICON=1`. USB/portable installs never create one.
+
+**Where your data lives:** everything AEON keeps for you — your Vault, downloaded models, API keys, settings and logs — goes into one folder in your home directory, `~/AEON` (`C:\Users\<you>\AEON` on Windows), never into the AEON folder itself. Reinstalling or updating AEON is therefore safe: delete the AEON folder, unzip a new one (or `git pull`), launch, and everything is still there. An install from before this change moves its data into `~/AEON` on the next launch, once, and tells you what it moved. To put the home somewhere else, set `AEON_HOME` in your environment before launching.
 
 The launcher checks your computer, walks you through setup, and opens AEON in your browser. **Every setup question in the launcher can be skipped by pressing Enter** — you can finish everything later inside AEON under **Settings**. The one exception is before the launcher: if Node.js is missing, the wrapper asks to install it, and Enter means No and exits so you can install it yourself.
 
@@ -41,7 +43,7 @@ We do not say "cross-platform" and leave you to find out. Here is exactly what h
 
 ### Free AI, two ways
 - **Cloud (free keys)** — grab a free key from [aistudio.google.com](https://aistudio.google.com) (Gemini) or [console.groq.com](https://console.groq.com) (Groq). Paste it when the launcher asks on first run, or later under **Settings**.
-- **Local (no keys, fully private)** — open the **Cookbook** block, install the local runtime, download a model with one click. Models run inside AEON on a llama.cpp worker that the Cookbook downloads (a pinned, hash-verified release) into AEON's own `data/` folder — nothing is installed system-wide, and no internet is needed after the download.
+- **Local (no keys, fully private)** — open the **Cookbook** block, install the local runtime, download a model with one click. Models run inside AEON on a llama.cpp worker that the Cookbook downloads (a pinned, hash-verified release) into `~/AEON/data` — nothing is installed system-wide, nothing lands in the AEON folder, and no internet is needed after the download.
 
 ---
 
@@ -84,7 +86,7 @@ Not the wins — the failures, with mechanisms. A test suite that passed because
 | **Terminal** | Talk to AEON in plain English. `/` commands and drag-and-drop files. |
 | **Aeon Matrix** | Your documents as a living 3D knowledge graph. Ask with sources, search, and an **Index** tab showing exactly what is embedded. |
 | **Second Brain** | Your Vault is indexed on every launch and nightly at 3 AM; recall answers only from what it finds, and says so when nothing matches. |
-| **Vault** | Everything you save, with a suggested home for every file you drop in. API keys encrypted (AES-256-GCM). |
+| **Vault** | Everything you save, with a suggested home for every file you drop in. Lives in `~/AEON/Vault`, outside the install, so a reinstall never touches it. API keys encrypted (AES-256-GCM). |
 | **Cookbook** | Download and manage local AI models. Probes your hardware, recommends what fits. |
 | **Settings** | The nervous system. Every block declares its needs here; everything is configured in one place. |
 | **Blocks** | Dashboard, Council, Deep Research, Files, Fleet Control, Memory Core, Orion Search, Security, Writer, and more — each a self-contained cartridge. → [`docs/BLOCKS.md`](docs/BLOCKS.md) |
@@ -120,7 +122,7 @@ The manifest is not documentation — it is the source of truth the kernel reads
 
 ## Security model
 
-- **Keys are encrypted into the vault and are never returned by the API.** AES-256-GCM; Settings sees only *configured / missing / vault* status. The one exception is your own credential backup under Settings, a deliberate, session-gated download of `.env` and the keyslots. The master key and the keyslots are two halves — move both or neither.
+- **Keys are encrypted into the vault and are never returned by the API.** AES-256-GCM; Settings sees only *configured / missing / vault* status. The one exception is your own credential backup under Settings, a deliberate, session-gated download of `.env` and the keyslots. The master key (`~/AEON/.env`) and the keyslots (`~/AEON/secrets`) are two halves — both live under `~/AEON`; move both or neither.
 - **The vault refuses to overwrite itself.** A first-run guard that mints a fresh master key over an existing vault destroys access to everything in it. AEON refuses, names both halves, and points at your recovery code — and stays running, because you need the server in order to recover.
 - **Block API routes are auth-gated at mount** from the manifest, fail-closed, and enforced whether or not the global guard is on. Before a login exists the gate is a pass-through by design.
 - **Filesystem access beyond a block's own namespace is declared and audited.** 23 declarations, each naming the file, a scope, and a reason a reader can check. Undeclared access: **0**, enforced by a gate.
@@ -141,7 +143,7 @@ npm ci
 npm start               # vite dev server + kernel (hot reload)
 npm run build           # production frontend → dist/
 npm run server          # kernel only, serves dist/ at :3001
-npm test                # vitest — 1,526 tests (2026-09-14)
+npm test                # vitest — 1,561 tests (2026-09-14)
 npm run scan:release-gate   # runtime purity · path authority · cloud ratchet · block filesystem
 npm run scan:audit          # no unreviewed high/critical advisories
 ```

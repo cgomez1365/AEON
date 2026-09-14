@@ -19,7 +19,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 
 const ROOT = path.join(__dirname, '..', '..');
-const DB_DIR = process.env.AEON_DB_DIR || path.join(ROOT, 'db');
+const DB_DIR = process.env.AEON_DB_DIR || require('./aeonHome.cjs').roots({ appRoot: ROOT }).db; // <home>/db by default
 const STATE_FILE = path.join(DB_DIR, 'aeon-block-runstate.json');
 
 let _cache = null, _cacheAt = 0;

@@ -35,7 +35,7 @@ const crypto = require('crypto');
 const retrieval = require('./retrieval.cjs');
 
 const ROOT = path.join(__dirname, '..', '..');
-const DB_DIR = process.env.AEON_DB_DIR || path.join(ROOT, 'db');
+const DB_DIR = process.env.AEON_DB_DIR || require('./aeonHome.cjs').roots({ appRoot: ROOT }).db; // <home>/db by default
 const RECEIPTS_FILE = path.join(DB_DIR, 'retrieval', 'receipts.jsonl');
 
 const SENSITIVE_DOMAINS = ['medical', 'hr', 'legal', 'financial'];

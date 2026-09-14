@@ -16,7 +16,7 @@ AEON is an AI-native operating system: kernel + self-contained block cartridges 
 | `src/kernel/routers/console.cjs` | Operator Console (`/api/console/*`): block list, /data reader, vault file drops, model hotswap, key adds |
 | `src/blocks/*/` | Cartridges — manifest + index.jsx + api/index.cjs |
 | `src/components/Terminal2.jsx` | The terminal: 3 verbs (chat, /command, >shell) |
-| `services/storage.js` | VAULT_ROOT / DATA_ROOT seam — never hand-roll vault paths |
+| `services/storage.js` | VAULT_ROOT / DATA_ROOT seam — never hand-roll vault paths. Roots default to the AEON home (`~/AEON`, `src/kernel/aeonHome.cjs`), never the install |
 | `launch.js` | Consumer launcher: env detect, .env wizard, vault bootstrap, build, boot |
 
 ## Route namespaces

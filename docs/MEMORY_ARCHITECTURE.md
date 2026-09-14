@@ -9,9 +9,10 @@ it to keep, and the ability to answer from both with sources. This is how that w
 
 ## Where memory lives
 
-Everything durable is in the **Vault** — by default `src/blocks/aeon_matrix/data/Vault`,
-redirectable with `VAULT_PATH` (`services/storage.js`). It is git-ignored, never deployed,
-and survives a re-clone if carried across.
+Everything durable is in the **Vault** — by default `~/AEON/Vault`, outside the install
+(`src/kernel/aeonHome.cjs`; redirectable with `VAULT_PATH`, exposed by `services/storage.js`).
+It is never deployed and survives a re-clone untouched, because nothing in the install
+directory is yours.
 
 | What | Where | Written by |
 |---|---|---|

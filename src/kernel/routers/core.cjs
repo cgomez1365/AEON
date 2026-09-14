@@ -9,9 +9,9 @@ module.exports = function createCoreRouter(deps) {
     getProviderHealth, getKeyPoolInfo, VAULT_ROOT,
   } = deps;
 
-  // Coinbase CDP key: inside the install (secrets/) first, Desktop only as legacy.
+  // Coinbase CDP key: the resolved secrets dir first, Desktop only as legacy.
   const cdpKeyExists = () => [
-    path.join(__dirname, '..', '..', '..', 'secrets', 'cdp_api_key.json'),
+    path.join(require('../aeonHome.cjs').roots({ appRoot: path.join(__dirname, '..', '..', '..') }).secrets, 'cdp_api_key.json'),
     path.join(process.env.USERPROFILE || process.env.HOME || '', 'Desktop', 'cdp_api_key.json'), // aeon-path-authority-allow
   ].some(p => { try { return fs.existsSync(p); } catch { return false; } });
 

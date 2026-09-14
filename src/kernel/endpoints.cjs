@@ -24,7 +24,7 @@ const APP_ROOT = path.join(__dirname, '..', '..');
 // Honors AEON_SECRETS_DIR, same as vault.cjs:22. Without this the endpoint
 // registry stays pinned to the install dir while the vault follows the env —
 // on a portable/USB install that splits secrets across two filesystems.
-const SECRETS_DIR = process.env.AEON_SECRETS_DIR || path.join(APP_ROOT, 'secrets');
+const SECRETS_DIR = process.env.AEON_SECRETS_DIR || require('./aeonHome.cjs').roots({ appRoot: APP_ROOT }).secrets;
 try { if (!isVercel) fs.mkdirSync(SECRETS_DIR, { recursive: true }); } catch {}
 const REG_FILE = path.join(SECRETS_DIR, 'aeon-endpoints.json');
 const REG_ROW_ID = 1;

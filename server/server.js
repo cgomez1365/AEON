@@ -16,9 +16,21 @@ const { envFilePath } = require('../src/kernel/envFile.cjs');
 
 const ROOT = path.join(__dirname, '..');
 
+// ── The AEON home — before ANY root is read ──────────────────────────────
+// Every writable root now defaults to ~/AEON (src/kernel/aeonHome.cjs), and an
+// install from before that has its data inside the install directory. The
+// one-time move runs here as well as in launch.js because `npm run server`
+// skips the launcher; the second call is a no-op. It must precede the dotenv
+// load (the .env it reads may be about to move) and the first-run key guard
+// below (minting a key into a .env that then moves would orphan the vault).
+const { prepareHome } = require('../src/kernel/homeMigration.cjs');
+const HOME_BOOT = prepareHome({ appRoot: ROOT, env: process.env, log: (m) => console.log(m) });
+for (const m of HOME_BOOT.migration.moved) console.log(`[HOME] moved ${m.root}: ${m.from} → ${m.to}`);
+if (HOME_BOOT.migration.moved.length) console.log(`[HOME] Your data now lives in ${HOME_BOOT.roots.home}`);
+
 // ONE authority for the .env path, honoring AEON_ENV_FILE — so a packaged
 // desktop build keeps every writable root outside its read-only, code-signed
-// install directory. See src/kernel/envFile.cjs.
+// install directory. See src/kernel/envFile.cjs. Default: <home>/.env.
 const ENV_FILE = envFilePath({ appRoot: ROOT });
 
 require('dotenv').config({ path: ENV_FILE });
@@ -94,12 +106,16 @@ global.broadcastTerminalEvent = (type, message, meta = null) => {
 
 // ── Settings first-run guard — fresh installs get a working settings file ──
 // (aeon-213 pattern: settings.default.json → settings.json copy-on-boot)
+// The template ships in the install; the live file lives in the AEON home
+// (storage resolves it, honoring AEON_SETTINGS_FILE — same path the settings
+// service reads).
 try {
-  const SETTINGS_PATH = path.join(ROOT, 'src', 'aeon-settings.json');
+  const SETTINGS_PATH = require('../services/storage.js').SETTINGS_FILE;
   const DEFAULT_PATH = path.join(ROOT, 'src', 'settings.default.json');
   if (!fs.existsSync(SETTINGS_PATH) && fs.existsSync(DEFAULT_PATH)) {
+    fs.mkdirSync(path.dirname(SETTINGS_PATH), { recursive: true });
     fs.copyFileSync(DEFAULT_PATH, SETTINGS_PATH);
-    console.log('[FIRST RUN] settings.default.json → aeon-settings.json');
+    console.log(`[FIRST RUN] settings.default.json → ${SETTINGS_PATH}`);
   }
 } catch (e) { console.warn('[FIRST RUN] settings guard failed:', e.message); }
 
@@ -614,7 +630,7 @@ process.on('uncaughtException', (err) => {
   // R-05 — never silent. A survived crash is still a defect and must be
   // findable afterwards, not just a log line that scrolls away.
   try {
-    const logDir = path.join(__dirname, '..', 'data', 'logs');
+    const logDir = path.join(storage.DATA_ROOT, 'logs');
     fs.mkdirSync(logDir, { recursive: true });
     fs.appendFileSync(
       path.join(logDir, 'uncaught.log'),

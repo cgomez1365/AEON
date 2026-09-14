@@ -27,7 +27,9 @@ const { envFilePath } = require('./src/kernel/envFile.cjs');
 
 const ROOT = __dirname;
 // Same authority the server uses, so the launcher wizard and the first-run
-// vault guard can never disagree about where the master key lives.
+// vault guard can never disagree about where the master key lives. Since
+// 2026-09-14 that is <AEON home>/.env (src/kernel/aeonHome.cjs), and an older
+// install's .env is moved there by main() before this path is ever tested.
 const ENV_PATH = envFilePath({ appRoot: ROOT });
 // The template ships WITH the install and is read-only — it stays put.
 const ENV_EXAMPLE = path.join(ROOT, '.env.example');
@@ -91,22 +93,6 @@ if (smi) { gpuName = smi.split(',')[0].trim(); ok(`GPU: ${gpuName}`); }
 else if (os.platform() === 'darwin' && /Apple/.test(sh('sysctl -n machdep.cpu.brand_string') || '')) { gpuName = 'Apple Silicon'; ok('GPU: Apple Silicon (Metal)'); }
 else info('No dedicated GPU detected — cloud + small local models still work.');
 
-// Native local runtime (llama.cpp) — read the registry, never probe a daemon.
-let localRuntime = { available: false, runtimeId: null, readyModels: [] };
-try {
-  localRuntime = require(path.join(ROOT, 'services', 'local-runtime', 'index.cjs')).status();
-} catch {}
-
-// local model capability hint, written for Cookbook + Settings to read at boot
-const runtimeHints = {
-  scannedAt: new Date().toISOString(),
-  platform: os.platform(), arch: os.arch(), ramGb, gpu: gpuName,
-  localRuntime: {
-    installed: !!localRuntime.runtimeId,
-    backend: localRuntime.runtimeBackend || null,
-    readyModels: (localRuntime.readyModels || []).length,
-  },
-};
 
 // ── interactive helpers ─────────────────────────────────────────────────────
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -121,12 +107,43 @@ const ask = (q) => new Promise((res) => {
 });
 
 async function main() {
+  // ── 1b. AEON home ─────────────────────────────────────────────────────────
+  // Your data lives in ~/AEON (or AEON_HOME), not in this folder, so a
+  // reinstall is `git pull`. An install from before that has its Vault, models,
+  // keys, .env, runtime state and settings in here; they move now, once, root
+  // by root — BEFORE the .env branch below could copy a fresh template and
+  // mint a new vault key (that would orphan the existing keyslots), and before
+  // anything reads a storage root. server.js repeats the call (a no-op then)
+  // for `npm run server`.
+  const { prepareHome } = require('./src/kernel/homeMigration.cjs');
+  const homeBoot = prepareHome({ appRoot: ROOT, env: process.env, log: () => {} });
+  const mig = homeBoot.migration;
+  if (mig.moved.length || mig.refused.length || mig.warnings.length) {
+    p('');
+    p('  MIGRATION', PU);
+    const label = { envFile: '.env', secrets: 'secrets', settings: 'settings', db: 'runtime state', vault: 'Vault', data: 'data (models, indexes)' };
+    for (const m of mig.moved) ok(`${label[m.root] || m.root} moved to ${m.to}`);
+    for (const r of mig.refused) {
+      warn(`${label[r.root] || r.root} NOT moved — ${r.reason}`);
+      warn(`    legacy: ${r.from}`);
+      warn(`    target: ${r.to}`);
+    }
+    for (const w of mig.warnings) warn(w);
+    if (mig.moved.length) ok(`Your data now lives in ${homeBoot.roots.home}`);
+  }
+
   // ── 2. Local AI models ────────────────────────────────────────────────────
   // AEON runs local models with a bundled llama.cpp worker — no daemon, no
-  // system-wide install, everything inside <AEON>/data. The runtime and the
+  // system-wide install, everything inside <home>/data. The runtime and the
   // GGUF models are large, so fetching them is the Cookbook block's job (it
   // has progress, cancel, and disk-space checks); the launcher only reports
   // what is already installed. AEON boots fine on cloud AI either way.
+  // Read the registry, never probe a daemon — and only now, after the data
+  // root is settled (requiring storage resolves it for the whole process).
+  let localRuntime = { available: false, runtimeId: null, readyModels: [] };
+  try {
+    localRuntime = require(path.join(ROOT, 'services', 'local-runtime', 'index.cjs')).status();
+  } catch {}
   p('');
   p('  LOCAL AI MODELS', PU);
   if (localRuntime.available) {
@@ -137,7 +154,7 @@ async function main() {
   } else {
     info('Local models let AEON run free and private on this computer — no API');
     info('key, no internet. Install them from the Cookbook block inside AEON;');
-    info('everything stays contained in the AEON folder.');
+    info(`everything stays in your AEON home (${homeBoot.roots.home}).`);
     info('Until then AEON uses cloud AI (Gemini, Groq, OpenRouter).');
   }
 
@@ -228,12 +245,7 @@ async function main() {
   if (madeVault) ok('Vault created — your API keys will be encrypted on this computer.');
   else ok('Vault key present.');
 
-  // flash runtime hints for Cookbook/Settings
-  try {
-    const dataDir = path.join(ROOT, 'db');
-    if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
-    fs.writeFileSync(path.join(dataDir, 'host-runtime.json'), JSON.stringify(runtimeHints, null, 2));
-  } catch {}
+  // (db/host-runtime.json used to be written here; nothing ever read it.)
 
   // data/local-runtime.json is the native runtime's own transactional registry
   // (services/local-runtime/registry.cjs owns it). The launcher must never
@@ -272,6 +284,7 @@ async function main() {
     const { ensureDesktopShortcut } = require(path.join(ROOT, 'tools', 'desktop-shortcut.cjs'));
     const sc = ensureDesktopShortcut({
       root: ROOT, platform: os.platform(), env: process.env,
+      dataRoot: homeBoot.roots.data,
       force: process.argv.includes('--desktop-icon'),
     });
     if (sc.status === 'created') ok(`Desktop icon created — ${sc.path}. Open AEON from there next time.`);

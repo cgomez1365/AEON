@@ -20,7 +20,7 @@ const path = require('path');
 const fs = require('fs');
 
 const ROOT = path.join(__dirname, '..', '..');
-const DB_DIR = process.env.AEON_DB_DIR || path.join(ROOT, 'db');
+const DB_DIR = process.env.AEON_DB_DIR || require('./aeonHome.cjs').roots({ appRoot: ROOT }).db; // <home>/db by default
 const STORE_DIR = path.join(DB_DIR, 'retrieval');
 const SCOPES_FILE = path.join(STORE_DIR, '_scopes.json');
 const { BLOCKS_DIR } = require('./blocksDir.cjs');

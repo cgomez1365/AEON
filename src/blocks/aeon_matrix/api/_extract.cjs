@@ -17,7 +17,11 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-const CACHE_DIR = path.join(__dirname, '..', 'data', '.extract-cache');
+// The cache lives in the block's DATA namespace, injected by index.cjs at
+// mount (setCacheDir). The block-folder fallback only applies if nothing ever
+// configured it — the install may be read-only, so production always injects.
+let CACHE_DIR = path.join(__dirname, '..', 'data', '.extract-cache');
+function setCacheDir(dir) { if (dir && path.isAbsolute(dir)) CACHE_DIR = dir; }
 const MAX_OCR_PAGES = 30;      // cap OCR effort on huge scanned PDFs
 const OCR_SCALE = 2;           // render scale — higher = better OCR, slower
 const MAX_TEXT_CHARS = 1_500_000; // ~a 500k-word novel; keeps huge files from blowing up browser memory
@@ -198,4 +202,4 @@ async function extractText(resolved) {
   return result;
 }
 
-module.exports = { extractText, TEXT_EXTS, IMAGE_EXTS };
+module.exports = { extractText, setCacheDir, TEXT_EXTS, IMAGE_EXTS };
