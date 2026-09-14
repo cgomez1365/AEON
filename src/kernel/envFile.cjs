@@ -55,7 +55,10 @@ function envFilePath(ctx = {}) {
   const override = typeof raw === 'string' ? raw.trim() : '';
   if (!override) return path.join(appRoot, '.env');
 
-  return path.isAbsolute(override) ? override : path.resolve(appRoot, override);
+  // join, not resolve: on Windows path.resolve fills a drive-less root's drive
+  // from process.cwd() ("\opt\aeon" became "D:\opt\aeon" on the CI runner) —
+  // the exact cwd dependence rule 1 forbids. Caught by the windows-latest leg.
+  return path.isAbsolute(override) ? override : path.join(appRoot, override);
 }
 
 module.exports = { envFilePath };
