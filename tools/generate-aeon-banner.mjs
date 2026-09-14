@@ -22,7 +22,7 @@ import { createCanvas, loadImage, GlobalFonts } from '@napi-rs/canvas';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const MARK = path.join(ROOT, 'public', 'brand', 'aeon-mark', 'aeon-mark.svg');
-const OUT = path.join(ROOT, 'public', 'brand', 'aeon-banner.png');
+const OUT = process.env.AEON_BANNER_OUT || path.join(ROOT, 'public', 'brand', 'aeon-banner.png');
 
 // Fonts. @napi-rs/canvas registers only the FIRST face of a .ttc, and for
 // Avenir Next that is Bold - the opposite of the poster's hairline lettering.
@@ -93,7 +93,8 @@ for (const f of ['/System/Library/Fonts/Avenir Next.ttc', '/Library/Fonts/Avenir
 // the glow group, drop the <rect>. Everything else is the SVG's own geometry.
 const markSvg = fs.readFileSync(MARK, 'utf8').replace(/<rect[^>]*aeonGround[^>]*\/>/, '');
 
-const W = 1600, H = 400;
+const W = 1600, H = Number(process.env.AEON_BANNER_H) || 440;
+const TITLE = Number(process.env.AEON_BANNER_TITLE) || 165;
 // Output is 3840x960 (2.4x): every number below is in 1600x400 layout units
 // and the context is scaled, so text, mark and dust all render at full res.
 const SCALE = 2.4;
@@ -210,11 +211,18 @@ async function render({ onLight, out, mirror = false }) {
 
   const ink = onLight ? '#0b1a3a' : '#eaf3ff';
   const blue = onLight ? '#2f6fd6' : '#a9ccff';
-  const dim = onLight ? 'rgba(11,26,58,0.88)' : 'rgba(222,236,255,0.95)';
+  const dim = onLight ? '#1f4fa8' : 'rgba(222,236,255,0.95)';
   const ruleCol = onLight ? 'rgba(31,79,168,0.3)' : 'rgba(127,178,255,0.3)';
   const halo = onLight ? 'rgba(247,249,254,0.95)' : 'rgba(1,3,10,0.95)';
 
-  const g = await wordmark(ctx, { x: mirror ? W - 120 : 120, align: mirror ? 'right' : 'left', y: 212, size: 190, spacing: 36, color: ink, onLight, ringAlpha: onLight ? 0.85 : 0.8, halo });
+  // Chevron centred on the banner's mid-height so the whole mark, rings
+  // included, sits inside the frame; the text block hangs off the baseline.
+  const base = H / 2 + TITLE * CAP / 2;
+  // Left margin is measured from the OUTER RING, not the chevron: the ring
+  // reaches (markSize - chevW) / 2 further left than the glyph it surrounds.
+  const markSize = TITLE * CAP / CHEV_H, ringOverhang = (markSize - markSize * CHEV_W) / 2;
+  const left = 36 + ringOverhang;
+  const g = await wordmark(ctx, { x: mirror ? W - 120 : left, align: mirror ? 'right' : 'left', y: base, size: TITLE, spacing: Math.round(TITLE * 0.19), color: ink, onLight, ringAlpha: onLight ? 0.85 : 0.8, halo });
 
   // Tagline, rule and description: start under the O, clear of the outer ring.
   // Mirrored, the block is right-aligned to the N's edge instead.
@@ -222,12 +230,13 @@ async function render({ onLight, out, mirror = false }) {
   const tagW = trackedWidth(ctx, TAGLINE, 26, tagSp, FAMILY_MED);
   const right = W - 120;
   const tx = mirror ? right - tagW : g.oX;
-  tracked(ctx, TAGLINE, tx, 272, 26, tagSp, blue, FAMILY_MED);
+  tracked(ctx, TAGLINE, tx, base + 60, 26, tagSp, blue, FAMILY_MED);
   ctx.strokeStyle = ruleCol; ctx.lineWidth = 1; ctx.beginPath();
-  if (mirror) { ctx.moveTo(tx, 304.5); ctx.lineTo(right, 304.5); } else { ctx.moveTo(tx, 304.5); ctx.lineTo(tx + 700, 304.5); }
+  if (mirror) { ctx.moveTo(tx, base + 92.5); ctx.lineTo(right, base + 92.5); } else { ctx.moveTo(tx, base + 92.5); ctx.lineTo(tx + 700, base + 92.5); }
   ctx.stroke();
-  ctx.font = `400 24px ${FAMILY}`; ctx.fillStyle = dim; ctx.textAlign = mirror ? 'right' : 'left';
-  ctx.fillText(DESC, mirror ? right : tx, 342); ctx.textAlign = 'left';
+  // Same weight as the tagline: in Ultra Light this line went grey and vanished (CEO, 2026-09-14).
+  ctx.font = `400 23px ${FAMILY_MED}`; ctx.fillStyle = dim; ctx.textAlign = mirror ? 'right' : 'left';
+  ctx.fillText(DESC, mirror ? right : tx, base + 130); ctx.textAlign = 'left';
 
   fs.writeFileSync(out, canvas.toBuffer('image/png'));
   console.log(`[brand:banner] wrote ${path.relative(ROOT, out)} ${W * SCALE}x${H * SCALE} (face: ${FACE})`);
