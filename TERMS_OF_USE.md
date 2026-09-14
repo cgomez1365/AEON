@@ -1,6 +1,6 @@
 # AEON — Terms of Use
 
-*Effective 2026-07-05 · applies to AEON 3 · Broken Gear Industries*
+*Effective 2026-07-05 · applies to AEON · Broken Gear Industries*
 
 By downloading, installing, or running AEON you agree to these terms and to the [LICENSE](LICENSE).
 

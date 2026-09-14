@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 /**
- * AEON 3 — Universal Launcher
+ * AEON — Universal Launcher
  * One file, every platform. Detects the environment, walks a non-technical
  * user through first-run setup, and boots the console.
  *

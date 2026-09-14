@@ -647,7 +647,7 @@ Slow model responses     the model streams off the drive. USB 3.2 or
                          better is strongly recommended.
 
 ---------------------------------------------------------------------
-AEON v3 · Broken Gear Industries · Apache-2.0
+AEON · Broken Gear Industries · Apache-2.0
 `);
 }
 

@@ -3,7 +3,7 @@
 # Vercel's build runs `npm run build`, which executes scripts/gen-*.cjs and
 # writes docs/BLOCKS.md — so scripts/ and docs/ must be uploaded. Until
 # 2026-09-14 both were excluded here, which would have failed every build.
-# Nothing noticed because AEON 3 has never been deployed to Vercel (zero
+# Nothing noticed because AEON has never been deployed to Vercel (zero
 # deployments on the account since this repository was created).
 
 # ── Build output & dependencies (Vercel installs and builds itself) ──

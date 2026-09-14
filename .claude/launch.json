@@ -2,7 +2,7 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "aeon3",
+      "name": "aeon",
       "runtimeExecutable": "node",
       "runtimeArgs": [
         "server.cjs"

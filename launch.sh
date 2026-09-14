@@ -1,5 +1,5 @@
 #!/bin/bash
-# AEON 3 — Linux launcher
+# AEON — Linux launcher
 cd "$(dirname "$0")"
 
 if ! command -v node &> /dev/null; then

@@ -130,7 +130,7 @@ data/
 Data/
 tools/bin/cloudflared.exe
 
-# AEON 3 additions
+# AEON additions
 db/host-runtime.json
 # BO-D2g — the per-call LLM ledger. Operator telemetry: what was asked of
 # which model, when, and how long it took. Never committed.

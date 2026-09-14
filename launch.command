@@ -1,5 +1,5 @@
 #!/bin/bash
-# AEON 3 — macOS launcher
+# AEON — macOS launcher
 # If macOS says you don't have permission, run once in Terminal:
 #   chmod +x launch.command
 cd "$(dirname "$0")"

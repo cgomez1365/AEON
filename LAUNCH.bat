@@ -1,5 +1,5 @@
 @echo off
-title AEON 3 - Console
+title AEON - Console
 cd /d "%~dp0"
 
 where node >nul 2>nul

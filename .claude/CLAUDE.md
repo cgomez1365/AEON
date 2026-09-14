@@ -1,4 +1,4 @@
-# AEON 3 — AI Assistant Briefing
+# AEON — AI Assistant Briefing
 
 AEON is an AI-native operating system: kernel + self-contained block cartridges + a Settings nervous system + an encrypted vault + one LLM service layer.
 

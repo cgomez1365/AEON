@@ -2,7 +2,7 @@
   <img src="public/brand/aeon-banner.png" alt="AEON — Modular. Local. Yours. A local-first AI workspace." width="100%">
 </p>
 
-# AEON 3
+# AEON
 
 **A local-first AI workspace built from governed blocks.** Runs on your computer. Your data never leaves it unless you connect your own cloud.
 
@@ -155,7 +155,7 @@ All of the above run in CI on every push, across five legs. Contributions follow
 
 ## Lineage
 
-AEON 3 is the fourth generation. Two full rewrites, one hardening fork, one fusion. Almost no code survived between generations; the *ideas* did: the manifest (Gen 2), React (Gen 1), the operator account and kernel (v3x). What that history bought is the reason the gates above exist — each one is a defect that shipped once.
+This AEON is the fourth generation. Two full rewrites, one hardening fork, one fusion. Almost no code survived between generations; the *ideas* did: the manifest (Gen 2), React (Gen 1), the operator account and kernel (v3x). What that history bought is the reason the gates above exist — each one is a defect that shipped once.
 
 ## License
 
