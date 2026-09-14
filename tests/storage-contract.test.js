@@ -39,7 +39,12 @@ describe('Vault and block storage contract', () => {
   });
 
   it('keeps a block inside its own local and Vault namespaces', () => {
-    expect(storage.getBlockVaultFile('writer', 'notes/one.md')).toContain(path.join('Vault', 'blocks', 'writer', 'notes', 'one.md'));
+    // Asserted against the resolved VAULT_ROOT, not the literal "Vault" folder
+    // name: under VAULT_PATH (portable mode, or an isolated test run) the root
+    // is wherever that points, and the contract — a block's files live under
+    // <vault>/blocks/<id>/ — is what must hold.
+    expect(storage.getBlockVaultFile('writer', 'notes/one.md'))
+      .toBe(path.join(storage.VAULT_ROOT, 'blocks', 'writer', 'notes', 'one.md'));
     expect(() => storage.getBlockDataFile('writer', '../outside.json')).toThrow(/escapes/);
   });
 

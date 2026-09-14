@@ -25,13 +25,28 @@ const require = createRequire(import.meta.url);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
 
-const createOsRouter = require('../src/blocks/host_os/api/os.cjs');
-const { buildWidgetCatalogue } = require('../src/kernel/widgets.cjs');
-
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'aeon-console-'));
 const AUDIT_FILE = path.join(TMP, 'audit.json');
 
-afterAll(() => { try { fs.rmSync(TMP, { recursive: true, force: true }); } catch {} });
+// Isolation BEFORE the requires — see operator-gate-scope.test.js. The widget
+// and audit routes carry requireOperator, which reads the security policy from
+// VAULT_PATH (resolved at module scope). Unset, this suite read the install's
+// real policy and 5 tests answered 401 once the operator enabled the guard.
+const SAVED_ENV = { VAULT_PATH: process.env.VAULT_PATH, DATA_PATH: process.env.DATA_PATH, AEON_SECRETS_DIR: process.env.AEON_SECRETS_DIR };
+process.env.VAULT_PATH = path.join(TMP, 'vault');
+process.env.DATA_PATH = path.join(TMP, 'data');
+process.env.AEON_SECRETS_DIR = path.join(TMP, 'secrets');
+
+const createOsRouter = require('../src/blocks/host_os/api/os.cjs');
+const { buildWidgetCatalogue } = require('../src/kernel/widgets.cjs');
+
+afterAll(() => {
+  for (const [k, v] of Object.entries(SAVED_ENV)) {
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
+  try { fs.rmSync(TMP, { recursive: true, force: true }); } catch {}
+});
 
 const audits = [];
 

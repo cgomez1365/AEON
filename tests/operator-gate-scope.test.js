@@ -39,12 +39,31 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'aeon-gate-scope-'));
+const AUDIT_FILE = path.join(TMP, 'audit.json');
+
+// requireOperator reads the security policy through services/storage.js, which
+// resolves VAULT_PATH at module scope — so these must be set BEFORE the router
+// requires below. Without them this suite read the INSTALL's real
+// Vault/blocks/security/policy.json: green on a fresh clone, 3 failures (401)
+// on any machine whose operator had created an account and enabled the guard.
+// Measured 2026-09-13 on the CEO's Mac. AEON_SECRETS_DIR covers the legacy
+// user pointer the same validator reads (sessionValidator.cjs:42).
+const SAVED_ENV = { VAULT_PATH: process.env.VAULT_PATH, DATA_PATH: process.env.DATA_PATH, AEON_SECRETS_DIR: process.env.AEON_SECRETS_DIR };
+process.env.VAULT_PATH = path.join(TMP, 'vault');
+process.env.DATA_PATH = path.join(TMP, 'data');
+process.env.AEON_SECRETS_DIR = path.join(TMP, 'secrets');
+
 const createOsRouter = require('../src/blocks/host_os/api/os.cjs');
 const createSystemRouter = require('../src/blocks/host_os/api/system.cjs');
 
-const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'aeon-gate-scope-'));
-const AUDIT_FILE = path.join(TMP, 'audit.json');
-afterAll(() => { try { fs.rmSync(TMP, { recursive: true, force: true }); } catch {} });
+afterAll(() => {
+  for (const [k, v] of Object.entries(SAVED_ENV)) {
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
+  try { fs.rmSync(TMP, { recursive: true, force: true }); } catch {}
+});
 
 /**
  * Build the routers with a requireShellAuth that REFUSES, exactly as it does
