@@ -21,7 +21,12 @@ module.exports = (app, deps) => {
   const kernelEndpoints = require(path.join(__dirname, '..', '..', '..', 'kernel', 'endpoints.cjs'));
   const settingsService = require(path.join(APP_ROOT, 'services', 'settings.js'));
   const SETTINGS_FILE = settingsService.SETTINGS_FILE;
-  const ENV_FILE = path.join(APP_ROOT, '.env');
+  // Shared authority — this block WRITES API keys here. Before 2026-09-13 it
+  // ignored AEON_ENV_FILE while vault.cjs honored it, so a redirected install
+  // saved keys to one file and read the master key from another.
+  const ENV_FILE = require(
+    path.join(__dirname, '..', '..', '..', 'kernel', 'envFile.cjs'),
+  ).envFilePath({ appRoot: APP_ROOT });
   const cloudCredentials = deps && Object.prototype.hasOwnProperty.call(deps, 'cloudCredentials')
     ? deps.cloudCredentials
     : settingsService.createCloudCredentialStore();

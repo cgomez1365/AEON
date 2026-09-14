@@ -49,7 +49,9 @@ function resolveSources(deps = {}) {
   try { securityVaultDir = getVaultFile(path.join('blocks', 'security')); } catch { /* unconfigured */ }
 
   return {
-    '.env': path.join(appRoot, '.env'),
+    // Shared authority — a backup that captures the install's .env while the
+    // vault reads a redirected one would restore nothing. Honors AEON_ENV_FILE.
+    '.env': require('./envFile.cjs').envFilePath({ appRoot }),
     'secrets/aeon-keyslots.json': path.join(secretsDir, 'aeon-keyslots.json'),
     'vault/provider_credentials.json': securityVaultDir
       ? path.join(securityVaultDir, 'provider_credentials.json')

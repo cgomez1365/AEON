@@ -12,11 +12,18 @@ const fs = require('fs');
 const path = require('path');
 const EventEmitter = require('events');
 const bind = require('../src/kernel/server-utils/bind.cjs');
+const { envFilePath } = require('../src/kernel/envFile.cjs');
 
-require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+const ROOT = path.join(__dirname, '..');
+
+// ONE authority for the .env path, honoring AEON_ENV_FILE — so a packaged
+// desktop build keeps every writable root outside its read-only, code-signed
+// install directory. See src/kernel/envFile.cjs.
+const ENV_FILE = envFilePath({ appRoot: ROOT });
+
+require('dotenv').config({ path: ENV_FILE });
 
 const isVercel = require('../src/kernel/runtime.cjs').isCloud();
-const ROOT = path.join(__dirname, '..');
 
 // ── Vault first-run guard — the vault must ALWAYS be usable out of the box ──
 // If no master key exists (user skipped the launcher wizard or booted via npm),
@@ -50,8 +57,11 @@ if (!isVercel && !process.env.AEON_VAULT_MASTER_KEY) {
   } else {
     try {
       const crypto = require('crypto');
-      const envFile = path.join(ROOT, '.env');
+      const envFile = ENV_FILE;
       const key = crypto.randomBytes(32).toString('hex');
+      // The target may live outside the install (packaged builds point
+      // AEON_ENV_FILE at userData), so its directory may not exist yet.
+      try { fs.mkdirSync(path.dirname(envFile), { recursive: true }); } catch { }
       let env = fs.existsSync(envFile) ? fs.readFileSync(envFile, 'utf8') : '';
       if (/^AEON_VAULT_MASTER_KEY=\s*$/m.test(env)) {
         env = env.replace(/^AEON_VAULT_MASTER_KEY=\s*$/m, `AEON_VAULT_MASTER_KEY=${key}`);
@@ -60,7 +70,7 @@ if (!isVercel && !process.env.AEON_VAULT_MASTER_KEY) {
       }
       fs.writeFileSync(envFile, env);
       process.env.AEON_VAULT_MASTER_KEY = key;
-      console.log('[FIRST RUN] Vault master key generated and saved to .env');
+      console.log(`[FIRST RUN] Vault master key generated and saved to ${envFile}`);
     } catch (e) { console.warn('[FIRST RUN] vault key guard failed:', e.message); }
   }
 }

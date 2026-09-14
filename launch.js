@@ -23,8 +23,13 @@ const os = require('os');
 const crypto = require('crypto');
 const readline = require('readline');
 
+const { envFilePath } = require('./src/kernel/envFile.cjs');
+
 const ROOT = __dirname;
-const ENV_PATH = path.join(ROOT, '.env');
+// Same authority the server uses, so the launcher wizard and the first-run
+// vault guard can never disagree about where the master key lives.
+const ENV_PATH = envFilePath({ appRoot: ROOT });
+// The template ships WITH the install and is read-only — it stays put.
 const ENV_EXAMPLE = path.join(ROOT, '.env.example');
 const PORT = process.env.PORT || 3001;
 
@@ -140,8 +145,11 @@ async function main() {
   p('');
   p('  CONFIGURATION', PU);
   if (!fs.existsSync(ENV_PATH)) {
+    // AEON_ENV_FILE may point outside the install (packaged builds put it in
+    // userData); that directory need not exist yet.
+    try { fs.mkdirSync(path.dirname(ENV_PATH), { recursive: true }); } catch { }
     fs.copyFileSync(ENV_EXAMPLE, ENV_PATH);
-    ok('Created your private .env configuration file.');
+    ok(`Created your private configuration file at ${ENV_PATH}`);
     p('');
     info('AEON can use free cloud AI (Gemini, Groq, OpenRouter). If you already');
     info('have keys, paste them now. If not, just press Enter — you can add');

@@ -90,12 +90,38 @@ describe('vault .env protector is relocatable', () => {
   // keyslot half, so `npm test` reissued a key straight into the developer's
   // real .env — rotating the live AEON_VAULT_MASTER_KEY and orphaning anything
   // sealed under the previous one. Regression guard.
+  // 2026-09-13: vault.cjs no longer reads AEON_ENV_FILE itself — the path moved
+  // to the shared authority src/kernel/envFile.cjs, because settings.js and
+  // credentialBackup.cjs computed this same path WITHOUT honoring the var, so a
+  // redirected .env was read here and written there. The guard now checks the
+  // property (the write target is relocatable) rather than the spelling, and
+  // covers the module that actually reads the var.
   it('resolves the .env write target through AEON_ENV_FILE', () => {
     const src = fs.readFileSync(path.join(process.cwd(), 'src/kernel/vault.cjs'), 'utf8');
-    expect(src).toMatch(/process\.env\.AEON_ENV_FILE/);
+    const authority = fs.readFileSync(path.join(process.cwd(), 'src/kernel/envFile.cjs'), 'utf8');
+    expect(src).toMatch(/envFile\.cjs['"]\)/);
+    expect(authority).toMatch(/AEON_ENV_FILE/);
     // writeEnvKey must go through the seam, not rebuild the path itself.
     const fn = src.slice(src.indexOf('function writeEnvKey'), src.indexOf('function writeEnvKey') + 400);
     expect(fn).not.toMatch(/path\.join\(APP_ROOT,\s*'\.env'\)/);
+  });
+
+  it('a redirected AEON_ENV_FILE actually moves the resolved path', () => {
+    // Behavioural half of the guard above. The regression it exists to prevent
+    // was `npm test` minting a fresh key into the developer's REAL .env, so
+    // assert on a resolved path, not on source text.
+    const { envFilePath } = require('../src/kernel/envFile.cjs');
+    const saved = process.env.AEON_ENV_FILE;
+    const target = path.join(os.tmpdir(), 'aeon-test-env', '.env');
+    try {
+      process.env.AEON_ENV_FILE = target;
+      const resolved = envFilePath({ appRoot: process.cwd() });
+      expect(resolved).toBe(target);
+      expect(resolved.startsWith(process.cwd())).toBe(false);
+    } finally {
+      if (saved === undefined) delete process.env.AEON_ENV_FILE;
+      else process.env.AEON_ENV_FILE = saved;
+    }
   });
 });
 

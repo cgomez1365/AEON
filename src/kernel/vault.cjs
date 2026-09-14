@@ -118,7 +118,11 @@ function writeKeyslots(slots) {
 // pointing the vault at a temp directory still reissues the key into the real
 // install's .env. That is exactly what made `npm test` rotate the developer's
 // live AEON_VAULT_MASTER_KEY on every run.
-const ENV_FILE = process.env.AEON_ENV_FILE || path.join(APP_ROOT, '.env');
+// Resolution moved to the shared authority (src/kernel/envFile.cjs) 2026-09-13:
+// this file honored AEON_ENV_FILE, but settings.js and credentialBackup.cjs did
+// not, so a redirected .env was READ here and WRITTEN there. Same behaviour as
+// before for this caller; the authority is what makes the other two agree.
+const ENV_FILE = require('./envFile.cjs').envFilePath({ appRoot: APP_ROOT });
 
 function writeEnvKey(hexKey) {
   const envFile = ENV_FILE;
