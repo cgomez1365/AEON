@@ -6,8 +6,9 @@
  * the mark is scaled until that chevron matches the cap height of "EON" set in
  * Avenir Next Ultra Light, and the rings fall behind the word. The README
  * serves the dark one on GitHub's dark theme and the light one on light, via
- * <picture> + prefers-color-scheme. To the right, a field of light particles
- * streams in from the edge - a door opened onto the digital world. Dark:
+ * <picture> + prefers-color-scheme. Dark is mirrored - word on the right,
+ * dust from the left edge; light keeps word left, dust right. A field of
+ * light particles streams in from the edge - a door opened onto the digital world. Dark:
  * white-blue dust. Light: neon blue and deep blue. Deterministic (seeded), so
  * `npm run brand:banner` reproduces both files exactly on the same font.
  *
@@ -109,6 +110,9 @@ const CAP = 0.72; // Avenir Next Ultra Light cap height, em
 // Seeded RNG so both banners are byte-stable across runs.
 function rng(seed) { let s = seed >>> 0; return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; }; }
 
+const trackedWidth = (ctx, text, size, spacing, family = FAMILY) => {
+  ctx.font = `400 ${size}px ${family}`; let w = 0; for (const ch of text) w += ctx.measureText(ch).width + spacing; return w - spacing;
+};
 const tracked = (ctx, text, x, y, size, spacing, color, family = FAMILY) => {
   ctx.font = `400 ${size}px ${family}`; ctx.fillStyle = color; ctx.textBaseline = 'alphabetic';
   let cx = x; for (const ch of text) { ctx.fillText(ch, cx, y); cx += ctx.measureText(ch).width + spacing; }
@@ -116,10 +120,11 @@ const tracked = (ctx, text, x, y, size, spacing, color, family = FAMILY) => {
 
 // The wordmark: mark as the A, chevron at cap height, "EON" drawn last with a
 // halo in the ground colour so the rings behind stay readable.
-async function wordmark(ctx, { x, y, size, spacing, color, onLight, ringAlpha, halo }) {
+async function wordmark(ctx, { x, y, size, spacing, color, onLight, ringAlpha, halo, align = 'left' }) {
   ctx.font = `400 ${size}px ${FAMILY}`;
   const cap = size * CAP, markSize = cap / CHEV_H, chevW = markSize * CHEV_W;
   const letters = [...'EON'], lw = letters.map((ch) => ctx.measureText(ch).width);
+  if (align === 'right') x -= chevW + spacing + lw.reduce((a, b) => a + b + spacing, 0) - spacing;
   const chevCx = x + chevW / 2, chevCy = y - cap / 2;
   const markCy = chevCy + (0.5 - CHEV_CY) * markSize;
   const px = Math.round(markSize * SCALE);
@@ -154,7 +159,8 @@ function particles(ctx, { seed, doorX, from, colors, count, additive, centerY, s
   for (let i = 0; i < count; i++) {
     // distance from the door: most dust sits near the opening
     const d = Math.pow(r(), expo);
-    const x = doorX - d * (doorX - from) + (r() - 0.5) * 30;
+    const x = doorX + d * (from - doorX) + (r() - 0.5) * 30;
+    const toward = Math.sign(doorX - from); // streaks point back at the door
     // Full height at the door, not a point source: mostly uniform top to
     // bottom, with a mild pull toward centerY so the field still has a middle.
     const u = 12 + r() * (H - 24);
@@ -171,13 +177,13 @@ function particles(ctx, { seed, doorX, from, colors, count, additive, centerY, s
     ctx.fillStyle = hg; ctx.beginPath(); ctx.arc(x, y, size * 3, 0, Math.PI * 2); ctx.fill();
     // core, sometimes a streak
     ctx.fillStyle = rgba(a);
-    if (r() < 0.22) { const len = size * (5 + r() * 18) * (0.5 + near); ctx.fillRect(x, y - size * 0.3, len, size * 0.6); }
+    if (r() < 0.22) { const len = size * (5 + r() * 18) * (0.5 + near); ctx.fillRect(x, y - size * 0.3, len * toward, size * 0.6); }
     else { ctx.beginPath(); ctx.arc(x, y, size, 0, Math.PI * 2); ctx.fill(); }
   }
   ctx.restore();
 }
 
-async function render({ onLight, out }) {
+async function render({ onLight, out, mirror = false }) {
   const canvas = createCanvas(W * SCALE, H * SCALE);
   const ctx = canvas.getContext('2d');
   ctx.scale(SCALE, SCALE);
@@ -189,7 +195,8 @@ async function render({ onLight, out }) {
     for (let y = 0.5; y < H; y += 40) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
     ctx.restore();
   } else {
-    const g = ctx.createRadialGradient(300, H * 0.45, 40, 300, H * 0.45, 1500);
+    const gx = mirror ? W - 300 : 300;
+    const g = ctx.createRadialGradient(gx, H * 0.45, 40, gx, H * 0.45, 1500);
     g.addColorStop(0, '#0b1428'); g.addColorStop(0.45, '#050a16'); g.addColorStop(1, '#01030a');
     ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
     ctx.save(); ctx.strokeStyle = 'rgba(127,178,255,0.06)'; ctx.lineWidth = 1 / SCALE;
@@ -200,7 +207,7 @@ async function render({ onLight, out }) {
 
   // The dust, before the word so it passes behind EON's halo. No door glow: the
   // particles are filler and must not compete with the mark.
-  const DUST = { seed: 20260914, doorX: W - 40, from: 760, count: 380, centerY: H * 0.42, spreadK: 1.0, expo: 1.3, farAlpha: 0.4, sizeK: 1.25, dim: 0.495 };
+  const DUST = { seed: 20260914, doorX: mirror ? 40 : W - 40, from: mirror ? W - 760 : 760, count: 380, centerY: H * 0.42, spreadK: 1.0, expo: 1.3, farAlpha: 0.4, sizeK: 1.25, dim: 0.495 };
   if (onLight) particles(ctx, { ...DUST, additive: false, colors: ['rgba(0,140,255,A)', 'rgba(0,190,255,A)', 'rgba(31,79,168,A)', 'rgba(11,42,120,A)'] });
   else particles(ctx, { ...DUST, additive: true, colors: ['rgba(255,255,255,A)', 'rgba(220,235,255,A)', 'rgba(170,205,255,A)', 'rgba(127,178,255,A)'] });
 
@@ -210,17 +217,24 @@ async function render({ onLight, out }) {
   const ruleCol = onLight ? 'rgba(31,79,168,0.3)' : 'rgba(127,178,255,0.3)';
   const halo = onLight ? 'rgba(247,249,254,0.95)' : 'rgba(1,3,10,0.95)';
 
-  const g = await wordmark(ctx, { x: 120, y: 212, size: 190, spacing: 36, color: ink, onLight, ringAlpha: onLight ? 0.85 : 0.8, halo });
+  const g = await wordmark(ctx, { x: mirror ? W - 120 : 120, align: mirror ? 'right' : 'left', y: 212, size: 190, spacing: 36, color: ink, onLight, ringAlpha: onLight ? 0.85 : 0.8, halo });
 
-  // Tagline, rule and description start under the O - clear of the outer ring.
-  const tx = g.oX;
-  tracked(ctx, TAGLINE, tx, 272, 26, 10, blue, FAMILY_MED);
-  ctx.strokeStyle = ruleCol; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(tx, 304.5); ctx.lineTo(tx + 700, 304.5); ctx.stroke();
-  ctx.font = `400 24px ${FAMILY}`; ctx.fillStyle = dim; ctx.fillText(DESC, tx, 342);
+  // Tagline, rule and description: start under the O, clear of the outer ring.
+  // Mirrored, the block is right-aligned to the N's edge instead.
+  const tagSp = mirror ? 7 : 10;
+  const tagW = trackedWidth(ctx, TAGLINE, 26, tagSp, FAMILY_MED);
+  const right = W - 120;
+  const tx = mirror ? right - tagW : g.oX;
+  tracked(ctx, TAGLINE, tx, 272, 26, tagSp, blue, FAMILY_MED);
+  ctx.strokeStyle = ruleCol; ctx.lineWidth = 1; ctx.beginPath();
+  if (mirror) { ctx.moveTo(tx, 304.5); ctx.lineTo(right, 304.5); } else { ctx.moveTo(tx, 304.5); ctx.lineTo(tx + 700, 304.5); }
+  ctx.stroke();
+  ctx.font = `400 24px ${FAMILY}`; ctx.fillStyle = dim; ctx.textAlign = mirror ? 'right' : 'left';
+  ctx.fillText(DESC, mirror ? right : tx, 342); ctx.textAlign = 'left';
 
   fs.writeFileSync(out, canvas.toBuffer('image/png'));
   console.log(`[brand:banner] wrote ${path.relative(ROOT, out)} ${W * SCALE}x${H * SCALE} (face: ${FACE})`);
 }
 
-await render({ onLight: false, out: OUT_DARK });
+await render({ onLight: false, out: OUT_DARK, mirror: true });
 await render({ onLight: true, out: OUT_LIGHT });
