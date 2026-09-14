@@ -98,7 +98,9 @@ describe('macOS: AEON.app on the Desktop', () => {
     expect(plist).toMatch(/<key>CFBundleExecutable<\/key>\s*<string>AEON<\/string>/);
 
     const exe = path.join(APP(), 'Contents', 'MacOS', 'AEON');
-    expect(fs.statSync(exe).mode & 0o111).not.toBe(0);
+    // POSIX file modes do not exist on Windows (CI windows-latest read 0); the
+    // bundle only ever runs on macOS, where the executable bit is what matters.
+    if (process.platform !== 'win32') expect(fs.statSync(exe).mode & 0o111).not.toBe(0);
     expect(fs.readFileSync(exe, 'utf8')).toMatch(/open -a Terminal/);
 
     // Assembled from the committed per-size brand PNGs — the compact cut at
@@ -228,9 +230,13 @@ describe('Windows: AEON.lnk on the Desktop', () => {
       '$s=(New-Object -ComObject WScript.Shell).CreateShortcut($env:L); "$($s.TargetPath)|$($s.IconLocation)|$($s.WorkingDirectory)"'],
       { env: { ...process.env, L: link }, encoding: 'utf8' });
     const [target, icon, wd] = read.stdout.trim().split('|');
-    expect(target.toLowerCase()).toBe(path.join(root, 'LAUNCH.bat').toLowerCase());
-    expect(icon.toLowerCase()).toContain(path.join(root, 'AEON.ico').toLowerCase());
-    expect(wd.toLowerCase()).toBe(root.toLowerCase());
+    // os.tmpdir() on the runner is an 8.3 short path (C:\\Users\\RUNNER~1\\...); the
+    // saved shortcut holds the long form. Same folder, different spelling —
+    // compare resolved long paths, not strings (CI run 34849001725).
+    const long = (p) => fs.realpathSync.native(p).toLowerCase();
+    expect(long(target)).toBe(long(path.join(root, 'LAUNCH.bat')));
+    expect(long(icon.replace(/,\d+$/, ''))).toBe(long(path.join(root, 'AEON.ico')));
+    expect(long(wd)).toBe(long(root));
   }, 60000);
 });
 

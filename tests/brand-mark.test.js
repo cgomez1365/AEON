@@ -260,7 +260,10 @@ describe('1. every icon on disk is what the generator renders from the SVGs', ()
     const r = spawnSync(process.execPath, ['tools/generate-aeon-brand-icons.mjs'], {
       cwd: ROOT, env: { ...process.env, AEON_BRAND_WRITE: '0' }, encoding: 'utf8',
     });
-    expect(r.status, r.stderr).toBe(0);
+    // status null means the process was killed by a signal, not that it
+    // failed: say which, so a crash (ubuntu 22.13 floor, CI run 34849001725,
+    // 2.8 s in) is diagnosable instead of reading as "expected null to be 0".
+    expect(r.status, `signal=${r.signal} error=${r.error && r.error.message} stderr=${r.stderr}`).toBe(0);
     expect(r.stdout).toMatch(/\[brand\] \d+ icons from the vector mark/);
     for (const f of ['tools/generate-aeon-brand-icons.mjs', 'tools/generate-block-icons.mjs']) {
       const src = code(read(path.join(ROOT, f)));
