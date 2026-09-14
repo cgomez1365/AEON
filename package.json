@@ -55,7 +55,7 @@
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
-    "@napi-rs/canvas": "^1.0.2",
+    "@napi-rs/canvas": "^1.0.9",
     "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.6.1",
     "@supabase/supabase-js": "^2.105.4",
