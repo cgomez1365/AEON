@@ -10,7 +10,7 @@ Objectives: **RTO ≤ 1 hour**, **RPO ≤ 24 hours** (last daily sync).
 | Supabase data loss/corruption | Canary errors, app read failures | Restore from Supabase PITR (Pro plan) or the daily GAS backup (`/api/sync/gas-backup`). |
 | RLS regression (data exposed) | `npm run canary` → EXPOSED | Re-run `db/migrations/001_enable_rls.sql` immediately. Then investigate what dropped the policy. |
 | Vault unreadable (lost master key) | `[VAULT] decrypt failed` | The key is unrecoverable by design. Restore `AEON_VAULT_MASTER_KEY` from your password manager, OR re-enter every secret via the Settings → Account panel. **Back up this key offline.** |
-| Vercel outage | Site down | Desktop/Electron build keeps working locally (split-brain design). |
+| Vercel outage | Site down | The local install (launcher or Desktop icon) keeps working — it never depended on Vercel. |
 | Compromised API key | Provider alert / unexpected spend | Rotate at provider, update env, redeploy. See [SECURITY.md](SECURITY.md) §rotation. |
 
 ## Backups — what exists

@@ -1,0 +1,55 @@
+name: Bug report
+description: Something in AEON does not work the way it says it does.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. **Security problems do not belong here** — use the private
+        route in the security policy instead.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what AEON did instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open AEON from the Desktop icon
+        2. Go to Matrix ▸ Index
+        3. Click Run index
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - macOS
+        - Linux
+        - Portable / USB
+    validations:
+      required: true
+  - type: input
+    id: commit
+    attributes:
+      label: AEON version
+      description: Output of `git log --oneline -1` in your AEON folder, or the release you downloaded.
+    validations:
+      required: true
+  - type: input
+    id: node
+    attributes:
+      label: Node.js version
+      description: Output of `node -v`.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Console output
+      description: Anything relevant from the AEON terminal window. Remove API keys and personal data first.
+      render: text

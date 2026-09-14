@@ -125,11 +125,11 @@ had a `/tidy` slash-command calling `POST /api/memory/tidy`, a route that
 exists nowhere in this block or the kernel. That file was deleted (§21), so
 the stale caller is gone with it.
 
-**Still open:** `docs/BLOCK_MATRIX.md` documents the old deleted `memory`
-block's route set (`/api/memory/bulk-delete`, `/api/memory/tidy`,
-`/api/memory/import`, Supabase-backed) which never carried over to
-`memory_core`. Outside this block's folder, left alone; flagged here so it
-doesn't get rediscovered as a mystery bug later.
+**Closed 2026-09-14:** the hand-written block matrix that documented the old
+deleted `memory` block's route set (`/api/memory/bulk-delete`,
+`/api/memory/tidy`, `/api/memory/import`, Supabase-backed — never carried over
+to `memory_core`) was retired; `docs/BLOCKS.md` is generated from the manifests
+and cannot describe routes a block does not have.
 
 ## Settings / config keys
 

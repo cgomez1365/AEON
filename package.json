@@ -3,7 +3,7 @@
   "description": "AEON — a local-first AI workspace built from governed blocks. Runs anywhere.",
   "author": "Broken Gear Industries <cristian@brokengear.io>",
   "private": true,
-  "license": "Apache-2.0",
+  "license": "SEE LICENSE IN LICENSE",
   "version": "3.0.0",
   "engines": {
     "node": ">=22.13.0"

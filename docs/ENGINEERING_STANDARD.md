@@ -177,9 +177,15 @@ documentation reported the suite as "1,100 / 1,106" — it had taken 1,100 as th
 total. The correction was published rather than quietly patched, because a
 number that was never right must be re-taken, not carried forward.
 
-**Current reading — 2026-08-16, `e5185a8`:** 1,133 passing of 1,139 tests across
-100 files (6 POSIX-only, skipped on Windows), 0 failures. 17 blocks. 0
-undeclared block filesystem access, 23 declared and audited. Cloud conditionals
-94 with 0 raw environment reads. 7 of 7 Definition-of-Done criteria closed.
+**Current reading — 2026-09-14, macOS, the tree released as v3.0.0:** 1,485 passing
+and 1 skipped of 1,486 tests across 131 files (the skip is a real-PowerShell test
+that runs only on Windows), 0 failures. 17 blocks. 0 undeclared block filesystem
+access, 23 declared and audited. Cloud conditionals 95 with 0 raw environment
+reads. Every file path cited in `docs/`, the README and the contributor files
+exists (`tests/docs-truth.test.js`). The Definition-of-Done count was not
+re-measured for this reading, so it is not restated.
+
+**Previous reading — 2026-08-16, `e5185a8`:** 1,133 passing of 1,139 tests across
+100 files.
 
 Re-measure before quoting.

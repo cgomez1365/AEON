@@ -1,104 +1,99 @@
 # AEON Kernel
 
-The kernel is `server/server.js` — the composition root: an Express server providing routing, LLM abstraction, block loading, and system services. `server.cjs` at the repo root is a 12-line compatibility shim that re-exports it; earlier docs described the shim as the kernel.
+The kernel is `server/server.js`: the composition root that loads configuration, applies
+security, mounts the kernel routers and every block, and listens. It holds no business
+logic of its own. `server.cjs` at the repo root is a one-line shim that re-exports it.
 
-## Boot Sequence
+> Rewritten 2026-09-14. The previous version documented a `routes/*.js` layer, a trading
+> engine and modules that no longer exist. Every path below is checked by
+> `tests/docs-truth.test.js`; the order below is the order in `server/server.js`.
+
+## Boot sequence
+
+1. **Configuration.** The `.env` path is resolved once by `src/kernel/envFile.cjs`
+   (`AEON_ENV_FILE` or the install root) and loaded with dotenv.
+2. **Vault.** With no master key, a first-run guard mints one — unless keyslots already
+   exist, in which case it refuses and leaves the vault sealed for recovery rather than
+   writing a key that unlocks nothing (`src/kernel/vaultBootGuard.cjs`). Keyslots (file +
+   recovery) are then ensured (`src/kernel/vault.cjs`).
+3. **Security middleware** (`security/security.js`), in order: correlation id, CORS
+   allowlist, Helmet, JSON body parsing (10 MB), rate limiting on `/api`, `/core` and
+   `/block`, and the tunnel gate on `/api`.
+4. **Earlyware** (`server/earlyware.cjs`) — a replace-by-id hook list that drag-in blocks
+   such as Security register into before any route runs.
+5. **Search** (`/api/search-web` and friends) and **customization** routes
+   (`server/routes/customize.cjs`).
+6. **Authentication** — login routes and the global guard (`src/kernel/authGate.cjs`).
+7. **Blocks** — `server/block-loader.js` normalizes every manifest, gives each block only
+   the dependencies its manifest declares, and mounts block routes through
+   `src/kernel/blockHost.cjs` at `/api` and `/block/<id>`. A rescan tears down and remounts
+   the whole set.
+8. **Kernel services**
+   - `/api/build` — build pipeline: envelope → gate → staging → approve → promote → rescan
+   - `/api/store` — catalog and install through the lint airlock
+   - `/api/retrieval` — scoped indexes and the citation gate
+   - `/api/commands` — manifest-discovered command dispatch (`src/kernel/commandRegistry.cjs`)
+   - `/api/console` — the Operator Console, behind `requireOperator`
+9. **Core routers** (`src/kernel/routers/`): `/core`, `/core/telemetry`, `/api/ai`, `/blocks`,
+   `/events`, with `/api/system`, `/api/llm-telemetry` and `/api/blocks` as aliases.
+10. **Token analytics** and the **Second Brain** routes, then the boot index: an incremental
+    Vault scan 15 seconds after start, plus a nightly re-index at 03:00.
+11. **Autopilot** (`tools/autopilot-daemon.cjs`).
+12. **Frontend.** When `dist/` exists, it is served statically with an SPA fallback for any
+    path that is not `/api`, `/core`, `/events`, `/ws` or `/block`.
+13. **Listen** on `PORT` (default 3001), then attach the WebSocket at `/ws`
+    (`src/kernel/ws.cjs`).
+
+## LLM layer
+
+`kernelLLM(prompt, { role })` in `services/ai.js` is the one way the kernel and blocks call
+a model:
+
+1. Resolve the role through the endpoint registry (`src/kernel/endpoints.cjs`, stored in
+   `secrets/aeon-endpoints.json`). Roles include `chat`, `grading`, `vision`, `research`,
+   `creative`, the agent roles and `embed`.
+2. Dispatch to the resolved endpoint — a cloud provider or the bundled llama.cpp runtime.
+3. Only if the registry cannot resolve the role, fall back to the legacy per-role settings.
+
+HTTP surface (`src/kernel/routers/ai.cjs`):
 
 ```
-1. Load .env (dotenv)
-2. Initialize Treasury (Firebase sync, local only)
-3. Create Express app
-4. Mount middleware (CORS, auth, JSON parser, multer)
-5. Initialize Supabase client
-6. Define LLM functions (geminiRequest, groqRequest, localNativeRequest, kernelLLM)
-7. Define system functions (writeOSAudit, validateSDI, fetchDuckDuckGo)
-8. Mount modular plugins (modules/*.js — ats_engine, hr_arsenal, logistics)
-9. Scan src/blocks/*/block.manifest.json → mount API routes (Block Router v2)
-10. Mount route modules (routes/*.js — 17 route files)
-11. Mount Render Studio routes + Autopilot daemon
-12. Start listening on port 3001
-13. Launch sync daemon (tools/local-sync-daemon.js)
-14. Reap orphaned trading engine processes
+POST /api/ai            { prompt, role? }            a bare prompt
+POST /api/ai/converse   { line, history? }           a conversational turn with memory + vault recall
+POST /api/ai/vision     { image, prompt }            vision role
 ```
 
-## LLM Service Layer
+Every call crosses one seam, `_trackLLM`, and is appended once to the LLM ledger
+(`src/kernel/llm-ledger.cjs`), which the Activity and Fleet Control blocks read.
 
-### Direct Functions (internal use by routes)
-- `geminiRequest(prompt, model)` — Gemini API with key rotation and 429 failover
-- `groqRequest(prompt, model)` — Groq Cloud API
-- `localNativeRequest(prompt, model)` — AEON's bundled llama.cpp runtime, managed inside the app's data root
+## Kernel routers
 
-### Kernel LLM (preferred for blocks)
-```
-POST /api/kernel/llm
-{ "prompt": "...", "role": "chat|grading|research|creative" }
-```
+| Mount | File | What it serves |
+|---|---|---|
+| `/core` | `src/kernel/routers/core.cjs` | state, health, provider health, audit |
+| `/core/telemetry` | `src/kernel/routers/telemetry.cjs` | LLM telemetry |
+| `/api/ai` | `src/kernel/routers/ai.cjs` | model calls (above) |
+| `/blocks` | `src/kernel/routers/blocks.cjs` | registry, widgets, block state |
+| `/events` | `src/kernel/routers/events.cjs` | server-sent events |
+| `/api/console` | `src/kernel/routers/console.cjs` | block list, data reader, vault drops, model swap, key adds |
+| `/api/build` | `src/kernel/routers/build.cjs` | block build pipeline |
+| `/api/store` | `src/kernel/routers/store.cjs` | store catalog and install |
+| `/api/retrieval` | `src/kernel/routers/retrieval.cjs` | scoped retrieval + citation gate |
 
-Reads `aeon-settings.json` for role → provider/model mapping:
-```json
-{
-  "models": {
-    "chat": { "provider": "groq", "model": "llama-3.3-70b-versatile" },
-    "grading": { "provider": "gemini", "model": "gemini-2.0-flash" },
-    "research": { "provider": "groq", "model": "llama-3.3-70b-versatile" },
-    "creative": { "provider": "gemini", "model": "gemini-2.0-flash" }
-  },
-  "roulette": false
-}
-```
+## Security layers
 
-**Roulette mode:** When enabled, randomly picks between available providers to distribute rate limits across free-tier keys.
+1. **CORS allowlist** — localhost plus configured origins.
+2. **Bearer auth** — headless callers present `AEON_MOBILE_SECRET`.
+3. **Global auth guard** — once an operator account exists, requests need a session.
+4. **Read gates vs execution gates** — reads, reports and syncs use `requireOperator`
+   (`src/kernel/server-utils/requireOperator.cjs`); privileged OS operations use
+   `requireShellAuth`, which requires an operator session from every origin, loopback
+   included, and fails closed.
+5. **No shell execution surface** — `POST /api/os/action` runs named operations with a fixed
+   executable and argument array; no caller-supplied string reaches a shell.
+6. **Path containment** — filesystem access is limited to `ALLOWED_ROOTS` and each block's
+   declared scope; undeclared access is caught by `npm run scan:block-fs`.
+7. **Audit** — OS actions and key events are appended to the audit log.
 
-**Failover chain:** Gemini (with key rotation) → Groq → local runtime. Automatic on 429 or connection failure.
-
-## Block Router v2
-
-At boot, the kernel:
-1. Scans every directory in `src/blocks/`
-2. Reads `block.manifest.json` if present
-3. Builds `_blockRegistry` array (exposed via `GET /api/blocks/registry`)
-4. For blocks with `api/` subdirectory: auto-mounts each `.js` file as Express routes
-
-Blocks without manifests are still loaded but flagged as `tier: 'unknown'`.
-
-## Route Architecture
-
-| File | Endpoints | Purpose |
-|------|-----------|---------|
-| routes/os.js | /api/exec, /api/os/* | OS-level commands (allowlisted) |
-| routes/trading.js | /api/trading/* | Trading engine supervisor |
-| routes/fs.js | /api/fs/* | Filesystem CRUD |
-| routes/gemini.js | /api/email-draft, /api/transcribe | LLM endpoints |
-| routes/chat.js | /api/chat, /api/terminal-* | Chat log + terminal SSE |
-| routes/media.js | /api/video/*, /api/media/* | Video pipeline + components |
-| routes/brain.js | /api/brain_file, /api/notes, /api/narrator/* | Second Brain file access |
-| routes/analytics.js | /api/search, /api/telemetry, /api/pipeline-* | Search + analytics |
-| routes/system.js | /api/health, /api/system/*, /api/sync-* | System health + scanning |
-| routes/sandbox.js | /api/sandbox/*, /api/orion-scrape | Sandbox + Orion scraper |
-| routes/sync.js | /api/sync/*, /api/logistics/* | Block data sync + logistics (ATS routes removed 2026-07-17) |
-| routes/research.js | /api/research/* | Deep research pipeline |
-| routes/cookbook.js | /api/cookbook/*, /api/model/* | Local AI model management |
-| routes/hwfit.js | /api/hwfit/* | Hardware fitness scoring |
-| routes/compare.js | /api/compare/* | Model comparison arena |
-| routes/memory.js | /api/memory/* | Memory CRUD + tidy |
-| routes/token-analytics.js | /api/token-analytics/* | Usage tracking + heatmap data |
-
-## Security Layers
-
-1. **CORS allowlist** — Only listed origins permitted (localhost + configured domains)
-2. **Bearer auth** — External requests require `AEON_MOBILE_SECRET`
-3. **Session on privileged OS endpoints** — `requireShellAuth` requires an operator session from every origin, loopback included. Loopback is not authentication: a malicious local process, a compromised browser tab and an exposed dev proxy all originate from 127.0.0.1. `AEON_MOBILE_SECRET` remains accepted for headless callers, and the gate is fail-closed when neither is present.
-4. **No shell execution surface** — AEON does not run a caller-supplied string through a shell. `POST /api/os/action` exposes named operations with typed parameters, each launched with a fixed executable and an argument array.
-5. **Path allowlist** — Filesystem access restricted to `ALLOWED_ROOTS`
-6. **SDI validator** — Schema validation on all structured data writes
-7. **Audit trail** — Every action logged to `audit_log.json` + Supabase
-
-## Telemetry
-
-Every LLM call is tracked via `_trackLLM(engine, model, tokens, latencyMs, success)`:
-- Stored in memory (`_llmTelemetry` object)
-- Written to audit log
-- Forwarded to token-analytics if available
-- Exposed via `GET /api/llm-telemetry`
-
-System metrics (CPU, RAM) broadcast every 5 seconds via SSE to connected terminals.
+Keys never reach the browser. Blocks share one Node.js process: the manifest governs what a
+block is given, and is not a sandbox against hostile code.

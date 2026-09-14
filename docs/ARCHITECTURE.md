@@ -1,134 +1,115 @@
-# AEON Command Center — Architecture
+# AEON — Architecture
 
-## What Is This
+AEON is a local-first AI workspace: a Node.js kernel that discovers self-contained blocks,
+a React frontend that builds itself from those blocks' manifests, an encrypted vault for
+keys, and one LLM layer that routes every AI call by role. It runs on the operator's own
+machine; a cloud mirror is optional and off unless configured.
 
-AEON is a modular, offline-first AI operations portal. React + Vite frontend, Express backend, plugin block architecture. Runs locally with full OS access or on Vercel as a stateless cloud mirror.
+> Every path in this document is checked to exist by `tests/docs-truth.test.js`. It was
+> rewritten 2026-09-14 because the previous version described blocks, routes and files
+> that had been gone for months.
 
-## System Layers
-
-```
-┌─────────────────────────────────────┐
-│         PLUGIN BLOCKS               │  ← Drop-in modules (src/blocks/*)
-│  ATS, CRM, Trading, Research, etc.  │
-├─────────────────────────────────────┤
-│         SYSTEM SETTINGS             │  ← API keys, model-per-role config
-├─────────────────────────────────────┤
-│         ALWAYS-ON CORE              │  ← Dashboard, Fleet, Activity, Memory
-├─────────────────────────────────────┤
-│         AEON KERNEL                 │  ← Express router, block loader,
-│  server.cjs + routes/*              │     LLM service layer, SDI validator
-├─────────────────────────────────────┤
-│    PROVIDERS                        │
-│  Groq | Gemini | OpenAI | local     │  ← Cloud APIs + bundled llama.cpp
-├─────────────────────────────────────┤
-│    NEURAL TERMINAL                  │  ← User interface, slash commands
-└─────────────────────────────────────┘
-```
-
-## How Blocks Work
-
-Every block lives in `src/blocks/<block_id>/` and must contain:
-
-- `index.jsx` — React component (the UI)
-- `block.manifest.json` — Declares ID, route, deployment tag, dependencies
-- `api/` (optional) — Express route handlers auto-loaded by the kernel
-
-The kernel block loader (`server/block-loader.js`, wired from `server/server.js`) scans `src/blocks/*/` at boot, reads each `block.manifest.json`, and mounts any `api/*.js` files as Express routes. Frontend routing is in `DesktopLayout.jsx`.
-
-### Adding a new block
-
-1. Create folder: `src/blocks/my_block/`
-2. Add `block.manifest.json` with required fields
-3. Add `index.jsx` with a default export React component
-4. (Optional) Add `api/my_routes.js` for backend endpoints
-5. Add import + Route in `DesktopLayout.jsx`
-6. Restart server
-
-### Block manifest spec
-
-```json
-{
-  "id": "my_block",
-  "label": "My Block",
-  "icon": "🔧",
-  "route": "/my-block",
-  "description": "What this block does in one line",
-  "category": "tools",
-  "deployment": "universal",
-  "tier": "plugin",
-  "requires": {
-    "apis": ["groq"],
-    "blocks": []
-  },
-  "api_routes": false,
-  "version": "1.0.0"
-}
-```
-
-**deployment** values:
-- `universal` — Works on localhost and Vercel/cloud
-- `local_required` — Needs OS access, hardware, or local services
-- `hybrid` — Core features work on cloud, full features need local
-
-**tier** values:
-- `core` — Always present, cannot be removed
-- `free` — Ships with base AEON, can be removed
-- `plugin` — Installable add-on
-
-## Kernel LLM Service Layer
-
-Blocks should call the kernel LLM endpoint instead of specific providers:
+## Layers
 
 ```
-POST /api/kernel/llm
-{ "prompt": "...", "role": "grading" }
+┌──────────────────────────────────────────────────────────────┐
+│ LAUNCH      launch.js · Desktop icon (tools/desktop-shortcut) │  first-run setup, build, boot
+├──────────────────────────────────────────────────────────────┤
+│ FRONTEND    Vite + React · nav and routes built from manifests│  src/components, src/kernel/blockRegistry.js
+├──────────────────────────────────────────────────────────────┤
+│ BLOCKS      src/blocks/<id>/ — manifest + UI + optional API   │  mounted by the block host
+├──────────────────────────────────────────────────────────────┤
+│ KERNEL      server/server.js — security → routers → blocks    │  commands, retrieval, build, store, console
+├──────────────────────────────────────────────────────────────┤
+│ SERVICES    services/ — ai, storage, cloud, search, media     │  kernelLLM lives in services/ai.js
+├──────────────────────────────────────────────────────────────┤
+│ STORAGE     Vault · data/ · secrets/ · .env                   │  every root redirectable by env var
+├──────────────────────────────────────────────────────────────┤
+│ PROVIDERS   cloud endpoints · bundled llama.cpp runtime       │  resolved per role by endpoints.cjs
+└──────────────────────────────────────────────────────────────┘
 ```
 
-The kernel reads `aeon-settings.json` to determine which provider/model handles each role:
-- `chat` → default conversational model
-- `grading` → analytical model for scoring/evaluation
-- `research` → model used for multi-step research
-- `creative` → model for content generation
+## Launch
 
-**Roulette mode**: When enabled, the kernel randomly picks between available free-tier providers to distribute rate limits.
+`launch.js` is what a double-click runs (`launch.command`, `LAUNCH.bat`, `launch.sh`). It
+checks Node, walks a first-run `.env` wizard in which every prompt can be skipped,
+bootstraps the vault key, installs dependencies and builds the frontend once, puts an AEON
+icon on the Desktop (`tools/desktop-shortcut.cjs`; never on portable media), then starts
+`server/server.js` and opens the browser once the port answers.
 
-**Failover chain**: Gemini → Groq → local runtime. If one provider 429s or errors, the next is tried automatically.
+## Blocks
 
-## Data Architecture
+A block is a folder under `src/blocks/` with `block.manifest.json` (identity, permissions,
+commands, settings, routes), `index.jsx` (the UI) and optionally `api/` (Express routes).
+The manifest is the block's declaration of itself; `src/kernel/schema.json` defines it and
+`src/kernel/staging.cjs` validates it.
 
-- **Supabase** — Source of truth for cloud sync (aeon_blocks, documents, candidates)
-- **Firebase** — Treasury sync, real-time telemetry
-- **Local JSON** — chat_log.json, audit_log.json, aeon-settings.json, brain-data.json
-- **Google Apps Script** — Failsafe backup (not source of truth)
+- **Server side:** `server/block-loader.js` normalizes every manifest at boot and hands
+  each block only the dependencies its manifest declares. `src/kernel/blockHost.cjs`
+  mounts block routers at `/api` and `/block/<id>`, and remounts the whole set on rescan
+  rather than diffing.
+- **Client side:** `src/kernel/blockRegistry.js` discovers every manifest and component
+  with Vite's `import.meta.glob`; `src/components/DesktopLayout.jsx` builds nav and routes
+  from it. Adding a block needs no edit to the layout.
+- **Generated, not hand-kept:** `docs/BLOCKS.md` and each manifest's route list are
+  written by `scripts/gen-block-docs.cjs` and `scripts/gen-block-routes.cjs` during
+  `npm run build`, so they cannot drift from the code.
 
-Every block that needs cloud sync follows the pattern: try local API → Supabase fallback.
+Blocks share one Node.js process. The manifest governs what the kernel injects; it is not
+a sandbox against hostile code.
 
-## Key Files
+## The LLM layer
 
-| File | Purpose |
-|------|---------|
-| `server/server.js` | Express backend — the kernel composition root: routes, block loader, LLM functions |
-| `server.cjs` | 12-line compatibility shim re-exporting `server/server.js` |
-| `src/config.js` | Shared frontend config (WORKSPACE, SB_URL, SB_KEY from env) |
-| `src/kernel/supabase.js` | Shared Supabase client |
-| `.env` | All API keys and configuration (never committed) |
-| `.env.example` | Template for new installations |
-| `aeon-settings.json` | Runtime settings (model assignments, roulette toggle) |
-| `src/kernel/schema.json` | JSON Schema for block.manifest.json — enforced by `staging.cjs validateManifest()` |
-| `launch-brain.bat` | Windows boot script (index → sync → start) |
+Blocks never name a provider. They call `kernelLLM(prompt, { role })` (`services/ai.js`),
+which asks `src/kernel/endpoints.cjs` which endpoint and model serve that role. Roles
+include `chat`, `grading`, `vision`, `research`, `creative`, the agent roles, and `embed`
+for the Second Brain. An endpoint is either a cloud provider the operator added a key for,
+or the bundled llama.cpp runtime managed inside the data root
+(`services/local-runtime/paths.cjs`). Every call is recorded once in the LLM ledger
+(`src/kernel/llm-ledger.cjs`).
 
-## Security Model
+The kernel's AI routes are `POST /api/ai` (a bare prompt), `POST /api/ai/converse` (a
+conversational turn with memory and vault recall, policy in `src/kernel/context.cjs`) and
+`POST /api/ai/vision`.
 
-- `.env` contains all secrets, never committed to git
-- `AEON_MOBILE_SECRET` bearer token required for external API access
-- `requireShellAuth` on privileged OS endpoints: operator session required from every origin (loopback included), `AEON_MOBILE_SECRET` for headless callers, fail-closed when neither is present
-- No shell execution surface — `POST /api/os/action` runs named operations with fixed executables and argument arrays, so no caller-supplied string reaches a shell
-- `ALLOWED_ROOTS` for filesystem access boundaries
-- Supabase RLS enabled on all tables
-- Groq/Gemini keys only in `.env`, referenced via `import.meta.env.VITE_*` in frontend
+## The terminal
+
+`src/components/Terminal2.jsx` has three verbs in one input: plain text is a conversation,
+`/` runs a command, `>` is the shell sigil. Commands are declared in block manifests and
+dispatched by `src/kernel/commandRegistry.cjs`; the terminal holds no dispatch logic of its
+own.
+
+## Storage
+
+| Root | Default | Override | Holds |
+|---|---|---|---|
+| Vault | `src/blocks/aeon_matrix/data/Vault` | `VAULT_PATH` | documents, memories, block memory — durable |
+| Data | `data/` | `DATA_PATH` | indexes, models, block state — regenerable |
+| Secrets | `secrets/` | `AEON_SECRETS_DIR` | keyslots, endpoint registry |
+| `.env` | install root | `AEON_ENV_FILE` | master key, configuration |
+| Workspace | install root | `AEON_WORKSPACE` | what file tools may open |
+
+`services/storage.js` owns the Vault and Data roots and `src/kernel/envFile.cjs` owns the
+`.env` path — nothing else computes them. Because every writable root is redirectable, AEON
+runs from USB media and can run from a read-only install.
+
+Keys are encrypted at rest (AES-256-GCM, `src/kernel/vault.cjs`). The `.env` master key and
+`secrets/aeon-keyslots.json` are two halves of one protector: move both or neither.
+
+## Cloud (optional)
+
+`services/cloud.js` creates a Supabase client only when keys are configured, and never when
+`AEON_LOCAL_ONLY=1` or `AEON_PORTABLE=true`. Every consumer handles its absence. The same
+codebase also deploys to Vercel as a stateless cloud mirror; see
+[`DEPLOYMENT.md`](DEPLOYMENT.md).
 
 ## Ports
 
-- `3000` — Vite dev server (frontend + proxy)
-- `3001` — Express API server (backend)
-- Vite proxies `/api/*` to `localhost:3001`
+- `3001` — the kernel. In production it also serves the built frontend from `dist/`.
+- `3000` — the Vite dev server during development only (`npm start`), proxying `/api` to `3001`.
+
+## Further reading
+
+[Kernel](KERNEL.md) · [Blocks](BLOCKS.md) · [Block standard](BLOCK_STANDARD.md) ·
+[Memory architecture](MEMORY_ARCHITECTURE.md) · [Security](SECURITY.md) ·
+[Engineering standard](ENGINEERING_STANDARD.md)

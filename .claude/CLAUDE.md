@@ -13,14 +13,14 @@ AEON is an AI-native operating system: kernel + self-contained block cartridges 
 | `server/server.js` | Composition root — security → services → block loader → routers → listen |
 | `server/block-loader.js` | Cartridge discovery, manifest validation, sandbox |
 | `src/kernel/` | vault.cjs (AES-256-GCM), endpoints.cjs (model registry), commandRegistry.cjs (Terminal 2.0 bus), routers/ |
-| `src/kernel/routers/god.cjs` | God mode: /open, /data reader, vault file drops, model hotswap, key adds |
+| `src/kernel/routers/console.cjs` | Operator Console (`/api/console/*`): block list, /data reader, vault file drops, model hotswap, key adds |
 | `src/blocks/*/` | Cartridges — manifest + index.jsx + api/index.cjs |
 | `src/components/Terminal2.jsx` | The terminal: 3 verbs (chat, /command, >shell) |
 | `services/storage.js` | VAULT_ROOT / DATA_ROOT seam — never hand-roll vault paths |
 | `launch.js` | Consumer launcher: env detect, .env wizard, vault bootstrap, build, boot |
 
 ## Route namespaces
-`/core/*` kernel · `/api/ai` LLM dispatch · `/blocks` registry · `/api/god/*` god mode (desktop only) · `/block/:id/*` + `/api/*` block routes · `/events` SSE · `/ws` WebSocket.
+`/core/*` kernel · `/api/ai` LLM dispatch · `/blocks` registry · `/api/console/*` operator console (desktop only) · `/block/:id/*` + `/api/*` block routes · `/events` SSE · `/ws` WebSocket.
 
 ## Rules
 - Patch, don't rewrite. Minimal diffs.

@@ -5,7 +5,15 @@
 > A doctor cannot afford a model that "learned the gist" of patient history.
 
 **Engine:** `src/kernel/retrieval.cjs` · `src/kernel/citationGate.cjs`
-**Router:** `/api/retrieval/*` · **Test suites:** `node tools/test-retrieval.cjs` (13/13) · `node tools/test-citation.cjs` (30/30)
+**Router:** `/api/retrieval/*`
+
+> **Test coverage, stated plainly (2026-09-14):** no test in this repository loads
+> `citationGate.cjs` or `retrieval.cjs` directly. Earlier revisions of this line cited
+> `tools/test-retrieval.cjs` (13/13) and `tools/test-citation.cjs` (30/30); neither file has
+> ever existed in this repository. Read the doctrine below as the design, proven only where
+> a named test says so. Recall through the Second Brain (a different path — see
+> [`MEMORY_ARCHITECTURE.md`](MEMORY_ARCHITECTURE.md)) is covered by
+> `tests/second-brain-chunks.test.js` and `tests/context-recall.test.js`.
 
 ---
 
@@ -85,7 +93,7 @@ Even "just draft a note about John's case" → Class 3 (named person in HR domai
 
 ### Bypass surface
 
-**There is no bypass.** No `skipCitations`, no `forceClass`, no prompt phrasing that lowers the class. Junk options are ignored. Tested in `test-citation.cjs` cases 29-30.
+**There is no bypass.** No `skipCitations`, no `forceClass`, no prompt phrasing that lowers the class. Junk options are ignored. No test in this repository currently proves this — see the coverage note at the top.
 
 ---
 
@@ -113,10 +121,9 @@ This is how an HR department or medical practice defends their AEON usage if a r
 
 ## Seeding / reseeding
 
-```bash
-node tools/reseed-retrieval.cjs
-```
+The reseed script earlier revisions described here (`tools/reseed-retrieval.cjs` — a
+deterministic job that copied `vault_index.json` into a `personal_notes` scope) is not part
+of this repository. Scopes are populated through `POST /api/retrieval/:scope/ingest`.
 
-Deterministic ops bot — zero LLM tokens. Reads `vault_index.json`, filters tooling paths, ingests into `personal_notes` (owner: `second_brain`). Rerunnable at any time. Run with a local embedding model installed for cosine embeddings on top of the BM25 floor.
-
-BM25 is the deterministic fallback: always works, zero tokens, survives the embedding model being unavailable. The doctrine holds on the BM25 floor alone.
+BM25 is the deterministic floor: it needs no model and survives the embedding runtime being
+unavailable, with cosine similarity layered on top when an embedder serves the `embed` role.

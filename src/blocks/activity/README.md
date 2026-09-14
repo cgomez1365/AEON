@@ -52,8 +52,9 @@ round trip.
 | GET / POST | `/api/audit` | Read/append the audit log — Supabase-backed with a local-file cache/fallback. |
 
 None of these five are called by `index.jsx`; they're consumed elsewhere
-(`docs/BLOCK_MATRIX.md` lists Dashboard and Fleet Control as readers of
-`/api/llm-telemetry`, `/api/pipeline-metrics`, `/api/token-analytics/*`).
+(the retired hand-written block matrix listed Dashboard and Fleet Control as
+readers of `/api/llm-telemetry`, `/api/pipeline-metrics`,
+`/api/token-analytics/*`; the generated `docs/BLOCKS.md` replaced it 2026-09-14).
 They're real, mounted, working routes — not dead code — just misfiled under
 this block from an earlier iteration.
 

@@ -3,7 +3,7 @@
 > **NEVER an LLM call.** Asking a model if something is risky makes the gate exploitable.
 > All checks are deterministic string/regex/AST operations.
 > Engine: `src/kernel/complexityGate.cjs` + `src/kernel/staging.cjs` (shared `CODE_CHECKS`).
-> Test suite: `node tools/test-gate.cjs` — **must pass 20/20** before any change to this system ships.
+> Test suite: `tests/adversarial-gate.test.js` — 10 hostile specs, run by `npm test` and on every CI leg. Every case must pass before any change to this system ships.
 
 ---
 
@@ -73,6 +73,6 @@ The check is block-local only — `node_modules` and kernel imports are out of s
 ## How to extend
 
 1. Add a new regex to `CODE_CHECKS` in `staging.cjs`. Both `lintBlock()` and `gate()` inherit it.
-2. Add a test case to `tools/test-gate.cjs` (append-only — never delete existing cases).
-3. Run `node tools/test-gate.cjs` — all cases must pass before the change ships.
+2. Add a hostile case to `tests/adversarial-gate.test.js` (append-only — never delete existing cases).
+3. Run `npx vitest run tests/adversarial-gate.test.js` — every case must pass before the change ships.
 4. If the new check changes what "HIGH" means for any existing block in `src/blocks/`, that block must be re-linted and the finding resolved before the kernel reboots with the new check.

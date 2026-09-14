@@ -88,7 +88,7 @@
       },
       {
         "cmd": "/model-pull",
-        "desc": "Download a local model — /model-pull qwen3-1.7b-q4 (curated catalog) or org/repo (HuggingFace)",
+        "desc": "Download a local model — /model-pull qwen3-1.7b-q8 (curated catalog) or org/repo (HuggingFace)",
         "method": "POST",
         "route": "/api/model/download",
         "param": "repo_id",

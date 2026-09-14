@@ -148,9 +148,9 @@ directly on `/api` only (see `src/kernel/blockHost.cjs`).
   `api/static-includes.js`'s static require and `api/index.js`'s Vercel
   route list — both outside this block's scope to edit) and responds
   correctly, but grepping every `.jsx` file in the repo turns up zero
-  callers. `src/blocks/activity/README.md` claims `docs/BLOCK_MATRIX.md`
-  lists Dashboard as a reader of `/api/pipeline-metrics` — that's now
-  stale; the caller was almost certainly the treasury/deficit panel this
+  callers. The retired hand-written block matrix (replaced by the generated
+  `docs/BLOCKS.md`, 2026-09-14) listed Dashboard as a reader of
+  `/api/pipeline-metrics` — that was stale; the caller was almost certainly the treasury/deficit panel this
   block had stripped out. Deleting the file would leave a dangling
   `require()` in `api/static-includes.js` and `api/index.js` (root-level,
   out of this pass's scope) that would log a caught error on every boot.
