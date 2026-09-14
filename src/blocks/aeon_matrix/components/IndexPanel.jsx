@@ -102,9 +102,10 @@ export default function IndexPanel() {
           if (ev.error) { bump('failed'); push({ kind: 'error', text: `${ev.file} — ${ev.error}` }); continue; }
           if (ev.deleted) { bump('deleted'); push({ kind: 'deleted', text: ev.file }); continue; }
           if (ev.action === 'embed-backfill') { bump('embedded'); push({ kind: 'embed', text: ev.file }); continue; }
+          if (ev.action === 'space-migrate-kept') { push({ kind: 'note', text: `${ev.file} — could not re-embed into ${ev.to}; kept its ${ev.from} vector, will retry next run` }); continue; }
           if (ev.action === 'space-migrate') { bump('migrated'); push({ kind: 'embed', text: `${ev.file} — re-embedded into ${ev.to}` }); continue; }
           if (ev.action === 'chunk-backfill') { bump('chunked'); push({ kind: 'note', text: `${ev.file} — ${ev.chunks} chunks` }); continue; }
-          if (ev.file) { bump('indexed'); push({ kind: 'file', text: ev.file }); }
+          if (ev.file) { bump('indexed'); if (ev.embedded) bump('embedded'); push({ kind: ev.embedded ? 'embed' : 'file', text: ev.file }); }
         }
       }
     } catch (e) {
@@ -225,9 +226,14 @@ export default function IndexPanel() {
           {result.errors?.length ? <AlertTriangle size={13} style={{ color: '#ffaa00', marginTop: 2 }} /> : <CheckCircle2 size={13} style={{ color: 'var(--accent)', marginTop: 2 }} />}
           <div>
             <strong style={{ color: 'var(--text)' }}>
-              {result.ingested} ingested · {result.skipped} unchanged · {result.deleted} removed
+              {result.ingested} ingested · {result.embedded ?? 0} embedded · {result.skipped} unchanged · {result.deleted} removed
             </strong>
             {result.reason && <div style={{ marginTop: 4 }}>{result.reason}</div>}
+            {!result.errors?.length && !result.ingested && canEmbed && pending === 0 && emb?.embedded > 0 && (
+              <div style={{ marginTop: 4 }}>
+                Nothing was owed: all {NUM(emb.embedded)} documents already carry a vector from {emb.model}. New and changed files are embedded as they arrive.
+              </div>
+            )}
             {result.errors?.length > 0 && (
               <div style={{ marginTop: 4, color: '#ffaa00' }}>
                 {result.errors.length} file{result.errors.length === 1 ? '' : 's'} could not be read — they stay out of the index rather than being indexed empty.

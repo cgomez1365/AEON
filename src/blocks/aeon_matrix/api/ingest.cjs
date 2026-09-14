@@ -299,7 +299,9 @@ module.exports = function ingestFactory(deps) {
   }
 
   async function _runScan(onEvent = () => {}) {
-    const results = { ingested: 0, skipped: 0, deleted: 0, errors: [] };
+    // embedded counts vectors WRITTEN this run — first ingest, backfill, or space
+    // migration. ingested alone could not say whether a model was involved.
+    const results = { ingested: 0, embedded: 0, skipped: 0, deleted: 0, errors: [] };
     if (isVercel) {
       const r = { ...results, reason: 'cloud env — vault lives on the local filesystem only' };
       onEvent({ done: true, ...r });
@@ -369,6 +371,7 @@ module.exports = function ingestFactory(deps) {
               existing.embeddingModel = model;
               existing.updatedAt = Date.now();
               results.ingested++;
+              results.embedded++;
               onEvent({ file: relPosix, action: 'embed-backfill' });
               if (results.ingested % 10 === 0) checkpoint();
               continue;
@@ -384,11 +387,20 @@ module.exports = function ingestFactory(deps) {
             try {
               const text = await extractText(full);
               const fresh = await buildEntry(full, relPosix, text, stat);
-              index.documents[relPosix] = fresh;
-              results.ingested++;
-              onEvent({ file: relPosix, action: 'space-migrate', from: existing.embeddingModel, to: currentSpace });
-              if (results.ingested % 10 === 0) checkpoint();
-              continue;
+              // buildEntry swallows an embed failure and returns an entry with
+              // NO vector. Replacing the document with that turned a stale but
+              // searchable entry into an unsearchable one whenever the model
+              // answered the scan's probe and then failed (crash, rate limit,
+              // timeout). Keep the old vector; the next scan retries.
+              if (Array.isArray(fresh.embedding) && fresh.embedding.length) {
+                index.documents[relPosix] = fresh;
+                results.ingested++;
+                results.embedded++;
+                onEvent({ file: relPosix, action: 'space-migrate', from: existing.embeddingModel, to: currentSpace });
+                if (results.ingested % 10 === 0) checkpoint();
+                continue;
+              }
+              onEvent({ file: relPosix, action: 'space-migrate-kept', from: existing.embeddingModel, to: currentSpace });
             } catch { /* unreadable or no embedder — leave it, try next scan */ }
           }
           // Chunk backfill: indexed before windows existed, or too short to
@@ -417,10 +429,16 @@ module.exports = function ingestFactory(deps) {
           continue;
         }
 
-        index.documents[relPosix] = await buildEntry(full, relPosix, text, stat);
+        const entry = await buildEntry(full, relPosix, text, stat);
+        index.documents[relPosix] = entry;
         manifest[rel] = { hash, indexedAt: Date.now() };
         results.ingested++;
-        onEvent({ file: relPosix });
+        // buildEntry embeds when it can and swallows the failure when it cannot,
+        // so the event must say which. A bare { file } read as "indexed, not
+        // embedded" in the panel even when the vector was written.
+        const embedded = Array.isArray(entry.embedding) && entry.embedding.length > 0;
+        if (embedded) results.embedded++;
+        onEvent({ file: relPosix, embedded });
         checkpoint();
       } catch (err) {
         results.errors.push({ file: relPosix, error: err.message });

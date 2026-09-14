@@ -194,6 +194,103 @@ describe('the push itself — a run backfills the vectors it was missing', () =>
     const bare = body.match(/await embed\(/g) || [];
     expect(bare, 'every embed call in _runScan must go through injectedEmbed || embed').toEqual([]);
   });
+
+  // CEO, 2026-09-13: "i have an embedding model in aeon but it said it didnt
+  // embed any documents?" Measured on the operator's vault the same day: all 9
+  // documents carried 768-d vectors in the active space, and a live query
+  // recalled the homework memory at 0.70 cosine. The vectors were fine. The
+  // REPORT was wrong: a first-time ingest embeds inside buildEntry but emitted a
+  // bare { file } event, which the panel tallies as "indexed" only. So a run that
+  // embedded everything showed "embedded 0", and an unchanged rerun showed
+  // "0 ingested · 9 unchanged" with no word that all nine were already done.
+  it('a first-time ingest says whether it embedded, and the run totals it', async () => {
+    const files = { 'one.md': '# One\nalpha beta gamma', 'two.md': '# Two\ndelta epsilon zeta' };
+    const h = await mountScannable(files, fakeEmbed);
+    try {
+      const events = await h.scan();
+      const ingests = events.filter(e => e.file && !e.action && !e.error && !e.deleted);
+      expect(ingests.length).toBe(2);
+      expect(ingests.every(e => e.embedded === true)).toBe(true);
+      const done = events.find(e => e.done);
+      expect(done.ingested).toBe(2);
+      expect(done.embedded).toBe(2);
+    } finally { h.close(); }
+  });
+
+  it('with no embedder the ingest event says so, and the total is an honest 0', async () => {
+    const files = { 'one.md': '# One\nalpha beta gamma' };
+    const dead = async () => { throw Object.assign(new Error('no model'), { code: 'no_embed_model' }); };
+    const h = await mountScannable(files, dead);
+    try {
+      const events = await h.scan();
+      const ingest1 = events.find(e => e.file === 'one.md' && !e.action);
+      expect(ingest1.embedded).toBe(false);
+      const done = events.find(e => e.done);
+      expect(done.ingested).toBe(1);
+      expect(done.embedded).toBe(0);
+    } finally { h.close(); }
+  });
+
+  it('backfill and space migration count toward the embedded total too', async () => {
+    const files = { 'one.md': '# One\nalpha beta gamma', 'two.md': '# Two\ndelta epsilon zeta' };
+    const dead = async () => { throw Object.assign(new Error('no model'), { code: 'no_embed_model' }); };
+    let h = await mountScannable(files, dead);
+    try { await h.scan(); } finally { h.close(); }
+    h = await mountScannable(files, fakeEmbed, { keep: true });
+    try {
+      const done = (await h.scan()).find(e => e.done);
+      expect(done.embedded).toBe(2);
+    } finally { h.close(); }
+  });
+
+  it('a space migration whose re-embed fails keeps the old vector instead of erasing it', async () => {
+    // Found 2026-09-13 while fixing the count. buildEntry swallows an embed
+    // failure and returns an entry with NO vector; the migration branch then
+    // replaced the document with it. A model that answers the once-per-scan
+    // probe and then fails (a runtime that crashes, a rate limit, a timeout)
+    // silently turned a stale-but-searchable document into an unsearchable one.
+    const files = { 'one.md': '# One\nalpha beta gamma' };
+    const oldSpace = async () => ({ vector: [1, 2, 3], model: 'old-space' });
+    let h = await mountScannable(files, oldSpace);
+    try { await h.scan(); } finally { h.close(); }
+
+    const flaky = async (text) => {
+      if (text === 'aeon space probe') return { vector: [0, 0, 1], model: 'new-space' };
+      throw new Error('runtime went away');
+    };
+    h = await mountScannable(files, flaky, { keep: true });
+    try {
+      const events = await h.scan();
+      const done = events.find(e => e.done);
+      expect(done.embedded).toBe(0);
+      // Said, not silent (R-05) — and not reported as a successful migration.
+      expect(events.some(e => e.action === 'space-migrate-kept' && e.to === 'new-space')).toBe(true);
+      expect(events.some(e => e.action === 'space-migrate')).toBe(false);
+      const panel = fs.readFileSync(path.join(ROOT, 'src/blocks/aeon_matrix/components/IndexPanel.jsx'), 'utf8');
+      expect(panel).toMatch(/space-migrate-kept/);
+      const doc = JSON.parse(fs.readFileSync(INDEX_FILE, 'utf8')).documents['one.md'];
+      expect(doc.embedding).toEqual([1, 2, 3]);
+      expect(doc.embeddingModel).toBe('old-space');
+    } finally { h.close(); }
+  });
+
+  it('an unchanged rerun embeds nothing, and status still shows every vector is present', async () => {
+    // The pair the panel needs to say "already embedded" instead of implying
+    // nothing happened: the run's own total (0) and the index's (all of them).
+    const files = { 'one.md': '# One\nalpha beta gamma', 'two.md': '# Two\ndelta epsilon zeta' };
+    let h = await mountScannable(files, fakeEmbed);
+    try { await h.scan(); } finally { h.close(); }
+    h = await mountScannable(files, fakeEmbed, { keep: true });
+    try {
+      const done = (await h.scan()).find(e => e.done);
+      expect(done.ingested).toBe(0);
+      expect(done.skipped).toBe(2);
+      expect(done.embedded).toBe(0);
+      const s = await h.status();
+      expect(s.embedding.embedded).toBe(2);
+      expect(s.embedding.pending).toBe(0);
+    } finally { h.close(); }
+  });
 });
 
 describe('the panel is reachable and does what it says', () => {
@@ -228,5 +325,17 @@ describe('the panel is reachable and does what it says', () => {
 
   it('the help card no longer points at a button that does not exist', () => {
     expect(block).toMatch(/open the Index tab/);
+  });
+
+  it('the live tally counts a first-time ingest that embedded, not only backfills', () => {
+    // The defect: `if (ev.file) { bump('indexed') ... }` with no embedded bump.
+    expect(panel).toMatch(/if \(ev\.embedded\) bump\('embedded'\)/);
+  });
+
+  it('the outcome line reports embedded, and names a rerun with nothing owed as done', () => {
+    expect(panel).toMatch(/result\.embedded/);
+    // "0 ingested · 9 unchanged" alone reads as failure when every document
+    // already carries a vector. The panel must say which it is.
+    expect(panel).toMatch(/already carr(y|ies) a vector/);
   });
 });
