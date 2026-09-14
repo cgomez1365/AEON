@@ -1,6 +1,8 @@
-<p align="center">
-  <img src="public/brand/aeon-banner.png" alt="AEON — Modular. Local. Yours." width="100%">
-</p>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="public/brand/aeon-banner-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="public/brand/aeon-banner-light.png">
+  <img src="public/brand/aeon-banner-dark.png" alt="AEON — Modular. Local. Yours. A local-first AI workspace." width="100%">
+</picture>
 
 # AEON 3
 

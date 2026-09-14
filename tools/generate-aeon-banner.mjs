@@ -1,12 +1,15 @@
 #!/usr/bin/env node
 /**
- * AEON README banner — public/brand/aeon-banner.png
+ * AEON README banners — public/brand/aeon-banner-dark.png and -light.png
  *
- * Derived from the same source as every icon: the mark's glow group in
- * public/brand/aeon-mark/aeon-mark.svg is rasterised as-is (no rounded ground,
- * the banner carries its own), then the wordmark and tagline are set beside it
- * in canvas text. Same ground gradient and the same three blues as the mark,
- * so the banner and the icons read as one object. Run: `npm run brand:banner`.
+ * The mark IS the A. In the 512 mark the chevron is 136 tall (y 192..328), so
+ * the mark is scaled until that chevron matches the cap height of "EON" set in
+ * Avenir Next Ultra Light, and the rings fall behind the word. The README
+ * serves the dark one on GitHub's dark theme and the light one on light, via
+ * <picture> + prefers-color-scheme. To the right, a field of light particles
+ * streams in from the edge - a door opened onto the digital world. Dark:
+ * white-blue dust. Light: neon blue and deep blue. Deterministic (seeded), so
+ * `npm run brand:banner` reproduces both files exactly on the same font.
  *
  * 1600x400 — GitHub renders a README image at content width (~900px) so this
  * stays crisp on 2x displays. Text uses the system's Avenir Next when present
@@ -20,10 +23,8 @@ import { createCanvas, loadImage, GlobalFonts } from '@napi-rs/canvas';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const MARK = path.join(ROOT, 'public', 'brand', 'aeon-mark', 'aeon-mark.svg');
-const OUT = path.join(ROOT, 'public', 'brand', 'aeon-banner.png');
-
-const W = 1600, H = 400;
-const TAGLINE = 'MODULAR. LOCAL. YOURS.';
+const OUT_DARK = path.join(ROOT, 'public', 'brand', 'aeon-banner-dark.png');
+const OUT_LIGHT = path.join(ROOT, 'public', 'brand', 'aeon-banner-light.png');
 
 // Fonts. @napi-rs/canvas registers only the FIRST face of a .ttc, and for
 // Avenir Next that is Bold - the opposite of the poster's hairline lettering.
@@ -90,54 +91,124 @@ for (const f of ['/System/Library/Fonts/Avenir Next.ttc', '/Library/Fonts/Avenir
 // the glow group, drop the <rect>. Everything else is the SVG's own geometry.
 const markSvg = fs.readFileSync(MARK, 'utf8').replace(/<rect[^>]*aeonGround[^>]*\/>/, '');
 
-const canvas = createCanvas(W, H);
-const ctx = canvas.getContext('2d');
+const W = 1600, H = 400;
+const TAGLINE = 'MODULAR. LOCAL. YOURS.';
+const DESC = 'A local-first AI workspace';
 
-// Ground: the icon's radial gradient, centred on the mark, stretched wide.
-const g = ctx.createRadialGradient(330, H * 0.42, 40, 330, H * 0.42, 1500);
-g.addColorStop(0, '#0b1428'); g.addColorStop(0.45, '#050a16'); g.addColorStop(1, '#01030a');
-ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+// In the 512 mark: chevron outer apex y=192, feet y=328; feet x 183..329.
+const CHEV_H = 136 / 512, CHEV_W = 146 / 512, CHEV_CY = (192 + 328) / 2 / 512;
+const CAP = 0.72; // Avenir Next Ultra Light cap height, em
 
-// The poster's faint grid, receding to the right.
-ctx.save();
-ctx.strokeStyle = 'rgba(127,178,255,0.07)'; ctx.lineWidth = 1;
-for (let x = 0.5; x < W; x += 40) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
-for (let y = 0.5; y < H; y += 40) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
-const fade = ctx.createLinearGradient(0, 0, W, 0);
-fade.addColorStop(0, 'rgba(1,3,10,0)'); fade.addColorStop(0.55, 'rgba(1,3,10,0)'); fade.addColorStop(1, 'rgba(1,3,10,0.85)');
-ctx.fillStyle = fade; ctx.fillRect(0, 0, W, H);
-ctx.restore();
+// Seeded RNG so both banners are byte-stable across runs.
+function rng(seed) { let s = seed >>> 0; return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; }; }
 
-// A thin horizontal HUD line through the mark's centre, as on the poster.
-ctx.save();
-ctx.strokeStyle = 'rgba(127,178,255,0.35)'; ctx.lineWidth = 1.5;
-ctx.beginPath(); ctx.moveTo(60, H / 2 + 0.5); ctx.lineTo(520, H / 2 + 0.5); ctx.stroke();
-ctx.restore();
-
-// The mark, 320px, vertically centred, left.
-const markSize = 320;
-const mark = await loadImage(Buffer.from(markSvg.replace(/width="512" height="512"/, `width="${markSize}" height="${markSize}"`)));
-ctx.drawImage(mark, 330 - markSize / 2, H / 2 - markSize / 2, markSize, markSize);
-
-// Wordmark. Light weight, wide tracking - the poster sets "AEON" the same way.
-const tracked = (text, x, y, size, weight, spacing, color) => {
-  ctx.font = `${weight} ${size}px ${FAMILY}`; ctx.fillStyle = color; ctx.textBaseline = 'alphabetic';
-  let cx = x;
-  for (const ch of text) { ctx.fillText(ch, cx, y); cx += ctx.measureText(ch).width + spacing; }
-  return cx - spacing;
+const tracked = (ctx, text, x, y, size, spacing, color) => {
+  ctx.font = `400 ${size}px ${FAMILY}`; ctx.fillStyle = color; ctx.textBaseline = 'alphabetic';
+  let cx = x; for (const ch of text) { ctx.fillText(ch, cx, y); cx += ctx.measureText(ch).width + spacing; }
 };
-const textX = 560;
-ctx.save();
-ctx.shadowColor = 'rgba(127,178,255,0.55)'; ctx.shadowBlur = 28;
-tracked('AEON', textX, 196, 136, '400', 26, '#eaf3ff');
-ctx.restore();
-tracked(TAGLINE, textX + 4, 258, 30, '400', 9, '#7fb2ff');
 
-// Rule and the one-line description, in the README's words.
-ctx.strokeStyle = 'rgba(127,178,255,0.3)'; ctx.lineWidth = 1;
-ctx.beginPath(); ctx.moveTo(textX + 2, 292.5); ctx.lineTo(textX + 690, 292.5); ctx.stroke();
-ctx.font = `400 22px ${FAMILY}`; ctx.fillStyle = 'rgba(188,216,255,0.72)';
-ctx.fillText('A local-first AI workspace built from governed blocks.', textX + 2, 330);
+// The wordmark: mark as the A, chevron at cap height, "EON" drawn last with a
+// halo in the ground colour so the rings behind stay readable.
+async function wordmark(ctx, { x, y, size, spacing, color, onLight, ringAlpha, halo }) {
+  ctx.font = `400 ${size}px ${FAMILY}`;
+  const cap = size * CAP, markSize = cap / CHEV_H, chevW = markSize * CHEV_W;
+  const letters = [...'EON'], lw = letters.map((ch) => ctx.measureText(ch).width);
+  const chevCx = x + chevW / 2, chevCy = y - cap / 2;
+  const markCy = chevCy + (0.5 - CHEV_CY) * markSize;
+  let svg = markSvg.replace(/width="512" height="512"/, `width="${markSize}" height="${markSize}"`);
+  if (onLight) {
+    // Ink, not glow: the bloom filter has nothing dark to bloom against.
+    svg = svg.replace(/#bcd8ff|#eaf3ff/g, '#2f6fd6').replace(/#7fb2ff/g, '#5b8fe0').replace(/fill="#ffffff"/, 'fill="#0b1a3a"').replace(/filter="url\(#aeonGlow\)"/, '');
+  }
+  const img = await loadImage(Buffer.from(svg));
+  ctx.save(); ctx.globalAlpha = ringAlpha; ctx.drawImage(img, chevCx - markSize / 2, markCy - markSize / 2, markSize, markSize); ctx.restore();
+  let cx = x + chevW + spacing; const xs = [];
+  ctx.save(); ctx.textBaseline = 'alphabetic'; ctx.font = `400 ${size}px ${FAMILY}`;
+  ctx.shadowColor = halo; ctx.shadowBlur = 14; ctx.fillStyle = color;
+  letters.forEach((ch, i) => { xs.push(cx); ctx.fillText(ch, cx, y); ctx.fillText(ch, cx, y); cx += lw[i] + spacing; });
+  ctx.restore();
+  return { oX: xs[1], ringR: markSize * 205 / 512, cx: chevCx, cy: markCy };
+}
 
-fs.writeFileSync(OUT, canvas.toBuffer('image/png'));
-console.log(`[brand:banner] wrote ${path.relative(ROOT, OUT)} ${W}x${H} (face: ${FACE})`);
+// Light through an opened door: a soft vertical slit at the right edge and a
+// stream of particles pouring in from it, dense at the door, thinning leftward.
+// Two glows per particle (wide faint halo, tight bright core), some drawn as
+// short horizontal streaks so the field reads as motion, not static noise.
+function particles(ctx, { seed, doorX, from, colors, slit, count, additive, centerY, spreadK }) {
+  const r = rng(seed);
+  ctx.save();
+  // the slit
+  const s = ctx.createLinearGradient(doorX - 160, 0, W, 0);
+  s.addColorStop(0, slit.replace('A', '0')); s.addColorStop(0.75, slit.replace('A', '0.08')); s.addColorStop(0.97, slit.replace('A', '0.45')); s.addColorStop(1, slit.replace('A', '0.8'));
+  ctx.fillStyle = s; ctx.fillRect(doorX - 160, 0, W - doorX + 160, H);
+  // Additive on dark (light adds up); normal on light (ink would wash to white).
+  ctx.globalCompositeOperation = additive ? 'lighter' : 'source-over';
+  for (let i = 0; i < count; i++) {
+    // distance from the door: squared so most dust sits near the opening
+    const d = Math.pow(r(), 1.9);
+    const x = doorX - d * (doorX - from) + (r() - 0.5) * 30;
+    // spread widens as the light travels; centre band around mid-height
+    const spread = 0.55 + d * 0.55;
+    const y = centerY + (r() + r() + r() - 1.5) * (H / 3) * spread * spreadK;
+    if (y < -10 || y > H + 10) continue;
+    const near = 1 - d;
+    const size = 0.6 + r() * (1.4 + near * 2.6);
+    const a = (0.25 + r() * 0.75) * (0.35 + near * 0.65);
+    const col = colors[Math.floor(r() * colors.length)];
+    const rgba = (alpha) => col.replace('A', alpha.toFixed(3));
+    // halo
+    const hg = ctx.createRadialGradient(x, y, 0, x, y, size * 4);
+    hg.addColorStop(0, rgba(a * 0.35)); hg.addColorStop(1, rgba(0));
+    ctx.fillStyle = hg; ctx.beginPath(); ctx.arc(x, y, size * 4, 0, Math.PI * 2); ctx.fill();
+    // core, sometimes a streak
+    ctx.fillStyle = rgba(a);
+    if (r() < 0.28) { const len = size * (6 + r() * 26) * (0.5 + near); ctx.fillRect(x, y - size * 0.35, len, size * 0.7); }
+    else { ctx.beginPath(); ctx.arc(x, y, size, 0, Math.PI * 2); ctx.fill(); }
+  }
+  ctx.restore();
+}
+
+async function render({ onLight, out }) {
+  const canvas = createCanvas(W, H);
+  const ctx = canvas.getContext('2d');
+  if (onLight) {
+    const g = ctx.createLinearGradient(0, 0, W, H); g.addColorStop(0, '#f7f9fe'); g.addColorStop(1, '#e9eef9');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    ctx.save(); ctx.strokeStyle = 'rgba(31,79,168,0.08)'; ctx.lineWidth = 1;
+    for (let x = 0.5; x < W; x += 40) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
+    for (let y = 0.5; y < H; y += 40) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+    ctx.restore();
+  } else {
+    const g = ctx.createRadialGradient(300, H * 0.45, 40, 300, H * 0.45, 1500);
+    g.addColorStop(0, '#0b1428'); g.addColorStop(0.45, '#050a16'); g.addColorStop(1, '#01030a');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    ctx.save(); ctx.strokeStyle = 'rgba(127,178,255,0.06)'; ctx.lineWidth = 1;
+    for (let x = 0.5; x < W; x += 40) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
+    for (let y = 0.5; y < H; y += 40) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+    ctx.restore();
+  }
+
+  // The door, before the word so the brightest dust can pass behind EON's halo.
+  if (onLight) particles(ctx, { seed: 20260914, doorX: W - 40, from: 980, count: 700, additive: false, centerY: H * 0.42, spreadK: 0.85, slit: 'rgba(47,111,214,A)', colors: ['rgba(0,140,255,A)', 'rgba(0,190,255,A)', 'rgba(31,79,168,A)', 'rgba(11,42,120,A)'] });
+  else particles(ctx, { seed: 20260914, doorX: W - 40, from: 980, count: 700, additive: true, centerY: H * 0.42, spreadK: 0.85, slit: 'rgba(200,225,255,A)', colors: ['rgba(255,255,255,A)', 'rgba(220,235,255,A)', 'rgba(170,205,255,A)', 'rgba(127,178,255,A)'] });
+
+  const ink = onLight ? '#0b1a3a' : '#eaf3ff';
+  const blue = onLight ? '#2f6fd6' : '#7fb2ff';
+  const dim = onLight ? 'rgba(11,26,58,0.7)' : 'rgba(188,216,255,0.72)';
+  const ruleCol = onLight ? 'rgba(31,79,168,0.3)' : 'rgba(127,178,255,0.3)';
+  const halo = onLight ? 'rgba(247,249,254,0.95)' : 'rgba(1,3,10,0.95)';
+
+  const g = await wordmark(ctx, { x: 120, y: 212, size: 190, spacing: 36, color: ink, onLight, ringAlpha: onLight ? 0.85 : 0.8, halo });
+
+  // Tagline, rule and description start under the O - clear of the outer ring.
+  const tx = g.oX;
+  tracked(ctx, TAGLINE, tx, 272, 28, 10, blue);
+  ctx.strokeStyle = ruleCol; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(tx, 304.5); ctx.lineTo(tx + 700, 304.5); ctx.stroke();
+  ctx.font = `400 24px ${FAMILY}`; ctx.fillStyle = dim; ctx.fillText(DESC, tx, 342);
+
+  fs.writeFileSync(out, canvas.toBuffer('image/png'));
+  console.log(`[brand:banner] wrote ${path.relative(ROOT, out)} ${W}x${H} (face: ${FACE})`);
+}
+
+await render({ onLight: false, out: OUT_DARK });
+await render({ onLight: true, out: OUT_LIGHT });
