@@ -31,12 +31,18 @@ below.
   switch (forces the local model once `KILL_SWITCH_THRESHOLD` is
   hit), and a Gemini → Groq → offline-failsafe fallback chain.
 - `api/chat-stream.cjs` — SSE token-by-token streaming chat:
-  `POST /api/chat/stream`, `POST /api/chat/stop`. Reads role→provider→model
-  from `aeon-settings.json`, injects VP's persistent memory + approved
-  skills into the system prompt, and falls back configured provider → Groq
-  → local runtime if a provider errors mid-stream. Also fires a non-blocking
-  auto-memory-extraction call after each turn when `brain_settings.auto_memory`
-  is on.
+  `POST /api/chat/stream`, `POST /api/chat/stop`. Asks the kernel which
+  provider/model serves the role (`kernelLLM.describeRole`), injects the
+  operator's persistent memory + approved skills + Second Brain recall into
+  the turn, then streams it through `kernelLLM.stream` — the same LLM layer
+  every other AI call uses. Provider routing (endpoint registry, then
+  `aeon-settings.json`), key resolution, pacing, cooldowns and the fallback
+  chain (configured provider → `prefs.provider_priority` → local runtime)
+  all happen in the kernel; the block relays tokens and emits a `warning` +
+  corrected `meta` when the kernel falls back. `/chat/stop` aborts the
+  in-flight stream and asks the kernel (`kernelLLM.cancelAll`) to reclaim
+  local generations. Also fires a non-blocking auto-memory-extraction call
+  after each turn when `brain_settings.auto_memory` is on.
 - `api/audit.js` — `GET/POST/PUT/DELETE/OPTIONS /api/audit`: Supabase-backed
   audit log (`aeon_audit_log` table), used by the live activity feed here
   and by other blocks that write audit entries.
@@ -93,12 +99,11 @@ directly on `/api` only (see `src/kernel/blockHost.cjs`).
 - `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` — read directly in the
   browser (`index.jsx`, via `src/config.js`) as the fallback path when the
   primary `/api/token-analytics/*` fetches fail.
-- Provider keys for Groq/Gemini are resolved by the kernel's shared
-  `geminiRequest`/`groqRequest` helpers (local inference needs no key) and, in
-  `chat-stream.cjs`, directly from the vault (`GROQ_API_KEY`,
-  `GEMINI_PAID_KEY`/`GEMINI_FREE_KEY_1`, `OPENROUTER_API_KEY`,
-  `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) — this is why
-  `contract.permissions.secrets` is `true`.
+- Provider keys are never read by this block. `chat.cjs` calls the kernel's
+  shared `geminiRequest`/`groqRequest` helpers and `chat-stream.cjs` streams
+  through `kernelLLM.stream`; the kernel resolves each provider's key from
+  the endpoint registry / vault (or `.env`) itself. `contract.permissions.secrets`
+  stays `true` for the kernel-mediated provider access the terminal depends on.
 
 ## Storage
 - `LOG_FILE`, `TERMINAL_HISTORY_FILE`, `AUDIT_FILE` — shared kernel-level

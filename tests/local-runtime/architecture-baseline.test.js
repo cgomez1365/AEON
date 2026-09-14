@@ -127,6 +127,15 @@ describe('baseline: terminal SSE event vocabulary', () => {
       expect(doneBlock.slice(0, 300)).toContain(key);
     }
   });
+
+  it('streams through the kernel LLM layer, never a provider of its own', () => {
+    // "One LLM layer that routes every AI call by role" was false for the one
+    // route the operator actually talks to: this file carried its own Groq,
+    // Gemini and local streamers, its own vault key lookup, and a Claude branch
+    // that posted to Groq's URL. The provider hosts must not reappear here.
+    expect(src).not.toMatch(/api\.groq\.com|openrouter\.ai|generativelanguage\.googleapis|api\.anthropic\.com|api\.openai\.com/);
+    expect(src).toContain('kernelLLM.stream(');
+  });
 });
 
 describe('baseline: block dependency injection boundary', () => {

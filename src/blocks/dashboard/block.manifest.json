@@ -87,11 +87,6 @@
           "file": "api/chat.cjs",
           "scope": "vault",
           "reason": "Chat history is persisted to shared storage so the terminal and dashboard read one transcript."
-        },
-        {
-          "file": "api/chat-stream.cjs",
-          "scope": "vault",
-          "reason": "Reads the shared memory store at Agents/Aeon/memory/memories.json to inject working memory into a turn. It writes nothing — the previous reason claimed it wrote the shared transcript, which was never true of this file (BO-MEM T1)."
         }
       ]
     },

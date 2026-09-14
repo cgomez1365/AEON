@@ -46,7 +46,8 @@ const BLOCKS = path.join(ROOT, 'src', 'blocks');
 const BASELINE = new Set([
   // Literal requires — the form that took memory_core's mount down.
   'council/api/index.cjs',
-  'dashboard/api/chat-stream.cjs',
+  // dashboard/api/chat-stream.cjs left this list on 2026-09-14: streaming
+  // now goes through kernelLLM.stream, injected like every other dep.
   'dashboard/api/chat.cjs',
   'fleet_control/api/local-status.js',
   // Computed requires — found 2026-08-07 when this gate was widened to see

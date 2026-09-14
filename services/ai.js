@@ -366,26 +366,28 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   // ── Phase 6: native local runtime (llama.cpp, provider id: "local") ──────
   // Calls services/local-runtime/index.cjs — native runtime, no TCP port.
   // Only called when isAvailable() returns true (runtime + model in registry).
+  // F3c — an error with two remedies must name both, cheaper first.
+  // This said only "Install the runtime and a model in Cookbook." True, and
+  // incomplete: the operator fixed it the other way, by repointing the role
+  // at a provider that was already configured and working. That path needs
+  // no download and the message never mentioned it, so a first-time user
+  // reads this banner and goes to fetch 1.4 GB. AEON already knows which
+  // providers are healthy — it just was not using that knowledge when it
+  // explained a failure. Shared by the blocking and streaming local paths.
+  const _noLocalModelError = () => {
+    const alive = Object.entries(getProviderHealth())
+      .filter(([p, h]) => p !== 'local' && h.configured && h.healthy)
+      .map(([p]) => p);
+    return new Error(
+      alive.length
+        ? `No local model is installed. Assign a configured provider (${alive.join(', ')}) in Settings → Model Assignment — that works now and needs no download — or install a local model in Cookbook.`
+        : 'No local model is installed and no cloud provider is configured. Install a local model in Cookbook, or add a provider key in Settings → Connections.'
+    );
+  };
+
   const localNativeRequest = async (prompt, modelId, opts = {}) => {
     const lr = _getLocalRT();
-    if (!lr || !lr.isAvailable()) {
-      // F3c — an error with two remedies must name both, cheaper first.
-      // This said only "Install the runtime and a model in Cookbook." True, and
-      // incomplete: the operator fixed it the other way, by repointing the role
-      // at a provider that was already configured and working. That path needs
-      // no download and the message never mentioned it, so a first-time user
-      // reads this banner and goes to fetch 1.4 GB. AEON already knows which
-      // providers are healthy — it just was not using that knowledge when it
-      // explained a failure.
-      const alive = Object.entries(getProviderHealth())
-        .filter(([p, h]) => p !== 'local' && h.configured && h.healthy)
-        .map(([p]) => p);
-      throw new Error(
-        alive.length
-          ? `No local model is installed. Assign a configured provider (${alive.join(', ')}) in Settings → Model Assignment — that works now and needs no download — or install a local model in Cookbook.`
-          : 'No local model is installed and no cloud provider is configured. Install a local model in Cookbook, or add a provider key in Settings → Connections.'
-      );
-    }
+    if (!lr || !lr.isAvailable()) throw _noLocalModelError();
     const _t0 = Date.now();
     const flatPrompt = typeof prompt === 'string' ? prompt : (Array.isArray(prompt) ? prompt.map(m => m.content || '').join('\n') : String(prompt));
     // D1a — no default here. `|| 512` made this the real ceiling on /api/ai:
@@ -630,6 +632,28 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     }
   };
 
+  // One error mapping for every OpenAI-compatible transport, streaming or not.
+  // The message is operator-facing (§08 — an error names its remedy); the
+  // status and retry-after ride along as fields so callers never scrape text.
+  const _openAIError = async (response, model) => {
+    const body = (await response.text().catch(() => '')).slice(0, 200);
+    const err = new Error(
+      response.status === 401 || response.status === 403
+        ? 'That service rejected the API key.'
+        : response.status === 404
+          ? 'That address or model was not found. Check the Base URL ends in /v1 and the model name is right.'
+          : `Endpoint error ${response.status}: ${_redactKeys(body)}`
+    );
+    // Structured, so callers never have to scrape the message text.
+    err.status = response.status;
+    err.model = model;
+    const ra = response.headers.get('retry-after');
+    if (ra) err.retryAfterMs = /^\d+$/.test(ra.trim())
+      ? parseInt(ra, 10) * 1000
+      : Math.max(0, new Date(ra).getTime() - Date.now());
+    return err;
+  };
+
   const genericOpenAIRequest = async (prompt, model, baseUrl, apiKey, opts = {}) => {
     const _t0 = Date.now();
     const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
@@ -646,21 +670,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     });
     if (!response.ok) {
       _trackLLM('openai-compat', model, 0, Date.now() - _t0, false);
-      const body = (await response.text().catch(() => '')).slice(0, 200);
-      const err = new Error(
-        response.status === 401 || response.status === 403
-          ? 'That service rejected the API key.'
-          : response.status === 404
-            ? 'That address or model was not found. Check the Base URL ends in /v1 and the model name is right.'
-            : `Endpoint error ${response.status}: ${_redactKeys(body)}`
-      );
-      // Structured, so callers never have to scrape the message text.
-      err.status = response.status;
-      const ra = response.headers.get('retry-after');
-      if (ra) err.retryAfterMs = /^\d+$/.test(ra.trim())
-        ? parseInt(ra, 10) * 1000
-        : Math.max(0, new Date(ra).getTime() - Date.now());
-      throw err;
+      throw await _openAIError(response, model);
     }
     const data = await response.json().catch(() => null);
     // An OpenAI-compatible server that is merely *incompatible* answers 200 with
@@ -715,6 +725,480 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     if (provider === 'local') return localNativeRequest(prompt, model, o);
     return genericOpenAIRequest(prompt, model, base_url, apiKey, o);
   };
+
+  // ── Streaming transports ──────────────────────────────────────────────
+  //
+  // The dashboard's terminal used to carry its own copies of these — its own
+  // Groq/Gemini/local streamers, its own key lookup, its own fallback chain —
+  // which made "one LLM layer that routes every AI call by role" false for the
+  // one route the operator actually talks to. Worse, its Claude and OpenAI
+  // branches posted to Groq's URL. Every streaming call now comes through
+  // here, resolves through the same registry and settings as kernelLLM, and
+  // records through the same _trackLLM seam.
+  //
+  // Timeouts: the blocking transports wrap the whole request in
+  // AbortSignal.timeout(240s). A stream must not be killed mid-answer by a
+  // wall clock, so here the clock runs only until the response headers arrive;
+  // after that only the caller's own signal (client closed the tab, /chat/stop)
+  // can end it.
+  const STREAM_CONNECT_TIMEOUT_MS = 60000;
+  const _streamSignal = (opts = {}) => {
+    const connect = new AbortController();
+    const timer = setTimeout(
+      () => connect.abort(new Error(`No response headers within ${Math.round((opts.timeout_ms || STREAM_CONNECT_TIMEOUT_MS) / 1000)}s`)),
+      opts.timeout_ms || STREAM_CONNECT_TIMEOUT_MS,
+    );
+    const signal = opts.signal ? AbortSignal.any([connect.signal, opts.signal]) : connect.signal;
+    return { signal, connected: () => clearTimeout(timer) };
+  };
+
+  // Read a text/event-stream body and hand each `data:` payload to onData.
+  // onData returns false to stop early (the [DONE] sentinel).
+  const _readSSE = async (body, onData) => {
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+        for (const raw of lines) {
+          const line = raw.replace(/\r$/, '');
+          if (!line.startsWith('data:')) continue;
+          const payload = line.slice(5).trim();
+          if (!payload) continue;
+          if (onData(payload) === false) return;
+        }
+      }
+    } finally {
+      try { reader.releaseLock(); } catch {}
+    }
+  };
+
+  const _estimateTokens = (messages, text) =>
+    Math.ceil(JSON.stringify(messages || '').length / 4) + Math.ceil((text || '').length / 4);
+
+  const _emptyStreamError = () => {
+    const err = new Error('The model returned an empty response. If this is a custom endpoint, check the model name is one this service actually serves.');
+    err.emptyResponse = true;
+    return err;
+  };
+
+  // OpenAI-compatible SSE: groq, openai, openrouter, grok, lmstudio, custom.
+  const streamOpenAICompat = async (messages, model, baseUrl, apiKey, opts = {}) => {
+    const provider = opts.provider || 'openai-compat';
+    const _t0 = Date.now();
+    const base = String(baseUrl || '').replace(/\/$/, '');
+    if (!base) throw new Error(`No base URL for provider "${provider}".`);
+    const headers = { 'Content-Type': 'application/json' };
+    if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+    // Same clamp as openRouterRequest: free-tier models reserve max_tokens
+    // against the credit balance and 402 on a large reservation.
+    const isFree = provider === 'openrouter' && (model === 'openrouter/free' || String(model).endsWith(':free'));
+    const maxTokens = isFree ? Math.min(opts.max_tokens || 1024, 1024) : (opts.max_tokens || 4096);
+    await _pace(_paceKey(base, provider), opts.rpm_limit);
+    const { signal, connected } = _streamSignal(opts);
+    let response;
+    try {
+      response = await fetch(`${base}/chat/completions`, {
+        method: 'POST', headers,
+        body: JSON.stringify({ model, messages, stream: true, max_tokens: maxTokens }),
+        signal,
+      });
+    } finally { connected(); }
+    if (!response.ok) {
+      _trackLLM(provider, model, 0, Date.now() - _t0, false);
+      if (response.status === 429 || response.status === 402) rotateKeyPool(provider);
+      throw await _openAIError(response, model);
+    }
+    let text = '';
+    let reasoning = '';
+    let usage = null;
+    let finishReason = null;
+    await _readSSE(response.body, (payload) => {
+      if (payload === '[DONE]') return false;
+      let chunk;
+      try { chunk = JSON.parse(payload); } catch { return true; }
+      const choice = chunk.choices?.[0];
+      const delta = choice?.delta;
+      if (delta?.content) { text += delta.content; opts.onToken?.(delta.content); }
+      // Reasoning models put the answer in reasoning_content and leave content
+      // null. Held back rather than streamed, so a model's private thinking
+      // does not scroll through the terminal ahead of its answer; used only if
+      // no content ever arrives — the same parity genericOpenAIRequest keeps.
+      else if (delta?.reasoning_content) reasoning += delta.reasoning_content;
+      if (choice?.finish_reason) finishReason = choice.finish_reason;
+      if (chunk.usage) usage = chunk.usage;
+      return true;
+    });
+    if (!text && reasoning) { text = reasoning; opts.onToken?.(reasoning); }
+    if (text.trim() === '') {
+      _trackLLM(provider, model, 0, Date.now() - _t0, false);
+      throw _emptyStreamError();
+    }
+    const tokens = usage?.total_tokens || _estimateTokens(messages, text);
+    _trackLLM(provider, model, tokens, Date.now() - _t0, true);
+    return {
+      text, tokens, model, finishReason,
+      complete: finishReason !== 'length',
+      truncated: finishReason === 'length',
+      truncationReason: finishReason === 'length' ? 'max_tokens' : null,
+    };
+  };
+
+  // Same messages array as every other provider, mapped onto Gemini's shape:
+  // system turns become systemInstruction, the model's own turns are "model".
+  // Key-pool rotation on 429 happens only before the first token — a 429 is a
+  // response status, so it can only ever arrive there.
+  const streamGemini = async (messages, model, baseUrl, apiKey, opts = {}, retries = 0) => {
+    const _t0 = Date.now();
+    const base = (baseUrl || 'https://generativelanguage.googleapis.com/v1beta').replace(/\/$/, '');
+    const system = messages.filter(m => m.role === 'system').map(m => m.content).join('\n\n');
+    const contents = messages
+      .filter(m => m.role !== 'system')
+      .map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: String(m.content ?? '') }] }));
+    const url = `${base}/models/${model}:streamGenerateContent?alt=sse&key=${apiKey}`;
+    const { signal, connected } = _streamSignal(opts);
+    let response;
+    try {
+      response = await fetch(url, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents,
+          ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),
+          generationConfig: { maxOutputTokens: opts.max_tokens || 4096 },
+        }),
+        signal,
+      });
+    } finally { connected(); }
+    if (response.status === 429 && GEMINI_KEY_POOL.length > 1 && retries < GEMINI_KEY_POOL.length - 1) {
+      _trackLLM('gemini', model, 0, Date.now() - _t0, false);
+      rotateKey('429 Rate Limit');
+      return streamGemini(messages, model, baseUrl, getActiveKey(), opts, retries + 1);
+    }
+    if (!response.ok) {
+      _trackLLM('gemini', model, 0, Date.now() - _t0, false);
+      const err = new Error(`Gemini error ${response.status}: ${_redactKeys((await response.text().catch(() => '')).slice(0, 200))}`);
+      err.status = response.status;
+      throw err;
+    }
+    let text = '';
+    let usageTotal = 0;
+    let finishReason = null;
+    await _readSSE(response.body, (payload) => {
+      let chunk;
+      try { chunk = JSON.parse(payload); } catch { return true; }
+      const cand = chunk.candidates?.[0];
+      const t = cand?.content?.parts?.map(p => p.text || '').join('') || '';
+      if (t) { text += t; opts.onToken?.(t); }
+      if (cand?.finishReason) finishReason = cand.finishReason;
+      if (chunk.usageMetadata?.totalTokenCount) usageTotal = chunk.usageMetadata.totalTokenCount;
+      return true;
+    });
+    if (text.trim() === '') {
+      _trackLLM('gemini', model, 0, Date.now() - _t0, false);
+      throw _emptyStreamError();
+    }
+    const tokens = usageTotal || _estimateTokens(messages, text);
+    _trackLLM('gemini', model, tokens, Date.now() - _t0, true);
+    return {
+      text, tokens, model, finishReason,
+      complete: finishReason !== 'MAX_TOKENS',
+      truncated: finishReason === 'MAX_TOKENS',
+      truncationReason: finishReason === 'MAX_TOKENS' ? 'max_tokens' : null,
+    };
+  };
+
+  // Anthropic Messages API, stream:true. Same headers and error handling as
+  // claudeRequest; text arrives as content_block_delta / text_delta events.
+  const streamClaude = async (messages, model, apiKey, opts = {}) => {
+    const _t0 = Date.now();
+    const headers = {
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'Content-Type': 'application/json',
+    };
+    const system = messages.filter(m => m.role === 'system').map(m => m.content).join('\n\n');
+    const turns = messages.filter(m => m.role !== 'system').map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: String(m.content ?? '') }));
+    const body = { model, max_tokens: opts.max_tokens || 4096, messages: turns, stream: true };
+    if (system) body.system = system;
+    const { signal, connected } = _streamSignal(opts);
+    let response;
+    try {
+      response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST', headers, body: JSON.stringify(body), signal,
+      });
+    } finally { connected(); }
+    if (!response.ok) {
+      const errBody = await response.text().catch(() => '');
+      _trackLLM('claude', model, 0, Date.now() - _t0, false);
+      if (response.status === 429 || response.status === 402) { markUnhealthy('claude', response.status, errBody); rotateKeyPool('claude'); }
+      const err = new Error(`Claude API error ${response.status}: ${_redactKeys(errBody)}`);
+      err.status = response.status;
+      throw err;
+    }
+    let text = '';
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let stopReason = null;
+    let streamErr = null;
+    await _readSSE(response.body, (payload) => {
+      let ev;
+      try { ev = JSON.parse(payload); } catch { return true; }
+      if (ev.type === 'content_block_delta' && ev.delta?.type === 'text_delta' && ev.delta.text) {
+        text += ev.delta.text; opts.onToken?.(ev.delta.text);
+      } else if (ev.type === 'message_start') {
+        inputTokens = ev.message?.usage?.input_tokens || 0;
+      } else if (ev.type === 'message_delta') {
+        if (ev.delta?.stop_reason) stopReason = ev.delta.stop_reason;
+        if (ev.usage?.output_tokens) outputTokens = ev.usage.output_tokens;
+      } else if (ev.type === 'error') {
+        streamErr = new Error(`Claude API error: ${_redactKeys(ev.error?.message || JSON.stringify(ev.error || {}))}`);
+        return false;
+      } else if (ev.type === 'message_stop') {
+        return false;
+      }
+      return true;
+    });
+    if (streamErr) {
+      _trackLLM('claude', model, 0, Date.now() - _t0, false);
+      throw streamErr;
+    }
+    if (text.trim() === '') {
+      _trackLLM('claude', model, 0, Date.now() - _t0, false);
+      throw _emptyStreamError();
+    }
+    const tokens = (inputTokens + outputTokens) || _estimateTokens(messages, text);
+    _trackLLM('claude', model, tokens, Date.now() - _t0, true);
+    return {
+      text, tokens, model, finishReason: stopReason,
+      complete: stopReason !== 'max_tokens',
+      truncated: stopReason === 'max_tokens',
+      truncationReason: stopReason === 'max_tokens' ? 'max_tokens' : null,
+    };
+  };
+
+  // Native local runtime. The runtime applies the model's own chat template to
+  // a real messages array — a system turn is a system turn — and honours the
+  // caller's signal, so /chat/stop reaches llama-server, not just the display.
+  const streamLocal = async (messages, model, opts = {}) => {
+    const lr = _getLocalRT();
+    if (!lr || !lr.isAvailable()) throw _noLocalModelError();
+    const _t0 = Date.now();
+    const result = await lr.inferStream('', {
+      model: model || undefined,
+      messages,
+      signal: opts.signal,
+      // D1a — undefined means "derive it from the window".
+      maxTokens: opts.max_tokens,
+      temperature: opts.temperature ?? 0.7,
+    }, opts.onToken);
+    _trackLLM('local', result.model || model || 'local', result.tokens || 0, Date.now() - _t0, !result.cancelled);
+    return {
+      text: result.text || '',
+      tokens: result.tokens || 0,
+      model: result.model || model,
+      complete: result.complete !== false && !result.cancelled,
+      truncated: !!result.truncated,
+      truncationReason: result.truncationReason || null,
+      cancelled: !!result.cancelled,
+      finishReason: result.finishReason || null,
+    };
+  };
+
+  // Keys for the legacy (settings-file) path, where no registry endpoint
+  // carried one. The registry path passes the vault key straight through.
+  const _legacyKeyFor = (p) =>
+    p === 'groq' ? (nextKey('groq') || process.env.GROQ_API_KEY) :
+    p === 'gemini' ? getActiveKey() :
+    p === 'openrouter' ? (nextKey('openrouter') || process.env.OPENROUTER_API_KEY) :
+    p === 'claude' ? (nextKey('claude') || process.env.ANTHROPIC_API_KEY) :
+    p === 'openai' ? process.env.OPENAI_API_KEY :
+    p === 'grok' ? (process.env.XAI_API_KEY || process.env.GROK_API_KEY) :
+    null;
+  const _KEY_REQUIRED = { groq: 'GROQ_API_KEY', openai: 'OPENAI_API_KEY', openrouter: 'OPENROUTER_API_KEY', claude: 'ANTHROPIC_API_KEY', grok: 'XAI_API_KEY', gemini: 'a Gemini key' };
+
+  // Dispatch on the transport STYLE from the registry's provider profiles, so
+  // custom/lmstudio/grok endpoints stream the same way groq does.
+  const _dispatchStream = async (messages, c, opts = {}) => {
+    const transport = aeonEndpoints?.PROVIDER_TRANSPORT || {};
+    const profile = transport[c.provider] || {};
+    const style = profile.style || (c.provider === 'local' ? 'local' : 'openai');
+    const o = { ...opts, provider: c.provider, ...(c.rpm_limit != null ? { rpm_limit: c.rpm_limit } : {}) };
+    if (style === 'local') return streamLocal(messages, c.model, o);
+    const apiKey = c.apiKey || _legacyKeyFor(c.provider);
+    if (!apiKey && _KEY_REQUIRED[c.provider]) {
+      throw new Error(`${_KEY_REQUIRED[c.provider]} missing in .env or vault`);
+    }
+    const base = c.base_url || profile.base || null;
+    if (style === 'gemini') return streamGemini(messages, c.model || 'gemini-flash-latest', base, apiKey, o);
+    if (style === 'anthropic') return streamClaude(messages, c.model || 'claude-sonnet-5', apiKey, o);
+    return streamOpenAICompat(messages, c.model, base, apiKey, o);
+  };
+
+  // The ordered list of {provider, model, base_url?, apiKey?} a streaming call
+  // will try: the role's own assignment first (registry, else the settings
+  // file), then the fallback chain kernelLLM uses, with local always last.
+  const _STREAM_FALLBACK_MODELS = { groq: 'llama-3.3-70b-versatile', gemini: 'gemini-flash-latest', openrouter: 'openai/gpt-4o-mini', local: undefined };
+  const _streamCandidates = async (role, opts = {}) => {
+    const settings = loadSettings() || {};
+    const candidates = [];
+    let primary = null;
+
+    if (opts.provider) {
+      primary = { provider: opts.provider, model: opts.model, source: 'override' };
+    } else if (aeonEndpoints) {
+      try {
+        const r = await aeonEndpoints.resolveForRole(role, supabase);
+        if (r && r.ok) {
+          if (r.via === 'relay') {
+            throw new Error(`Model "${r.model}" is desktop-only; relay required (desktop must be online).`);
+          }
+          primary = { provider: r.provider, model: r.model, base_url: r.base_url, apiKey: r.apiKey, rpm_limit: r.rpm_limit, source: 'registry' };
+        }
+      } catch (e) {
+        if (/desktop-only/.test(e.message)) throw e;
+        console.warn(`[KERNEL] registry resolve(${role}) fell back:`, e.message);
+      }
+    }
+    if (!primary) {
+      // The settings file, with the same offline floor the terminal used to
+      // build for itself: no chat role at all still resolves to a local model.
+      const models = settings.models || {};
+      const roleConfig = models[role] || models.chat || { provider: 'local', model: defaultLocalModel() };
+      primary = { provider: roleConfig.provider || 'local', model: roleConfig.model, source: 'settings' };
+    }
+    candidates.push(primary);
+
+    const availableProviders = opts._vercelStrict
+      ? ['groq', 'gemini', 'openrouter']
+      : ['groq', 'gemini', 'openrouter', 'local'];
+    const priority = settings.prefs?.provider_priority;
+    const fallbacks = Array.isArray(priority) && priority.length
+      ? priority.filter(p => availableProviders.includes(p))
+      : availableProviders;
+    for (const p of fallbacks) {
+      if (candidates.some(c => c.provider === p)) continue;
+      if (!isConfigured(p) || !isHealthy(p)) continue;
+      candidates.push({ provider: p, model: _STREAM_FALLBACK_MODELS[p], source: 'fallback' });
+    }
+    // Local is the floor, never a rung in the middle: a local answer is a
+    // noticeable change in quality and speed, so every configured cloud
+    // provider gets its turn first.
+    if (!opts._vercelStrict && localRuntimePresent() && !candidates.some(c => c.provider === 'local')) {
+      candidates.push({ provider: 'local', model: undefined, source: 'fallback' });
+    }
+    const localIdx = candidates.findIndex((c, i) => i > 0 && c.provider === 'local');
+    if (localIdx > 0 && localIdx !== candidates.length - 1) {
+      candidates.push(...candidates.splice(localIdx, 1));
+    }
+    return candidates;
+  };
+
+  /**
+   * kernelLLM.stream — token-by-token dispatch by role.
+   *
+   *   opts = { role='chat', signal, onToken(delta) [required],
+   *            onAttempt({provider, model, fallback}),
+   *            onFallback({from, to, model, reason}),
+   *            max_tokens, timeout_ms, provider, model }
+   *
+   * Resolves like kernelLLM (registry, then settings, then the fallback
+   * chain). A provider that fails BEFORE its first token is skipped and the
+   * next candidate tried, with onFallback told why. A failure AFTER tokens
+   * have reached the caller cannot be retried transparently — the caller has
+   * already shown them — so it is rethrown with err.partialText. A caller
+   * abort resolves to { cancelled: true } with whatever text had arrived.
+   */
+  const kernelLLMStream = async (messages, opts = {}) => {
+    if (typeof opts.onToken !== 'function') throw new Error('kernelLLM.stream requires opts.onToken');
+    if (!Array.isArray(messages) || !messages.length) throw new Error('kernelLLM.stream requires a messages array');
+    const role = opts.role || 'chat';
+    if (_isCloud()) opts = { ...opts, _vercelStrict: true };
+    const t0 = Date.now();
+    const candidates = await _streamCandidates(role, opts);
+    const primary = candidates[0];
+    const attempts = [];
+    let lastErr = null;
+    let lastFailed = null;
+
+    for (const c of candidates) {
+      const fallback = c !== primary;
+      if (fallback && lastFailed) {
+        opts.onFallback?.({ from: lastFailed.provider, to: c.provider, model: c.model, reason: lastErr?.message || 'unavailable' });
+      }
+      opts.onAttempt?.({ provider: c.provider, model: c.model, fallback });
+
+      let partial = '';
+      let served = 0;
+      const onToken = (t) => { if (!t) return; served++; partial += t; opts.onToken(t); };
+      try {
+        const r = await _dispatchStream(messages, c, { ...opts, onToken });
+        const usedModel = r.model || c.model;
+        if (fallback) notify(`↪ Fallback: ${role} streamed via ${c.provider}/${usedModel} (configured: ${primary.provider})`, { provider: c.provider });
+        return {
+          text: r.text, tokens: r.tokens, latencyMs: Date.now() - t0,
+          provider: c.provider, model: usedModel, fallback,
+          complete: r.complete !== false, truncated: !!r.truncated,
+          truncationReason: r.truncationReason || null, cancelled: !!r.cancelled,
+          finishReason: r.finishReason || null,
+        };
+      } catch (e) {
+        if (opts.signal?.aborted) {
+          // The operator stopped it. Not a provider failure — do not fall back.
+          _trackLLM(c.provider, c.model || 'unknown', _estimateTokens(messages, partial), Date.now() - t0, false);
+          return {
+            text: partial, tokens: Math.ceil(partial.length / 4), latencyMs: Date.now() - t0,
+            provider: c.provider, model: c.model, fallback,
+            complete: false, truncated: false, truncationReason: null, cancelled: true, finishReason: 'cancelled',
+          };
+        }
+        if (served > 0) {
+          // Tokens already reached the caller; a silent retry would show the
+          // operator two answers. Surface it with what arrived.
+          _trackLLM(c.provider, c.model || 'unknown', _estimateTokens(messages, partial), Date.now() - t0, false);
+          e.partialText = partial;
+          e.provider = c.provider;
+          e.model = c.model;
+          throw e;
+        }
+        lastErr = e;
+        lastFailed = c;
+        const status = e.status || Number(/error (\d{3})/i.exec(e.message)?.[1]) || (/429/.test(e.message) ? 429 : /402/.test(e.message) ? 402 : null);
+        if (status === 429 || status === 402) markUnhealthy(c.provider, status, e.message);
+        attempts.push({ provider: c.provider, status: status || null, message: e.message });
+        console.warn(`[KERNEL] stream ${c.provider} failed (${e.message.slice(0, 120)}), trying next provider`);
+      }
+    }
+    throw _chainExhaustedError(attempts, lastErr);
+  };
+
+  // The provider/model the role WOULD stream through, and the context window
+  // the memory budget should be denominated in. Local models know their real
+  // window; cloud windows are far larger than anything injected, so 8k is a
+  // safe floor there rather than a guess that matters.
+  const describeRole = async (role = 'chat') => {
+    const opts = _isCloud() ? { _vercelStrict: true } : {};
+    let c = null;
+    try { c = (await _streamCandidates(role, opts))[0] || null; }
+    catch (e) { console.warn(`[KERNEL] describeRole(${role}):`, e.message); }
+    if (!c) return { provider: null, model: null, contextTokens: 8192 };
+    let contextTokens = 8192;
+    let model = c.model;
+    if (c.provider === 'local') {
+      const lr = _getLocalRT();
+      if (!model) model = defaultLocalModel();
+      try { contextTokens = (await lr?.plannedContext?.(model))?.contextTokens || 8192; } catch {}
+    }
+    return { provider: c.provider, model: model ?? null, contextTokens };
+  };
+
+  // Local generations may be held by the runtime itself, not only by a
+  // caller's AbortController — a stop that names no stream reclaims those too.
+  const cancelAll = () => { try { return _getLocalRT()?.cancelAll?.() || 0; } catch { return 0; } };
 
   // ── Vision — reads an image via whatever provider the "vision" role is
   // set to in Settings (Model Assignment). Provider-agnostic by design: the
@@ -908,24 +1392,31 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       }
     }
 
-    // BO-SHIP P8c — say which provider failed and why.
-    //
-    // This used to throw `lastErr`: the error from the LAST provider in the
-    // chain, which is `local`. So a configured, working Groq key that had
-    // simply hit its per-minute token limit produced
-    //
-    //     "No local model is installed and no cloud provider is configured.
-    //      Install a local model in Cookbook, or add a provider key."
-    //
-    // — a permanent-sounding configuration error, telling the operator to add a
-    // key they already had, for a condition that clears in seconds. Found by
-    // driving /write three times against a live server on a Groq free tier:
-    // call one succeeded, calls two and three "had no provider".
-    //
-    // A transient throttle and an unconfigured install are different states
-    // with different remedies. The old comment asserted this was always "a
-    // configuration state, not an internal fault"; that is only true when
-    // nothing was actually configured.
+    throw _chainExhaustedError(attempts, lastErr);
+  };
+
+  // BO-SHIP P8c — say which provider failed and why.
+  //
+  // This used to throw `lastErr`: the error from the LAST provider in the
+  // chain, which is `local`. So a configured, working Groq key that had
+  // simply hit its per-minute token limit produced
+  //
+  //     "No local model is installed and no cloud provider is configured.
+  //      Install a local model in Cookbook, or add a provider key."
+  //
+  // — a permanent-sounding configuration error, telling the operator to add a
+  // key they already had, for a condition that clears in seconds. Found by
+  // driving /write three times against a live server on a Groq free tier:
+  // call one succeeded, calls two and three "had no provider".
+  //
+  // A transient throttle and an unconfigured install are different states
+  // with different remedies. The old comment asserted this was always "a
+  // configuration state, not an internal fault"; that is only true when
+  // nothing was actually configured.
+  //
+  // Shared by kernelLLM and kernelLLM.stream so a streaming chat and a blocking
+  // call report the same failure the same way.
+  function _chainExhaustedError(attempts, lastErr) {
     const throttled = attempts.find((a) => a.status === 429);
     if (throttled) {
       const err = new Error(
@@ -938,7 +1429,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       err.retryable = true;
       // Deliberately NOT noProviderAvailable: a provider IS available, and
       // sending the operator to Settings would be sending them nowhere.
-      throw err;
+      return err;
     }
 
     // Every candidate provider was tried and none could serve. That is a
@@ -949,11 +1440,18 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     const exhausted = lastErr || new Error('No LLM provider available (check API keys in Settings)');
     exhausted.noProviderAvailable = true;
     exhausted.attempts = attempts;
-    throw exhausted;
-  };
+    return exhausted;
+  }
+
+  // Streaming rides on the same function object every block already holds, so
+  // a block that was handed `kernelLLM` can stream without a new dependency.
+  kernelLLM.stream = kernelLLMStream;
+  kernelLLM.describeRole = describeRole;
+  kernelLLM.cancelAll = cancelAll;
 
   return {
-    kernelLLM, kernelVision, geminiRequest, groqRequest, localNativeRequest, openRouterRequest, claudeRequest,
+    kernelLLM, kernelLLMStream, describeRole, cancelAll,
+    kernelVision, geminiRequest, groqRequest, localNativeRequest, openRouterRequest, claudeRequest,
     GEMINI_KEY_POOL, _trackLLM, _llmTelemetry, setActivityRecorder,
     getDailyCost, addRunCost,
     KILL_SWITCH_THRESHOLD, GEMINI_PRICE_PER_TOKEN, GROQ_PRICE_PER_TOKEN,
