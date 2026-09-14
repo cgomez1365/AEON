@@ -142,18 +142,13 @@ directly on `/api` only (see `src/kernel/blockHost.cjs`).
   text inputs exist in `index.jsx`, and no `outline: none` was found.
 
 ## Known limitations (judgment calls, not fixed here — flagged for the operator)
-- **`api/pipeline-metrics.js` is dead API surface.** It's mounted (both via
-  `api/static-includes.js`'s static require and `api/index.js`'s Vercel
-  route list — both outside this block's scope to edit) and responds
-  correctly, but grepping every `.jsx` file in the repo turns up zero
-  callers. The retired hand-written block matrix (replaced by the generated
+- **`api/pipeline-metrics.js` is dead API surface.** It's mounted by the
+  block host like every other file in `api/` and responds correctly, but
+  grepping every `.jsx` file in the repo turns up zero callers. The retired hand-written block matrix (replaced by the generated
   `docs/BLOCKS.md`, 2026-09-14) listed Dashboard as a reader of
   `/api/pipeline-metrics` — that was stale; the caller was almost certainly the treasury/deficit panel this
-  block had stripped out. Deleting the file would leave a dangling
-  `require()` in `api/static-includes.js` and `api/index.js` (root-level,
-  out of this pass's scope) that would log a caught error on every boot.
-  Recommend either wiring it into a real UI panel or removing it together
-  with its two require sites in one cross-scope pass.
+  block had stripped out. Recommend either wiring it into a real UI panel
+  or deleting the file.
 - **Closed 2026-09-14: `components/MobileCommandDashboard.jsx` and its
   duplicate `src/components/MobileCommandDashboard.jsx` were removed** in the
   stale-file sweep, together — the two-copies concern above was the reason an

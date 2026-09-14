@@ -7,17 +7,17 @@ Objectives: **RTO ≤ 1 hour**, **RPO ≤ 24 hours** (last daily sync).
 | Scenario | Detection | Recovery |
 |----------|-----------|----------|
 | Server crash loop | Healthcheck red / `pm2` restarts | `uncaughtException` exits non-zero → process manager restarts. Check Pino logs for the fatal line. |
-| Supabase data loss/corruption | Canary errors, app read failures | Restore from Supabase PITR (Pro plan) or the daily GAS backup (`/api/sync/gas-backup`). |
+| Supabase data loss/corruption | Canary errors, app read failures | Restore from Supabase PITR (Pro plan). There is no other automated copy. |
 | RLS regression (data exposed) | `npm run canary` → EXPOSED | Re-run `db/migrations/001_enable_rls.sql` immediately. Then investigate what dropped the policy. |
 | Vault unreadable (lost master key) | `[VAULT] decrypt failed` | The key is unrecoverable by design. Restore `AEON_VAULT_MASTER_KEY` from your password manager, OR re-enter every secret via the Settings → Account panel. **Back up this key offline.** |
-| Vercel outage | Site down | The local install (launcher or Desktop icon) keeps working — it never depended on Vercel. |
 | Compromised API key | Provider alert / unexpected spend | Rotate at provider, update env, redeploy. See [SECURITY.md](SECURITY.md) §rotation. |
 
 ## Backups — what exists
 
-- **Supabase**: source of truth. Enable Point-in-Time Recovery (Pro) — this is the
-  single most important backup. Without it, RPO = the daily GAS sync.
-- **GAS daily backup**: `vercel.json` cron `/api/sync/gas-backup` (00:00). Failsafe, not primary (R-08).
+- **Supabase** (if you connected one): enable Point-in-Time Recovery (Pro) — without
+  it there is no automated copy. Earlier revisions of this page described a daily
+  Google Apps Script backup on a Vercel cron; neither the cron nor the route ever
+  existed in this repository.
 - **Vault master key**: store `AEON_VAULT_MASTER_KEY` in a password manager. It is
   NOT in any backup and cannot be regenerated to decrypt existing data.
 - **Local JSON stores** (`db/*.json`): per-box, not authoritative. Mount a

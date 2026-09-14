@@ -41,29 +41,23 @@ pm2 save && pm2 startup
 Every writable root can live outside the install directory — see the storage table in
 [ARCHITECTURE.md](ARCHITECTURE.md).
 
-## 2. Vercel — unverified
+## 2. Vercel — removed
 
-`vercel.json`, `.vercelignore` and `api/` describe a stateless cloud mirror, and the code
-carries cloud branches for it. **It has never been deployed from this repository:** every
-Vercel project on the account showed zero deployments from the repository's creation
-(2026-07-21) to 2026-09-14. Until a deployment has run and passed §3, treat this section
-as design, not a supported path.
+A stateless Vercel mirror was described in this repository from its creation
+(2026-07-21) and never deployed once. On 2026-09-14 the mirror's files were removed:
+the rewrite config, the ignore file, the generated serverless entry and its generator,
+and the cloud-only web-search function. The local `/api/search-web` route in
+`services/search.js` is unaffected.
 
-What is known to be required:
+What remains is the code's own cloud awareness: the `isVercel` branches that every
+cloud-aware module carries (95 sites across 22 files, counted and ratcheted by
+`scripts/scan-cloud-surface.cjs`). They are subtractive — each one skips something
+the cloud could not do — and inert on every supported target. They are being removed
+under the ratchet, which only ever allows the count to fall.
 
-- Vercel runs `npm run build`, which executes `scripts/gen-*.cjs` and writes
-  `docs/BLOCKS.md`. `.vercelignore` must therefore upload `scripts/` and `docs/` (fixed
-  2026-09-14; both were excluded before).
-- Set environment variables in the Vercel dashboard, never in `vercel.json`.
-- The serverless filesystem is read-only: the vault, local models, the Second Brain index
-  and the launcher do not exist there. Keys come from the environment
-  (`AEON_VAULT_MASTER_KEY`, provider keys) and data from Supabase.
-- `vercel.json` defines rewrites only — no cron jobs. Earlier revisions of this page listed
-  two crons that the file never contained.
-
-```bash
-vercel --prod
-```
+If a cloud deployment is ever wanted again, it starts from a design, not from these
+remnants: a read-only filesystem, no vault, no local models, no Second Brain index,
+keys from the environment and data from Supabase.
 
 ## 3. Post-deploy verification
 

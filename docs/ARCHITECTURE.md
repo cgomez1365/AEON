@@ -99,9 +99,8 @@ Keys are encrypted at rest (AES-256-GCM, `src/kernel/vault.cjs`). The `.env` mas
 ## Cloud (optional)
 
 `services/cloud.js` creates a Supabase client only when keys are configured, and never when
-`AEON_LOCAL_ONLY=1` or `AEON_PORTABLE=true`. Every consumer handles its absence. The same
-codebase also deploys to Vercel as a stateless cloud mirror; see
-[`DEPLOYMENT.md`](DEPLOYMENT.md).
+`AEON_LOCAL_ONLY=1` or `AEON_PORTABLE=true`. Every consumer handles its absence. There is
+no cloud deployment of AEON itself; see [`DEPLOYMENT.md`](DEPLOYMENT.md).
 
 ## Ports
 

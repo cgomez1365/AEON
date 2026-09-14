@@ -16,7 +16,6 @@ export default defineConfig({
           'vendor-icons': ['lucide-react'],
           'vendor-charts': ['recharts'],
           'vendor-supabase': ['@supabase/supabase-js'],
-          'vendor-3d': ['three', '@react-three/fiber', '@react-three/drei'],
           'vendor-markdown': ['react-markdown', 'remark-gfm'],
         },
       },

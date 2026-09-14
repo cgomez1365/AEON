@@ -39,8 +39,8 @@ in the vault, keyed by `AEON_VAULT_MASTER_KEY` which lives only in env.
 Run this whenever a key may be exposed (and once now — keys have been on disk):
 
 1. **Generate new key** at the provider dashboard (Groq, Gemini, Supabase, etc.).
-2. **Update env** in every deployment target (Vercel dashboard,
-   self-host `.env`). Never commit.
+2. **Update env** on every machine that runs AEON (`.env`, or Settings → Account).
+   Never commit.
 3. **Supabase service_role**: Settings → API → roll. Then redeploy with new key in
    server env ONLY. Grep first: `grep -rI service_role src/` must only hit `kernel/`.
 4. **Vault master key** (`AEON_VAULT_MASTER_KEY`): rotating it requires re-encrypting.

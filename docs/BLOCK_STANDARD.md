@@ -67,7 +67,7 @@ rather than fixed — two schemas is the defect, not their disagreement.
 - Cloud fallback: try local API first, then Supabase direct query
 
 ### Deployment Tags
-- `universal` — Works on localhost AND Vercel/cloud. No OS access, no local files.
+- `universal` — Needs no OS access and no local files, so it would run on a read-only host. (No cloud target is deployed today.)
 - `local_required` — Needs OS access, hardware, or local services (FFmpeg, Python, the bundled local runtime).
 - `hybrid` — Core features work on cloud, advanced features need local.
 

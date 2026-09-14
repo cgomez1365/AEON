@@ -120,7 +120,6 @@ code reads it or calls Groq directly.
 ## Dependencies
 
 - `@supabase/supabase-js` — candidate storage/sync
-- `@google/generative-ai` — direct Gemini call for alert-email drafting
 - `pdf-parse` — résumé PDF → plain text extraction
 - `kernelLLM` (injected via block host `deps`, requires `contract.permissions.ai: true`) — grading
 

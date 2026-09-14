@@ -122,8 +122,8 @@ not a route owned by Deep Research — it's exposed here as a terminal command s
 
 ### Frontend calls into other blocks/kernel routes (not owned by this block)
 
-`index.jsx`'s browser-direct fallback pipeline calls `/api/search-web` (Vercel Edge Function,
-routed via `vercel.json` → `api/search-web.js`), `/api/orion-scrape` (Orion Search block), and
+`index.jsx`'s browser-direct fallback pipeline calls `/api/search-web` (the kernel's search
+router in `services/search.js`), `/api/orion-scrape` (Orion Search block), and
 `/api/ai` (kernel LLM route) — all confirmed live elsewhere in the repo, not orphaned calls.
 
 ## Config keys / dependencies
