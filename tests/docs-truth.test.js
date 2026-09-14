@@ -12,8 +12,9 @@
  *
  * A reader cannot tell a stale doc from a true one, so one stale doc teaches
  * them to distrust all of it (claim discipline). This gate is the cheapest check
- * that would have caught every one of those: a path a doc cites in backticks
- * must exist in the repo.
+ * that would have caught every one of those: a path a doc cites in backticks,
+ * as a Markdown link target or as an <img src> must exist in the repo, and a
+ * link's #anchor must be a heading in the target.
  *
  * Bare filenames (`index.cjs`, `block.manifest.json`) are skipped: they name a
  * file every block has, not one path. Paths a doc cites as HISTORY are listed in
@@ -63,6 +64,13 @@ const DOCS = [
 
 const PATHISH = /(?:^|[\s(`'"])((?:\.{1,2}\/)*[A-Za-z0-9_.~-]+(?:\/[A-Za-z0-9_.~*-]+)+\.(?:js|cjs|mjs|jsx|json|md|bat|sh|command|sql|yml|yaml|html))(?=$|[\s)`'",:;#])/g;
 
+// Markdown link targets and <img src> as well as backtick spans: README's
+// [Architecture](docs/ARCHITECTURE.md) and its banner are claims too. A broken
+// anchor (#lessons-paid-for on a heading GitHub slugs as #4-lessons-paid-for)
+// went unnoticed because only backticks were read (2026-09-14).
+const LINK = /\]\(([^)\s]+)\)|<img[^>]*\ssrc="([^"]+)"/g;
+const EXTERNAL = /^(?:[a-z]+:|\/\/)/i;
+
 function citedPaths(src) {
   const out = new Set();
   for (const span of src.match(/`[^`\n]+`/g) || []) {
@@ -70,7 +78,35 @@ function citedPaths(src) {
     PATHISH.lastIndex = 0;
     while ((m = PATHISH.exec(span.slice(1, -1)))) out.add(m[1]);
   }
+  for (const [, link, img] of src.matchAll(LINK)) {
+    const target = link || img;
+    if (!target || EXTERNAL.test(target) || target.startsWith('#')) continue;
+    out.add(target.split('#')[0]);
+  }
   return out;
+}
+
+// Anchors: `path#slug` must name a heading in that file, slugged the way GitHub
+// does it - lowercase, punctuation dropped, spaces to hyphens.
+function citedAnchors(src) {
+  const out = [];
+  for (const [, link] of src.matchAll(LINK)) {
+    if (!link || EXTERNAL.test(link) || !link.includes('#')) continue;
+    const [file, anchor] = link.split('#');
+    if (file && anchor) out.push({ file, anchor });
+  }
+  return out;
+}
+const slug = (heading) => heading.toLowerCase().replace(/[`*_]/g, '').replace(/[^\p{L}\p{N} -]/gu, '').trim().replace(/ /g, '-');
+function headingSlugs(file) {
+  const text = fs.readFileSync(path.join(ROOT, file), 'utf8');
+  return new Set([...text.matchAll(/^#{1,6}\s+(.+?)\s*#*$/gm)].map(m => slug(m[1])));
+}
+function resolveDoc(doc, p) {
+  const clean = norm(p);
+  if (TRACKED.has(clean)) return clean;
+  const rel = norm(path.posix.join(path.posix.dirname(doc), p));
+  return TRACKED.has(rel) ? rel : null;
 }
 
 // Checked against TRACKED files, never the disk. A doc citing a git-ignored file
@@ -98,6 +134,10 @@ describe('docs cite only files that exist', () => {
       const src = fs.readFileSync(path.join(ROOT, doc), 'utf8');
       const dead = [...citedPaths(src)].filter(p => !exists(doc, p));
       expect(dead, `${doc} cites files that do not exist`).toEqual([]);
+      const badAnchors = citedAnchors(src)
+        .filter(({ file, anchor }) => { const f = resolveDoc(doc, file); return f && !headingSlugs(f).has(anchor); })
+        .map(({ file, anchor }) => `${file}#${anchor}`);
+      expect(badAnchors, `${doc} links to anchors no heading produces`).toEqual([]);
     });
   }
 
@@ -106,6 +146,11 @@ describe('docs cite only files that exist', () => {
     expect([...citedPaths('see `src/kernel/routers/god.cjs` and `index.cjs`')]).toEqual(['src/kernel/routers/god.cjs']);
     expect(exists('docs/X.md', 'src/kernel/routers/god.cjs')).toBe(false);
     expect(exists('docs/X.md', 'src/kernel/routers/console.cjs')).toBe(true);
+    // Links and images are read too, and anchors are slugged like GitHub does.
+    expect([...citedPaths('[k](docs/NOPE.md#x) <img src="public/nope.png"> [ext](https://x.y/z.md)')]).toEqual(['docs/NOPE.md', 'public/nope.png']);
+    expect(slug('4. Lessons paid for')).toBe('4-lessons-paid-for');
+    expect(headingSlugs('docs/ENGINEERING_STANDARD.md').has('4-lessons-paid-for')).toBe(true);
+    expect(headingSlugs('docs/ENGINEERING_STANDARD.md').has('lessons-paid-for')).toBe(false);
   });
 });
 

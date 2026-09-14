@@ -86,3 +86,17 @@ describe('the launchers agree about the floor they declare', () => {
     }
   });
 });
+
+describe('the launcher narrates every desktop-icon outcome', () => {
+  // README: "No Desktop icon on Linux yet — the launcher says so". It did not:
+  // ensureDesktopShortcut returned { skipped, unsupported-platform } and
+  // launch.js printed nothing for it (2026-09-14). Every reason the shortcut
+  // module can return for a non-creation must reach the operator.
+  it('prints a line for the unsupported-platform skip, not only for created/updated/failed', () => {
+    const src = fs.readFileSync(path.join(ROOT, 'launch.js'), 'utf8');
+    for (const reason of ['removed-by-user', 'unsupported-platform']) {
+      expect(src, `launch.js handles reason '${reason}'`).toContain(`sc.reason === '${reason}'`);
+    }
+    expect(src).toMatch(/unsupported-platform'\)\s*info\(['"`]No Desktop icon on Linux yet/);
+  });
+});

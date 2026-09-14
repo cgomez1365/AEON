@@ -8,7 +8,7 @@
 
 > Think Linux, for the AI era: a kernel that discovers self-contained blocks, a nervous system (Settings) every block reports to, a vault that encrypts your keys, a Second Brain that indexes your files and answers with sources, and one LLM layer that routes every AI call by role.
 
-<sub>**Measured 2026-09-14 on macOS, after the stale-file sweep** · 1,526 passing and 1 skipped (a real-PowerShell test that runs only on Windows) of 1,527 tests across 133 files · 17 blocks (plus two `_` scaffolds the kernel skips) · 5 CI legs (Windows · Ubuntu on Node 24 · Ubuntu on the Node 22.13 floor · macOS · security) · 0 undeclared block filesystem access. Every number here is a dated reading, not a property — see [Engineering standard](docs/ENGINEERING_STANDARD.md).</sub>
+<sub>**Measured 2026-09-14 on macOS, after the stale-file sweep** · 1,527 passing and 1 skipped (a real-PowerShell test that runs only on Windows) of 1,528 tests across 133 files · 17 blocks (plus two `_` scaffolds the kernel skips) · 5 CI legs (Windows · Ubuntu on Node 24 · Ubuntu on the Node 22.13 floor · macOS · security) · 0 undeclared block filesystem access. Every number here is a dated reading, not a property — see [Engineering standard](docs/ENGINEERING_STANDARD.md).</sub>
 
 ---
 
@@ -33,7 +33,7 @@ We do not say "cross-platform" and leave you to find out. Here is exactly what h
 |---|---|---|
 | **Windows** | Developed and released here | `LAUNCH.bat` run end-to-end continuously; CI leg on every push; the Desktop shortcut is created and read back through real PowerShell on the Windows CI leg |
 | **macOS** | **Verified on real hardware** | 2026-08-12, a MacBook Pro that had never run AEON: `git clone` + `launch.command`, a local model installed, and it **answered with Wi-Fi off**. 2026-09-13: opening the Desktop icon started AEON in 5 s and indexed the Vault 24 s in. CI leg on every push |
-| **Linux** | **Verified on a clean machine** | 2026-08-08, clean Ubuntu 24.04 with no Node: `launch.sh` offered to install Node via NodeSource (that day's LTS, 24.19.0; needs `curl`, `sudo` and apt, dnf or pacman) and booted AEON. CI legs on Ubuntu with Node 24 and with the Node 22.13 floor. No Desktop icon on Linux yet — the launcher silently skips it |
+| **Linux** | **Verified on a clean machine** | 2026-08-08, clean Ubuntu 24.04 with no Node: `launch.sh` offered to install Node via NodeSource (that day's LTS, 24.19.0; needs `curl`, `sudo` and apt, dnf or pacman) and booted AEON. CI legs on Ubuntu with Node 24 and with the Node 22.13 floor. No Desktop icon on Linux yet — the launcher says so |
 
 **Known friction, not hidden:** a ZIP downloaded from a browser on macOS loses the executable bit and gains Gatekeeper's quarantine flag, so `launch.command` may refuse to open the first time. If you hit it: open Terminal, type `chmod +x `, drag the file in, press Enter. After that first launch, use the Desktop icon, which AEON builds on your own machine.
 
@@ -53,7 +53,7 @@ Plenty of things look like this from the outside. The difference is what happens
 
 Not of the design. A declaration with no consumer is not a feature; a badge that reads `Connected` from configuration while a probe reads `Failed` is a lie the product is telling. This is written down as a rule, and violations are treated as defects. → [`docs/CLAIM_DISCIPLINE.md`](docs/CLAIM_DISCIPLINE.md)
 
-That rule applies to this README and to the docs: every file path they cite in backticks is checked to exist by a test, because a reference that carries stale facts teaches people to distrust all of it.
+That rule applies to this README and to the docs: every file path, link and anchor they cite is checked to exist by a test, because a reference that carries stale facts teaches people to distrust all of it.
 
 ### Standing gates, cleared on every push
 
@@ -114,7 +114,7 @@ src/blocks/my_block/
 
 Nothing about a block is hardcoded anywhere else. Copy `src/blocks/_template/` to start (routes are optional — see `src/blocks/_template/api/README.md`), and run `npm run aeon -- lint my_block` before you share it.
 
-The manifest is not documentation — it is the source of truth the kernel reads at boot, and gates check it against the code. A route your manifest declares but your code does not serve fails the test suite and CI (`npm run build` regenerates the route table from the code instead). → [`docs/BLOCK_STANDARD.md`](docs/BLOCK_STANDARD.md)
+The manifest is not documentation — it is the source of truth the kernel reads at boot, and gates check it against the code. A route your manifest declares but your code does not serve fails the build: `npm run build` checks the route table and stops on drift, and `npm run prep:routes` regenerates it. → [`docs/BLOCK_STANDARD.md`](docs/BLOCK_STANDARD.md)
 
 ---
 
@@ -141,7 +141,7 @@ npm ci
 npm start               # vite dev server + kernel (hot reload)
 npm run build           # production frontend → dist/
 npm run server          # kernel only, serves dist/ at :3001
-npm test                # vitest — 1,527 tests (2026-09-14)
+npm test                # vitest — 1,528 tests (2026-09-14)
 npm run scan:release-gate   # runtime purity · path authority · cloud ratchet · block filesystem
 npm run scan:audit          # no unreviewed high/critical advisories
 ```

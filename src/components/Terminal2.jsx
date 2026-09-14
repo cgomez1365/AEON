@@ -301,7 +301,7 @@ const Terminal2 = ({ onUsageUpdate }) => {
   const [modelGroups, setModelGroups] = useState([]);
   const [showModelPicker, setShowModelPicker] = useState(false);
   const refreshModelGroups = () => fetch('/api/console/models').then(r => r.json()).then(d => setModelGroups(d.groups || [])).catch(() => {});
-  // Lazy-load: fetch fresh data each time the picker opens so /addkey changes appear immediately.
+  // Lazy-load: fetch fresh data each time the picker opens so a key added in Settings appears immediately.
   useEffect(() => { if (showModelPicker) refreshModelGroups(); }, [showModelPicker]);
 
   const hotswapModel = async (provider, model) => {
@@ -713,6 +713,7 @@ const Terminal2 = ({ onUsageUpdate }) => {
     const text = raw.trim();
     if (!text) return;
     // Never echo raw API keys into the transcript
+    // /addkey is gone, but a hand that still types it must not see the key echoed.
     const echo = text.startsWith('/addkey')
       ? text.replace(/(\/addkey\s+\S+\s+)(\S{4})\S+/, '$1$2••••••••')
       : text;
@@ -985,7 +986,7 @@ const Terminal2 = ({ onUsageUpdate }) => {
             style={{ flex: 1, maxWidth: 420, background: '#0b0f19', color: '#c8d6e8', border: '1px solid #1e2d45', borderRadius: 2, fontSize: 11, padding: '4px 6px', fontFamily: 'inherit' }}>
             <option value="" disabled>Pick a model (grouped by key availability)…</option>
             {modelGroups.map(g => (
-              <optgroup key={g.provider} label={`${g.label || g.provider} ${g.hasKey ? '· ✓ key ready' : '· ✗ no key — /addkey ' + g.provider}`}>
+              <optgroup key={g.provider} label={`${g.label || g.provider} ${g.hasKey ? '· ✓ key ready' : '· ✗ no key — add one in Settings'}`}>
                 {(g.models.length ? g.models : ['(no models listed)']).map(m => (
                   <option key={g.provider + m} value={`${g.provider}::${m}`} disabled={!g.hasKey || m === '(no models listed)'}>{m}</option>
                 ))}
@@ -1005,7 +1006,7 @@ const Terminal2 = ({ onUsageUpdate }) => {
           value={input}
           onChange={e => setInput(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter' && !isLoading) dispatch(input); }}
-          placeholder="Ask, /command, or > shell…"
+          placeholder="Ask, or /command…"
           style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', color: '#e8f0fa', fontFamily: 'inherit', fontSize: 13 }}
         />
         {/* D1c — while a generation runs this is a STOP control, not a dead

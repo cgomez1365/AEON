@@ -278,6 +278,7 @@ async function main() {
     else if (sc.status === 'updated') ok(`Desktop icon updated to this install — ${sc.path}`);
     else if (sc.status === 'failed') warn(`Could not create the desktop icon: ${sc.reason}`);
     else if (sc.reason === 'removed-by-user') info('Desktop icon was removed — run "node launch.js --desktop-icon" to bring it back.');
+    else if (sc.reason === 'unsupported-platform') info('No Desktop icon on Linux yet — start AEON with ./launch.sh.');
     if (sc.warning) warn(sc.warning);
   } catch (e) {
     warn(`Desktop icon skipped: ${e.message}`);

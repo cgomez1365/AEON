@@ -1,7 +1,7 @@
 # AEON — Security Guide
 
-Operational security model and procedures. For the incident history see
-[AEON-SECURITY-HANDOFF.md](AEON-SECURITY-HANDOFF.md).
+Operational security model and procedures. For the incident history see the
+[lessons paid for](ENGINEERING_STANDARD.md#4-lessons-paid-for) in the engineering standard.
 
 ## Model in one paragraph
 
