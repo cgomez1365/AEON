@@ -123,7 +123,7 @@ the old (broken) subprocess call.
 | `/api/fs/write` | POST | none beyond `isVercel` | Writes a file, creating parent dirs as needed. |
 | `/api/fs/mkdir` | POST | none beyond `isVercel` | Recursive mkdir. |
 | `/api/fs/delete` | POST | none beyond `isVercel` | Deletes a file or recursively deletes a directory. |
-| `/api/fs/upload` | POST | none beyond `isVercel` | Multer upload (up to 20 files). If any land under `WORKSPACE/Data/Second_Brain`, kicks off `tools/incremental-index.mjs` in the background to keep the Second Brain index current. |
+| `/api/fs/upload` | POST | none beyond `isVercel` | Multer upload (up to 20 files). Does not index; the Vault is indexed on boot, nightly and from Matrix ▸ Index. |
 | `/api/fs/serve` | GET | none | Streams a file back with a guessed `Content-Type` (`?path=`). |
 
 `fs.cjs` routes rely on the global operator auth gate (`authGate.cjs`) plus

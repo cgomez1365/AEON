@@ -37,10 +37,12 @@ Second Brain folder trigger an automatic re-index.
 - **Edit** — text-ish files (`.txt .md .json .js .jsx .html .css .py .bat`)
   open in an in-browser textarea editor (local mode only) and save back via
   `/api/fs/write` — a route owned by **host_os**, not this block (BO-A2d).
-- **Second Brain re-index** — any local upload under
-  `WORKSPACE/Data/Second_Brain` triggers `tools/incremental-index.mjs` after
-  the upload completes (fire-and-forget, logged, non-blocking). This is
-  handled by `host_os/api/fs.cjs`, not by this block's own code.
+- **Second Brain re-index** — uploads do not trigger indexing themselves. The
+  Vault is re-indexed on every boot, nightly, and from Matrix ▸ Index; see
+  `docs/MEMORY_ARCHITECTURE.md`. (Earlier revisions said uploads under
+  `WORKSPACE/Data/Second_Brain` ran a separate indexer script; no code has done
+  that since the Second Brain moved into the Vault, and the script was removed
+  2026-09-14.)
 
 ## Files
 

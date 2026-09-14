@@ -103,7 +103,6 @@ gate readiness.
 ## Files
 
 - `index.jsx` — main UI (status cards, provider health, engine telemetry, VP missions)
-- `components/AgentTelemetry.jsx` — placeholder stub, not currently imported anywhere
 - `api/missions.cjs` — VP mission history reader (Vault-backed)
 - `api/hwfit.cjs` — hardware detection + model fit ranking (not yet wired into the UI)
 - `api/local-status.js` — local runtime readiness probe

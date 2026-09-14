@@ -47,12 +47,10 @@ below.
   (`drafted`/`ready`/`identified`). **Not called by this block's own UI or
   by any other `.jsx` in the app** — see *Known limitations* below; almost
   certainly a leftover from the treasury/deficit panel that was removed.
-- `components/MobileCommandDashboard.jsx` — a full mobile command-center
-  UI (notes/email-draft/calendar/GAS-sync panels + module grid). **Dead
-  code** — not imported anywhere; the mobile shell (`MobileLayout.jsx`)
-  renders this same block's `index.jsx` for every route, including `/`.
-  It's also an exact duplicate of `src/components/MobileCommandDashboard.jsx`
-  (also unreferenced). See *Known limitations*.
+- `components/MobileCommandDashboard.jsx` — **removed 2026-09-14** with its
+  duplicate `src/components/MobileCommandDashboard.jsx`. Neither was imported;
+  the mobile shell (`MobileLayout.jsx`) renders this block's `index.jsx` for
+  every route, including `/`.
 - `block.manifest.json` — kernel contract (permissions, requires, routes,
   Neural Terminal `/note`, `/push`, `/pull` command registrations).
 - `.aeon.runtime.json` — **auto-generated on every boot** by the kernel
@@ -156,18 +154,10 @@ directly on `/api` only (see `src/kernel/blockHost.cjs`).
   out of this pass's scope) that would log a caught error on every boot.
   Recommend either wiring it into a real UI panel or removing it together
   with its two require sites in one cross-scope pass.
-- **`components/MobileCommandDashboard.jsx` is a dead, duplicated file.**
-  Confirmed unreferenced anywhere in the repo (only self-matches), and
-  `src/kernel/blockRegistry.js` only globs `../blocks/*/index.jsx` — never
-  `components/*` — so it can't be picked up implicitly either. It's
-  effectively the same component as `src/components/MobileCommandDashboard.jsx`,
-  which is *also* unreferenced (the mobile shell renders block `index.jsx`
-  routes directly, not this component). Left in place rather than deleted:
-  removing the in-scope copy alone would leave an inconsistent, still-dead
-  duplicate outside this block, and the intent (migration-in-progress vs.
-  stale leftover) isn't clear from this pass alone. Its own fetch calls to
-  `/api/email-draft` (real, served by the `outreach` block),
-  `/api/gas/status` (real, a stub in `host_os`), and `/api/gas/sync` /
-  `/api/gas/notes-push` / `/api/gas/crm` (**not implemented anywhere** in
-  the repo) never execute today since the component never mounts — but
-  would 404 immediately if it were ever wired back up.
+- **Closed 2026-09-14: `components/MobileCommandDashboard.jsx` and its
+  duplicate `src/components/MobileCommandDashboard.jsx` were removed** in the
+  stale-file sweep, together — the two-copies concern above was the reason an
+  earlier pass left them. Neither was imported, `blockRegistry.js` never globs
+  `components/*`, and several of their fetch targets (`/api/gas/sync`,
+  `/api/gas/notes-push`, `/api/gas/crm`) were implemented nowhere.
+  `tests/retired-files.test.js` keeps them from coming back.
