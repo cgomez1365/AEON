@@ -147,10 +147,10 @@ function particles(ctx, { seed, doorX, from, colors, count, additive, centerY, s
     // distance from the door: most dust sits near the opening
     const d = Math.pow(r(), expo);
     const x = doorX - d * (doorX - from) + (r() - 0.5) * 30;
-    // spread widens as the light travels; centre band around mid-height
-    const spread = (0.55 + d * 0.55) * spreadK;
-    const y = centerY + (r() + r() + r() - 1.5) * (H / 3) * spread;
-    if (y < -10 || y > H + 10) continue;
+    // Full height at the door, not a point source: mostly uniform top to
+    // bottom, with a mild pull toward centerY so the field still has a middle.
+    const u = 12 + r() * (H - 24);
+    const y = u + (centerY - u) * 0.25 * spreadK;
     const near = 1 - d;
     const size = (0.6 + r() * (1.4 + near * 2.6)) * sizeK;
     // `dim` scales everything down: the dust is filler and must never outdo the mark.
