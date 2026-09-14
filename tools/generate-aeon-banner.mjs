@@ -76,7 +76,7 @@ function extractFace(ttcPath, wantSubfamily) {
   return null;
 }
 
-let FAMILY = 'sans-serif', FACE = 'none';
+let FAMILY = 'sans-serif', FACE = 'none', FAMILY_MED = 'sans-serif';
 for (const f of ['/System/Library/Fonts/Avenir Next.ttc', '/Library/Fonts/Avenir Next.ttc']) {
   if (!fs.existsSync(f)) continue;
   const face = extractFace(f, /Ultra ?Light$/i) || extractFace(f, /(^|\s)Light$/i);
@@ -84,6 +84,10 @@ for (const f of ['/System/Library/Fonts/Avenir Next.ttc', '/Library/Fonts/Avenir
   const tmp = path.join(os.tmpdir(), `aeon-banner-face-${process.pid}.ttf`);
   fs.writeFileSync(tmp, face.buffer);
   try { GlobalFonts.registerFromPath(tmp, 'AeonBannerFace'); FAMILY = 'AeonBannerFace'; FACE = face.subfamily; } catch {}
+  // The tagline in Ultra Light at 28px is a hairline - nearly invisible on the
+  // dark ground (CEO, 2026-09-14). It gets the Medium face instead.
+  const med = extractFace(f, /^Medium$/i) || extractFace(f, /^Regular$/i);
+  if (med) { const t2 = path.join(os.tmpdir(), `aeon-banner-face-med-${process.pid}.ttf`); fs.writeFileSync(t2, med.buffer); try { GlobalFonts.registerFromPath(t2, 'AeonBannerFaceMed'); FAMILY_MED = 'AeonBannerFaceMed'; } catch {} }
   break;
 }
 
@@ -102,8 +106,8 @@ const CAP = 0.72; // Avenir Next Ultra Light cap height, em
 // Seeded RNG so both banners are byte-stable across runs.
 function rng(seed) { let s = seed >>> 0; return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; }; }
 
-const tracked = (ctx, text, x, y, size, spacing, color) => {
-  ctx.font = `400 ${size}px ${FAMILY}`; ctx.fillStyle = color; ctx.textBaseline = 'alphabetic';
+const tracked = (ctx, text, x, y, size, spacing, color, family = FAMILY) => {
+  ctx.font = `400 ${size}px ${family}`; ctx.fillStyle = color; ctx.textBaseline = 'alphabetic';
   let cx = x; for (const ch of text) { ctx.fillText(ch, cx, y); cx += ctx.measureText(ch).width + spacing; }
 };
 
@@ -134,35 +138,32 @@ async function wordmark(ctx, { x, y, size, spacing, color, onLight, ringAlpha, h
 // stream of particles pouring in from it, dense at the door, thinning leftward.
 // Two glows per particle (wide faint halo, tight bright core), some drawn as
 // short horizontal streaks so the field reads as motion, not static noise.
-function particles(ctx, { seed, doorX, from, colors, slit, count, additive, centerY, spreadK }) {
+function particles(ctx, { seed, doorX, from, colors, count, additive, centerY, spreadK, expo, farAlpha, sizeK, dim }) {
   const r = rng(seed);
   ctx.save();
-  // the slit
-  const s = ctx.createLinearGradient(doorX - 160, 0, W, 0);
-  s.addColorStop(0, slit.replace('A', '0')); s.addColorStop(0.75, slit.replace('A', '0.08')); s.addColorStop(0.97, slit.replace('A', '0.45')); s.addColorStop(1, slit.replace('A', '0.8'));
-  ctx.fillStyle = s; ctx.fillRect(doorX - 160, 0, W - doorX + 160, H);
   // Additive on dark (light adds up); normal on light (ink would wash to white).
   ctx.globalCompositeOperation = additive ? 'lighter' : 'source-over';
   for (let i = 0; i < count; i++) {
-    // distance from the door: squared so most dust sits near the opening
-    const d = Math.pow(r(), 1.9);
+    // distance from the door: most dust sits near the opening
+    const d = Math.pow(r(), expo);
     const x = doorX - d * (doorX - from) + (r() - 0.5) * 30;
     // spread widens as the light travels; centre band around mid-height
-    const spread = 0.55 + d * 0.55;
-    const y = centerY + (r() + r() + r() - 1.5) * (H / 3) * spread * spreadK;
+    const spread = (0.55 + d * 0.55) * spreadK;
+    const y = centerY + (r() + r() + r() - 1.5) * (H / 3) * spread;
     if (y < -10 || y > H + 10) continue;
     const near = 1 - d;
-    const size = 0.6 + r() * (1.4 + near * 2.6);
-    const a = (0.25 + r() * 0.75) * (0.35 + near * 0.65);
+    const size = (0.6 + r() * (1.4 + near * 2.6)) * sizeK;
+    // `dim` scales everything down: the dust is filler and must never outdo the mark.
+    const a = (0.25 + r() * 0.75) * (farAlpha + near * (1 - farAlpha)) * dim;
     const col = colors[Math.floor(r() * colors.length)];
     const rgba = (alpha) => col.replace('A', alpha.toFixed(3));
-    // halo
-    const hg = ctx.createRadialGradient(x, y, 0, x, y, size * 4);
-    hg.addColorStop(0, rgba(a * 0.35)); hg.addColorStop(1, rgba(0));
-    ctx.fillStyle = hg; ctx.beginPath(); ctx.arc(x, y, size * 4, 0, Math.PI * 2); ctx.fill();
+    // soft halo
+    const hg = ctx.createRadialGradient(x, y, 0, x, y, size * 3);
+    hg.addColorStop(0, rgba(a * 0.3)); hg.addColorStop(1, rgba(0));
+    ctx.fillStyle = hg; ctx.beginPath(); ctx.arc(x, y, size * 3, 0, Math.PI * 2); ctx.fill();
     // core, sometimes a streak
     ctx.fillStyle = rgba(a);
-    if (r() < 0.28) { const len = size * (6 + r() * 26) * (0.5 + near); ctx.fillRect(x, y - size * 0.35, len, size * 0.7); }
+    if (r() < 0.22) { const len = size * (5 + r() * 18) * (0.5 + near); ctx.fillRect(x, y - size * 0.3, len, size * 0.6); }
     else { ctx.beginPath(); ctx.arc(x, y, size, 0, Math.PI * 2); ctx.fill(); }
   }
   ctx.restore();
@@ -188,12 +189,14 @@ async function render({ onLight, out }) {
     ctx.restore();
   }
 
-  // The door, before the word so the brightest dust can pass behind EON's halo.
-  if (onLight) particles(ctx, { seed: 20260914, doorX: W - 40, from: 980, count: 700, additive: false, centerY: H * 0.42, spreadK: 0.85, slit: 'rgba(47,111,214,A)', colors: ['rgba(0,140,255,A)', 'rgba(0,190,255,A)', 'rgba(31,79,168,A)', 'rgba(11,42,120,A)'] });
-  else particles(ctx, { seed: 20260914, doorX: W - 40, from: 980, count: 700, additive: true, centerY: H * 0.42, spreadK: 0.85, slit: 'rgba(200,225,255,A)', colors: ['rgba(255,255,255,A)', 'rgba(220,235,255,A)', 'rgba(170,205,255,A)', 'rgba(127,178,255,A)'] });
+  // The dust, before the word so it passes behind EON's halo. No door glow: the
+  // particles are filler and must not compete with the mark.
+  const DUST = { seed: 20260914, doorX: W - 40, from: 760, count: 380, centerY: H * 0.42, spreadK: 1.0, expo: 1.3, farAlpha: 0.4, sizeK: 1.25, dim: 0.55 };
+  if (onLight) particles(ctx, { ...DUST, additive: false, colors: ['rgba(0,140,255,A)', 'rgba(0,190,255,A)', 'rgba(31,79,168,A)', 'rgba(11,42,120,A)'] });
+  else particles(ctx, { ...DUST, additive: true, colors: ['rgba(255,255,255,A)', 'rgba(220,235,255,A)', 'rgba(170,205,255,A)', 'rgba(127,178,255,A)'] });
 
   const ink = onLight ? '#0b1a3a' : '#eaf3ff';
-  const blue = onLight ? '#2f6fd6' : '#7fb2ff';
+  const blue = onLight ? '#2f6fd6' : '#a9ccff';
   const dim = onLight ? 'rgba(11,26,58,0.7)' : 'rgba(188,216,255,0.72)';
   const ruleCol = onLight ? 'rgba(31,79,168,0.3)' : 'rgba(127,178,255,0.3)';
   const halo = onLight ? 'rgba(247,249,254,0.95)' : 'rgba(1,3,10,0.95)';
@@ -202,7 +205,7 @@ async function render({ onLight, out }) {
 
   // Tagline, rule and description start under the O - clear of the outer ring.
   const tx = g.oX;
-  tracked(ctx, TAGLINE, tx, 272, 28, 10, blue);
+  tracked(ctx, TAGLINE, tx, 272, 26, 10, blue, FAMILY_MED);
   ctx.strokeStyle = ruleCol; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(tx, 304.5); ctx.lineTo(tx + 700, 304.5); ctx.stroke();
   ctx.font = `400 24px ${FAMILY}`; ctx.fillStyle = dim; ctx.fillText(DESC, tx, 342);
 
