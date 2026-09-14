@@ -96,6 +96,9 @@ for (const f of ['/System/Library/Fonts/Avenir Next.ttc', '/Library/Fonts/Avenir
 const markSvg = fs.readFileSync(MARK, 'utf8').replace(/<rect[^>]*aeonGround[^>]*\/>/, '');
 
 const W = 1600, H = 400;
+// Output is 3840x960 (2.4x): every number below is in 1600x400 layout units
+// and the context is scaled, so text, mark and dust all render at full res.
+const SCALE = 2.4;
 const TAGLINE = 'MODULAR. LOCAL. YOURS.';
 const DESC = 'A local-first AI workspace';
 
@@ -119,11 +122,16 @@ async function wordmark(ctx, { x, y, size, spacing, color, onLight, ringAlpha, h
   const letters = [...'EON'], lw = letters.map((ch) => ctx.measureText(ch).width);
   const chevCx = x + chevW / 2, chevCy = y - cap / 2;
   const markCy = chevCy + (0.5 - CHEV_CY) * markSize;
-  let svg = markSvg.replace(/width="512" height="512"/, `width="${markSize}" height="${markSize}"`);
+  const px = Math.round(markSize * SCALE);
+  let svg = markSvg.replace(/width="512" height="512"/, `width="${px}" height="${px}"`);
   if (onLight) {
     // Ink, not glow: the bloom filter has nothing dark to bloom against.
     svg = svg.replace(/#bcd8ff|#eaf3ff/g, '#2f6fd6').replace(/#7fb2ff/g, '#5b8fe0').replace(/fill="#ffffff"/, 'fill="#0b1a3a"').replace(/filter="url\(#aeonGlow\)"/, '');
   }
+  // The glow filter blurs the chevron's own edge along with its halo. Draw the
+  // chevron once more, unfiltered, on top - the bloom stays, the edge is crisp.
+  const chev = svg.match(/<path d="[^"]+" fill="[^"]+" stroke="none"\/>/)[0];
+  svg = svg.replace('</svg>', `<g>${chev}</g></svg>`);
   const img = await loadImage(Buffer.from(svg));
   ctx.save(); ctx.globalAlpha = ringAlpha; ctx.drawImage(img, chevCx - markSize / 2, markCy - markSize / 2, markSize, markSize); ctx.restore();
   let cx = x + chevW + spacing; const xs = [];
@@ -170,12 +178,13 @@ function particles(ctx, { seed, doorX, from, colors, count, additive, centerY, s
 }
 
 async function render({ onLight, out }) {
-  const canvas = createCanvas(W, H);
+  const canvas = createCanvas(W * SCALE, H * SCALE);
   const ctx = canvas.getContext('2d');
+  ctx.scale(SCALE, SCALE);
   if (onLight) {
     const g = ctx.createLinearGradient(0, 0, W, H); g.addColorStop(0, '#f7f9fe'); g.addColorStop(1, '#e9eef9');
     ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
-    ctx.save(); ctx.strokeStyle = 'rgba(31,79,168,0.08)'; ctx.lineWidth = 1;
+    ctx.save(); ctx.strokeStyle = 'rgba(31,79,168,0.08)'; ctx.lineWidth = 1 / SCALE;
     for (let x = 0.5; x < W; x += 40) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
     for (let y = 0.5; y < H; y += 40) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
     ctx.restore();
@@ -183,7 +192,7 @@ async function render({ onLight, out }) {
     const g = ctx.createRadialGradient(300, H * 0.45, 40, 300, H * 0.45, 1500);
     g.addColorStop(0, '#0b1428'); g.addColorStop(0.45, '#050a16'); g.addColorStop(1, '#01030a');
     ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
-    ctx.save(); ctx.strokeStyle = 'rgba(127,178,255,0.06)'; ctx.lineWidth = 1;
+    ctx.save(); ctx.strokeStyle = 'rgba(127,178,255,0.06)'; ctx.lineWidth = 1 / SCALE;
     for (let x = 0.5; x < W; x += 40) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
     for (let y = 0.5; y < H; y += 40) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
     ctx.restore();
@@ -191,13 +200,13 @@ async function render({ onLight, out }) {
 
   // The dust, before the word so it passes behind EON's halo. No door glow: the
   // particles are filler and must not compete with the mark.
-  const DUST = { seed: 20260914, doorX: W - 40, from: 760, count: 380, centerY: H * 0.42, spreadK: 1.0, expo: 1.3, farAlpha: 0.4, sizeK: 1.25, dim: 0.55 };
+  const DUST = { seed: 20260914, doorX: W - 40, from: 760, count: 380, centerY: H * 0.42, spreadK: 1.0, expo: 1.3, farAlpha: 0.4, sizeK: 1.25, dim: 0.495 };
   if (onLight) particles(ctx, { ...DUST, additive: false, colors: ['rgba(0,140,255,A)', 'rgba(0,190,255,A)', 'rgba(31,79,168,A)', 'rgba(11,42,120,A)'] });
   else particles(ctx, { ...DUST, additive: true, colors: ['rgba(255,255,255,A)', 'rgba(220,235,255,A)', 'rgba(170,205,255,A)', 'rgba(127,178,255,A)'] });
 
   const ink = onLight ? '#0b1a3a' : '#eaf3ff';
   const blue = onLight ? '#2f6fd6' : '#a9ccff';
-  const dim = onLight ? 'rgba(11,26,58,0.7)' : 'rgba(188,216,255,0.72)';
+  const dim = onLight ? 'rgba(11,26,58,0.88)' : 'rgba(222,236,255,0.95)';
   const ruleCol = onLight ? 'rgba(31,79,168,0.3)' : 'rgba(127,178,255,0.3)';
   const halo = onLight ? 'rgba(247,249,254,0.95)' : 'rgba(1,3,10,0.95)';
 
@@ -210,7 +219,7 @@ async function render({ onLight, out }) {
   ctx.font = `400 24px ${FAMILY}`; ctx.fillStyle = dim; ctx.fillText(DESC, tx, 342);
 
   fs.writeFileSync(out, canvas.toBuffer('image/png'));
-  console.log(`[brand:banner] wrote ${path.relative(ROOT, out)} ${W}x${H} (face: ${FACE})`);
+  console.log(`[brand:banner] wrote ${path.relative(ROOT, out)} ${W * SCALE}x${H * SCALE} (face: ${FACE})`);
 }
 
 await render({ onLight: false, out: OUT_DARK });
