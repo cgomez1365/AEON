@@ -7,10 +7,13 @@ Operational security model and procedures. For the incident history see the
 
 The browser never touches sensitive Supabase tables directly. RLS denies the anon
 key (default deny-all). All privileged DB access goes through the server, which holds
-`service_role` (bypasses RLS) in server-only env. External API + every OS shell
-endpoint requires `AEON_MOBILE_SECRET` (bearer); shell endpoints fail **closed** if the
-secret is unset. Secrets at rest are AES-256-GCM encrypted in the vault, keyed by
-`AEON_VAULT_MASTER_KEY` which lives only in env.
+`service_role` (bypasses RLS) in server-only env. There is no shell endpoint: the
+one OS execution route, `POST /api/os/action`, runs named actions with fixed
+executables and argument arrays, and requires an operator session from every
+origin, loopback included — or `AEON_MOBILE_SECRET` (bearer) for headless and
+tunnel callers. It fails **closed** when neither is present. Non-local `/api`
+traffic also requires the mobile secret. Secrets at rest are AES-256-GCM encrypted
+in the vault, keyed by `AEON_VAULT_MASTER_KEY` which lives only in env.
 
 ## Controls in place
 
