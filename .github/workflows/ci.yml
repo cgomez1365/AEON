@@ -153,8 +153,12 @@ jobs:
         with:
           node-version: '24'
           cache: 'npm'
+      # --ignore-scripts: this job only reads the lockfile (npm audit) and greps
+      # source, so no package's install script needs to run. ffmpeg-static's
+      # downloads a binary from GitHub Releases, and a 504 there failed this job
+      # on cd4e480 (run 34857985001) with nothing wrong in AEON.
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
       # Was `npm audit --audit-level=high` with continue-on-error: true — a
       # check that cannot fail. The gate below fails on unreviewed high/critical
       # advisories in shipped code, and requires a written reason plus a review
