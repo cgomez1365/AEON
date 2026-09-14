@@ -1,16 +1,14 @@
 #!/usr/bin/env node
 /**
- * AEON README banners — public/brand/aeon-banner-dark.png and -light.png
+ * AEON README banner — public/brand/aeon-banner.png
  *
  * The mark IS the A. In the 512 mark the chevron is 136 tall (y 192..328), so
  * the mark is scaled until that chevron matches the cap height of "EON" set in
- * Avenir Next Ultra Light, and the rings fall behind the word. The README
- * serves the dark one on GitHub's dark theme and the light one on light, via
- * <picture> + prefers-color-scheme. Dark is mirrored - word on the right,
- * dust from the left edge; light keeps word left, dust right. A field of
- * light particles streams in from the edge - a door opened onto the digital world. Dark:
- * white-blue dust. Light: neon blue and deep blue. Deterministic (seeded), so
- * `npm run brand:banner` reproduces both files exactly on the same font.
+ * Avenir Next Ultra Light, and the rings fall behind the word. Pale ground,
+ * ink lettering, and to the right a field of neon-blue and deep-blue
+ * particles streaming in from the edge - a door opened onto the digital
+ * world. Deterministic (seeded), so `npm run brand:banner` reproduces the
+ * file exactly on the same font.
  *
  * 1600x400 — GitHub renders a README image at content width (~900px) so this
  * stays crisp on 2x displays. Text uses the system's Avenir Next when present
@@ -24,8 +22,7 @@ import { createCanvas, loadImage, GlobalFonts } from '@napi-rs/canvas';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const MARK = path.join(ROOT, 'public', 'brand', 'aeon-mark', 'aeon-mark.svg');
-const OUT_DARK = path.join(ROOT, 'public', 'brand', 'aeon-banner-dark.png');
-const OUT_LIGHT = path.join(ROOT, 'public', 'brand', 'aeon-banner-light.png');
+const OUT = path.join(ROOT, 'public', 'brand', 'aeon-banner.png');
 
 // Fonts. @napi-rs/canvas registers only the FIRST face of a .ttc, and for
 // Avenir Next that is Bold - the opposite of the poster's hairline lettering.
@@ -236,5 +233,6 @@ async function render({ onLight, out, mirror = false }) {
   console.log(`[brand:banner] wrote ${path.relative(ROOT, out)} ${W * SCALE}x${H * SCALE} (face: ${FACE})`);
 }
 
-await render({ onLight: false, out: OUT_DARK, mirror: true });
-await render({ onLight: true, out: OUT_LIGHT });
+// One banner, the light one - the dark and mirrored variants were tried and
+// the operator chose this (CEO, 2026-09-14). `onLight`/`mirror` stay as seams.
+await render({ onLight: true, out: OUT });
