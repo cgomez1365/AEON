@@ -1,8 +1,8 @@
-// Vercel Edge Function — web search proxy
+// Vercel Function (Node.js runtime) — web search proxy
 // Tries: Bing RSS → DDG HTML → DDG Lite
-export const config = { runtime: 'edge' };
-
-export default async function handler(req) {
+// Was an Edge function; Vercel rejects the deprecated Edge runtime. A named GET
+// export keeps the Web Request/Response signature on the Node.js runtime.
+export async function GET(req) {
   const { searchParams } = new URL(req.url);
   const q = searchParams.get('q');
   if (!q) return Response.json({ results: [], error: 'q param required' }, { status: 400 });
