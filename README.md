@@ -1,5 +1,8 @@
 <p align="center">
-  <img src="public/brand/aeon-banner.png" alt="AEON — Modular. Local. Yours. A local-first AI workspace." width="100%">
+  <picture>
+    <source media="(prefers-reduced-motion: reduce)" srcset="public/brand/aeon-banner.png">
+    <img src="public/brand/aeon-banner.webp" alt="AEON — Modular. Local. Yours. A local-first AI workspace." width="100%">
+  </picture>
 </p>
 
 # AEON
