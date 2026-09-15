@@ -27,7 +27,9 @@ const ROOT_KEYS = ['vault', 'data', 'secrets', 'db', 'envFile', 'settings', 'wor
 describe('AEON home — defaults', () => {
   it('AEON_HOME sets every root at once', () => {
     const r = home.roots({ appRoot: APP, env: { AEON_HOME: '/opt/home' }, homedir: fakeHomedir });
-    expect(r.home).toBe(path.resolve('/opt/home'));
+    // Verbatim, not path.resolve: resolve would add the cwd's drive on Windows,
+    // which is exactly what aeonHome.cjs avoids for an absolute value.
+    expect(r.home).toBe('/opt/home');
     expect(r.vault).toBe(path.join(r.home, 'Vault'));
     expect(r.data).toBe(path.join(r.home, 'data'));
     expect(r.secrets).toBe(path.join(r.home, 'secrets'));
@@ -84,7 +86,7 @@ describe('AEON home — each per-root override still wins', () => {
     it(`${varName} overrides ${root} and nothing else`, () => {
       const base = home.roots({ appRoot: APP, env: { AEON_HOME: '/opt/home' }, homedir: fakeHomedir });
       const r = home.roots({ appRoot: APP, env: { AEON_HOME: '/opt/home', [varName]: value }, homedir: fakeHomedir });
-      expect(r[root]).toBe(path.resolve(value));
+      expect(r[root]).toBe(value);
       for (const k of ROOT_KEYS) if (k !== root) expect(r[k], `${k} must be untouched`).toBe(base[k]);
       expect(home.isOverridden(root, { [varName]: value })).toBe(true);
       expect(home.isOverridden(root, { [varName]: '  ' })).toBe(false);
