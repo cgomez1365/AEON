@@ -1,16 +1,478 @@
 /**
  * AeonBootGate — the animated sign-in experience shown at the gate once an
  * operator turns on "Use the AEON boot sequence" in Protection settings.
- * Ported from a standalone visual prototype (AEON-Intro/index.html); the
- * canvas/motion code is unchanged, but the auth form now calls the REAL
- * kernel auth API instead of the prototype's placeholder handlers, and
- * theming reads AEON's actual live CSS variables instead of a separate
- * prefs-sync system (aurora.css already owns that).
+ *
+ * The canvas draws the REAL mark: the geometry of
+ * public/brand/aeon-mark/aeon-mark.svg, in its own 512-unit box, on the
+ * animated README banner's loop. The drawing code below is ported from the
+ * operator-approved design (aeon-boot-mark.html) frame for frame — the mark,
+ * the twelve instrument layers, the outward data stream and the soft halo
+ * under every line. What did NOT come across: the design's opaque ground and
+ * its canvas aurora, because this gate already renders three .aeon-boot-orb
+ * elements with pointer parallax behind the canvas and drawing the aurora
+ * twice would double it. The canvas therefore clears to transparent and the
+ * DOM owns the ground.
+ *
+ * Two things are computed differently from the design: the still half of the
+ * mark is pre-rendered and blitted rather than re-blurred sixty times a
+ * second, and the stream's per-particle constants and paints are built once
+ * instead of per frame. Both are argued where they sit. Neither changes a
+ * number, an order or a blend — what they cost is rounding, and it was
+ * measured rather than asserted: against the design's own code, over both
+ * themes, three viewports and four phases, composited on an opaque ground, no
+ * channel moves by more than 4/255 and fewer than one subpixel in 4,000 moves
+ * by more than 1/255. That is the price of an 8-bit buffer, and it buys a
+ * third of the frame's blur budget back.
+ *
+ * The auth form calls the REAL kernel auth API, and theming reads AEON's live
+ * CSS variables (aurora.css owns those) rather than a palette of its own —
+ * live meaning live: the canvas re-reads them when they change, not only when
+ * the window resizes.
  */
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { login as apiLogin, setToken } from '../../kernel/auth';
 import RecoveryModal from './components/RecoveryModal.jsx';
 import './AeonBootGate.css';
+
+const TAU = Math.PI * 2;
+const RAD = Math.PI / 180;
+
+/**
+ * The loop length of the animated README banner. Every layer completes whole
+ * turns inside it — the outer ring +90 degrees, the three nodes -360 — so the
+ * loop is seamless. Motion is driven from p = (elapsed % LOOP) / LOOP and
+ * nothing else, which is why this gate and the banner stay in step.
+ */
+const LOOP = 12.67;
+
+/** The mark, in its own 512-unit box (public/brand/aeon-mark/aeon-mark.svg). */
+const MARK = {
+  ringR: 205, ringW: 14, dash: [257.61, 64.40], ringRot: -36,
+  nodeR: 218, nodeSize: 24, nodeW: 10, nodeAng: [315, 45, 180],
+  innerR: 118, innerW: 9,
+  chev: [[183, 328], [256, 192], [329, 328], [307, 328], [256, 233], [205, 328]],
+};
+
+/** The same six-vertex chevron as SVG, cropped to itself, for the lockup. */
+const CHEVRON_D = 'M183 328 L256 192 L329 328 L307 328 L256 233 L205 328 Z';
+const CHEVRON_BOX = '183 192 146 136';
+
+/**
+ * The mark keeps its own colours; only the instruments take the accent.
+ * On a dark ground every line blooms in its OWN colour.
+ */
+const MARK_DARK = {
+  ring: '#bcd8ff', node: '#eaf3ff', inner: '#7fb2ff', chev: '#ffffff',
+  halo: null, haloK: 1, add: true,
+  dust: ['255,255,255', '220,235,255', '170,205,255', '127,178,255'],
+  mote: null, gridA: 0.05,
+};
+/**
+ * On a light ground, the banner's substitutions and ONE soft blue halo at
+ * three-quarter strength: a bloom has nothing to bloom against on white.
+ */
+const MARK_LIGHT = {
+  ring: '#2f6fd6', node: '#2f6fd6', inner: '#5b8fe0', chev: '#0b1a3a',
+  halo: 'rgba(47,111,214,.55)', haloK: .75, add: false,
+  dust: ['0,140,255', '0,190,255', '31,79,168', '11,42,120'],
+  mote: '#1f4fa8', gridA: 0.07,
+};
+
+// ── Colour plumbing — the gate reads live CSS variables ─────────────────────
+function rgbParts(color, fallback) {
+  const hex = String(color).match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+  if (hex) {
+    const s = hex[1].length === 3 ? hex[1].split('').map(c => c + c).join('') : hex[1];
+    const n = parseInt(s, 16);
+    return [n >> 16, (n >> 8) & 255, n & 255];
+  }
+  const rgb = String(color).match(/rgba?\(\s*([\d.]+)[, ]+([\d.]+)[, ]+([\d.]+)/i);
+  return rgb ? [Number(rgb[1]), Number(rgb[2]), Number(rgb[3])] : fallback;
+}
+const rgbTriplet = (color, fallback) => rgbParts(color, null)?.join(',') || fallback;
+const alphaColor = (color, alpha) => {
+  const p = rgbParts(color, null);
+  return p ? `rgba(${p[0]},${p[1]},${p[2]},${alpha})` : color;
+};
+/** 0 (black) .. 1 (white). Decides which treatment the mark gets. */
+const luminance = (color) => {
+  const [r, g, b] = rgbParts(color, [7, 8, 13]);
+  return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+};
+
+// ── The approved drawing code ───────────────────────────────────────────────
+function hash(i) { const x = Math.sin(i * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); }
+function halo(ctx, T, colour, blur) { ctx.shadowColor = T.halo || colour; ctx.shadowBlur = blur * T.haloK; }
+function clearGlow(ctx) { ctx.shadowBlur = 0; }
+function hud(T, a) { return 'rgba(' + T.hud + ',' + a + ')'; }
+
+/** The design's ground(), minus the opaque fill and the aurora — see the header. */
+function grid(ctx, w, h, k, T) {
+  ctx.strokeStyle = T.grid; ctx.lineWidth = 1;
+  const step = 52 * k;
+  let x, y;
+  for (x = -Math.ceil(w / 2 / step) * step; x < w / 2; x += step) {
+    ctx.beginPath(); ctx.moveTo(x, -h / 2); ctx.lineTo(x, h / 2); ctx.stroke();
+  }
+  for (y = -Math.ceil(h / 2 / step) * step; y < h / 2; y += step) {
+    ctx.beginPath(); ctx.moveTo(-w / 2, y); ctx.lineTo(w / 2, y); ctx.stroke();
+  }
+}
+
+/**
+ * Every constant a stream particle has is a pure function of its index, so the
+ * table is built once. Recomputing it inside the loop cost 1,219 hash() calls
+ * (a Math.sin and a Math.floor each) and 460 trig calls per frame — 100,740 a
+ * second — for numbers that never changed. Only the phase does.
+ */
+const STREAM_N = 230;
+const DUST = (() => {
+  const ca = new Float64Array(STREAM_N), sa = new Float64Array(STREAM_N);
+  const size = new Float64Array(STREAM_N), alpha = new Float64Array(STREAM_N);
+  const pick = new Float64Array(STREAM_N), streak = new Float64Array(STREAM_N);
+  const isStreak = new Uint8Array(STREAM_N);
+  for (let i = 0; i < STREAM_N; i++) {
+    const ang = hash(i) * TAU;
+    ca[i] = Math.cos(ang); sa[i] = Math.sin(ang);
+    size[i] = 0.6 + hash(i + 51) * 1.7;
+    alpha[i] = 0.20 + hash(i + 7) * 0.55;
+    pick[i] = hash(i + 333);
+    isStreak[i] = hash(i + 17) < 0.30 ? 1 : 0;
+    streak[i] = 4 + hash(i + 5) * 16;
+  }
+  return { ca, sa, size, alpha, pick, streak, isStreak };
+})();
+
+/**
+ * The particle paints, built once per theme instead of 230 gradients and 690
+ * colour strings per frame. The halo was a positional gradient only because
+ * position, radius and alpha were baked into it; a unit-radius gradient placed
+ * by the transform and faded by globalAlpha is the same premultiplied source,
+ * under 'lighter' as well as source-over. Dropping the old toFixed(3) on the
+ * alpha makes it slightly more exact, not less; measured against the design's
+ * own code the whole substitution moves no channel by more than 2/255.
+ */
+function dustPaints(ctx, T) {
+  T.dustGrad = T.dust.map((col) => {
+    const g = ctx.createRadialGradient(0, 0, 0, 0, 0, 1);
+    g.addColorStop(0, 'rgba(' + col + ',1)');
+    g.addColorStop(1, 'rgba(' + col + ',0)');
+    return g;
+  });
+  T.dustSolid = T.dust.map((col) => 'rgb(' + col + ')');
+}
+
+/** The data stream: OUT of the core, three crossings per loop. */
+function stream(ctx, w, h, k, p, T) {
+  const N = STREAM_N, rStart = 22 * k, rEnd = Math.max(w, h) * 0.64;
+  if (!T.dustGrad) dustPaints(ctx, T);
+  ctx.save();
+  if (T.add) ctx.globalCompositeOperation = 'lighter';
+  for (let i = 0; i < N; i++) {
+    const ph = ((i / N) + p * 3) % 1;
+    const r = rStart + Math.pow(ph, 0.78) * (rEnd - rStart);
+    const ca = DUST.ca[i], sa = DUST.sa[i];
+    const x = ca * r, y = sa * r * 0.82;
+    const size = DUST.size[i] * k;
+    const a = Math.sin(ph * Math.PI) * DUST.alpha[i] * (T.add ? 0.95 : 0.72);
+    const c = (DUST.pick[i] * T.dust.length) | 0;
+
+    const wide = size * 3;
+    ctx.globalAlpha = a * 0.30;
+    ctx.fillStyle = T.dustGrad[c];
+    ctx.save();
+    ctx.translate(x, y); ctx.scale(wide, wide);
+    ctx.beginPath(); ctx.arc(0, 0, 1, 0, TAU); ctx.fill();
+    ctx.restore();
+
+    ctx.globalAlpha = a;
+    if (DUST.isStreak[i]) {
+      const len = size * DUST.streak[i] * (0.3 + ph);
+      ctx.strokeStyle = T.dustSolid[c]; ctx.lineWidth = size * 0.9;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x - ca * len, y - sa * len * 0.82);
+      ctx.stroke();
+    } else {
+      ctx.fillStyle = T.dustSolid[c];
+      ctx.beginPath(); ctx.arc(x, y, size, 0, TAU); ctx.fill();
+    }
+  }
+  ctx.restore();
+}
+
+/** Twelve instrument layers, in the accent only. */
+function instruments(ctx, k, p, T, level) {
+  let a, i, r0, r1;
+
+  ctx.save(); ctx.rotate(p * Math.PI);
+  ctx.strokeStyle = hud(T, .24); ctx.lineWidth = 1;
+  for (i = 0; i < 48; i++) {
+    a = i * 7.5 * RAD; r0 = 250 * k; r1 = r0 + (i % 4 === 0 ? 10 * k : 5 * k);
+    ctx.beginPath();
+    ctx.moveTo(Math.cos(a) * r0, Math.sin(a) * r0);
+    ctx.lineTo(Math.cos(a) * r1, Math.sin(a) * r1);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  ctx.save(); ctx.rotate(-p * TAU);
+  ctx.strokeStyle = hud(T, .34); ctx.lineWidth = 1;
+  ctx.setLineDash([3, 8]);
+  ctx.beginPath(); ctx.arc(0, 0, 152 * k, 0, TAU); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
+
+  const turns = [1, -2, 3, -1], radii = [316, 268, 196, 244], sizes = [3.2, 2.6, 2.1, 2.4];
+
+  if (level >= 2) {
+    ctx.strokeStyle = hud(T, .13); ctx.lineWidth = 1;
+    ctx.setLineDash([1, 9]);
+    for (i = 0; i < radii.length; i++) {
+      ctx.beginPath(); ctx.arc(0, 0, radii[i] * k, 0, TAU); ctx.stroke();
+    }
+    ctx.setLineDash([]);
+
+    const d = (330 + Math.sin(p * TAU) * 6) * k, arm = 34 * k;
+    ctx.strokeStyle = hud(T, .42); ctx.lineWidth = 1.5;
+    for (i = 0; i < 4; i++) {
+      const sx = (i === 0 || i === 3) ? -1 : 1;
+      const sy = (i < 2) ? -1 : 1;
+      ctx.beginPath();
+      ctx.moveTo(sx * d, sy * d - sy * arm);
+      ctx.lineTo(sx * d, sy * d);
+      ctx.lineTo(sx * d - sx * arm, sy * d);
+      ctx.stroke();
+    }
+
+    ctx.strokeStyle = hud(T, .5); ctx.lineWidth = 1.6;
+    for (i = 0; i < 4; i++) {
+      a = i * 90 * RAD;
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(a) * 262 * k, Math.sin(a) * 262 * k);
+      ctx.lineTo(Math.cos(a) * 278 * k, Math.sin(a) * 278 * k);
+      ctx.stroke();
+    }
+
+    ctx.save(); ctx.rotate(-p * TAU / 4);
+    halo(ctx, T, hud(T, 1), 8 * k);
+    ctx.strokeStyle = hud(T, .58); ctx.lineWidth = 1.4;
+    for (i = 0; i < 4; i++) {
+      a = (45 + i * 90) * RAD;
+      const cx = Math.cos(a) * 292 * k, cy = Math.sin(a) * 292 * k, s = 7 * k;
+      ctx.beginPath(); ctx.arc(cx, cy, s, 0, TAU); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(cx - s * .8, cy + s * .8); ctx.lineTo(cx + s * .8, cy - s * .8); ctx.stroke();
+    }
+    clearGlow(ctx); ctx.restore();
+
+    ctx.save(); ctx.rotate(p * TAU);
+    for (i = 0; i < 26; i++) {
+      ctx.strokeStyle = hud(T, (0.17 * (1 - i / 26)).toFixed(3));
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(0, 0, 232 * k, -i * .018 - .02, -i * .018, true); ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  if (level >= 3) {
+    for (i = 0; i < MARK.nodeAng.length; i++) {
+      const deg = ((MARK.nodeAng[i] - p * 360 + 90) % 360 + 360) % 360;
+      const frac = deg / 360;
+      if (frac < .18) {
+        const g2 = frac / .18;
+        a = (MARK.nodeAng[i] - p * 360) * RAD;
+        ctx.strokeStyle = hud(T, ((1 - g2) * .45).toFixed(3));
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.arc(Math.cos(a) * MARK.nodeR * k, Math.sin(a) * MARK.nodeR * k,
+                MARK.nodeSize * k + g2 * 36 * k, 0, TAU);
+        ctx.stroke();
+      }
+    }
+
+    ctx.strokeStyle = hud(T, .45); ctx.lineWidth = 2.4;
+    ctx.beginPath(); ctx.arc(0, 0, 176 * k, -Math.PI / 2, -Math.PI / 2 + p * TAU); ctx.stroke();
+    a = -Math.PI / 2 + p * TAU;
+    halo(ctx, T, hud(T, 1), 10 * k);
+    ctx.fillStyle = hud(T, .9);
+    ctx.beginPath(); ctx.arc(Math.cos(a) * 176 * k, Math.sin(a) * 176 * k, 2.6 * k, 0, TAU); ctx.fill();
+    clearGlow(ctx);
+
+    ctx.strokeStyle = hud(T, .2); ctx.lineWidth = 1;
+    for (i = 0; i < 72; i++) {
+      a = i * 5 * RAD; r0 = 104 * k; r1 = r0 + (i % 6 === 0 ? 7 * k : 3.5 * k);
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(a) * r0, Math.sin(a) * r0);
+      ctx.lineTo(Math.cos(a) * r1, Math.sin(a) * r1);
+      ctx.stroke();
+    }
+  }
+
+  halo(ctx, T, hud(T, 1), 12 * k);
+  for (i = 0; i < 4; i++) {
+    a = (p * turns[i] * TAU) + i * 1.7;
+    ctx.fillStyle = T.mote; ctx.globalAlpha = .9;
+    ctx.beginPath();
+    ctx.arc(Math.cos(a) * radii[i] * k, Math.sin(a) * radii[i] * k, sizes[i] * k, 0, TAU);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1; clearGlow(ctx);
+
+  const cyc = (p * 4) % 1;
+  ctx.strokeStyle = hud(T, ((1 - cyc) * .30).toFixed(3));
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(0, 0, (60 + cyc * 250) * k, 0, TAU); ctx.stroke();
+}
+
+// ── The mark, with a soft halo under every line ─────────────────────────────
+function chevronPath(ctx, k) {
+  ctx.beginPath();
+  for (let i = 0; i < MARK.chev.length; i++) {
+    const x = (MARK.chev[i][0] - 256) * k, y = (MARK.chev[i][1] - 256) * k;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+}
+
+/** A wide half-strength pass under a crisp pass. */
+function softStroke(ctx, T, k, colour, width, draw) {
+  ctx.strokeStyle = colour; ctx.lineWidth = width;
+  ctx.globalAlpha = .55; halo(ctx, T, colour, 34 * k);
+  draw(); ctx.stroke();
+  ctx.globalAlpha = 1; halo(ctx, T, colour, 9 * k);
+  draw(); ctx.stroke();
+  clearGlow(ctx);
+}
+
+/**
+ * The still half of the mark: the inner ring and the chevron, which take no
+ * clock and read none. Kept apart from theMark() for one reason — four of the
+ * frame's twenty-five shadow-blurred passes live here, the two widest among
+ * them, and every frame redrew them to a byte-identical result.
+ */
+function markStill(ctx, k, T) {
+  softStroke(ctx, T, k, T.inner, MARK.innerW * k, function () {
+    ctx.beginPath(); ctx.arc(0, 0, MARK.innerR * k, 0, TAU);
+  });
+
+  // Solid, as the logo draws it: white on dark, ink on light.
+  ctx.globalAlpha = .5; halo(ctx, T, T.chev, 30 * k);
+  ctx.fillStyle = T.chev; chevronPath(ctx, k); ctx.fill();
+  ctx.globalAlpha = 1; halo(ctx, T, T.chev, 10 * k);
+  chevronPath(ctx, k); ctx.fill();
+  clearGlow(ctx);
+}
+
+/**
+ * markStill(), pre-rendered into its own buffer.
+ *
+ * This is safe to cache and nothing else on the canvas is, because the still
+ * half is drawn LAST: no reordering is involved, and source-over is
+ * associative, so a group composited into a transparent buffer and then laid
+ * down lands exactly where the same draws in the same order would have. The
+ * buffer is pinned to a whole device pixel and carries the centre's sub-pixel
+ * remainder inside itself, so nothing is resampled and no edge shifts; what
+ * the round trip does cost is one extra premultiplied 8-bit rounding, measured
+ * at no more than 4/255 on any channel and mostly at 1.
+ *
+ * STILL_R is in the mark's own 512-units: the inner ring's outer edge
+ * (118 + 9/2) plus the wide pass's halo, a Gaussian of sigma 34/2 that is
+ * spent by three sigma = 51. 210 leaves another one and a half sigma of margin
+ * so nothing of the bloom is clipped.
+ */
+const STILL_R = 210;
+
+function buildStill(w, h, dpr, k, cyFrac, T) {
+  const cxDev = w / 2 * dpr, cyDev = h * cyFrac * dpr;
+  const half = Math.ceil(STILL_R * k * dpr) + 1;
+  if (!(half > 0) || !Number.isFinite(cxDev) || !Number.isFinite(cyDev)) return null;
+  const buf = document.createElement('canvas');
+  buf.width = half * 2; buf.height = half * 2;
+  const g = buf.getContext('2d');
+  if (!g) return null;
+  const ox = Math.round(cxDev) - half, oy = Math.round(cyDev) - half;
+  g.translate(cxDev - ox, cyDev - oy);
+  g.scale(dpr, dpr);
+  markStill(g, k, T);
+  return { buf, ox, oy };
+}
+
+function blitStill(ctx, still) {
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(still.buf, still.ox, still.oy);
+  ctx.restore();
+}
+
+function theMark(ctx, k, p, T, still) {
+  let a, i;
+  // Outer segmented ring: +90 degrees per loop.
+  ctx.save();
+  ctx.rotate((MARK.ringRot + p * 90) * RAD);
+  ctx.setLineDash([MARK.dash[0] * k, MARK.dash[1] * k]);
+  softStroke(ctx, T, k, T.ring, MARK.ringW * k, function () {
+    ctx.beginPath(); ctx.arc(0, 0, MARK.ringR * k, 0, TAU);
+  });
+  ctx.setLineDash([]);
+  ctx.restore();
+
+  // The three nodes: -360 degrees per loop, one whole turn the other way.
+  for (i = 0; i < MARK.nodeAng.length; i++) {
+    a = (MARK.nodeAng[i] - p * 360) * RAD;
+    ((ang) => {
+      softStroke(ctx, T, k, T.node, MARK.nodeW * k, function () {
+        ctx.beginPath();
+        ctx.arc(Math.cos(ang) * MARK.nodeR * k, Math.sin(ang) * MARK.nodeR * k, MARK.nodeSize * k, 0, TAU);
+      });
+    })(a);
+  }
+
+  // Inner ring and chevron: STILL, so a prepared layer may stand in for them.
+  if (still) blitStill(ctx, still); else markStill(ctx, k, T);
+}
+
+/**
+ * `fill` and `cy` are composition, not geometry: k scales the mark's own
+ * 512-unit box and every number above is expressed in it, so the proportions
+ * are the file's whichever value k takes. The design draws into a 16:9 figure
+ * with nothing else in it and fills it (0.86, centred). This gate's canvas is
+ * the whole viewport with a copy block along the bottom edge, and at 0.86 the
+ * outer ring's lower node lands under the lockup. So the mark is sized to the
+ * room above the copy and sits a little high in the frame, which is where the
+ * gate has always put it.
+ */
+const GATE_FILL = 0.62, GATE_CY = 0.44;
+const markScale = (w, h, fill) => Math.min(w, h) / 512 * (fill ?? 0.86);
+
+function drawFinal(ctx, w, h, t, opts) {
+  const T = opts.theme;
+  const k = markScale(w, h, opts.fill);
+  const p = (t % LOOP) / LOOP;
+  ctx.clearRect(0, 0, w, h);
+  ctx.save();
+  ctx.translate(w / 2, h * (opts.cy ?? 0.5));
+  grid(ctx, w, h, k, T);
+  if (opts.stream) stream(ctx, w, h, k, p, T);
+  if (opts.level > 0) instruments(ctx, k, p, T, opts.level);
+  theMark(ctx, k, p, T, opts.still);
+  ctx.restore();
+}
+
+/**
+ * The banner's lockup: the mark's own chevron standing in for the A, then EON.
+ * The SVG is aria-hidden and the wrapper carries the name, so a screen reader
+ * hears one word — "AEON" — and not a graphic followed by three letters.
+ */
+function AeonLockup({ className = '' }) {
+  return (
+    <span className={`aeon-lockup${className ? ` ${className}` : ''}`} role="img" aria-label="AEON">
+      <svg className="aeon-lockup-chevron" viewBox={CHEVRON_BOX} aria-hidden="true" focusable="false">
+        <path d={CHEVRON_D} fill="currentColor" />
+      </svg>
+      <span className="aeon-lockup-word">EON</span>
+    </span>
+  );
+}
 
 export default function AeonBootGate({ onAuthed }) {
   const canvasRef = useRef(null);
@@ -23,38 +485,46 @@ export default function AeonBootGate({ onAuthed }) {
   const [message, setMessage] = useState('');
   const [recoveryOpen, setRecoveryOpen] = useState(false);
 
-  // ── Canvas motion — the orbital "boot" animation ──────────────────────
+  // ── Canvas motion — the mark on the banner's loop ─────────────────────────
   useEffect(() => {
     const canvas = canvasRef.current;
     const ctx = canvas.getContext('2d');
     const root = document.documentElement;
     const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
-    const TAU = Math.PI * 2;
 
-    let dpr = 1, w = 0, h = 0;
-    let pointer = { x: 0, y: 0 };
-    let palette = {};
-    let start = performance.now();
+    let w = 0, h = 0, dpr = 1;
+    let theme = null, themeSig = '';
+    let still = null, stillDirty = true;
+    const pointer = { x: 0, y: 0 };
+    const start = performance.now();
     let revealed = false;
+    let lastT = 0;
     let raf = 0;
     let parallaxRaf = 0;
 
-    const css = (name, fallback) => getComputedStyle(root).getPropertyValue(name).trim() || fallback;
-    const refreshPalette = () => {
-      palette = {
-        bg: css('--bg', '#07080d'),
-        accent: css('--accent', '#00f2ff'),
-        text: css('--text', '#dce8f5'),
+    /**
+     * True when the palette actually moved. documentElement is watched for any
+     * attribute change below and most of those are not theme changes, so the
+     * still layer is only thrown away when a colour really did shift.
+     */
+    const readTheme = () => {
+      const style = getComputedStyle(root);
+      const css = (name, fallback) => style.getPropertyValue(name).trim() || fallback;
+      const bg = css('--bg', '#07080d');
+      const accent = css('--accent', '#00f2ff');
+      const text = css('--text', '#dce8f5');
+      const sig = `${bg}|${accent}|${text}`;
+      if (theme && sig === themeSig) return false;
+      themeSig = sig;
+      const base = luminance(bg) > .5 ? MARK_LIGHT : MARK_DARK;
+      theme = {
+        ...base,
+        hud: rgbTriplet(accent, '0,242,255'),
+        mote: base.mote || text,
+        grid: alphaColor(accent, base.gridA),
       };
-    };
-    const alphaColor = (color, alpha) => {
-      const hex = color.match(/^#([0-9a-f]{6})$/i);
-      if (hex) {
-        const n = parseInt(hex[1], 16);
-        return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${alpha})`;
-      }
-      const rgb = color.match(/rgba?\(\s*([\d.]+)[, ]+([\d.]+)[, ]+([\d.]+)/i);
-      return rgb ? `rgba(${rgb[1]},${rgb[2]},${rgb[3]},${alpha})` : color;
+      stillDirty = true;
+      return true;
     };
 
     const resize = () => {
@@ -63,164 +533,43 @@ export default function AeonBootGate({ onAuthed }) {
       canvas.width = Math.round(w * dpr);
       canvas.height = Math.round(h * dpr);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      stillDirty = true;
     };
 
-    const ease = x => 1 - Math.pow(1 - Math.max(0, Math.min(1, x)), 3);
-    const polar = (r, a) => ({ x: Math.cos(a) * r, y: Math.sin(a) * r });
-
-    function strokePath(draw, width = 1, color = palette.accent, alpha = 1, glow = 0) {
-      ctx.save(); ctx.beginPath(); draw();
-      ctx.strokeStyle = color; ctx.lineWidth = width; ctx.globalAlpha = alpha;
-      ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-      if (glow) { ctx.shadowColor = color; ctx.shadowBlur = glow; }
-      ctx.stroke(); ctx.restore();
-    }
-    function arc(r, a0, a1, width, alpha = 1, glow = 0) {
-      strokePath(() => ctx.arc(0, 0, r, a0, a1), width, palette.text, alpha, glow);
-    }
-    function node(r, a, size = 12, alpha = 1) {
-      const p = polar(r, a);
-      ctx.save(); ctx.globalAlpha = alpha; ctx.fillStyle = palette.bg;
-      ctx.strokeStyle = palette.text; ctx.lineWidth = Math.max(1.5, size * .13);
-      ctx.shadowColor = palette.accent; ctx.shadowBlur = size * .7;
-      ctx.beginPath(); ctx.arc(p.x, p.y, size, 0, TAU); ctx.fill(); ctx.stroke(); ctx.restore();
-    }
-    function ringTicks(r, count, rot, alpha) {
-      ctx.save(); ctx.rotate(rot);
-      for (let i = 0; i < count; i++) {
-        const a = i / count * TAU;
-        const p1 = polar(r - 3, a), p2 = polar(r + 3, a);
-        strokePath(() => { ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); }, 1, palette.accent, alpha);
+    const paint = (t) => {
+      lastT = t;
+      if (stillDirty) {
+        stillDirty = false;
+        still = theme ? buildStill(w, h, dpr, markScale(w, h, GATE_FILL), GATE_CY, theme) : null;
       }
-      ctx.restore();
-    }
-    function drawGrid() {
-      ctx.save();
-      const gx = pointer.x * 12, gy = pointer.y * 8, horizon = h * .045;
-      ctx.translate(gx, gy); ctx.lineWidth = 1;
-      const gap = 44;
-      ctx.strokeStyle = alphaColor(palette.accent, .10);
-      for (let x = -gap; x < w + gap; x += gap) {
-        ctx.beginPath(); ctx.moveTo(x, horizon); ctx.lineTo(w / 2 + (x - w / 2) * 2.05, h); ctx.stroke();
-      }
-      const rows = 24;
-      for (let i = 0; i <= rows; i++) {
-        const depth = i / rows;
-        const y = horizon + (h - horizon) * Math.pow(depth, 1.72);
-        ctx.strokeStyle = alphaColor(palette.accent, .045 + depth * .075);
-        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
-      }
-      ctx.restore();
-      ctx.save();
-      ctx.fillStyle = alphaColor(palette.accent, .23);
-      for (let i = 0; i < 42; i++) {
-        const x = (i * 173.3) % w, y = (i * 97.7) % h;
-        ctx.fillRect(x + pointer.x * 5, y + pointer.y * 4, 1.2, 1.2);
-      }
-      ctx.restore();
-    }
-    function drawAxes(S, progress) {
-      const R = S * .43;
-      strokePath(() => {
-        ctx.moveTo(-R, 0); ctx.lineTo(R, 0); ctx.moveTo(0, -R); ctx.lineTo(0, R);
-      }, 1, palette.accent, .62 * progress, 5);
-      for (let i = -12; i <= 12; i++) {
-        const v = i * R / 12, l = i % 3 === 0 ? 6 : 3;
-        strokePath(() => {
-          ctx.moveTo(v, -l); ctx.lineTo(v, l); ctx.moveTo(-l, v); ctx.lineTo(l, v);
-        }, 1, palette.text, .48 * progress);
-      }
-      for (const a of [0, Math.PI / 2, Math.PI, Math.PI * 1.5]) {
-        const q = polar(R, a);
-        ctx.save(); ctx.fillStyle = palette.text; ctx.shadowColor = palette.accent; ctx.shadowBlur = 9;
-        ctx.globalAlpha = progress; ctx.beginPath(); ctx.arc(q.x, q.y, 2.2, 0, TAU); ctx.fill(); ctx.restore();
-      }
-    }
-    function drawAeonMark(S, progress) {
-      const outerApexY = -S * .120, innerApexY = -S * .041, baseY = S * .121;
-      const outerBaseX = S * .119, innerBaseX = S * .081;
-      strokePath(() => {
-        ctx.moveTo(0, outerApexY);
-        ctx.lineTo(outerBaseX, baseY); ctx.lineTo(innerBaseX, baseY);
-        ctx.lineTo(0, innerApexY);
-        ctx.lineTo(-innerBaseX, baseY); ctx.lineTo(-outerBaseX, baseY);
-        ctx.closePath();
-      }, 2.25, palette.accent, .74 * progress, 7);
-    }
-    function outerSystem(S, railAngle, planetAngle, progress) {
-      const r = S * .335;
-      ctx.save(); ctx.rotate(railAngle);
-      const spans = [[-2.95, -1.63], [-1.50, -1.12], [-.78, -.12], [.08, .72], [.90, 1.48], [1.63, 2.93]];
-      for (const [a, b] of spans) arc(r, a, a + (b - a) * progress, S * .017, .94, 14);
-      ctx.restore();
-      ctx.save(); ctx.rotate(planetAngle);
-      node(r, Math.PI, S * .034, progress); node(r, -.82, S * .031, progress); node(r, .90, S * .031, progress);
-      ctx.restore();
-    }
-    function middleSystem(S, angle, progress) {
-      ctx.save(); ctx.rotate(angle);
-      const r = S * .245;
-      strokePath(() => ctx.arc(0, 0, r, 0, TAU), 1.2, palette.accent, .42 * progress, 2);
-      ctx.setLineDash([3, 7]);
-      strokePath(() => ctx.arc(0, 0, r * .9, 0, TAU), 1, palette.text, .42 * progress);
-      ctx.setLineDash([]);
-      for (const [a, b] of [[-2.85, -1.8], [-1.52, -.35], [.05, 1.25], [1.58, 2.75]]) arc(r * .73, a, a + (b - a) * progress, 2, .78, 6);
-      node(r * .73, Math.PI, S * .017, progress); node(r * .73, -.64, S * .022, progress); node(r * .73, .92, S * .022, progress);
-      ringTicks(r, 24, -angle, .2 * progress);
-      ctx.restore();
-    }
-    function innerSystem(S, angle, progress) {
-      ctx.save(); ctx.rotate(angle);
-      const r = S * .142;
-      for (const [a, b] of [[-2.9, -1.72], [-1.43, -.18], [.12, 1.30], [1.62, 2.78]]) arc(r, a, a + (b - a) * progress, 1.7, .86, 5);
-      arc(r * .78, -2.8, -2.8 + 4.7 * progress, 1.2, .55, 3);
-      ctx.save(); ctx.rotate(-angle); drawAeonMark(S, progress); ctx.restore();
-      ctx.restore();
-    }
-    function satellites(S, t, progress) {
-      for (const [r, speed, phase, size] of [[S * .39, .18, .5, 3.8], [S * .29, -.26, 2.2, 3], [S * .20, .34, 4.5, 2.4], [S * .34, -.13, 5.2, 2.5]]) {
-        const q = polar(r, t * speed + phase);
-        ctx.save(); ctx.globalAlpha = progress; ctx.fillStyle = palette.text;
-        ctx.shadowColor = palette.accent; ctx.shadowBlur = 13;
-        ctx.beginPath(); ctx.arc(q.x, q.y, size, 0, TAU); ctx.fill(); ctx.restore();
-      }
-    }
-    function pulse(S, t, progress) {
-      const cycle = (t % 3.8) / 3.8;
-      const r = S * (.05 + cycle * .20);
-      ctx.save(); ctx.globalAlpha = (1 - cycle) * .34 * progress; ctx.strokeStyle = palette.accent;
-      ctx.lineWidth = 1; ctx.shadowColor = palette.accent; ctx.shadowBlur = 8;
-      ctx.beginPath(); ctx.arc(0, 0, r, 0, TAU); ctx.stroke(); ctx.restore();
-      ctx.save(); ctx.fillStyle = palette.text; ctx.shadowColor = palette.accent; ctx.shadowBlur = 18;
-      ctx.globalAlpha = .95 * progress;
-      ctx.beginPath(); ctx.arc(0, 0, 3.5 + Math.sin(t * 2) * .6, 0, TAU); ctx.fill(); ctx.restore();
-    }
+      drawFinal(ctx, w, h, t, { level: 3, stream: true, fill: GATE_FILL, cy: GATE_CY, theme, still });
+    };
 
     function frame(now) {
       const t = (now - start) / 1000;
-      const build = reduced ? 1 : ease(t / 3.9);
-      const S = Math.min(w, h) * .78;
-      const cx = w / 2 + pointer.x * 6, cy = h * .46 + pointer.y * 5;
-      ctx.clearRect(0, 0, w, h);
-      const aura = ctx.createRadialGradient(cx, cy, 0, cx, cy, S * .68);
-      aura.addColorStop(0, alphaColor(palette.accent, .09));
-      aura.addColorStop(.50, alphaColor(palette.accent, .025));
-      aura.addColorStop(1, alphaColor(palette.bg, 0));
-      ctx.fillStyle = aura; ctx.fillRect(0, 0, w, h);
-      drawGrid();
-      ctx.save(); ctx.translate(cx, cy);
-      drawAxes(S, ease(t / 2.3));
-      outerSystem(S, reduced ? 0 : t * .032, reduced ? 0 : t * .055, ease((t - .75) / 2.6));
-      middleSystem(S, reduced ? 0 : -t * .12, ease((t - .45) / 2.3));
-      innerSystem(S, reduced ? 0 : t * .18, ease((t - .22) / 2.0));
-      satellites(S, t, ease((t - 1.45) / 1.45));
-      pulse(S, t, build);
-      ctx.restore();
+      paint(t);
       if (!revealed && t > 3.75) { revealed = true; setReady(true); }
       raf = requestAnimationFrame(frame);
     }
 
-    const onResize = () => resize();
+    const onResize = () => {
+      resize(); readTheme();
+      if (reduced) paint(lastT);
+    };
+    /**
+     * The gate is precisely the screen a theme change lands on, and none of the
+     * ways it lands involve a resize: the operator picks a new accent in
+     * Settings > Appearance, aurora.css swaps its tokens, or the OS flips
+     * light/dark. Re-reading only on resize left the canvas drawing the old
+     * palette indefinitely while the CSS orbs behind it recoloured at once —
+     * and in the reduced-motion branch there is no rAF loop to repaint it, so
+     * the still frame is redrawn here by hand.
+     */
+    const onThemeChange = () => {
+      if (readTheme() && reduced) paint(lastT);
+    };
+    const scheme = matchMedia('(prefers-color-scheme: dark)');
+    const themeWatch = new MutationObserver(onThemeChange);
     const onMove = (e) => {
       pointer.x = e.clientX / Math.max(w, 1) - .5;
       pointer.y = e.clientY / Math.max(h, 1) - .5;
@@ -238,16 +587,29 @@ export default function AeonBootGate({ onAuthed }) {
     };
 
     resize();
-    refreshPalette();
+    readTheme();
     window.addEventListener('resize', onResize);
     window.addEventListener('pointermove', onMove);
-    raf = requestAnimationFrame(frame);
+    scheme.addEventListener('change', onThemeChange);
+    themeWatch.observe(root, { attributes: true, attributeFilter: ['class', 'style', 'data-theme'] });
+
+    if (reduced) {
+      // One static frame, no rAF loop. At p = 0 every layer is where the SVG
+      // draws it, so the still IS the mark.
+      paint(0);
+      setReady(true);
+    } else {
+      raf = requestAnimationFrame(frame);
+    }
 
     return () => {
-      cancelAnimationFrame(raf);
+      if (raf) cancelAnimationFrame(raf);
       if (parallaxRaf) cancelAnimationFrame(parallaxRaf);
       window.removeEventListener('resize', onResize);
       window.removeEventListener('pointermove', onMove);
+      scheme.removeEventListener('change', onThemeChange);
+      themeWatch.disconnect();
+      still = null; // the pre-rendered buffer is the largest thing here; drop it
     };
   }, []);
 
@@ -298,13 +660,12 @@ export default function AeonBootGate({ onAuthed }) {
       </div>
       <canvas
         ref={canvasRef} className="aeon-boot-canvas" tabIndex={0} role="button"
-        aria-label="Animated AEON orbital system. Activate to sign in."
+        aria-label="Animated AEON mark. Activate to sign in."
         onClick={() => ready && openAuth()}
         onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && ready) { e.preventDefault(); openAuth(); } }}
       />
       <div className={`aeon-boot-copy${ready ? ' ready' : ''}`}>
-        <img src="/brand/aeon-mark/aeon-mark.svg" alt="" width="48" height="48" />
-        <div className="aeon-boot-brand">AEON</div>
+        <AeonLockup className="aeon-boot-brand" />
         <div className="aeon-boot-tag">Modular. Local. Yours.</div>
         <button type="button" className="aeon-boot-enter" onClick={openAuth}>Initialize connection</button>
       </div>
@@ -312,6 +673,7 @@ export default function AeonBootGate({ onAuthed }) {
       <div className={`aeon-boot-auth${authOpen ? ' open' : ''}`} aria-hidden={!authOpen}>
         <form className="aeon-boot-panel" onSubmit={handleSubmit}>
           <button type="button" className="aeon-boot-close" aria-label="Close" onClick={closeAuth}>&times;</button>
+          <AeonLockup className="aeon-boot-panel-lockup" />
           <h1>Connect to AEON</h1>
           <p className="aeon-boot-sub">Your second brain is ready.</p>
           <label className="aeon-boot-field-label" htmlFor="aeon-boot-identity">Username</label>

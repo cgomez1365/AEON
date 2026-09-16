@@ -466,7 +466,11 @@ describe('3. the surfaces load the cut made for their size', () => {
         found.push({ file: path.relative(ROOT, f), tag: m[0], src: m[1], picture: inPicture ? before.slice(pictureOpen) : null });
       }
     }
-    expect(found.length, 'expected the sidebar, top nav, mobile header, boot gate and recovery modal').toBeGreaterThanOrEqual(5);
+    // Was 5, and named the boot gate as one of them. The boot gate no longer
+    // <img>s the mark: it DRAWS it, from the same geometry, on the banner's
+    // loop (tests/boot-gate-mark.test.js holds that). Four <img> surfaces are
+    // left, and the floor moved with the elements rather than above them.
+    expect(found.length, 'expected the sidebar panel header, the top nav, the mobile header and the recovery modal').toBeGreaterThanOrEqual(4);
     for (const { file, tag, src, picture } of found) {
       const width = Number(tag.match(/width="(\d+)"/)?.[1]);
       expect(width, `${file}: img needs an explicit width`).toBeGreaterThan(0);
