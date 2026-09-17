@@ -28,6 +28,9 @@ module.exports = (app, deps) => {
       res.json({
         endpoints: reg.endpoints,
         roles: reg.roles,
+        // Per connection: how many accounts it holds, which one is up next,
+        // which are resting. Refs only — a ref is a name, never key material.
+        keyPools: await endpoints.credentialReport(supabase),
         vault: { unlocked: vault.isUnlocked(), refs },
         runtime: endpoints.isVercel ? 'cloud' : 'local',
         cloudMirror: !!supabase,
@@ -64,9 +67,13 @@ module.exports = (app, deps) => {
       key = await vault.getSecret(auth_ref, supabase);
     }
 
-    const models = await endpoints.discoverModels(provider, target, key);
-    if (models && models.error) return res.json({ ok: false, error: models.error, manual: !!models.manual });
-    res.json({ ok: true, models });
+    // The catalogue, not just the ids: `free` carries the rows the provider
+    // itself priced at zero, and `models` arrives with those first. Without it
+    // this route handed the form a paid-first list and the form auto-selected
+    // models[0] — which on OpenRouter is a paid model, every time.
+    const found = await endpoints.discoverModelCatalogue(provider, target, key);
+    if (found && found.error) return res.json({ ok: false, error: found.error, manual: !!found.manual });
+    res.json({ ok: true, models: found.models, free: found.free });
   });
 
   // ── POST /api/connections — add/update an endpoint (+ optional key) ─
@@ -142,6 +149,59 @@ module.exports = (app, deps) => {
       audit('CONN_REMOVE', `Endpoint ${req.params.id}`, 200, 0);
       res.json({ ok: true, endpoints: reg.endpoints });
     } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ── Key pools: several accounts behind one connection ──────────────
+  //
+  // This is what "a few free accounts, and AEON rotates between them" means in
+  // the UI. The kernel round-robins the pool per turn, paces each account on
+  // its own per-minute budget, and rests one that answers 429/402/401 instead
+  // of condemning the whole provider.
+
+  // POST /api/connections/:id/keys — add an account to this connection
+  app.post('/api/connections/:id/keys', async (req, res) => {
+    try {
+      const { apiKey, label } = req.body || {};
+      if (!apiKey || !String(apiKey).trim()) return res.status(400).json({ error: 'Paste the API key to add.' });
+      if (!vault.isUnlocked()) return res.status(400).json({ error: 'Encrypted Vault is locked — unlock it before saving keys.' });
+
+      const reg = await endpoints.load(supabase);
+      const ep = (reg.endpoints || []).find(e => e.id === req.params.id);
+      if (!ep) return res.status(404).json({ error: 'Connection not found' });
+
+      // The ref is a NAME the operator will see in Settings, so it must never
+      // be derived from the key. Numbered within the connection, which also
+      // makes it stable across a rename.
+      const existing = endpoints.credentialRefs(ep);
+      const clean = String(label || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 24);
+      let ref = clean ? `${ep.id}-${clean}` : `${ep.id}-key-${existing.length + 1}`;
+      let n = existing.length + 1;
+      while (existing.includes(ref)) { n++; ref = `${ep.id}-key-${n}`; }
+
+      await vault.setSecret(ref, String(apiKey).trim(), supabase);
+      const updated = await endpoints.addCredential(ep.id, ref, supabase);
+      // A new account is new capacity: let the running process use it without
+      // a restart, the same way hydration does on boot.
+      if (deps.hydrateEnvFromVault) { try { await deps.hydrateEnvFromVault(); } catch {} }
+      audit('CONN_KEY_ADD', `Endpoint ${ep.id} (${ep.provider}) key ${ref}`, 200, 0);
+      res.json({ ok: true, endpoint: updated, keyPool: await endpoints.credentialReport(supabase) });
+    } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+  });
+
+  // DELETE /api/connections/:id/keys/:ref — drop one account
+  app.delete('/api/connections/:id/keys/:ref', async (req, res) => {
+    try {
+      const { id, ref } = req.params;
+      const reg = await endpoints.load(supabase);
+      const ep = (reg.endpoints || []).find(e => e.id === id);
+      if (!ep) return res.status(404).json({ error: 'Connection not found' });
+      // Registry first: it is the one that refuses to empty the pool. Removing
+      // the secret first would leave a ref pointing at nothing if it did.
+      const updated = await endpoints.removeCredential(id, ref, supabase);
+      try { await vault.removeSecret(ref, supabase); } catch {}
+      audit('CONN_KEY_REMOVE', `Endpoint ${id} key ${ref}`, 200, 0);
+      res.json({ ok: true, endpoint: updated, keyPool: await endpoints.credentialReport(supabase) });
+    } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
   });
 
   // ── POST /api/connections/assign-role — global role → endpoint+model ─

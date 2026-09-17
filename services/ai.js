@@ -68,6 +68,8 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   // buckets would each grant the full quota and the endpoint would answer with
   // the 429 this exists to prevent.
   const { pace: _pace, paceKey: _paceKey } = require('../src/kernel/pacing.cjs');
+  // One reading of Retry-After, shared with the credential pool that acts on it.
+  const { parseRetryAfter: _parseRetryAfter } = require('../src/kernel/keyPool.cjs');
 
   // ── Provider health tracker ──────────────────────────────────────────────
   // Every 429/402 marks the provider "in cooldown" for a computed duration so
@@ -662,7 +664,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     const messages = _toMessages(prompt, opts);
     if (opts.system) messages.unshift({ role: 'system', content: opts.system });
     // Pace before the call, not after the 429.
-    await _pace(_paceKey(baseUrl, opts.provider), opts.rpm_limit);
+    await _pace(_paceKey(baseUrl, opts.provider, opts.credential_ref), opts.rpm_limit);
     const response = await fetch(url, {
       method: 'POST', headers,
       body: JSON.stringify({ model, messages, max_tokens: opts.max_tokens || 4096 }),
@@ -699,6 +701,9 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     const flatText = _flatPrompt(prompt, opts);
     const contents = [{ parts: [{ text: flatText }] }];
     if (opts.system) contents.unshift({ role: 'user', parts: [{ text: opts.system }] });
+    // Gemini paced nowhere, so a free key's per-minute cap was discovered only
+    // by hitting it. Same budget seam as every other transport.
+    await _pace(_paceKey(base, 'gemini', opts.credential_ref), opts.rpm_limit);
     const response = await fetch(url, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ contents, generationConfig: { maxOutputTokens: opts.max_tokens || 4096 } }),
@@ -706,7 +711,13 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     });
     if (!response.ok) {
       _trackLLM('gemini', model, 0, Date.now() - _t0, false);
-      throw new Error(`Gemini error ${response.status}: ${(await response.text()).slice(0, 200)}`);
+      // Structured, so the credential pool classifies this without scraping
+      // the message — a 429 here is the KEY's minute, not the provider's.
+      const err = new Error(`Gemini error ${response.status}: ${_redactKeys((await response.text().catch(() => '')).slice(0, 200))}`);
+      err.status = response.status;
+      const ra = _parseRetryAfter(response.headers.get('retry-after'));
+      if (ra) err.retryAfterMs = ra;
+      throw err;
     }
     const data = await response.json();
     const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
@@ -715,15 +726,70 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     return text;
   };
 
+  // ── Credential rotation at the transport boundary ──────────────────────
+  //
+  // The registry resolves ONE credential per turn. This is what makes a pool of
+  // several behave like a pool: a 429/402/401 is a fact about that key, so the
+  // key is cooled and the next healthy one takes the turn, in place, before the
+  // caller is ever told the provider failed. Only once every key on the
+  // endpoint has been refused does the error escape — which is the point at
+  // which marking the whole provider unhealthy, and falling back to a different
+  // provider, is actually a true statement.
+  const _statusOf = (e) =>
+    e?.status || Number(/error (\d{3})/i.exec(e?.message || '')?.[1]) || null;
+
+  /**
+   * Run `attempt(apiKey, credentialRef)` against the endpoint's credential
+   * pool. Single-credential endpoints take exactly the path they always did.
+   *
+   * `err.streamStarted` opts an attempt out of retrying: once tokens have
+   * reached the operator, a silent second attempt would show them two answers.
+   */
+  const _withCredentials = async (r, attempt) => {
+    const total = r.credential_count || (r.credential_ref ? 1 : 0);
+    let apiKey = r.apiKey;
+    let ref = r.credential_ref || null;
+    let tries = 0;
+
+    for (;;) {
+      try {
+        const out = await attempt(apiKey, ref);
+        if (ref) aeonEndpoints?.markCredentialOk?.(r.endpoint_id, ref);
+        return out;
+      } catch (e) {
+        tries++;
+        const status = _statusOf(e);
+        const rotatable = ref && total > 1 && tries < total
+          && !e.streamStarted
+          && aeonEndpoints?.isCredentialFault?.(status);
+        if (!rotatable) throw e;
+
+        const next = await aeonEndpoints.rotateCredential(
+          r.endpoint_id, ref, { status, retryAfterMs: e.retryAfterMs, message: e.message }, supabase,
+        );
+        if (!next) throw e;
+        notify(
+          `🔁 ${r.provider}: key ${ref} answered ${status} — switching to key ${next.credential_index + 1} of ${next.credential_count}`,
+          { provider: r.provider },
+        );
+        apiKey = next.apiKey;
+        ref = next.credential_ref;
+      }
+    }
+  };
+
   const _dispatchResolved = async (prompt, r, opts = {}) => {
-    const { provider, model, base_url, apiKey, rpm_limit } = r;
+    const { provider, model, base_url, rpm_limit } = r;
     // Carry the endpoint's own pacing budget into the transport. Everything
     // else already flows through opts.
-    const o = rpm_limit != null ? { ...opts, rpm_limit, provider } : { ...opts, provider };
-    if (provider === 'gemini') return genericGeminiRequest(prompt, model, base_url, apiKey, o);
-    if (provider === 'claude') return claudeRequest(prompt, model, apiKey, undefined, o);
-    if (provider === 'local') return localNativeRequest(prompt, model, o);
-    return genericOpenAIRequest(prompt, model, base_url, apiKey, o);
+    const base = rpm_limit != null ? { ...opts, rpm_limit, provider } : { ...opts, provider };
+    return _withCredentials(r, (apiKey, credential_ref) => {
+      const o = { ...base, credential_ref };
+      if (provider === 'gemini') return genericGeminiRequest(prompt, model, base_url, apiKey, o);
+      if (provider === 'claude') return claudeRequest(prompt, model, apiKey, undefined, o);
+      if (provider === 'local') return localNativeRequest(prompt, model, o);
+      return genericOpenAIRequest(prompt, model, base_url, apiKey, o);
+    });
   };
 
   // ── Streaming transports ──────────────────────────────────────────────
@@ -799,7 +865,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     // against the credit balance and 402 on a large reservation.
     const isFree = provider === 'openrouter' && (model === 'openrouter/free' || String(model).endsWith(':free'));
     const maxTokens = isFree ? Math.min(opts.max_tokens || 1024, 1024) : (opts.max_tokens || 4096);
-    await _pace(_paceKey(base, provider), opts.rpm_limit);
+    await _pace(_paceKey(base, provider, opts.credential_ref), opts.rpm_limit);
     const { signal, connected } = _streamSignal(opts);
     let response;
     try {
@@ -874,7 +940,12 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
         signal,
       });
     } finally { connected(); }
-    if (response.status === 429 && GEMINI_KEY_POOL.length > 1 && retries < GEMINI_KEY_POOL.length - 1) {
+    // The env pool is the legacy path, for a key that came from .env rather
+    // than the registry. When the caller resolved through the registry it owns
+    // the rotation (_withCredentials) and rotating here as well would swap the
+    // key out from under it, spending two accounts on one turn.
+    if (response.status === 429 && !opts.credential_ref
+        && GEMINI_KEY_POOL.length > 1 && retries < GEMINI_KEY_POOL.length - 1) {
       _trackLLM('gemini', model, 0, Date.now() - _t0, false);
       rotateKey('429 Rate Limit');
       return streamGemini(messages, model, baseUrl, getActiveKey(), opts, retries + 1);
@@ -1034,9 +1105,22 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       throw new Error(`${_KEY_REQUIRED[c.provider]} missing in .env or vault`);
     }
     const base = c.base_url || profile.base || null;
-    if (style === 'gemini') return streamGemini(messages, c.model || 'gemini-flash-latest', base, apiKey, o);
-    if (style === 'anthropic') return streamClaude(messages, c.model || 'claude-sonnet-5', apiKey, o);
-    return streamOpenAICompat(messages, c.model, base, apiKey, o);
+
+    // Exhaust this endpoint's OWN accounts before the caller concludes the
+    // provider is down. Without this, one free key hitting its per-minute cap
+    // marked the whole provider unhealthy and fell through to a different one,
+    // with the operator's other keys sitting unused.
+    return _withCredentials({ ...c, apiKey }, (key, credential_ref) => {
+      let served = 0;
+      const co = { ...o, credential_ref, onToken: (t) => { served++; o.onToken?.(t); } };
+      const run =
+        style === 'gemini' ? streamGemini(messages, c.model || 'gemini-flash-latest', base, key, co)
+        : style === 'anthropic' ? streamClaude(messages, c.model || 'claude-sonnet-5', key, co)
+        : streamOpenAICompat(messages, c.model, base, key, co);
+      // Past the first token the operator has already seen text; a retry on
+      // another key would print a second answer underneath the first.
+      return run.catch((e) => { if (served > 0) e.streamStarted = true; throw e; });
+    });
   };
 
   // The ordered list of {provider, model, base_url?, apiKey?} a streaming call
@@ -1057,7 +1141,13 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
           if (r.via === 'relay') {
             throw new Error(`Model "${r.model}" is desktop-only; relay required (desktop must be online).`);
           }
-          primary = { provider: r.provider, model: r.model, base_url: r.base_url, apiKey: r.apiKey, rpm_limit: r.rpm_limit, source: 'registry' };
+          primary = {
+            provider: r.provider, model: r.model, base_url: r.base_url, apiKey: r.apiKey,
+            rpm_limit: r.rpm_limit, source: 'registry',
+            // The pool travels with the candidate — _dispatchStream rotates
+            // through it before this candidate is declared failed.
+            endpoint_id: r.endpoint_id, credential_ref: r.credential_ref, credential_count: r.credential_count,
+          };
         }
       } catch (e) {
         if (/desktop-only/.test(e.message)) throw e;
@@ -1455,7 +1545,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     GEMINI_KEY_POOL, _trackLLM, _llmTelemetry, setActivityRecorder,
     getDailyCost, addRunCost,
     KILL_SWITCH_THRESHOLD, GEMINI_PRICE_PER_TOKEN, GROQ_PRICE_PER_TOKEN,
-    getProviderHealth, getKeyPoolInfo, dehydrateProvider,
+    getProviderHealth, getKeyPoolInfo, dehydrateProvider, hydrateEnvFromVault,
     defaultLocalModel, localRuntimePresent,
     envHydrated,
   };

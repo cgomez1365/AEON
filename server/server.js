@@ -248,6 +248,9 @@ const baseDeps = {
   isVercel, addRunCost: ai.addRunCost, getDailyCost: ai.getDailyCost,
   getProviderHealth: ai.getProviderHealth, getKeyPoolInfo: ai.getKeyPoolInfo,
   dehydrateProvider: ai.dehydrateProvider,
+  // A key added in Settings joins the running process's pools immediately,
+  // rather than on the next boot.
+  hydrateEnvFromVault: ai.hydrateEnvFromVault,
   _llmTelemetry: ai._llmTelemetry, loadSettings,
   GEMINI_KEY_POOL: ai.GEMINI_KEY_POOL, _trackLLM: ai._trackLLM,
   GEMINI_PRICE_PER_TOKEN: ai.GEMINI_PRICE_PER_TOKEN, GROQ_PRICE_PER_TOKEN: ai.GROQ_PRICE_PER_TOKEN,

@@ -13,10 +13,22 @@
 
 const _buckets = new Map(); // key -> { stamps: number[] }
 
-/** Buckets are keyed by address so two endpoints cannot poison each other. */
-function paceKey(baseUrl, provider) {
-  try { const u = new URL(baseUrl); return `${u.protocol}//${u.host}`; }
-  catch { return provider || 'unknown'; }
+/**
+ * Buckets are keyed by address so two endpoints cannot poison each other, and
+ * by CREDENTIAL where one is known.
+ *
+ * A requests-per-minute cap is enforced per account, not per host. Keyed by
+ * address alone, three free keys on one provider shared a single key's worth
+ * of budget: AEON throttled itself to 1/3 of what the operator had paid
+ * nothing for, and rotating between the keys bought exactly nothing. The
+ * address stays in the key so an endpoint with one credential paces exactly
+ * as it did before.
+ */
+function paceKey(baseUrl, provider, credentialRef) {
+  let addr;
+  try { const u = new URL(baseUrl); addr = `${u.protocol}//${u.host}`; }
+  catch { addr = provider || 'unknown'; }
+  return credentialRef ? `${addr}#${credentialRef}` : addr;
 }
 
 /**

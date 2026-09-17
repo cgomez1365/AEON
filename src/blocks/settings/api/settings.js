@@ -1,5 +1,10 @@
 const fs = require('fs');
 const path = require('path');
+// How much of a catalogue survives, and which rows the provider priced at
+// zero. Shared with /api/connections/discover so the two model pickers cannot
+// drift apart. See src/kernel/modelCatalogue.cjs for why free is read from
+// price and not from the ":free" suffix.
+const { MAX_MODELS, isFreeModelRow, freeFirst } = require('../../../kernel/modelCatalogue.cjs');
 
 /**
  * Is this request from the machine AEON runs on?
@@ -726,7 +731,10 @@ module.exports = (app, deps) => {
           timeout(8000)
         ]);
         const data = await r.json();
-        return res.json({ ok: r.ok, models: (data.data || []).map(m => m.id).slice(0, 20), latency_ms: 0 });
+        // Groq publishes no per-model price, so no `free` key is sent: free on
+        // Groq is a property of the key, not the model. Alphabetical is
+        // display order only.
+        return res.json({ ok: r.ok, models: (data.data || []).map(m => m.id).sort().slice(0, MAX_MODELS), latency_ms: 0 });
       }
 
       if (id === 'gemini') {
@@ -737,7 +745,8 @@ module.exports = (app, deps) => {
           timeout(8000)
         ]);
         const data = await r.json();
-        return res.json({ ok: r.ok, models: (data.models || []).map(m => m.name.replace('models/', '')).slice(0, 20) });
+        // Same as Groq: the tier lives on the project, not on the model row.
+        return res.json({ ok: r.ok, models: (data.models || []).map(m => m.name.replace('models/', '')).sort().slice(0, MAX_MODELS) });
       }
 
       if (id === 'local') {
@@ -789,7 +798,7 @@ module.exports = (app, deps) => {
           timeout(8000)
         ]);
         const data = await r.json();
-        return res.json({ ok: r.ok, models: (data.data || []).map(m => m.id).slice(0, 30) });
+        return res.json({ ok: r.ok, models: (data.data || []).map(m => m.id).sort().slice(0, MAX_MODELS) });
       }
 
       if (id === 'claude') {
@@ -800,7 +809,9 @@ module.exports = (app, deps) => {
           timeout(8000)
         ]);
         const data = await r.json();
-        return res.json({ ok: r.ok, models: (data.data || []).map(m => m.id).slice(0, 20) });
+        // Anthropic returns newest-first, which is more useful here than
+        // alphabetical, so this one keeps the provider's own order.
+        return res.json({ ok: r.ok, models: (data.data || []).map(m => m.id).slice(0, MAX_MODELS) });
       }
 
       if (id === 'grok') {
@@ -811,7 +822,7 @@ module.exports = (app, deps) => {
           timeout(8000)
         ]);
         const data = await r.json();
-        return res.json({ ok: r.ok, models: (data.data || []).map(m => m.id).slice(0, 20) });
+        return res.json({ ok: r.ok, models: (data.data || []).map(m => m.id).sort().slice(0, MAX_MODELS) });
       }
 
       if (id === 'lmstudio') {
@@ -831,7 +842,17 @@ module.exports = (app, deps) => {
           timeout(8000)
         ]);
         const data = await r.json();
-        return res.json({ ok: r.ok, models: (data.data || []).map(m => m.id).slice(0, 40) });
+        // OpenRouter is the one provider here that publishes a price per
+        // model, so it is the one that can honestly say which are free. Sort
+        // the ROWS before mapping to ids — the price lives on the row.
+        const rows = freeFirst((data.data || []), isFreeModelRow).slice(0, MAX_MODELS);
+        return res.json({
+          ok: r.ok,
+          models: rows.map(m => m.id),
+          // No `free` key at all means "this provider does not say", which is
+          // what every other branch above means by omitting it.
+          free: rows.filter(isFreeModelRow).map(m => m.id),
+        });
       }
 
       res.json({ ok: false, error: `Unknown provider: ${id}` });

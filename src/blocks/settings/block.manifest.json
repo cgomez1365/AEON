@@ -112,6 +112,16 @@
     },
     {
       "method": "POST",
+      "path": "/api/connections/:id/keys",
+      "auth": true
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/connections/:id/keys/:ref",
+      "auth": true
+    },
+    {
+      "method": "POST",
       "path": "/api/connections/assign-role",
       "auth": true
     },

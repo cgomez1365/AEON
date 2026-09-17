@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Settings as SettingsIcon, Check, X, RefreshCw, Zap, Shield, ChevronDown, ChevronUp, Search, Wifi, WifiOff, Activity, Cpu, Database, Layers, ToggleLeft, ToggleRight, User, Lock, KeyRound, LogOut, LogIn, Save, Eye, Palette, Wrench } from 'lucide-react';
 import { authFetch, login as apiLogin, logout as apiLogout } from '../../kernel/auth';
+import { matchesModelQuery } from '../../kernel/modelQuery';
 import { BLOCKS as INSTALLED_BLOCKS } from '../../kernel/blockRegistry';
 import { BlockIcon } from '../../components/BlockIcon';
 import { applyAppearance, applyThemeBuilder } from '../../kernel/appearance';
@@ -73,7 +74,7 @@ async function savePref(key, value) {
 }
 
 // ── Searchable Model Picker ──────────────────────────────────────────
-function ModelPicker({ models, value, onChange, label = 'Model', id }) {
+function ModelPicker({ models, value, onChange, label = 'Model', id, freeModels }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
   const ref = useRef(null);
@@ -84,7 +85,19 @@ function ModelPicker({ models, value, onChange, label = 'Model', id }) {
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
-  const filtered = models.filter(m => m.toLowerCase().includes(search.toLowerCase()));
+  // `freeModels` carries only flags the PROVIDER stated — today that is
+  // OpenRouter, whose catalogue publishes a price per model. A provider that
+  // sends no free list gets no free labels here, because on Groq or Gemini
+  // "free" is a property of the key, not of the model: a label read off the
+  // account's tier would be the same lie as a badge that says Connected from
+  // configuration.
+  const freeSet = useMemo(() => new Set(freeModels || []), [freeModels]);
+
+  // Searching matches the id, plus the word "free" for models the provider
+  // priced at zero. That is why filtering for "free" now finds a zero-priced
+  // model whose id never says so. The predicate itself lives in
+  // src/kernel/modelQuery.js so the suite can test it without a DOM.
+  const filtered = models.filter(m => matchesModelQuery(m, search, freeSet));
 
   if (models.length <= 5) {
     // A <select> whose value matches no option silently displays the FIRST one.
@@ -100,7 +113,7 @@ function ModelPicker({ models, value, onChange, label = 'Model', id }) {
     return (
       <select id={id} value={value} onChange={e => onChange(e.target.value)} className="settings-select" aria-label={label}>
         {orphaned && <option value={value}>{value} — not available, pick one below</option>}
-        {models.map(m => <option key={m} value={m}>{m}</option>)}
+        {models.map(m => <option key={m} value={m}>{m}{freeSet.has(m) ? ' — free' : ''}</option>)}
       </select>
     );
   }
@@ -136,7 +149,10 @@ function ModelPicker({ models, value, onChange, label = 'Model', id }) {
                 onClick={() => { onChange(m); setOpen(false); setSearch(''); }}
                 onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onChange(m); setOpen(false); setSearch(''); } }}
               >
-                {m}
+                <span className="model-picker-item-name">
+                  {m}
+                  {freeSet.has(m) && <span className="model-picker-free">free</span>}
+                </span>
                 {m === value && <Check size={12} style={{ color: 'var(--accent)' }} />}
               </div>
             ))}
@@ -352,13 +368,17 @@ function EmbedReadiness() {
 }
 
 // ── Role Card ────────────────────────────────────────────────────────
-function RoleCard({ role, config, providers, liveModels, onUpdate, providerBlocks, providerRegistry }) {
+function RoleCard({ role, config, providers, liveModels, freeModels, onUpdate, providerBlocks, providerRegistry }) {
   const providerReg = (providerRegistry || []).find(p => p.id === config?.provider);
   // `?.length ?` not `||` — an empty array is truthy, so a provider that
   // answered with zero models short-circuited the fallback and rendered a
   // blank <select>. That is how a ready local model stayed invisible.
   const live = liveModels[config?.provider];
   const models = (live?.length ? live : providerReg?.fallbackModels) || [];
+  // Only real flags, and only for the live list. A fallbackModels list is a
+  // hardcoded guess about a provider we could not reach — nothing there is
+  // known to be free.
+  const free = live?.length ? (freeModels?.[config?.provider] || []) : [];
   const isLocal = config?.provider === 'local';
   const isConfigured = providers[config?.provider];
   const poweredBlocks = providerBlocks?.[config?.provider] || [];
@@ -405,6 +425,7 @@ function RoleCard({ role, config, providers, liveModels, onUpdate, providerBlock
             id={`role-model-${role.key}`}
             label={`Model for ${role.label}`}
             models={models}
+            freeModels={free}
             value={config?.model || ''}
             onChange={v => onUpdate(role.key, 'model', v)}
           />
@@ -956,6 +977,125 @@ function BlockAssignPicker({ provider, providerBlocks, allBlocks, selected, onCh
   );
 }
 
+// ── Key pool: several accounts behind one connection ────────────────
+//
+// The operator's strategy is "make a few free accounts and give AEON every
+// key." That only means something if they can SEE the pool — how many
+// accounts a connection holds, which one takes the next turn, and which are
+// resting after a rate limit — and can add a key without editing a file. The
+// kernel round-robins the pool per call and paces each account on its own
+// per-minute budget, so a second key is real extra throughput, not a spare.
+function KeyPool({ ep, pool, onChange }) {
+  const [open, setOpen] = useState(false);
+  const [apiKey, setApiKey] = useState('');
+  const [label, setLabel] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  const keys = pool?.keys || [];
+  const total = keys.length;
+  const ready = pool?.available ?? total;
+  const nextIdx = pool?.next_index ?? 0;
+
+  const restFor = (ms) => {
+    const s = Math.ceil(ms / 1000);
+    if (s < 90) return `~${s}s`;
+    if (s < 3600) return `~${Math.ceil(s / 60)}m`;
+    return `~${Math.ceil(s / 3600)}h`;
+  };
+  const whyResting = (status) =>
+    status === 429 ? 'hit its rate limit'
+    : status === 402 ? 'is out of credit'
+    : 'was rejected';
+
+  const add = async () => {
+    const key = apiKey.trim();
+    if (!key) { setErr('Paste the API key to add.'); return; }
+    setErr(''); setBusy(true);
+    try {
+      const r = await fetch(`/api/connections/${encodeURIComponent(ep.id)}/keys`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey: key, label: label.trim() }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || 'That key could not be saved.');
+      setApiKey(''); setLabel('');
+      showToast(`Key added — ${ep.label || ep.provider} now has ${(d.endpoint?.auth_refs || []).length} accounts`, 'success');
+      onChange();
+    } catch (e) { setErr(e.message); }
+    setBusy(false);
+  };
+
+  const drop = async (ref) => {
+    setErr(''); setBusy(true);
+    try {
+      const r = await fetch(`/api/connections/${encodeURIComponent(ep.id)}/keys/${encodeURIComponent(ref)}`, { method: 'DELETE' });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || 'That key could not be removed.');
+      showToast('Key removed', 'success');
+      onChange();
+    } catch (e) { setErr(e.message); }
+    setBusy(false);
+  };
+
+  return (
+    <div className="keypool">
+      <button type="button" className="keypool-summary" onClick={() => setOpen(o => !o)}
+        aria-expanded={open} aria-controls={`keypool-${ep.id}`}>
+        <span className="keypool-count">{total} {total === 1 ? 'account' : 'accounts'}</span>
+        {total > 1 && <span className="keypool-rot">rotating</span>}
+        {ready < total && <span className="keypool-resting">{total - ready} resting</span>}
+        <span className="keypool-chev">{open ? '▾' : '▸'}</span>
+      </button>
+
+      {open && (
+        <div className="keypool-body" id={`keypool-${ep.id}`}>
+          {total > 1 && (
+            <div className="keypool-note">
+              AEON spreads calls across these accounts, one per turn, and gives each its own
+              per-minute budget. An account that hits a limit rests and the next one takes over.
+            </div>
+          )}
+          <ul className="keypool-list">
+            {keys.map(k => (
+              <li key={k.ref} className={`keypool-key${k.cooling ? ' keypool-key--resting' : ''}`}>
+                <span className="keypool-dot" aria-hidden="true">{k.cooling ? '◌' : '●'}</span>
+                <span className="keypool-ref">{k.ref}</span>
+                <span className="keypool-state">
+                  {k.cooling
+                    ? `resting — ${whyResting(k.status)}, back in ${restFor(k.retry_in_ms)}`
+                    : (k.index === nextIdx && total > 1 ? 'ready · next turn' : 'ready')}
+                </span>
+                {total > 1 && (
+                  <button type="button" className="keypool-drop" disabled={busy}
+                    onClick={() => drop(k.ref)} title="Remove this key"
+                    aria-label={`Remove key ${k.ref} from ${ep.label || ep.provider}`}><X size={12} /></button>
+                )}
+              </li>
+            ))}
+          </ul>
+
+          <div className="keypool-add">
+            <input className="settings-select keypool-input" type="password" autoComplete="off"
+              placeholder="Paste another API key for this provider" value={apiKey}
+              aria-label={`New API key for ${ep.label || ep.provider}`}
+              onChange={e => setApiKey(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') add(); }} />
+            <input className="settings-select keypool-input keypool-input--label" placeholder="Name (optional)"
+              value={label} aria-label="Name for this key, shown in this list"
+              onChange={e => setLabel(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') add(); }} />
+            <button type="button" className="settings-btn settings-btn--secondary" disabled={busy} onClick={add}>
+              {busy ? 'Saving…' : 'Add key'}
+            </button>
+          </div>
+          {err && <div className="keypool-err">{err}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ConnectionsPanel({ nervousSystem }) {
   // Derive CONN_PROVIDERS from nervous system (no hardcoded list)
   const CONN_PROVIDERS = nervousSystem
@@ -965,7 +1105,7 @@ function ConnectionsPanel({ nervousSystem }) {
     : [];
   const [data, setData] = useState(null);
   const [adding, setAdding] = useState(false);
-  const [form, setForm] = useState({ provider: 'groq', label: '', base_url: '', apiKey: '', models: [], selectedModel: '', accountEmail: '', assignedBlocks: [], modelName: '', manualModel: false, discoverNote: '', rpmLimit: '' });
+  const [form, setForm] = useState({ provider: 'groq', label: '', base_url: '', apiKey: '', models: [], freeModels: [], selectedModel: '', accountEmail: '', assignedBlocks: [], modelName: '', manualModel: false, discoverNote: '', rpmLimit: '' });
   const [discovering, setDiscovering] = useState(false);
   const [busy, setBusy] = useState(false);
   const [accts, setAccts] = useState({});
@@ -984,7 +1124,7 @@ function ConnectionsPanel({ nervousSystem }) {
     const p = CONN_PROVIDERS.find(x => x.id === id);
     if (p) {
       const liveBlocks = (providerBlocks[id] || []).map(b => typeof b === 'string' ? b : b.id);
-      setForm(f => ({ ...f, provider: id, base_url: p.base || '', models: [], selectedModel: '', assignedBlocks: liveBlocks }));
+      setForm(f => ({ ...f, provider: id, base_url: p.base || '', models: [], freeModels: [], selectedModel: '', assignedBlocks: liveBlocks }));
     } else {
       setForm(f => ({ ...f, provider: id }));
     }
@@ -999,7 +1139,18 @@ function ConnectionsPanel({ nervousSystem }) {
       });
       const d = await r.json();
       if (d.ok) {
-        setForm(f => ({ ...f, models: d.models, selectedModel: d.models[0] || '', manualModel: false, discoverNote: '' }));
+        // models[0] is now the first FREE model when the provider priced any
+        // at zero, because the route sorts before it flattens. Absent `free`
+        // means the provider does not publish prices — not that none are free —
+        // and either way an empty list draws no badges.
+        setForm(f => ({
+          ...f,
+          models: d.models,
+          freeModels: Array.isArray(d.free) ? d.free : [],
+          selectedModel: d.models[0] || '',
+          manualModel: false,
+          discoverNote: '',
+        }));
         showToast(`Found ${d.models.length} model${d.models.length === 1 ? '' : 's'}`);
       } else {
         // d.manual means the connection may well be fine — the service just
@@ -1038,7 +1189,7 @@ function ConnectionsPanel({ nervousSystem }) {
           await savePref('provider_accounts', accts);
         }
         showToast('Connection saved'); setAdding(false);
-        setForm({ provider: 'groq', label: '', base_url: '', apiKey: '', models: [], selectedModel: '', accountEmail: '', assignedBlocks: [], modelName: '', manualModel: false, discoverNote: '', rpmLimit: '' }); load();
+        setForm({ provider: 'groq', label: '', base_url: '', apiKey: '', models: [], freeModels: [], selectedModel: '', accountEmail: '', assignedBlocks: [], modelName: '', manualModel: false, discoverNote: '', rpmLimit: '' }); load();
       } else showToast(d.error || 'Save failed', 'error');
     } catch { showToast('Save failed', 'error'); }
     setBusy(false);
@@ -1103,13 +1254,15 @@ function ConnectionsPanel({ nervousSystem }) {
       {data.endpoints.map(ep => {
         const acctInfo = accts[ep.id] || accts[ep.provider];
         return (
-          <div key={ep.id} className="admin-card conn-row">
+          <div key={ep.id} className="admin-card conn-row conn-row--stack">
+            <div className="conn-row-top">
             <div className="conn-row-main">
               <span className="conn-provider-icon">{(nervousSystem?.providers?.[ep.provider]?.icon) || (ep.kind === 'local' ? '🖥️' : '🔌')}</span>
               <div style={{ flex: 1 }}>
                 <div className="conn-label">{ep.label} <ReachBadge reach={ep.reachable_from} /></div>
                 <div className="conn-meta">
-                  {ep.provider} · {ep.models.length} model(s){ep.auth_ref ? ' · 🔑 keyed' : ''}
+                  {ep.provider} · {ep.models.length} model(s)
+                  {(ep.auth_refs?.length > 1) ? ` · 🔑 ${ep.auth_refs.length} keys` : (ep.auth_ref ? ' · 🔑 keyed' : '')}
                   {acctInfo?.email && <> · <span className="conn-acct-email">{acctInfo.email}</span></>}
                 </div>
                 {acctInfo?.assignedBlocks?.length > 0 && (
@@ -1120,6 +1273,10 @@ function ConnectionsPanel({ nervousSystem }) {
               </div>
             </div>
             <button type="button" className="conn-remove" onClick={() => removeConn(ep.id)} title="Remove" aria-label={`Remove connection: ${ep.label || ep.provider}`}><X size={14} /></button>
+            </div>
+            {(ep.auth_refs?.length || ep.auth_ref) && data.vault.unlocked && (
+              <KeyPool ep={ep} pool={data.keyPools?.[ep.id]} onChange={load} />
+            )}
           </div>
         );
       })}
@@ -1172,11 +1329,22 @@ function ConnectionsPanel({ nervousSystem }) {
             </button>
             {/* Picking from the real list is how a wrong model name becomes
                 impossible. Manual entry is the fallback for the servers that
-                genuinely do not publish one. */}
+                genuinely do not publish one.
+
+                The same searchable picker as Model Assignment, for the same
+                reason: this list is 445 rows on OpenRouter, and the bare
+                <select> that used to sit here gave the operator no way to find
+                the free ones in it. .model-picker-wrap carries flex:1 already,
+                which is what that <select> needed a style prop for. */}
             {form.models.length > 0 && !form.manualModel && (
-              <select className="settings-select" style={{ flex: 1 }} value={form.selectedModel} onChange={e => setForm(f => ({ ...f, selectedModel: e.target.value }))} aria-label="Selected model">
-                {form.models.map(m => <option key={m} value={m}>{m}</option>)}
-              </select>
+              <ModelPicker
+                id="conn-selected-model"
+                label="Selected model"
+                models={form.models}
+                freeModels={form.freeModels}
+                value={form.selectedModel}
+                onChange={v => setForm(f => ({ ...f, selectedModel: v }))}
+              />
             )}
             {form.manualModel && (
               <input className="settings-input" style={{ flex: 1 }} value={form.modelName}
@@ -2736,6 +2904,9 @@ export default function SystemSettings() {
   const [providers, setProviders] = useState({});
   const [blocks, setBlocks] = useState([]);
   const [liveModels, setLiveModels] = useState({});
+  // provider id → ids the PROVIDER priced at zero. Only providers that publish
+  // per-model pricing ever appear here; see the test-provider route.
+  const [freeModels, setFreeModels] = useState({});
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [tab, setTab] = useState('start');
@@ -2778,6 +2949,10 @@ export default function SystemSettings() {
         // the picker empty even after the provider was fixed.
         if (d.ok && Array.isArray(d.models) && d.models.length) {
           setLiveModels(prev => ({ ...prev, [id]: d.models }));
+          // Absent `free` is not "none are free" — it is "this provider does
+          // not say". Either way there is nothing to label, so both land as an
+          // empty list and no badge is drawn.
+          if (Array.isArray(d.free)) setFreeModels(prev => ({ ...prev, [id]: d.free }));
         }
       } catch {}
     };
@@ -2964,6 +3139,7 @@ export default function SystemSettings() {
               config={settings.models[role.key]}
               providers={providers}
               liveModels={liveModels}
+              freeModels={freeModels}
               onUpdate={updateRole}
               providerBlocks={providerBlocksMap}
               providerRegistry={getProviderRegistry(nervousSystem)}
@@ -3474,6 +3650,18 @@ export default function SystemSettings() {
           transition: background 0.1s;
           font-family: monospace;
         }
+        .model-picker-item-name { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+        .model-picker-free {
+          font-family: inherit;
+          font-size: 9px;
+          letter-spacing: 0.04em;
+          text-transform: uppercase;
+          padding: 1px 5px;
+          border-radius: 999px;
+          color: #10b981;
+          border: 1px solid rgba(16,185,129,0.45);
+          background: rgba(16,185,129,0.10);
+        }
         .model-picker-item:hover { background: var(--accent-dim); }
         .model-picker-item--active { color: var(--accent); }
         .model-picker-empty { padding: 12px; text-align: center; font-size: 11px; color: var(--text-dim); }
@@ -3718,6 +3906,32 @@ export default function SystemSettings() {
         .vault-status-sub { font-size: 10px; color: var(--text-dim); margin-top: 2px; }
         .conn-empty { font-size: 12px; color: var(--text-dim); text-align: center; }
         .conn-row { display: flex; align-items: center; gap: 10px; padding: 12px 14px; }
+        .conn-row--stack { flex-direction: column; align-items: stretch; gap: 0; }
+        .conn-row-top { display: flex; align-items: center; gap: 10px; }
+        /* Key pool */
+        .keypool { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 8px; }
+        .keypool-summary { display: flex; align-items: center; gap: 8px; width: 100%; background: none; border: none; padding: 2px 0; cursor: pointer; font-size: 10px; color: var(--text-dim); text-align: left; }
+        .keypool-summary:hover .keypool-count { color: var(--accent); }
+        .keypool-count { font-weight: 600; letter-spacing: 0.3px; }
+        .keypool-rot { font-size: 8px; text-transform: uppercase; letter-spacing: 0.6px; padding: 1px 6px; border-radius: 4px; background: rgba(0,242,255,0.1); color: var(--accent); font-weight: 600; }
+        .keypool-resting { font-size: 8px; text-transform: uppercase; letter-spacing: 0.6px; padding: 1px 6px; border-radius: 4px; background: rgba(245,166,35,0.12); color: #f5a623; font-weight: 600; }
+        .keypool-chev { margin-left: auto; font-size: 9px; }
+        .keypool-body { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; }
+        .keypool-note { font-size: 10px; line-height: 1.5; color: var(--text-dim); max-width: 62ch; }
+        .keypool-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+        .keypool-key { display: flex; align-items: center; gap: 8px; font-size: 10px; color: var(--text); padding: 4px 6px; border-radius: 5px; background: rgba(255,255,255,0.02); }
+        .keypool-key--resting { color: var(--text-dim); }
+        .keypool-dot { color: #00ff40; font-size: 8px; }
+        .keypool-key--resting .keypool-dot { color: #f5a623; }
+        .keypool-ref { font-family: var(--font-mono, ui-monospace, monospace); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 46%; }
+        .keypool-state { color: var(--text-dim); font-size: 9px; margin-left: auto; text-align: right; }
+        .keypool-drop { background: none; border: none; color: var(--text-dim); cursor: pointer; padding: 2px 4px; border-radius: 4px; display: flex; }
+        .keypool-drop:hover:not(:disabled) { color: #ff4466; background: rgba(255,68,102,0.1); }
+        .keypool-drop:disabled { opacity: 0.4; cursor: default; }
+        .keypool-add { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+        .keypool-input { flex: 1; min-width: 150px; font-size: 11px; }
+        .keypool-input--label { flex: 0 1 130px; min-width: 90px; }
+        .keypool-err { font-size: 10px; color: #ff4466; }
         .conn-row-main { display: flex; align-items: center; gap: 10px; flex: 1; }
         .conn-provider-icon { font-size: 16px; }
         .conn-label { font-size: 13px; color: var(--text); font-weight: 500; display: flex; align-items: center; gap: 8px; }

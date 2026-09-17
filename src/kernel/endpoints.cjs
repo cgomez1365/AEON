@@ -9,7 +9,8 @@
  *
  *   endpoint = {
  *     id, label, kind: 'cloud'|'local', provider,
- *     base_url, auth_ref|null, models: [],
+ *     base_url, auth_ref|null, auth_refs: [],  // several accounts, one endpoint
+ *     models: [],
  *     reachable_from: ['local'] | ['cloud'] | ['local','cloud']
  *   }
  *
@@ -18,6 +19,13 @@
 const fs = require('fs');
 const path = require('path');
 const vault = require('./vault.cjs');
+// Which of an endpoint's accounts serves this turn, and which ones are resting.
+// Kernel policy, because the router is the only thing that sees every call.
+const keyPool = require('./keyPool.cjs');
+// One place decides how much of a catalogue survives and which rows the
+// provider priced at zero — shared with /api/settings/test-provider so the two
+// model pickers cannot drift apart.
+const { MAX_MODELS, isFreeModelRow, freeFirst } = require('./modelCatalogue.cjs');
 
 const isVercel = require('./runtime.cjs').isCloud();
 const APP_ROOT = path.join(__dirname, '..', '..');
@@ -34,6 +42,21 @@ const REG_ROW_ID = 1;
 // in exactly one place instead of being hardcoded per call site. (BO7)
 // The one role that must never be served by a substitute. See resolveForRole().
 const EMBED_ROLE = 'embed';
+
+/**
+ * Every vault ref this endpoint can authenticate with.
+ *
+ * `auth_refs` is the pool; `auth_ref` is the first of them, kept populated
+ * because several readers legitimately ask "is there a key here at all" and
+ * were right to ask it of one ref. Registries written before pools existed
+ * carry only `auth_ref`, so this reads both rather than needing a migration —
+ * a file on disk should not have to be rewritten for the router to work.
+ */
+function credentialRefs(ep) {
+  if (!ep) return [];
+  if (Array.isArray(ep.auth_refs) && ep.auth_refs.length) return ep.auth_refs.filter(Boolean);
+  return ep.auth_ref ? [ep.auth_ref] : [];
+}
 
 function lmStudioHost() {
   return process.env.LMSTUDIO_HOST || 'http://localhost:1234';
@@ -216,6 +239,16 @@ async function addEndpoint(ep, supabase) {
     ? (isPriv ? ['local'] : ['local', 'cloud'])
     : (profile.reach || ['local']);
 
+  // A connection can hold several accounts. A caller that names `auth_refs`
+  // states the whole pool; a caller that names only `auth_ref` — which is
+  // every caller that predates pools, including the Add-connection form adding
+  // a second key — ADDS to the pool rather than replacing it. Editing a
+  // connection's label must not silently drop the operator's other keys.
+  const priorRefs = credentialRefs(reg.endpoints.find(e => e.id === ep.id));
+  const auth_refs = Array.isArray(ep.auth_refs)
+    ? [...new Set(ep.auth_refs.filter(Boolean))]
+    : [...new Set([...priorRefs, ...(ep.auth_ref ? [ep.auth_ref] : [])])];
+
   const endpoint = {
     // Date.now() alone is one millisecond of resolution — fine for a human
     // clicking Save, not for a double-submitted form or a scripted add, and
@@ -225,7 +258,8 @@ async function addEndpoint(ep, supabase) {
     kind: ep.kind || (derivedReach.includes('cloud') ? 'cloud' : 'local'),
     provider: ep.provider,
     base_url,
-    auth_ref: ep.auth_ref || null,
+    auth_ref: auth_refs[0] || null,
+    auth_refs,
     models: ep.models || [],
     reachable_from: ep.reachable_from || derivedReach,
     // Model the operator typed themselves, when the service publishes no list.
@@ -259,6 +293,7 @@ function defaultLabel(provider, base_url, reg, keepId) {
 async function removeEndpoint(id, supabase) {
   const reg = await load(supabase);
   reg.endpoints = reg.endpoints.filter(e => e.id !== id);
+  keyPool.forget(id); // no cooldowns haunting an id the operator may reuse
   for (const [role, m] of Object.entries(reg.roles)) {
     if (m.endpoint_id === id) delete reg.roles[role];
   }
@@ -274,7 +309,17 @@ async function assignRole(role, endpoint_id, model, cloud_fallback, supabase) {
 }
 
 // ── Discovery: probe an endpoint for its real model list ─────────────
-async function discoverModels(provider, base_url, apiKey) {
+/**
+ * The full catalogue: every id the endpoint listed, free ones first.
+ *
+ * This is the shape /api/connections/discover needs. `discoverModels` below
+ * flattens it to the bare id array every older caller already reads, so the
+ * price survives exactly as far as it is useful and no further.
+ *
+ * Returns { models: string[], free: string[] } on success, or the same
+ * { error, manual? } object it always did on failure.
+ */
+async function discoverModelCatalogue(provider, base_url, apiKey) {
   const profile = PROVIDER_TRANSPORT[provider] || {};
   const base = base_url || profile.base;
   const timeout = (ms) => new Promise((_, r) => setTimeout(() => r(new Error('timeout')), ms));
@@ -305,8 +350,10 @@ async function discoverModels(provider, base_url, apiKey) {
     if (profile.style === 'local') {
       try {
         const lr = require('../../services/local-runtime/index.cjs');
-        return lr.status().readyModels.map(m => m.id);
-      } catch { return []; }
+        // A model already on this machine has no price to publish and no paid
+        // sibling to sort ahead of, so there is nothing honest to flag.
+        return { models: lr.status().readyModels.map(m => m.id), free: [] };
+      } catch { return { models: [], free: [] }; }
     }
     if (profile.style === 'gemini') {
       const r = await Promise.race([fetch(`${base}/models?key=${apiKey}`), timeout(8000)]);
@@ -314,7 +361,13 @@ async function discoverModels(provider, base_url, apiKey) {
       // Google answers a bad key with { error: { message } } and no models.
       // That used to come back as an empty list — the same shape as success.
       if (d.error) return { error: d.error.message || 'Gemini rejected the API key.' };
-      return (d.models || []).map(m => m.name.replace('models/', ''));
+      // ListModels rows carry name, token limits and supported generation
+      // methods — no price. Google's free tier is granted per API KEY and per
+      // project, not per model, so nothing here can say which models are free
+      // for this operator. Alphabetical at least makes a long list scannable.
+      const ids = (d.models || []).map(m => m.name.replace('models/', ''))
+        .sort((a, b) => a.localeCompare(b)).slice(0, MAX_MODELS);
+      return { models: ids, free: [] };
     }
     if (profile.style === 'anthropic') {
       const r = await Promise.race([
@@ -323,7 +376,9 @@ async function discoverModels(provider, base_url, apiKey) {
       ]);
       const d = await r.json();
       if (d.error) return { error: d.error.message || 'Anthropic auth failed' };
-      return (d.data || []).map(m => m.id);
+      // No price in Anthropic's rows, and no free models to lift. Its own order
+      // is newest-first, which is more useful than alphabetical, so it stands.
+      return { models: (d.data || []).map(m => m.id).slice(0, MAX_MODELS), free: [] };
     }
     // openai-style (groq, openai, grok, lmstudio, custom)
     //
@@ -358,13 +413,22 @@ async function discoverModels(provider, base_url, apiKey) {
     // standard { data: [{ id }] }, plus { models: [...] }, a bare array, and
     // rows keyed name/model instead of id.
     const rows = Array.isArray(d) ? d : (Array.isArray(d.data) ? d.data : (Array.isArray(d.models) ? d.models : []));
-    const ids = rows
-      .map(m => (typeof m === 'string' ? m : (m?.id || m?.name || m?.model || null)))
-      .filter(m => typeof m === 'string' && m)
-      .map(m => m.replace(/^models\//, ''));
+    // Carry the price alongside the id instead of mapping straight to strings.
+    // The old one-line map threw the pricing away in the same expression that
+    // read the id, which is why this route could never sort free models first
+    // and the connection form auto-selected a paid model on OpenRouter.
+    const entries = rows.slice(0, MAX_MODELS)
+      .map(m => {
+        const raw = typeof m === 'string' ? m : (m?.id || m?.name || m?.model || null);
+        if (typeof raw !== 'string' || !raw) return null;
+        return { id: raw.replace(/^models\//, ''), free: isFreeModelRow(m) };
+      })
+      .filter(Boolean);
+    const ordered = freeFirst(entries, e => e.free);
+    const ids = ordered.map(e => e.id);
 
     if (!ids.length) return { error: 'Connected, but this service listed no models. Type the model name yourself.', manual: true };
-    return ids;
+    return { models: ids, free: ordered.filter(e => e.free).map(e => e.id) };
   } catch (e) {
     // NEVER return e.message raw — the gemini branch above puts the key in the
     // URL, and fetch failures quote the URL back in the message.
@@ -375,6 +439,21 @@ async function discoverModels(provider, base_url, apiKey) {
     if (name === 'CERT_HAS_EXPIRED' || /CERT|SSL|TLS/i.test(String(name))) return { error: 'That server\'s security certificate could not be verified.' };
     return { error: 'Could not reach that address. Check the Base URL and your connection.' };
   }
+}
+
+/**
+ * Just the ids, in the same free-first order.
+ *
+ * Every caller that predates the `free` list keeps the array it already reads —
+ * model-scan's detect and scan-all, and the auto-discovery inside
+ * POST /api/connections. They all gain the ordering, which matters: scan-all
+ * upserts this list back into the registry, so what is STORED is free-first too
+ * and stays that way for the next reader.
+ */
+async function discoverModels(provider, base_url, apiKey) {
+  const found = await discoverModelCatalogue(provider, base_url, apiKey);
+  if (found && found.error) return found;
+  return found.models;
 }
 
 // ── One truth for "is this provider configured?" ─────────────────────
@@ -403,7 +482,7 @@ async function discoverModels(provider, base_url, apiKey) {
 function isProviderConfigured(provider) {
   const reg = readLocal();
   if (!reg || !Array.isArray(reg.endpoints)) return false;
-  return reg.endpoints.some(e => e.provider === provider && !!e.auth_ref);
+  return reg.endpoints.some(e => e.provider === provider && credentialRefs(e).length > 0);
 }
 
 // ── Auto-pick: which model on an endpoint can actually hold a conversation ──
@@ -558,7 +637,7 @@ async function resolveForRole(role, supabase) {
       }
     }
     const reachable = reg.endpoints.filter(e => e.reachable_from.includes(runtime));
-    const candidate = reachable.find(e => e.auth_ref) || reachable[0];
+    const candidate = reachable.find(e => credentialRefs(e).length) || reachable[0];
     if (!candidate) return { ok: false, code: role === EMBED_ROLE ? 'no_embed_model' : undefined, role, error: `No model assigned for role "${role}"` };
 
     if (role === EMBED_ROLE) {
@@ -595,7 +674,12 @@ async function resolveForRole(role, supabase) {
   }
   if (!ep) return { ok: false, error: `Endpoint "${mapping.endpoint_id}" not found` };
 
-  const apiKey = ep.auth_ref ? await vault.getSecret(ep.auth_ref, supabase) : null;
+  // One endpoint, possibly several accounts. The pool decides WHICH account
+  // serves this turn; the vault is then asked for exactly that one, so a pool
+  // of ten keys costs the same single decrypt a pool of one always did.
+  const refs = credentialRefs(ep);
+  const pick = refs.length ? keyPool.acquire(ep.id, refs) : null;
+  const apiKey = pick ? await vault.getSecret(pick.ref, supabase) : null;
   const reachable = ep.reachable_from.includes(runtime);
 
   return {
@@ -604,6 +688,11 @@ async function resolveForRole(role, supabase) {
     model,
     base_url: ep.base_url,
     apiKey,
+    // Which account this is, so the transport can pace it on its own budget
+    // and hand it back for a cooldown if the provider refuses it.
+    credential_ref: pick ? pick.ref : null,
+    credential_index: pick ? pick.index : null,
+    credential_count: refs.length,
     via: reachable ? 'direct' : 'relay',  // 'relay' → enqueue to desktop_commands
     endpoint_id: ep.id,
     // Client-side pacing budget for this endpoint, carried to the transport so
@@ -718,7 +807,7 @@ function describeRoleLocal(role) {
       if (local) return { ok: true, provider: 'local', model: local };
     }
     const reachable = reg.endpoints.filter(e => (e.reachable_from || []).includes(runtime));
-    const candidate = reachable.find(e => e.auth_ref) || reachable[0];
+    const candidate = reachable.find(e => credentialRefs(e).length) || reachable[0];
     if (!candidate) return { ok: false, reason: role === EMBED_ROLE ? 'no_embed_model' : 'no_reachable_endpoint' };
     if (role === EMBED_ROLE) {
       const picked = pickEmbedModel(candidate.models);
@@ -764,10 +853,96 @@ function describeRoleLocal(role) {
   return { ok: true, provider: ep.provider, model: mapping.model };
 }
 
+// ── Credential pool: rotation and management ─────────────────────────
+//
+// The router resolves ONE credential per turn (resolveForRole above). These
+// are what make a pool of several behave like a pool: the transport hands back
+// the credential that was refused, and gets the next healthy one.
+
+/**
+ * A credential failed. Sit it out and return the next usable one.
+ *
+ * Returns null when there is nothing better to offer — one credential, or the
+ * whole pool is resting — and the caller should surface the provider's own
+ * error rather than retry. Never returns the credential that just failed.
+ *
+ * @returns {Promise<{apiKey, credential_ref, credential_index, credential_count, healthy}|null>}
+ */
+async function rotateCredential(endpointId, failedRef, info, supabase) {
+  const reg = await load(supabase);
+  const ep = reg.endpoints.find(e => e.id === endpointId);
+  const refs = credentialRefs(ep);
+  if (failedRef) keyPool.penalize(endpointId, failedRef, info || {});
+  if (refs.length < 2) return null;
+
+  const pick = keyPool.acquire(endpointId, refs);
+  if (!pick || pick.ref === failedRef) return null;
+  const apiKey = await vault.getSecret(pick.ref, supabase);
+  if (!apiKey) return null;
+  return {
+    apiKey,
+    credential_ref: pick.ref,
+    credential_index: pick.index,
+    credential_count: pick.total,
+    healthy: pick.healthy,
+  };
+}
+
+/** A credential that just answered is healthy again, whatever it did before. */
+function markCredentialOk(endpointId, ref) { keyPool.succeed(endpointId, ref); }
+
+/** Add another account to an endpoint. The secret itself is the vault's job. */
+async function addCredential(endpointId, ref, supabase) {
+  const reg = await load(supabase);
+  const ep = reg.endpoints.find(e => e.id === endpointId);
+  if (!ep) { const err = new Error(`Connection "${endpointId}" not found`); err.status = 404; throw err; }
+  const refs = credentialRefs(ep);
+  if (!refs.includes(ref)) refs.push(ref);
+  ep.auth_refs = refs;
+  ep.auth_ref = refs[0] || null;
+  await save(reg, supabase);
+  return ep;
+}
+
+/**
+ * Drop an account from an endpoint. Refuses to empty the pool through this
+ * door: a connection with no key left is a connection that fails on its next
+ * turn, and deleting the connection is the honest way to say that.
+ */
+async function removeCredential(endpointId, ref, supabase) {
+  const reg = await load(supabase);
+  const ep = reg.endpoints.find(e => e.id === endpointId);
+  if (!ep) { const err = new Error(`Connection "${endpointId}" not found`); err.status = 404; throw err; }
+  const refs = credentialRefs(ep);
+  if (!refs.includes(ref)) { const err = new Error(`This connection has no key "${ref}"`); err.status = 404; throw err; }
+  if (refs.length < 2) {
+    const err = new Error('This is the connection\'s only key. Remove the connection itself, or add another key first.');
+    err.status = 400;
+    throw err;
+  }
+  ep.auth_refs = refs.filter(r => r !== ref);
+  ep.auth_ref = ep.auth_refs[0] || null;
+  keyPool.forget(endpointId); // the cursor pointed into a list that no longer exists
+  await save(reg, supabase);
+  return ep;
+}
+
+/**
+ * Pool health for Settings: per connection, how many accounts it holds, which
+ * one is up next, and which are resting and for how long. Refs only — the ref
+ * is a name, never key material.
+ */
+async function credentialReport(supabase) {
+  const reg = await load(supabase);
+  return Object.fromEntries(
+    (reg.endpoints || []).map(ep => [ep.id, keyPool.snapshot(ep.id, credentialRefs(ep))]),
+  );
+}
+
 module.exports = {
   PROVIDER_TRANSPORT, load, save,
   addEndpoint, removeEndpoint, assignRole,
-  discoverModels, resolveForRole, isVercel,
+  discoverModels, discoverModelCatalogue, resolveForRole, isVercel,
   lmStudioHost, isPortable, describeRoleLocal, describeRoleFromEnv,
   // Exported so the gate tests the REAL predicate rather than re-implementing it.
   pickChatModel, NON_CHAT_MODEL_RE, isProviderConfigured,
@@ -777,4 +952,9 @@ module.exports = {
   // Egress policy — the settings block validates the operator's address with
   // the same predicate the kernel enforces, so the two cannot drift.
   checkBaseUrl, isPrivateHost,
+  // Credential pools. isCredentialFault is re-exported so the transports
+  // classify a failure with the same predicate the pool cools keys by.
+  credentialRefs, rotateCredential, markCredentialOk,
+  addCredential, removeCredential, credentialReport,
+  isCredentialFault: keyPool.isCredentialFault,
 };

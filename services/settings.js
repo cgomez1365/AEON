@@ -38,15 +38,31 @@ const SETTINGS_FILE = storage.SETTINGS_FILE;
 const SECURITY_VAULT_DIR = storage.getVaultFile(path.join('blocks', 'security'));
 const CLOUD_CREDENTIALS_FILE = path.join(SECURITY_VAULT_DIR, 'cloud_credentials.json');
 const PROVIDER_CREDENTIALS_FILE = path.join(SECURITY_VAULT_DIR, 'provider_credentials.json');
-const PROVIDER_SECRET_KEYS = new Set([
+/**
+ * Approved provider credential BASES.
+ *
+ * A base admits its plain name and its numbered siblings — GROQ_API_KEY,
+ * GROQ_API_KEY_2, GROQ_API_KEY_3 … — because that numbering IS the key pool
+ * convention the kernel reads (services/ai.js buildPool, scanGeminiEnvKeys).
+ *
+ * This was a flat list of exact names, which enumerated GEMINI_FREE_KEY_1..3
+ * and stopped: Gemini could hold three accounts and every other provider
+ * exactly one, and a fourth Gemini key was refused. The operator's whole
+ * strategy — several free accounts per provider, AEON rotating between them —
+ * was unreachable from the UI for every provider but one, and capped there.
+ *
+ * It stays an allowlist. An unlisted base is still refused, and the suffix
+ * must be a plain number: nothing here admits an arbitrary name.
+ */
+const PROVIDER_SECRET_BASES = [
   'GROQ_API_KEY',
-  'GEMINI_FREE_KEY_1',
-  'GEMINI_FREE_KEY_2',
-  'GEMINI_FREE_KEY_3',
+  'GEMINI_API_KEY',
+  'GEMINI_FREE_KEY',
   'GEMINI_PAID_KEY',
   'OPENAI_API_KEY',
   'ANTHROPIC_API_KEY',
   'GROK_API_KEY',
+  'XAI_API_KEY',
   'OPENROUTER_API_KEY',
   'TAVILY_API_KEY',
   'SERPER_API_KEY',
@@ -59,7 +75,13 @@ const PROVIDER_SECRET_KEYS = new Set([
   'YOUTUBE_CLIENT_SECRET',
   'YOUTUBE_REFRESH_TOKEN',
   'AEON_MOBILE_SECRET',
-]);
+];
+
+/** GROQ_API_KEY and GROQ_API_KEY_7 are both approved; GROQ_API_KEY_X is not. */
+const isProviderSecretKey = (name) =>
+  typeof name === 'string' && PROVIDER_SECRET_BASES.some(
+    base => name === base || (name.startsWith(base + '_') && /^[1-9][0-9]{0,2}$/.test(name.slice(base.length + 1))),
+  );
 
 const loadSettings = () => {
   try { return JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')); }
@@ -304,7 +326,7 @@ function createProviderCredentialStore(options = {}) {
     const data = loadForWrite();
     const written = [];
     for (const [key, value] of Object.entries(vars)) {
-      if (!PROVIDER_SECRET_KEYS.has(key)) {
+      if (!isProviderSecretKey(key)) {
         throw Object.assign(new Error(`${key} is not an approved provider credential`), { statusCode: 400 });
       }
       const secret = nonEmptyString(value, key);
@@ -349,5 +371,5 @@ module.exports = {
   SETTINGS_FILE,
   CLOUD_CREDENTIALS_FILE,
   PROVIDER_CREDENTIALS_FILE,
-  PROVIDER_SECRET_KEYS,
+  PROVIDER_SECRET_BASES, isProviderSecretKey,
 };
