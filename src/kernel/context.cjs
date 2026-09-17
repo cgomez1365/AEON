@@ -61,6 +61,39 @@ const COUNTING_RE = /\b(how many|how much|count|total( number)?|number of|list (
 
 const FORCE_PREFIX = '/matrix ';
 
+/**
+ * How an answer should be SHAPED. One sentence of instruction, one of limit.
+ *
+ * The operator gets walls of prose because nothing in the prompt ever asked
+ * for anything else: "i know ais can format stuff really well but current
+ * terminal limits that ability and sometimes i get really large paragraphs
+ * instead of well formatted responses, outlines or reports" (2026-09-17). The
+ * terminal's side of that is fixed — a table no longer overruns the panel —
+ * but a model that is never told it is writing into a 380px column has no
+ * reason to write for one.
+ *
+ * Two constraints on this string, and they are why it is this short:
+ *
+ *   1. It rides on EVERY turn, so it is two sentences and no examples.
+ *   2. It must not compete with the rules that already live in this prompt.
+ *      The memory policy, the citation doctrine ("quote the sentence you rely
+ *      on and name the file") and the counting rule are claims about TRUTH;
+ *      this is a claim about LAYOUT only, and it says so outright — otherwise
+ *      "be brief" is exactly the licence a model needs to drop the caveat, the
+ *      citation, or the admission that it did not find something. That second
+ *      sentence is the whole reason this is safe to add.
+ *
+ * It belongs with the identity, ahead of memory and of the retrieved passages,
+ * so it reads as part of how AEON speaks rather than as an instruction about
+ * the operator's documents. Both conversational callers append it to their
+ * identity line: src/kernel/routers/ai.cjs (POST /api/ai/converse) and
+ * src/blocks/dashboard/api/chat-stream.cjs (POST /api/chat/stream, which is
+ * what the terminal and the browser chat actually stream through). One string,
+ * two callers — the same reason the recall gate lives here and not in three
+ * places.
+ */
+const FORMATTING = 'Your answer is read in a narrow terminal panel, so prefer short paragraphs, headings and tight bullet lists over long prose, keep code in fenced blocks, and use a table only when every column is short. Shape is all this governs: never drop a caveat, a citation, or an admission of uncertainty to make an answer fit.';
+
 // The wake phrase. Was a private const in chat-stream.cjs; the terminal needs
 // the same one, and two copies of a trigger phrase drift exactly like two
 // copies of a gate do.
@@ -494,6 +527,7 @@ module.exports = {
   RECALL_PATTERNS,
   COUNTING_RE,
   FORCE_PREFIX,
+  FORMATTING,
   WAKE_RE,
   composePrompt,
   isRecallQuery,

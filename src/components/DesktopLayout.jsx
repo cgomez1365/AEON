@@ -21,6 +21,10 @@ import { Terminal } from 'lucide-react';
 import BlockShell from './BlockShell';
 import AuroraField from './AuroraField';
 import { BlockIcon, SectionIcon } from './BlockIcon';
+// The terminal's manual size. The handles write CSS custom properties that
+// .command-center and .chat-modal already read — the panel keeps its place in
+// the grid; only the track it occupies changes.
+import { TerminalWidthHandle, TerminalSheetHandle } from './PanelResizer';
 
 // Everything is a block now — nav + routes come purely from the registry.
 // Add non-block component routes here only if something can't be a cartridge.
@@ -443,6 +447,10 @@ export default function DesktopLayout({ chatHistory, auditLogs }) {
 
       {/* 4. RIGHT PANEL (Neural Terminal Desktop View) */}
       <div className="module-panel desktop-terminal-panel" style={{ width: '100%', flexShrink: 0 }}>
+        {/* The panel's INNER edge. .module-panel is already position:relative,
+            so this needs no new stacking context and no absolute positioning
+            of the panel itself. */}
+        <TerminalWidthHandle />
         <div className="panel-header" style={{ justifyContent: 'space-between' }}>
           <span>🧠 NEURAL TERMINAL</span>
           <span style={{ fontSize: '10px', color: '#00f2ff' }}>ONLINE</span>
@@ -466,6 +474,10 @@ export default function DesktopLayout({ chatHistory, auditLogs }) {
       {isChatOpen && (
         <div className="modal-overlay" onClick={() => setIsChatOpen(false)} style={{ zIndex: 1099, paddingTop: 0 }}>
           <div className="chat-modal" onClick={e => e.stopPropagation()}>
+            {/* Below 1200px the panel above is display:none and this sheet IS
+                the terminal, so it gets the same manual sizing — by height,
+                which is the axis a sheet has. */}
+            <TerminalSheetHandle />
             <div className="chat-modal-header">
               <span style={{ fontSize: "12px", fontWeight: 800, color: "#00f2ff", letterSpacing: "2px" }}>💬 NEURAL TERMINAL</span>
               <button onClick={() => setIsChatOpen(false)} style={{ background: "transparent", border: "none", color: "#64748b", cursor: "pointer", fontSize: "18px" }}>✕</button>

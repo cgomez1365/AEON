@@ -27,6 +27,127 @@ import { Send, Loader, Cpu, Clock, Zap, ChevronRight, ChevronDown, ShieldAlert, 
 import { describeStreamFailure } from '../utils/interceptorPolicy.js';
 import { describeDispatchOutcome, describeDenial, describeCommandOutput } from '../utils/commandOutcome.js';
 
+// ── Markdown rendering — the panel is a narrow column and nothing leaves it ──
+//
+// react-markdown was handed a components map with exactly ONE entry (the
+// anchor), so every other element rendered at browser defaults. An unstyled
+// <table> sizes itself to its content: in a 380px column the right-hand column
+// wrapped to one character per line and ran past the panel edge — the operator's
+// report of 2026-09-17, "responses will sometimes leak out of confinement".
+//
+// The answer is containment, not smaller type. A wide table gets its own
+// horizontal scroller and scrolls sideways INSIDE the terminal; code gets its
+// own; prose breaks a token wider than the column instead of pushing the
+// layout. Nothing here shrinks or truncates an answer — the content is intact,
+// it is the box that now holds the line.
+//
+// Defined at module scope on purpose. A components map rebuilt on every render
+// is a new component TYPE on every render, so React would remount the whole
+// answer and reset every table's scroll position on each streamed token.
+
+// react-markdown dropped the `inline` prop in v9, and a hast node carries no
+// parent pointer, so a <code> cannot tell on its own whether it is a fenced
+// block or a word in a sentence. The only honest answer comes from the
+// ancestor that knows: <pre> says so.
+const InPre = React.createContext(false);
+
+// Every component merges an incoming `style` LAST. remark-gfm turns a table's
+// alignment row into `style` on th/td, and spreading our own style after it
+// would silently drop the operator's column alignment.
+// Exported so the containment can be GATED rather than eyeballed — see
+// tests/terminal-output-containment.test.js. Nothing else imports it today.
+export const MD = {
+  a: ({ node, style, ...rest }) => (
+    <a {...rest} target="_blank" rel="noopener noreferrer"
+      style={{ color: '#00f2ff', overflowWrap: 'anywhere', ...style }} />
+  ),
+  p: ({ node, style, ...rest }) => (
+    <p {...rest} style={{ margin: '0 0 6px', lineHeight: 1.55, overflowWrap: 'anywhere', ...style }} />
+  ),
+
+  // A compact scale. In a 400px column the browser's 2em <h1> reads as
+  // shouting and eats a third of the width, so hierarchy is carried by weight
+  // and colour with only a little size behind it.
+  h1: ({ node, style, ...rest }) => (
+    <h1 {...rest} style={{ fontSize: 14.5, fontWeight: 700, color: '#e8f0fa', letterSpacing: '0.02em', margin: '12px 0 5px', paddingBottom: 3, borderBottom: '1px solid #1e2d45', overflowWrap: 'anywhere', ...style }} />
+  ),
+  h2: ({ node, style, ...rest }) => (
+    <h2 {...rest} style={{ fontSize: 13, fontWeight: 700, color: '#e8f0fa', letterSpacing: '0.02em', margin: '10px 0 4px', overflowWrap: 'anywhere', ...style }} />
+  ),
+  h3: ({ node, style, ...rest }) => (
+    <h3 {...rest} style={{ fontSize: 12.2, fontWeight: 700, color: '#b9cbe0', margin: '9px 0 3px', overflowWrap: 'anywhere', ...style }} />
+  ),
+  h4: ({ node, style, ...rest }) => (
+    <h4 {...rest} style={{ fontSize: 11.5, fontWeight: 700, color: '#8aa0b8', letterSpacing: '0.08em', textTransform: 'uppercase', margin: '8px 0 3px', overflowWrap: 'anywhere', ...style }} />
+  ),
+
+  ul: ({ node, style, ...rest }) => (
+    <ul {...rest} style={{ margin: '4px 0 7px', paddingLeft: 18, ...style }} />
+  ),
+  ol: ({ node, style, ...rest }) => (
+    <ol {...rest} style={{ margin: '4px 0 7px', paddingLeft: 20, ...style }} />
+  ),
+  li: ({ node, style, ...rest }) => (
+    <li {...rest} style={{ margin: '2px 0', lineHeight: 1.5, overflowWrap: 'anywhere', ...style }} />
+  ),
+
+  // The table scrolls SIDEWAYS inside its own box. Without this wrapper the
+  // table's min-content width is the sum of its columns, and a grid/flex
+  // ancestor has no choice but to grow or be overrun.
+  table: ({ node, style, ...rest }) => (
+    <div style={{ overflowX: 'auto', overflowY: 'hidden', maxWidth: '100%', margin: '6px 0' }}>
+      <table {...rest} style={{ borderCollapse: 'collapse', fontSize: 11.5, fontVariantNumeric: 'tabular-nums', ...style }} />
+    </div>
+  ),
+  thead: ({ node, style, ...rest }) => (
+    <thead {...rest} style={{ background: 'rgba(0,242,255,0.06)', ...style }} />
+  ),
+  // nowrap on a cell is what stops the one-character-per-line column: the cell
+  // wraps as a unit inside the scroller instead of being squeezed to nothing.
+  th: ({ node, style, ...rest }) => (
+    <th {...rest} style={{ border: '1px solid #1e2d45', padding: '4px 9px', textAlign: 'left', whiteSpace: 'nowrap', color: '#e8f0fa', fontWeight: 600, letterSpacing: '0.04em', ...style }} />
+  ),
+  td: ({ node, style, ...rest }) => (
+    <td {...rest} style={{ border: '1px solid #16233a', padding: '3px 9px', whiteSpace: 'nowrap', verticalAlign: 'top', ...style }} />
+  ),
+
+  pre: ({ node, style, children, ...rest }) => (
+    <InPre.Provider value={true}>
+      <pre {...rest} style={{ margin: '6px 0', padding: '8px 10px', background: 'rgba(8,13,22,0.85)', border: '1px solid #16233a', borderRadius: 3, overflowX: 'auto', maxWidth: '100%', fontSize: 11.5, lineHeight: 1.5, fontFamily: "'JetBrains Mono', monospace", whiteSpace: 'pre', ...style }}>{children}</pre>
+    </InPre.Provider>
+  ),
+  code: ({ node, style, children, ...rest }) => {
+    const block = React.useContext(InPre);
+    // Inside <pre> the block above already owns the scroller, the face and the
+    // padding; a second set here would double them.
+    if (block) {
+      return <code {...rest} style={{ background: 'none', border: 'none', padding: 0, fontSize: 'inherit', fontFamily: 'inherit', ...style }}>{children}</code>;
+    }
+    // overflow-wrap: anywhere, not white-space: nowrap. A token that fits moves
+    // to the next line whole — never broken mid-token — and only a token wider
+    // than the entire column is broken, which beats it leaving the panel.
+    return (
+      <code {...rest} style={{ background: 'rgba(0,242,255,0.07)', border: '1px solid #16233a', borderRadius: 2, padding: '0 4px', fontSize: '0.92em', fontFamily: "'JetBrains Mono', monospace", overflowWrap: 'anywhere', ...style }}>{children}</code>
+    );
+  },
+
+  blockquote: ({ node, style, ...rest }) => (
+    <blockquote {...rest} style={{ margin: '6px 0', padding: '2px 0 2px 10px', borderLeft: '2px solid #1e3a52', color: '#8aa0b8', ...style }} />
+  ),
+  hr: ({ node, style, ...rest }) => (
+    <hr {...rest} style={{ border: 'none', borderTop: '1px solid #1e2d45', margin: '10px 0', ...style }} />
+  ),
+  strong: ({ node, style, ...rest }) => (
+    <strong {...rest} style={{ color: '#e8f0fa', fontWeight: 600, ...style }} />
+  ),
+  em: ({ node, style, ...rest }) => (
+    <em {...rest} style={{ fontStyle: 'italic', color: '#b9cbe0', ...style }} />
+  ),
+  img: ({ node, style, ...rest }) => (
+    <img {...rest} style={{ maxWidth: '100%', height: 'auto', display: 'block', borderRadius: 3, margin: '6px 0', ...style }} />
+  ),
+};
+
 // UI-only commands — act on the terminal or app itself, never the server.
 // Block commands come from GET /api/commands (manifest-discovered); add nothing here.
 const UI_COMMANDS = [
@@ -67,16 +188,16 @@ function EventChip({ ev, onToggle }) {
         {ev.expanded ? <ChevronDown size={11} color={color} /> : <ChevronRight size={11} color={color} />}
         <span style={{ color: '#4a5568' }}>[{ev.pid}]</span>
         <span style={{ color, letterSpacing: '0.08em' }}>{ev.kind}</span>
-        <span style={{ color: '#c8d6e8', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ev.label}</span>
+        <span style={{ color: '#c8d6e8', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ev.label}</span>
         {(ev.status === 'running' || ev.status === 'pending') && <Loader size={11} color={color} className="spin" />}
         <span style={{ color, fontSize: 10 }}>{statusText}</span>
       </div>
       {ev.expanded && (
-        <div className="chip-output" style={{ padding: '6px 12px 8px 30px', fontSize: 11, color: '#8aa0b8', borderTop: `1px solid ${color}22`, whiteSpace: 'pre-wrap', maxHeight: 260, overflowY: 'auto' }}>
+        <div className="chip-output" style={{ padding: '6px 12px 8px 30px', fontSize: 11, color: '#8aa0b8', borderTop: `1px solid ${color}22`, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: 260, overflowY: 'auto', overflowX: 'hidden' }}>
           {/* Markdown, so a command that returns links returns LINKS. /orion
               used to print its sources as raw JSON in this box. */}
           {ev.output
-            ? <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: ({ node, ...props }) => <a {...props} target="_blank" rel="noopener noreferrer" style={{ color: '#00f2ff' }} />, p: ({ node, ...props }) => <p style={{ margin: '0 0 6px' }} {...props} /> }}>{ev.output}</ReactMarkdown>
+            ? <ReactMarkdown remarkPlugins={[remarkGfm]} components={MD}>{ev.output}</ReactMarkdown>
             : '(no output)'}
         </div>
       )}
@@ -790,7 +911,7 @@ const Terminal2 = ({ onUsageUpdate }) => {
         </button>
       </div>
 
-      <div ref={scrollRef} style={{ flex: 1, overflowY: 'auto', padding: '12px 14px' }}>
+      <div ref={scrollRef} style={{ flex: 1, minWidth: 0, overflowY: 'auto', overflowX: 'hidden', padding: '12px 14px' }}>
         {feed.map(entry => {
           if (entry.type === 'chip') return <EventChip key={entry.id} ev={entry} onToggle={() => patch(entry.id, e => ({ expanded: !e.expanded }))} />;
           if (entry.type === 'intercept') return <InterceptCard key={entry.id} prompt={entry.prompt} onAllow={() => approveIntercept(entry)} onDeny={() => denyIntercept(entry)} />;
@@ -815,7 +936,7 @@ const Terminal2 = ({ onUsageUpdate }) => {
                 <input aria-label="New folder inside the vault" placeholder="…or a new folder, e.g. Reference/Phishing" value={entry.newFolder || ''}
                   onChange={(e) => patch(entry.id, { newFolder: e.target.value })}
                   onKeyDown={(e) => { if (e.key === 'Enter' && entry.newFolder?.trim()) saveDrop(entry, entry.newFolder.trim()); }}
-                  style={{ background: '#0b0f19', color: '#c8d6e8', border: '1px solid #1e2d45', borderRadius: 2, fontSize: 11, padding: '3px 6px', fontFamily: 'inherit', minWidth: 220 }} />
+                  style={{ background: '#0b0f19', color: '#c8d6e8', border: '1px solid #1e2d45', borderRadius: 2, fontSize: 11, padding: '3px 6px', fontFamily: 'inherit', flex: '1 1 160px', minWidth: 0, maxWidth: '100%' }} />
                 {entry.newFolder?.trim() && (
                   <button onClick={() => saveDrop(entry, entry.newFolder.trim())}
                     style={{ background: 'rgba(0,242,255,0.1)', border: '1px solid #00f2ff', color: '#00f2ff', padding: '3px 14px', borderRadius: 2, cursor: 'pointer', fontSize: 11, fontFamily: 'inherit' }}>
@@ -832,14 +953,14 @@ const Terminal2 = ({ onUsageUpdate }) => {
           const roleColor = { user: '#e8f0fa', assistant: '#c8d6e8', system: '#5a6a80', warning: '#f59e0b', error: '#ff4455' }[entry.role] || '#c8d6e8';
           const roleTag = { user: 'USER', assistant: 'CORE', system: 'SYS', warning: 'WARN', error: 'ERROR' }[entry.role];
           return (
-            <div key={entry.id} style={{ margin: '8px 0', fontSize: 12.5 }}>
-              <span style={{ fontSize: 9, letterSpacing: '0.12em', color: roleColor, border: `1px solid ${roleColor}44`, borderRadius: 2, padding: '1px 6px', marginRight: 8 }}>{roleTag}</span>
-              <div style={{ display: 'inline-block', verticalAlign: 'top', maxWidth: 'calc(100% - 60px)', color: roleColor }}>
+            <div key={entry.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, margin: '8px 0', fontSize: 12.5, minWidth: 0 }}>
+              <span style={{ flexShrink: 0, fontSize: 9, letterSpacing: '0.12em', color: roleColor, border: `1px solid ${roleColor}44`, borderRadius: 2, padding: '1px 6px' }}>{roleTag}</span>
+              <div style={{ flex: 1, minWidth: 0, color: roleColor, overflowWrap: 'anywhere' }}>
                 {entry.role === 'assistant'
-                  ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{entry.content || (entry.streaming ? '▮' : '')}</ReactMarkdown>
+                  ? <ReactMarkdown remarkPlugins={[remarkGfm]} components={MD}>{entry.content || (entry.streaming ? '▮' : '')}</ReactMarkdown>
                   : <span style={{ whiteSpace: 'pre-wrap' }}>{entry.content}</span>}
                 {entry.meta?.model && (
-                  <div style={{ display: 'flex', gap: 10, marginTop: 3, fontSize: 9.5, color: '#4a5568' }}>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 3, fontSize: 9.5, color: '#4a5568', minWidth: 0 }}>
                     <span><Cpu size={9} style={{ verticalAlign: -1 }} /> {entry.meta.model}</span>
                     {entry.meta.latencyMs != null && <span><Clock size={9} style={{ verticalAlign: -1 }} /> {entry.meta.latencyMs}ms</span>}
                     {entry.meta.tokens != null && <span><Zap size={9} style={{ verticalAlign: -1 }} /> {entry.meta.tokens} tok</span>}
@@ -886,7 +1007,7 @@ const Terminal2 = ({ onUsageUpdate }) => {
                 onMouseEnter={e => e.currentTarget.style.background = 'rgba(0,242,255,0.07)'}
                 onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
                 <span style={{ color: off ? '#8a9ab0' : '#39ff14', minWidth: 90 }}>{c.cmd}</span>
-                <span style={{ color: '#5a6a80', flex: 1 }}>
+                <span style={{ color: '#5a6a80', flex: 1, minWidth: 0, overflowWrap: 'anywhere' }}>
                   {c.desc || c.title}
                   {off && <span style={{ color: '#ffaa00', marginLeft: 8, fontSize: 10 }}>⚠ {shortReason(c.reason)}</span>}
                 </span>
@@ -969,9 +1090,23 @@ const Terminal2 = ({ onUsageUpdate }) => {
       )}
 
       {pendingImage && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 14px', borderTop: '1px solid #1e2d45', fontSize: 11, color: '#00f2ff' }}>
-          <Paperclip size={11} /> {pendingImage.name}
-          <XIcon size={12} style={{ cursor: 'pointer', color: '#ff4455' }} onClick={() => setPendingImage(null)} />
+        // The filename is the only thing on this row that can be any length, so
+        // it is the only thing allowed to shrink. Left as a bare text node it
+        // was an anonymous flex item whose minimum size is its min-content
+        // width, and an ordinary 'Screenshot 2026-09-17 at 12.34.56 PM.png'
+        // pushed the remove control past the panel edge — which clips it, so
+        // the operator lost the one control that cancels the attachment.
+        // Ellipsis rather than wrap keeps the strip one line high; the whole
+        // name rides on `title`.
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 14px', borderTop: '1px solid #1e2d45', fontSize: 11, color: '#00f2ff', minWidth: 0 }}>
+          <Paperclip size={11} style={{ flexShrink: 0 }} />
+          <span title={pendingImage.name}
+            style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {pendingImage.name}
+          </span>
+          <XIcon size={12} aria-label="Remove the attached file"
+            style={{ cursor: 'pointer', color: '#ff4455', flexShrink: 0 }}
+            onClick={() => setPendingImage(null)} />
         </div>
       )}
       {showModelPicker && (
@@ -983,7 +1118,7 @@ const Terminal2 = ({ onUsageUpdate }) => {
               const [provider, ...m] = e.target.value.split('::');
               hotswapModel(provider, m.join('::'));
             }}
-            style={{ flex: 1, maxWidth: 420, background: '#0b0f19', color: '#c8d6e8', border: '1px solid #1e2d45', borderRadius: 2, fontSize: 11, padding: '4px 6px', fontFamily: 'inherit' }}>
+            style={{ flex: 1, minWidth: 0, maxWidth: 420, background: '#0b0f19', color: '#c8d6e8', border: '1px solid #1e2d45', borderRadius: 2, fontSize: 11, padding: '4px 6px', fontFamily: 'inherit' }}>
             <option value="" disabled>Pick a model (grouped by key availability)…</option>
             {modelGroups.map(g => (
               <optgroup key={g.provider} label={`${g.label || g.provider} ${g.hasKey ? '· ✓ key ready' : '· ✗ no key — add one in Settings'}`}>
@@ -1007,7 +1142,7 @@ const Terminal2 = ({ onUsageUpdate }) => {
           onChange={e => setInput(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter' && !isLoading) dispatch(input); }}
           placeholder="Ask, or /command…"
-          style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', color: '#e8f0fa', fontFamily: 'inherit', fontSize: 13 }}
+          style={{ flex: 1, minWidth: 0, background: 'transparent', border: 'none', outline: 'none', color: '#e8f0fa', fontFamily: 'inherit', fontSize: 13 }}
         />
         {/* D1c — while a generation runs this is a STOP control, not a dead
             spinner. The backend can cancel; the operator had no way to ask.

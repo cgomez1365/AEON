@@ -165,7 +165,12 @@ module.exports = function ({ kernelLLM, loadSettings: loadSettingsDep, VAULT_ROO
         // assistant as "VP (VP of Operations), the operator's autonomous
         // second-in-command" — an org-chart metaphor from how AEON is built,
         // which is not what a customer is buying.
-        { role: 'system', content: 'You are AEON, a private AI workspace built by Broken Gear Industries. You are helpful, precise, and concise. When the user asks you to do something, do it directly.' + mem.text },
+        // The formatting directive sits with the identity and AHEAD of
+        // mem.text, so the memory rules the kernel appends stay the last word
+        // on this system turn. It governs layout only — see its definition in
+        // src/kernel/context.cjs.
+        { role: 'system', content: 'You are AEON, a private AI workspace built by Broken Gear Industries. You are helpful, precise, and concise. When the user asks you to do something, do it directly. '
+          + kernelContext.FORMATTING + mem.text },
         ...history.slice(-20).map(m => ({ role: m.role === 'error' || m.role === 'system' ? 'user' : m.role, content: m.content })),
         // Retrieved documents ride with the user's turn, not as a system
         // message: they are material for THIS question, and a system turn

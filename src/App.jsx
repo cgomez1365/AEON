@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useLayoutEffect } from "react";
 import { BrowserRouter } from "react-router-dom";
 import { AuthProvider } from "./kernel/contexts/AuthContext";
 import { AeonProvider } from "./kernel/contexts/AeonContext";
@@ -12,6 +12,9 @@ import { shouldBannerResponse, describeResponseBanner, decideNetworkBanner, isSe
 // It used to be a private copy here, which is how theme and sidebar width came
 // to be saved by the panel and applied by nobody.
 import { loadAndApplyAppearance } from "./kernel/appearance";
+// Panel geometry is a UI preference like the rest: one applier, the server is
+// the record. See src/kernel/panelSizes.js.
+import { applyPanelSizes, loadPanelSizes, readCachedPanelSizes } from "./kernel/panelSizes";
 
 // One place that answers "is anyone signed in?". Read fresh on every call —
 // a captured boolean would keep the interceptor and the IDE-mode poll acting
@@ -27,6 +30,12 @@ export default function App() {
   const [auditLogs, setAuditLogs] = useState([]);
 
   useEffect(() => { loadAndApplyAppearance(); }, []);
+
+  // Two steps on purpose. The cached copy is applied BEFORE the first paint so
+  // the terminal does not open at its default width and then jump; the server's
+  // copy is the record and overwrites it when the round-trip lands.
+  useLayoutEffect(() => { applyPanelSizes(readCachedPanelSizes()); }, []);
+  useEffect(() => { loadPanelSizes().then(applyPanelSizes); }, []);
 
   useEffect(() => {
     const handleResize = () => setIsMobile(window.innerWidth <= 768);

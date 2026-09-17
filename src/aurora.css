@@ -291,10 +291,13 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 /* ── LAYOUT ─────────────────────────────────────────────────────────── */
+/* The terminal is the LAST column. --terminal-w is written by the drag handle
+   (src/kernel/panelSizes.js) and is absent until the operator resizes, so the
+   fallback here is the only copy of the shipped default. */
 .command-center {
   display: grid;
   grid-template-rows: 54px 1fr;
-  grid-template-columns: 1fr minmax(320px, 380px);
+  grid-template-columns: 1fr var(--terminal-w, minmax(320px, 380px));
   height: 100dvh;
   gap: 8px;
   padding: 8px;
@@ -305,7 +308,7 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 .command-center.with-sidebar {
-  grid-template-columns: var(--sidebar-w, clamp(200px, 18vw, 260px)) 1fr minmax(320px, 380px);
+  grid-template-columns: var(--sidebar-w, clamp(200px, 18vw, 260px)) 1fr var(--terminal-w, minmax(320px, 380px));
 }
 
 .aeon-shell {
@@ -1755,8 +1758,14 @@ h1, h2, h3, h4, h5, h6 {
   background: var(--accent-dim);
 }
 
+/* The sheet is BOTTOM-anchored so its height is the thing that changes and its
+   input row never moves under a thumb mid-drag. --terminal-sheet-h is written
+   by the grabber bar; the min() keeps "full" at exactly the size this sheet has
+   always been, so an operator who never touches the handle sees no change. */
 .chat-modal {
-  position: fixed; inset: 15px;
+  position: fixed;
+  top: auto; left: 15px; right: 15px; bottom: 15px;
+  height: min(var(--terminal-sheet-h, 100dvh), calc(100dvh - 30px));
   background: var(--bg-elevated);
   backdrop-filter: var(--glass);
   -webkit-backdrop-filter: var(--glass);
@@ -1774,6 +1783,86 @@ h1, h2, h3, h4, h5, h6 {
   border-bottom: 1px solid var(--border);
   background: rgba(0,0,0,0.45);
 }
+
+/* ── RESIZE HANDLES ─────────────────────────────────────────────────── */
+/* touch-action: none is load-bearing on the sheet — without it the browser
+   claims the vertical drag for page scrolling and the handle never sees a
+   pointermove. */
+.panel-resize-handle {
+  touch-action: none;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Inside the panel, not outside it: .module-panel clips its overflow, so a
+   handle at a negative offset would be invisible and unhittable. */
+.panel-resize-handle--v {
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 8px;
+  cursor: col-resize;
+  z-index: 6;
+}
+.panel-resize-handle--v::before {
+  content: '';
+  width: 2px; height: 46px;
+  border-radius: 2px;
+  background: var(--accent);
+  opacity: 0;
+  transition: opacity var(--t-base);
+}
+.panel-resize-handle--v:hover::before,
+.panel-resize-handle--v:focus-visible::before,
+:root[data-panel-resizing] .panel-resize-handle--v::before { opacity: 0.75; }
+
+/* A grabber bar, sized for a thumb rather than for a cursor. */
+.panel-resize-handle--h {
+  position: relative;
+  height: 20px;
+  flex-shrink: 0;
+  cursor: row-resize;
+}
+.panel-resize-handle--h::before {
+  content: '';
+  width: 46px; height: 4px;
+  border-radius: 3px;
+  background: var(--border-hi);
+  transition: background var(--t-base);
+}
+.panel-resize-handle--h:hover::before,
+.panel-resize-handle--h:focus-visible::before,
+:root[data-panel-resizing] .panel-resize-handle--h::before { background: var(--accent); }
+
+/* The focus ring the global :focus-visible rule draws sits 2px OUTSIDE the
+   element, and both handles live inside a box that clips its overflow —
+   .module-panel and .chat-modal are each overflow:hidden — so three of its four
+   edges are cut away. What was left was the ::before state change, set to the
+   same value as :hover: a keyboard operator saw exactly what a mouse operator
+   gets by hovering, which is not the distinguishable indicator WCAG 2.4.7 asks
+   for. An INSET ring cannot be clipped, and the focused bar is brighter and
+   longer than the hovered one. These follow the :hover rules above so that a
+   focused handle under the cursor still reads as focused. */
+.panel-resize-handle:focus-visible {
+  outline: none !important;
+  box-shadow: inset 0 0 0 2px var(--accent);
+  border-radius: 2px;
+}
+.panel-resize-handle--v:focus-visible::before { opacity: 1; height: 72px; }
+.panel-resize-handle--h:focus-visible::before { background: var(--accent); width: 64px; height: 5px; }
+
+/* A keyboard step should read as a movement, not a jump cut. Opt-in rather
+   than opt-out: the global reduce-motion block below already neutralises
+   transitions, and this keeps the intent legible next to the rule itself. */
+@media (prefers-reduced-motion: no-preference) {
+  .command-center { transition: grid-template-columns 140ms var(--ease-out-expo); }
+  .chat-modal     { transition: height 160ms var(--ease-out-expo); }
+}
+/* …but never while a pointer is dragging: an eased panel lags the cursor, and
+   that reads as the app being slow rather than as motion design. */
+:root[data-panel-resizing] .command-center,
+:root[data-panel-resizing] .chat-modal { transition: none; }
 
 /* ── UTILITY ────────────────────────────────────────────────────────── */
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }

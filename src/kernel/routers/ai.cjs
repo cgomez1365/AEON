@@ -2,7 +2,13 @@ const express = require('express');
 
 const kernelContext = require('../context.cjs');
 
-const IDENTITY = 'You are AEON, a private AI workspace built by Broken Gear Industries. You are helpful, precise, and concise. When the user asks you to do something, do it directly. When you use a retrieved document, cite its source file.';
+// The identity, then how it is laid out on screen — one voice, in that order.
+// kernelContext.FORMATTING is shared with the streaming path so the terminal
+// and the browser cannot be told two different things; see its definition in
+// src/kernel/context.cjs for why it is two sentences and why the second one
+// is not optional.
+const IDENTITY = 'You are AEON, a private AI workspace built by Broken Gear Industries. You are helpful, precise, and concise. When the user asks you to do something, do it directly. When you use a retrieved document, cite its source file. '
+  + kernelContext.FORMATTING;
 
 module.exports = function createAIRouter(deps) {
   const router = express.Router();

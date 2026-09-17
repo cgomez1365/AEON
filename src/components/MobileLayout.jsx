@@ -13,6 +13,9 @@ import NeuralTerminal from "./Terminal2"; // Terminal 2.0. The local name is his
 // still called /api/memory/tidy and /api/orion-scrape, which no longer exist. Git
 // history is the rollback path. Gate: tests/no-neural-terminal.test.js.
 import { BlockIcon } from "./BlockIcon";
+// The sheet's manual height — peek / half / full, persisted. Same component
+// the desktop layout mounts on its own chat sheet.
+import { TerminalSheetHandle } from "./PanelResizer";
 
 // Everything is a block now — nav + routes come purely from the registry.
 // NAV_GROUPS is computed inside MobileLayout (depends on runtime-fetched
@@ -308,6 +311,7 @@ export default function MobileLayout({ chatHistory, auditLogs }) {
       {isChatOpen && (
         <div className="modal-overlay" onClick={() => setIsChatOpen(false)} style={{ zIndex: 1099, paddingTop: 0 }}>
           <div className="chat-modal" onClick={e => e.stopPropagation()}>
+            <TerminalSheetHandle />
             <div className="chat-modal-header">
               <span style={{ fontSize: "12px", fontWeight: 800, color: "#00f2ff", letterSpacing: "2px" }}>💬 NEURAL TERMINAL</span>
               <button onClick={() => setIsChatOpen(false)} style={{ background: "transparent", border: "none", color: "#64748b", cursor: "pointer", fontSize: "18px" }}>✕</button>
