@@ -30,6 +30,11 @@
         }
         .sr { padding: 10px 15px; cursor: pointer; border-bottom: 1px solid rgba(0,229,255,0.2); font-size: 13px; color: #fff; }
         .sr:hover { background: rgba(0,229,255,0.2); }
+        .sr-path { display: block; margin-top: 3px; font-size: 11px; color: #7fa8c4;
+                   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        /* the box always answers: a "no matches" / "can't fly there" row is not clickable */
+        .sr-msg { cursor: default; color: #b0c4de; font-style: italic; }
+        .sr-msg:hover { background: none; }
         .dg.ac { z-index: 20 !important; }
     </style>
     <!-- THREE must load before 3d-force-graph so the UMD build shares the instance -->
@@ -66,10 +71,17 @@
     // just pinned everything around the vault center. 3D free physics only.
     const MATRIX_DEFAULTS = {
         nodeStyle: 'solid',     // 'solid' = defined orbs, 'fuzzy' = soft glow with no hard edge
-        nodeBrightness: 1,
+        // Nodes get the same +30% the operator asked for and that links and
+        // particles already received; raising only the slider's ceiling left the
+        // default view byte-identical for anyone who never opens this panel.
+        nodeBrightness: 1.3,
         focusMode: false,
         linkOpacity: 0.35,
         particles: false,
+        // Particle opacity, straight through. The library gave particles no
+        // control of their own and pinned them at linkOpacity*3 = 0.6; this
+        // default is that 0.6 raised by the 30% the operator asked for.
+        particleBrightness: 0.78,
         autoRotate: false,
         hideOrphans: false,
     };
@@ -84,15 +96,20 @@
     // ── Sprite factory ──────────────────────────────────────────────────────────
     // Flat canvas-texture sprites replace 3-D sphere meshes.
     // A sphere at resolution 8 = ~240 vertices; a sprite = 4 vertices.
-    // Cached by color so the same material is reused across nodes.
-    const spriteCache = new Map();
+    // The canvas TEXTURE is cached by look and shared; the material is not.
+    // Focus mode dims a node by writing its material.opacity, so a material
+    // shared between nodes dimmed every node that shared it — including the one
+    // under the cursor. See makeSprite.
+    const spriteTexCache = new Map();
     function hexToRgba(hex, a) {
         const n = parseInt(hex.replace('#', ''), 16);
         return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
     }
     function brightenHex(hex, brightness = 1) {
         const n = parseInt(hex.replace('#', ''), 16);
-        const scale = Math.max(0.35, Math.min(2.5, Number(brightness) || 1));
+        // Upper bound tracks the Node brightness slider's max (2.6) — at 2.5 the
+        // top of the range was silently clipped and the last steps did nothing.
+        const scale = Math.max(0.35, Math.min(2.6, Number(brightness) || 1));
         const r = Math.min(255, Math.round(((n >> 16) & 255) * scale));
         const g = Math.min(255, Math.round(((n >> 8) & 255) * scale));
         const b = Math.min(255, Math.round((n & 255) * scale));
@@ -102,14 +119,19 @@
         // Fuzzy nodes have no geometric edge — the falloff eats apparent size,
         // so scale them up and let additive blending give the nebula glow.
         const scale = style === 'fuzzy' ? radius * 1.9 : radius;
-        const brightColor = brightenHex(color, brightness);
-        const alphaBoost = Math.max(0.45, Math.min(1.8, Number(brightness) || 1));
+        // Ceiling is per style. Fuzzy sprites blend ADDITIVELY and are drawn at
+        // radius*1.9, so they overlap constantly and saturate against each
+        // other; pushing them to 2.6 turned the graph into a white wash and
+        // flattened four of the seven type colours to #ffffff. The 1.8 -> 2.6
+        // lift was aimed at the solid style, which blends normally — fuzzy
+        // keeps the ceiling it already had.
+        const ceiling = style === 'fuzzy' ? 1.8 : 2.6;
+        const capped = Math.max(0.35, Math.min(ceiling, Number(brightness) || 1));
+        const brightColor = brightenHex(color, capped);
+        const alphaBoost = Math.max(0.45, capped);
         const key = style + ':' + brightColor + ':' + radius + ':' + alphaBoost.toFixed(2);
-        if (spriteCache.has(key)) {
-            const s = new THREE.Sprite(spriteCache.get(key));
-            s.scale.set(scale, scale, 1);
-            return s;
-        }
+        const cached = spriteTexCache.get(key);
+        if (cached) return wrapSprite(cached, style, scale);
         const sz = 64;
         const canvas = document.createElement('canvas');
         canvas.width = canvas.height = sz;
@@ -135,14 +157,44 @@
             ctx.arc(sz/2, sz/2, sz*0.48, 0, 2*Math.PI);
             ctx.fillStyle = grd;
             ctx.fill();
+            // Above 1.0 the hex scale saturates — a cyan orb is already 255 on
+            // G and B, so the top of the brightness range changed nothing for
+            // the default 'solid' style. Spend the un-expressible part of the
+            // boost on a real additive halo instead. At brightness <= 1 nothing
+            // is drawn here; from the 1.3 default up, this rim is what actually
+            // carries the extra brightness, and it does so without dragging the
+            // node's hue toward white the way scaling RGB does.
+            if (alphaBoost > 1) {
+                // 0.5 / 1.6 — the halo reaches its cap at the slider maximum
+                // (2.6), not at 2.0. At *0.5 it saturated a third of the way
+                // from the top, and because brightenHex has already saturated
+                // the cyan by 1.054 the whole 2.0-2.6 span rendered pixels
+                // identical to 2.0: the exact clipping this change set out to fix.
+                const halo = Math.min(0.5, (alphaBoost - 1) * 0.3125);
+                const g2 = ctx.createRadialGradient(sz/2, sz/2, sz*0.30, sz/2, sz/2, sz/2);
+                g2.addColorStop(0, hexToRgba(brightColor, halo));
+                g2.addColorStop(1, hexToRgba(brightColor, 0));
+                ctx.globalCompositeOperation = 'lighter';
+                ctx.fillStyle = g2;
+                ctx.fillRect(0, 0, sz, sz);
+                ctx.globalCompositeOperation = 'source-over';
+            }
         }
         const tex = new THREE.CanvasTexture(canvas);
-        const mat = new THREE.SpriteMaterial({
+        spriteTexCache.set(key, tex);
+        return wrapSprite(tex, style, scale);
+    }
+    // One SpriteMaterial PER NODE, sharing the cached texture. Chosen over
+    // cloning the material for the focused node on hover: a SpriteMaterial is a
+    // small plain object while the canvas + CanvasTexture is the expensive part
+    // and is still shared, so this costs nothing per frame, whereas cloning
+    // would allocate during interaction for the whole highlighted set (a hub
+    // node highlights all its neighbours) and have to be undone on un-hover.
+    function wrapSprite(tex, style, scale) {
+        const s = new THREE.Sprite(new THREE.SpriteMaterial({
             map: tex, transparent: true, depthWrite: false,
             blending: style === 'fuzzy' ? THREE.AdditiveBlending : THREE.NormalBlending,
-        });
-        spriteCache.set(key, mat);
-        const s = new THREE.Sprite(mat);
+        }));
         s.scale.set(scale, scale, 1);
         return s;
     }
@@ -203,6 +255,13 @@
             linksByNode.get(b).push(link);
         });
 
+        // Which nodes survive "Hide orphans". Computed once — data.links never
+        // changes — and guarded for ids-vs-objects because d3 hydrates endpoints
+        // in place after the first tick.
+        const linkedIds = new Set();
+        data.links.forEach(l => { linkedIds.add(l.source.id || l.source); linkedIds.add(l.target.id || l.target); });
+        const isShown = (n) => !settings.hideOrphans || linkedIds.has(n.id) || n.root;
+
         const settings = loadMatrixSettings();
 
         let highlightNodes = new Set();
@@ -248,6 +307,8 @@
         // ── Node object: sprite (fast) or fallback sphere ─────────────────────
         const DIR_RADIUS  = 14;
         const FILE_RADIUS = 8;
+        const PARTICLE_COLOR = '#00f2ff';  // matches the resting link colour
+        const PARTICLE_WIDTH = 2;          // unchanged; brightness is the new knob
         Graph
             .nodeThreeObject(node => {
                 if (!spriteMode) return null; // fallback: let library draw spheres
@@ -264,8 +325,20 @@
         // main cause of rotation lag on large graphs.
             .linkColor(() => `rgba(0,242,255,0.35)`)
             .linkWidth(0)
-            .linkDirectionalParticles(0)          // off by default; enabled on hover
-            .linkDirectionalParticleWidth(2)
+        // The library multiplies its OWN linkOpacity prop into whatever alpha
+        // linkColor returns, and that prop defaults to 0.2 — so "Link opacity
+        // 0.35" was reaching the screen as 0.35 * 0.2 = 0.07. Pinning the prop
+        // to ~1 makes the alpha in linkColor, i.e. the slider, the real opacity.
+        // The default stays 0.35; the number now means what it says.
+        // Strictly under 1, though: the bundle builds the link material as
+        // `{transparent: pe<1, opacity: pe, depthWrite: pe>=1}` with
+        // `pe = linkOpacity * alphaOf(linkColor)`. At slider 1.0 that hit
+        // exactly 1, flipping links to opaque depth-writing geometry that
+        // occluded the transparent sprites and particles behind them.
+            .linkOpacity(0.99)
+            .linkDirectionalParticles(0)          // resting count comes from the
+                                                  // operator's setting, via applySettings
+            .linkDirectionalParticleWidth(PARTICLE_WIDTH)
             .linkDirectionalParticleSpeed(0.012)
 
         // ── Graph data ────────────────────────────────────────────────────────
@@ -284,37 +357,95 @@
             .cooldownTime(4000)
             .onEngineStop(() => { physicsOn = false; });
 
-        // ── Hover: throttled to 1 update per animation frame ─────────────────
-        // Without throttling, onNodeHover fires on every mousemove pixel.
+        // ── Particle appearance ───────────────────────────────────────────────
+        // The library hands particles a material of its own making with
+        // opacity = linkOpacity * 3 and offers no knob for it, so particles were
+        // stuck at 0.6 forever. Supplying linkDirectionalParticleThreeObject
+        // makes the library take OUR geometry and material instead, so the
+        // Particle brightness slider is the particle opacity, full stop.
+        // The geometry is built once and shared; only the material is rebuilt.
+        let particleGeom = null, particleProto = null;
+        function applyParticleStyle() {
+            const opacity = Math.max(0.05, Math.min(1,
+                Number(settings.particleBrightness) || MATRIX_DEFAULTS.particleBrightness));
+            try {
+                if (!particleGeom) particleGeom = new THREE.SphereGeometry(PARTICLE_WIDTH / 2, 4, 4);
+                particleProto = new THREE.Mesh(particleGeom, new THREE.MeshLambertMaterial({
+                    color: new THREE.Color(PARTICLE_COLOR), transparent: true, opacity,
+                }));
+                const proto = particleProto;
+                // A FRESH closure every time: re-assigning the same function is a
+                // no-op in 3d-force-graph, same trap as nodeThreeObject.
+                Graph.linkDirectionalParticleThreeObject(() => proto);
+            } catch (err) {
+                // Silent failure here leaves the library's own particle path in
+                // charge, whose opacity is linkOpacity*3 with no way to tune it
+                // independently — so the slider goes inert AND particles get
+                // brighter, with nothing on screen or in the console to say so.
+                console.warn('[matrix] particle style failed; falling back to the library default', err);
+            }
+        }
+
+        // ── Hover: coalesced to 1 update per animation frame ──────────────────
+        // Without throttling, onNodeHover fires on every mousemove pixel. This
+        // keeps the LATEST event rather than dropping it: the old version bailed
+        // out while a frame was queued, so a fast pointer-out was thrown away and
+        // the graph stayed stuck in its hovered state.
         let hoverRAF = null;
-        function applyHover(node) {
+        let pendingHover = null;                    // newest event, applied next frame
+        let currentHover = { node: null, link: null };  // what is on screen now
+
+        // The operator's own setting is the resting state. Hover READS it and
+        // never writes it — the old code restored with a hardcoded
+        // linkDirectionalParticles(0), which is why particles had to be
+        // re-enabled by hand after every hover.
+        const baseParticles = () => (settings.particles ? 2 : 0);
+
+        function setHighlight(node, link) {
             highlightNodes.clear();
             highlightLinks.clear();
             if (node) {
                 highlightNodes.add(node.id);
                 if (node.neighbors) node.neighbors.forEach(id => highlightNodes.add(id));
                 (linksByNode.get(node.id) || []).forEach(l => highlightLinks.add(l));
+            } else if (link) {
+                // d3 hydrates link endpoints into node objects lazily; before it
+                // does they are still bare ids. Guarded the same way applySettings
+                // guards the identical access.
+                highlightLinks.add(link);
+                highlightNodes.add(link.source.id || link.source);
+                highlightNodes.add(link.target.id || link.target);
             }
-            // Only rebuild link materials when in focus mode.
-            // Width stays 0 — highlighted links get brighter color + particles
-            // instead of thickness, so links remain cheap GPU lines.
-            if (focusMode) {
-                Graph.linkColor(link =>
-                    highlightLinks.size === 0 ? 'rgba(0,229,255,0.4)' :
-                    highlightLinks.has(link)  ? '#00e5ff' : 'rgba(0,0,0,0)'
-                );
-            }
-            // Particles light up on hovered links only
-            if (highlightLinks.size > 0) {
-                Graph.linkDirectionalParticles(link => highlightLinks.has(link) ? 3 : 0);
-            } else {
-                Graph.linkDirectionalParticles(0);
-            }
-            // Dim sprite opacity via material — no geometry rebuild needed
-            if (focusMode && spriteMode) {
+        }
+
+        function applyHover(node, link) {
+            currentHover = { node: node || null, link: link || null };
+            setHighlight(node, link);
+            const hovering = highlightNodes.size > 0 || highlightLinks.size > 0;
+            // Focus mode is the only mode that reacts to hover. With it off the
+            // graph stays exactly as the operator configured it — hovering used
+            // to hijack the global particle state either way.
+            if (!focusMode) return;
+            const base = baseParticles();
+            // Width stays 0 — emphasis is colour and particles, not thickness,
+            // so links remain cheap GPU lines.
+            Graph.linkColor(l =>
+                !hovering             ? `rgba(0,229,255,${settings.linkOpacity})` :
+                highlightLinks.has(l) ? '#00e5ff'
+                                      : `rgba(0,229,255,${(settings.linkOpacity * 0.12).toFixed(3)})`
+            );
+            // Focused links get more particles; every other link keeps the
+            // operator's count. Never zeroed.
+            Graph.linkDirectionalParticles(
+                hovering ? (l => (highlightLinks.has(l) ? 3 : base)) : base
+            );
+            // Dim sprite opacity via material — no geometry rebuild needed. Each
+            // sprite owns its material (see makeSprite), so the focused node
+            // really stays lit instead of being dimmed by a shared material.
+            if (spriteMode) {
                 data.nodes.forEach(n => {
                     if (n.__threeObj && n.__threeObj.material) {
-                        n.__threeObj.material.opacity = highlightNodes.size === 0 ? 1
+                        n.__threeObj.material.opacity = !hovering ? 1
                             : highlightNodes.has(n.id) ? 1 : 0.06;
                         n.__threeObj.material.needsUpdate = true;
                     }
@@ -322,26 +453,22 @@
             }
         }
 
-        Graph.onNodeHover(node => {
-            if (hoverRAF) return; // already queued for this frame
-            hoverRAF = requestAnimationFrame(() => { hoverRAF = null; applyHover(node); });
-        });
-
-        Graph.onLinkHover(link => {
-            if (hoverRAF) return;
-            hoverRAF = requestAnimationFrame(() => {
+        function queueHover(node, link) {
+            pendingHover = { node, link };
+            if (hoverRAF) return;                   // a frame is queued; it will
+            hoverRAF = requestAnimationFrame(() => { //  pick up whatever is newest
                 hoverRAF = null;
-                highlightNodes.clear(); highlightLinks.clear();
-                if (link) {
-                    highlightLinks.add(link);
-                    highlightNodes.add(link.source.id);
-                    highlightNodes.add(link.target.id);
-                }
-                applyHover(null);
-                // Ensure hovered link shows particle
-                if (link) Graph.linkDirectionalParticles(l => l === link ? 3 : 0);
+                const ev = pendingHover; pendingHover = null;
+                if (ev) applyHover(ev.node, ev.link);
             });
-        });
+        }
+
+        Graph.onNodeHover(node => queueHover(node, null));
+        // Link hover used to fill the highlight sets and then call applyHover(null),
+        // whose first two statements cleared them again — the whole branch was
+        // dead. Kept and made real: it now runs the same path as node hover, so
+        // hovering a link highlights that link and its two endpoints.
+        Graph.onLinkHover(link => queueHover(null, link));
 
         Graph.onNodeClick(node => {
             window.parent.postMessage(
@@ -377,28 +504,74 @@
         const searchResults = document.getElementById('search-results');
         searchInput.addEventListener('pointerdown', e => e.stopPropagation());
         searchResults.addEventListener('pointerdown', e => e.stopPropagation());
+        // The camera flight is motion. Honour the OS setting: jump instead.
+        const reduceMotion = window.matchMedia
+            ? window.matchMedia('(prefers-reduced-motion: reduce)')
+            : { matches: false };
+
+        function clearResults() { searchResults.textContent = ''; searchResults.style.display = 'none'; }
+        // One row, not clickable, saying what happened. An empty result and a
+        // broken search box used to look identical — both just hid the dropdown.
+        function searchMessage(text) {
+            searchResults.textContent = '';
+            const row = document.createElement('div');
+            row.className = 'sr sr-msg';
+            row.textContent = text;
+            searchResults.appendChild(row);
+            searchResults.style.display = 'block';
+        }
+        // true only if the camera actually went somewhere.
+        function flyToNode(n) {
+            if (!n || n.x == null || n.y == null || n.z == null) return false;
+            const dist = 100;
+            const ratio = 1 + dist / (Math.hypot(n.x, n.y, n.z) || 1);
+            Graph.cameraPosition(
+                { x: n.x*ratio, y: n.y*ratio, z: n.z*ratio }, n, reduceMotion.matches ? 0 : 1200
+            );
+            return true;
+        }
+
         searchInput.addEventListener('input', e => {
             const q = e.target.value.toLowerCase().trim();
-            if (!q) { searchResults.style.display = 'none'; return; }
-            const hits = data.nodes.filter(n => (n.name || n.id || '').toLowerCase().includes(q)).slice(0, 10);
-            if (!hits.length) { searchResults.style.display = 'none'; return; }
-            searchResults.innerHTML = hits.map(n =>
-                `<div class="sr" data-id="${n.id}">${n.name || n.id}</div>`
-            ).join('');
-            searchResults.style.display = 'block';
-            searchResults.querySelectorAll('.sr').forEach(el => {
-                el.onclick = () => {
-                    const n = nodeMap.get(el.dataset.id);
-                    if (n && n.x != null) {
-                        const dist = 100;
-                        const ratio = 1 + dist / Math.hypot(n.x, n.y, n.z);
-                        Graph.cameraPosition(
-                            { x: n.x*ratio, y: n.y*ratio, z: n.z*ratio }, n, 1200
-                        );
+            if (!q) { clearResults(); return; }
+            // Match the bare name, the vault-relative path and the id, so a path
+            // fragment or a full id finds the node instead of only a filename.
+            // Node objects carry no title today — nothing is invented here.
+            const hits = data.nodes.filter(n =>
+                [n.name, n.path, n.id].some(v => typeof v === 'string' && v.toLowerCase().includes(q))
+            ).slice(0, 10);
+            if (!hits.length) { searchMessage('No matches'); return; }
+            searchResults.textContent = '';
+            hits.forEach(n => {
+                const label = n.name || n.id || '(unnamed)';
+                // Built with DOM methods: node names come from the vault and are
+                // not HTML. innerHTML on them was an injection waiting for a file
+                // called <img onerror=...>.
+                const row = document.createElement('div');
+                row.className = 'sr';
+                row.textContent = label;
+                if (n.id && n.id !== label) {
+                    const sub = document.createElement('span');
+                    sub.className = 'sr-path';
+                    sub.textContent = n.id;
+                    row.appendChild(sub);
+                }
+                row.onclick = () => {
+                    // Silence was the old answer to both of these.
+                    if (!isShown(n)) {
+                        searchMessage(label + ' — hidden by "Hide orphans". Turn it off to fly there.');
+                        return;
                     }
-                    searchInput.value = ''; searchResults.style.display = 'none';
+                    if (!flyToNode(n)) {
+                        searchMessage(label + ' — found, but the layout has not placed it yet. Try again in a moment.');
+                        return;
+                    }
+                    searchInput.value = '';
+                    clearResults();
                 };
+                searchResults.appendChild(row);
             });
+            searchResults.style.display = 'block';
         });
 
         // ── Auto-rotate (RAF-free when off) ───────────────────────────────────
@@ -435,17 +608,21 @@
         // ── Matrix Settings panel — native, no CDN, keyboard accessible ───────
         function applySettings(s, { relayout = false } = {}) {
             focusMode = s.focusMode;
+            // Resting state — what the graph looks like with nothing hovered.
+            Graph.linkColor(() => `rgba(0,229,255,${s.linkOpacity})`).linkWidth(0);
+            Graph.linkDirectionalParticles(s.particles ? 2 : 0);
+            applyParticleStyle();
             if (!s.focusMode) {
-                Graph.linkColor(() => `rgba(0,229,255,${s.linkOpacity})`).linkWidth(0);
                 data.nodes.forEach(n => {
                     if (n.__threeObj?.material) { n.__threeObj.material.opacity = 1; n.__threeObj.material.needsUpdate = true; }
                 });
+            } else {
+                // Re-assert the focus overlay with the new numbers, keeping
+                // whatever is hovered right now.
+                applyHover(currentHover.node, currentHover.link);
             }
-            Graph.linkDirectionalParticles(s.particles ? 2 : 0);
-            const linked = new Set();
-            data.links.forEach(l => { linked.add(l.source.id || l.source); linked.add(l.target.id || l.target); });
             Graph.graphData({
-                nodes: s.hideOrphans ? data.nodes.filter(n => linked.has(n.id) || n.root) : data.nodes,
+                nodes: s.hideOrphans ? data.nodes.filter(n => isShown(n)) : data.nodes,
                 links: data.links,
             });
             autoRotate = s.autoRotate;
@@ -482,13 +659,14 @@
                   <option value="fuzzy">Fuzzy glow</option>
                 </select>
               </label>
-              <label>Node brightness <input type="range" id="ms-brightness" min="0.5" max="2" step="0.05" aria-label="Node brightness"></label>
+              <label>Node brightness <input type="range" id="ms-brightness" min="0.5" max="2.6" step="0.05" aria-label="Node brightness"></label>
               <label>Auto rotate <input type="checkbox" id="ms-rotate"></label>
             </fieldset>
             <fieldset>
               <legend>Detail</legend>
               <label>Link opacity <input type="range" id="ms-opacity" min="0" max="1" step="0.05" aria-label="Link opacity"></label>
               <label>Particles <input type="checkbox" id="ms-particles"></label>
+              <label>Particle brightness <input type="range" id="ms-pbright" min="0.2" max="1" step="0.05" aria-label="Particle brightness"></label>
               <label>Focus mode <input type="checkbox" id="ms-focus"></label>
               <label>Hide orphans <input type="checkbox" id="ms-orphans"></label>
             </fieldset>
@@ -505,7 +683,7 @@
         // and hand the library a FRESH accessor (same-function re-assign is a
         // no-op in 3d-force-graph; a new closure forces object regeneration).
         function rebuildSprites() {
-            spriteCache.clear();
+            spriteTexCache.clear();
             Graph.nodeThreeObject(node => {
                 if (!spriteMode) return null;
                 try {
@@ -517,10 +695,11 @@
 
         function syncPanel(s) {
             $('ms-nodestyle').value = s.nodeStyle || 'solid';
-            $('ms-brightness').value = s.nodeBrightness ?? 1;
+            $('ms-brightness').value = s.nodeBrightness ?? MATRIX_DEFAULTS.nodeBrightness;
             $('ms-rotate').checked = s.autoRotate;
             $('ms-opacity').value = s.linkOpacity;
             $('ms-particles').checked = s.particles;
+            $('ms-pbright').value = s.particleBrightness ?? MATRIX_DEFAULTS.particleBrightness;
             $('ms-focus').checked = s.focusMode;
             $('ms-orphans').checked = s.hideOrphans;
         }
@@ -542,10 +721,17 @@
         $('ms-rotate').onchange   = e => update({ autoRotate: e.target.checked });
         $('ms-opacity').oninput   = e => update({ linkOpacity: Number(e.target.value) });
         $('ms-particles').onchange= e => update({ particles: e.target.checked });
+        $('ms-pbright').oninput   = e => update({ particleBrightness: Number(e.target.value) });
         $('ms-focus').onchange    = e => update({ focusMode: e.target.checked });
         $('ms-orphans').onchange  = e => update({ hideOrphans: e.target.checked });
         $('ms-reheat').onclick    = () => Graph.d3ReheatSimulation();
-        $('ms-reset').onclick     = () => { Object.assign(settings, MATRIX_DEFAULTS); saveMatrixSettings(settings); syncPanel(settings); applySettings(settings, { relayout: true }); };
+        // rebuildSprites() is not optional: nodeStyle and nodeBrightness only
+        // reach the screen through nodeThreeObject, which applySettings never
+        // touches and which the library reuses verbatim because graphData keys
+        // nodes by object identity. Without it, reset leaves the panel and
+        // localStorage saying solid/1.3 while the graph still renders the old
+        // sprites. Both per-control handlers above already call it.
+        $('ms-reset').onclick     = () => { Object.assign(settings, MATRIX_DEFAULTS); saveMatrixSettings(settings); syncPanel(settings); applySettings(settings, { relayout: true }); rebuildSprites(); };
 
         // Apply persisted settings on load
         applySettings(settings);
