@@ -57,7 +57,17 @@ beforeAll(async () => {
   }
 
   // 2. Try to log in with the stress-test account (may exist from a prior run).
-  if (!sessionLive) {
+  //
+  //    2026-09-17: this was ungated while step 3 below was not, and it cost the
+  //    operator their own account. Every plain `npx vitest run` POSTed a login
+  //    for STRESS_USER to whatever answered :3001 — the operator's real server.
+  //    The login handler charges a WRONG USERNAME against the single local
+  //    account (security.js:238-240,257) and the counter never decays, so five
+  //    suite runs spread across an afternoon locked "cris" out for fifteen
+  //    minutes with nothing in the audit log to explain it. Same lesson as the
+  //    provisioning note below, one step earlier in the same function: a test
+  //    may observe a live instance, it may not authenticate against one.
+  if (!sessionLive && process.env.AEON_LIVE_STRESS === '1') {
     const loginRes = await client.request('POST', '/api/auth/login',
       { username: STRESS_USER, password: STRESS_PASS }, { timeout: 5000 });
     if (loginRes.ok) {
