@@ -40,23 +40,37 @@ module.exports = function cloudVaultFactory(deps) {
 
   const readJSON = (f, fb) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return fb; } };
 
+  // Found live, 2026-09-20: this built its OWN Supabase client from raw
+  // process.env.SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY, bypassing
+  // services/cloud.js — the ONE client every other consumer (sync.cjs,
+  // ai.js, security.js, the terminal's isCloudLinked gate) shares via
+  // deps.supabase. That client is null under AEON_LOCAL_ONLY=1 or
+  // AEON_PORTABLE=true specifically so a portable/local-only install cannot
+  // reach a cloud mirror (cloud.js: "a drive that boots on an untrusted host
+  // must not reach for a cloud mirror") — but this route never asked it. A
+  // host with leftover SUPABASE_URL/KEY env vars (a prior non-portable
+  // install, an inherited shell env) would still push full Vault document
+  // content off the local-only guarantee the rest of the kernel enforces.
+  // The manifest's `when: "supabase"` stops the TERMINAL command from
+  // reaching this in that state; it never protected a direct HTTP call.
   async function sbUpsert(rows) {
-    const url = process.env.SUPABASE_URL;
-    const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    if (!url || !key) throw new Error('SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY missing in .env');
-    const r = await fetch(`${url}/rest/v1/vault_docs?on_conflict=path`, {
-      method: 'POST',
-      headers: {
-        apikey: key, Authorization: `Bearer ${key}`,
-        'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal',
-      },
-      body: JSON.stringify(rows),
-      signal: AbortSignal.timeout(30000),
-    });
-    if (!r.ok) throw new Error(`Supabase ${r.status}: ${(await r.text()).slice(0, 200)}`);
+    if (!deps?.supabase) {
+      const e = new Error('No cloud mirror is linked (local-only, or Supabase not configured) — nothing was sent.');
+      e.code = 'no_cloud_mirror';
+      throw e;
+    }
+    const { error } = await deps.supabase.from('vault_docs').upsert(rows, { onConflict: 'path' });
+    if (error) throw new Error(`Supabase: ${error.message}`);
   }
 
   router.post('/crn/second-brain/vault-push', async (_req, res) => {
+    if (!deps?.supabase) {
+      return res.status(409).json({
+        ok: false, error: 'no_cloud_mirror',
+        message: 'This install is local-only, or Supabase is not configured — nothing was sent.',
+        remedy: 'Add SUPABASE_URL and a key to .env and restart, or stay local. Nothing is lost.',
+      });
+    }
     const index = readJSON(INDEX_FILE, { documents: {} });
     const docs = Object.values(index.documents || {});
     if (!docs.length) return res.status(400).json({ error: 'vault_index.json empty — run a Second Brain reindex first' });

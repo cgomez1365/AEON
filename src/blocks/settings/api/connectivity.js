@@ -13,14 +13,51 @@
  *   POST /api/settings/connectivity/tunnel/stop
  */
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, execFileSync } = require('child_process');
 const { isCloud: _isCloud } = require('../../../kernel/runtime.cjs');
 
 const ROOT = path.join(__dirname, '..', '..', '..', '..');
 const BIN_DIR = path.join(ROOT, 'tools', 'bin');
-const CLOUDFLARED = path.join(BIN_DIR, 'cloudflared.exe');
-const CLOUDFLARED_URL = 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe';
+
+/**
+ * Which cloudflared build this host needs, and how to get a runnable binary
+ * out of it.
+ *
+ * Found live, 2026-09-20 (CEO: "check... cloudflare tunnel"): CLOUDFLARED and
+ * CLOUDFLARED_URL were hardcoded to the Windows .exe with no os.platform()
+ * check. On macOS or Linux — the CEO's actual working machine — "Start
+ * tunnel" downloaded a Windows PE binary that cannot execute; spawn() failed
+ * with a generic "Could not start cloudflared: ..." rather than a clear
+ * "not supported here." Verified against the real release
+ * (github.com/cloudflare/cloudflared, tag 2026.9.1): Windows and Linux ship
+ * a directly-runnable file; macOS ships a .tgz — the binary inside still
+ * needs extracting, which the Windows-only code never had to do at all.
+ *
+ * @returns {{url: string, filename: string, archive: 'tgz'|null}}
+ */
+function cloudflaredTarget(plat = os.platform(), arch = os.arch()) {
+  if (plat === 'win32') {
+    const a = arch === 'ia32' ? '386' : 'amd64'; // cloudflared publishes no windows-arm64
+    return { url: `https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-${a}.exe`, filename: `cloudflared-windows-${a}.exe`, archive: null };
+  }
+  if (plat === 'darwin') {
+    const a = arch === 'arm64' ? 'arm64' : 'amd64';
+    return { url: `https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-${a}.tgz`, filename: `cloudflared-darwin-${a}.tgz`, archive: 'tgz' };
+  }
+  if (plat === 'linux') {
+    const map = { x64: 'amd64', arm64: 'arm64', arm: 'arm', ia32: '386' };
+    const a = map[arch];
+    if (!a) return null;
+    return { url: `https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${a}`, filename: `cloudflared-linux-${a}`, archive: null };
+  }
+  return null; // no published build for this platform (e.g. FreeBSD)
+}
+
+const CLOUDFLARED_TARGET = cloudflaredTarget();
+// The binary spawn() actually runs, whatever it took to get there.
+const CLOUDFLARED = CLOUDFLARED_TARGET ? path.join(BIN_DIR, os.platform() === 'win32' ? CLOUDFLARED_TARGET.filename : 'cloudflared') : null;
 const PORT = 3001;
 
 const _tunnel = { proc: null, url: null, startedAt: null };
@@ -226,12 +263,37 @@ module.exports = (app, deps) => {
     try {
       if (_tunnel.proc) return res.json({ ok: true, url: _tunnel.url, alreadyRunning: true });
 
+      if (!CLOUDFLARED_TARGET) {
+        throw new Error(`Cloudflare Tunnel has no published build for ${os.platform()}/${os.arch()} — cloudflare/cloudflared does not ship one. The tunnel is not available on this machine.`);
+      }
+
       if (!fs.existsSync(CLOUDFLARED)) {
         if (!fs.existsSync(BIN_DIR)) fs.mkdirSync(BIN_DIR, { recursive: true });
-        const r = await fetch(CLOUDFLARED_URL, { redirect: 'follow' });
+        const r = await fetch(CLOUDFLARED_TARGET.url, { redirect: 'follow' });
         if (!r.ok) throw new Error(`Could not download Cloudflare Tunnel: HTTP ${r.status}`);
-        fs.writeFileSync(CLOUDFLARED, Buffer.from(await r.arrayBuffer()));
-        console.log('[CONNECTIVITY] Downloaded cloudflared');
+        const bytes = Buffer.from(await r.arrayBuffer());
+
+        if (CLOUDFLARED_TARGET.archive === 'tgz') {
+          // macOS ships the binary inside a .tgz — download, extract with the
+          // system tar (present on macOS/Linux by default; no new dependency
+          // for the one platform that needs this step), then discard the
+          // archive. The extracted name is always `cloudflared`.
+          const tgzPath = path.join(BIN_DIR, CLOUDFLARED_TARGET.filename);
+          fs.writeFileSync(tgzPath, bytes);
+          try {
+            execFileSync('tar', ['-xzf', tgzPath, '-C', BIN_DIR], { stdio: 'pipe' });
+          } catch (e) {
+            throw new Error(`Downloaded Cloudflare Tunnel but could not extract it (${e.message}). Is 'tar' on PATH?`);
+          } finally {
+            try { fs.unlinkSync(tgzPath); } catch {}
+          }
+          if (!fs.existsSync(CLOUDFLARED)) throw new Error('Extracted the Cloudflare Tunnel archive but the cloudflared binary was not where expected.');
+        } else {
+          fs.writeFileSync(CLOUDFLARED, bytes);
+        }
+        // The download has no execute bit on macOS/Linux; Windows ignores this.
+        if (os.platform() !== 'win32') { try { fs.chmodSync(CLOUDFLARED, 0o755); } catch {} }
+        console.log('[CONNECTIVITY] Downloaded cloudflared for', `${os.platform()}/${os.arch()}`);
       }
 
       const proc = spawn(CLOUDFLARED, ['tunnel', '--url', `http://localhost:${PORT}`], {
@@ -366,3 +428,7 @@ module.exports = (app, deps) => {
     if (_tunnel.proc) { try { _tunnel.proc.kill(); } catch {} _tunnel.proc = null; _tunnel.url = null; }
   });
 };
+
+// Exposed for tests — platform/arch resolution must be provable without
+// downloading a real binary for every OS this runs on.
+module.exports.cloudflaredTarget = cloudflaredTarget;

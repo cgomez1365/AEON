@@ -36,6 +36,11 @@ const { isInside } = require('../../../kernel/pathContainment.cjs');
 const path    = require('path');
 const fs      = require('fs');
 const { loadExtractors, extractText, embed, cosineSimilarity, EMBED_MODEL } = require('./_lib.cjs');
+// Only for its exported chunkText — /ask-doc's FULL mode needs windows for a
+// document that has no chunk sidecar yet (indexed before BO-CHUNK, or never
+// scanned at all, only ever fetched by exact path). No cycle: ingest.cjs
+// requires _lib.cjs and nothing else in this block.
+const { chunkText } = require('./ingest.cjs');
 
 const DEFAULT_K        = 5;
 const MATCH_THRESHOLD   = 0.35; // cosine similarity floor
@@ -50,7 +55,15 @@ const RELATIVE_MARGIN   = 0.06; // "matched" = within this of the best score, no
 // window. Zero tokens, no model, deterministic.
 const CANDIDATES        = 20;   // docs re-scored lexically, from the top of the cosine ranking
 const LEX_WEIGHT        = 0.15; // full lexical overlap is worth this much cosine
-const WINDOWS_PER_DOC   = 2;    // passages handed over per document
+const WINDOWS_PER_DOC   = 2;    // passages handed over per document, when racing the whole Vault
+// /ask-doc FAST mode — nothing else is competing for the content budget, so
+// one document gets far more of it than it would racing the rest of the Vault.
+const DOC_WINDOWS       = 6;
+const DOC_MAX_CHARS     = 9000;
+// /ask-doc FULL mode — one map call per window, this many at a time. Bounded
+// by ingest's own CHUNK_CAP (a document has at most 64 windows), so the
+// worst case is ~22 batches, not unbounded.
+const FULL_CONCURRENCY  = 3;
 const STOP = new Set(['the','and','for','are','but','not','you','all','any','can','her','was','one','our','out','who','get','has','him','his','how','its','new','now','old','see','two','way','why','did','does','what','when','where','with','from','this','that','they','them','then','than','have','will','your','about','into','over','some','more','most','such','only','also','been','were','said','says','make','made','like','just','know','take','according','say','does','did']);
 const terms = (t) => new Set((String(t).toLowerCase().match(/[a-z][a-z0-9]{2,}/g) || []).filter(w => !STOP.has(w)));
 function lexicalOverlap(queryTerms, text) {
@@ -97,6 +110,33 @@ module.exports = function retrieveFactory(deps) {
   function readIndex() {
     if (!fs.existsSync(INDEX_FILE)) return { documents: {} };
     try { return JSON.parse(fs.readFileSync(INDEX_FILE, 'utf8')); } catch { return { documents: {} }; }
+  }
+
+  /**
+   * Resolve an operator-typed document name to exactly one indexed document.
+   *
+   * Never guesses (§08). An exact path, or an exact filename, wins outright
+   * over everything else — that is how an operator names a specific file.
+   * Short of that, every document whose title or filename CONTAINS the typed
+   * text is a candidate; one candidate resolves, two or more is reported as
+   * ambiguous with the list, and the caller picks rather than the code.
+   */
+  function resolveDocument(index, nameOrPath) {
+    const q = String(nameOrPath || '').trim();
+    if (!q) return [];
+    const all = Object.values(index.documents || {});
+    const qLower = q.toLowerCase();
+    const qBase = path.basename(qLower);
+
+    const exact = all.filter((d) => d.path === q || d.path.toLowerCase() === qLower);
+    if (exact.length) return exact;
+
+    const byName = all.filter((d) => path.basename(d.path).toLowerCase() === qBase);
+    if (byName.length) return byName;
+
+    return all.filter((d) =>
+      (d.title || '').toLowerCase().includes(qLower) ||
+      path.basename(d.path).toLowerCase().includes(qLower));
   }
 
   /**
@@ -334,6 +374,10 @@ module.exports = function retrieveFactory(deps) {
         action: unavailable.action,
         remedy: unavailable.action,
         citations: [],
+        // Terminal2 renders a dispatched command via `text` first
+        // (describeCommandOutput); without it, a real "here's why" answer
+        // fell through to a generic "no output" line and read as a crash.
+        text: `${unavailable.message} ${unavailable.action || ''}`.trim(),
       });
     }
 
@@ -387,6 +431,7 @@ module.exports = function retrieveFactory(deps) {
           n: i + 1, id: d.id, title: d.metadata?.source || d.id,
           similarity: Number((d.similarity || 0).toFixed(3)),
         })),
+        text: `${tooWeak ? `Nothing in the index is close enough to answer that (best match ${best.toFixed(2)}).` : 'Nothing in the index shares any meaningful word with that question.'} Rephrase using words closer to how you wrote it, or run /index-brain if the Vault has changed.`,
       });
     }
 
@@ -397,6 +442,7 @@ module.exports = function retrieveFactory(deps) {
         message: 'Nothing in the index clears the similarity threshold for that question.',
         remedy: 'Run /index-brain if the Vault has changed, or rephrase. Documents indexed without an embedding model are never matched.',
         citations: [],
+        text: 'Nothing in the index clears the similarity threshold for that question. Run /index-brain if the Vault has changed, or rephrase.',
       });
     }
 
@@ -441,6 +487,11 @@ module.exports = function retrieveFactory(deps) {
         contextChars: context.length,
         provider: out?.provider || null,
         model: out?.model || null,
+        // Same reason as the branches above: the dispatched-command chip
+        // reads `text`, not `answer` — without this the answer only ever
+        // reached the operator through the separate, best-effort narrator
+        // call, and never through the chip itself.
+        text: `${answer.trim()}\n\n${sources.map((s) => `[${s.n}] ${s.title}`).join('  ')}`,
       });
     } catch (e) {
       res.status(502).json({
@@ -454,6 +505,16 @@ module.exports = function retrieveFactory(deps) {
 
   // POST /crn/second-brain/retrieve — block-namespaced, same logic, no intent filter
   // (the caller gates the turn via src/kernel/context.cjs before calling)
+  //
+  // This response carried no `ok` and no `text` field, top-level `documents`
+  // instead of nested `data`. Terminal2's dispatched-command chip reads
+  // neither `body.ok` (missing → treated as a FAILED command) nor a
+  // recognisable payload shape (describeCommandOutput found no `text`, no
+  // `data.logs`, no `data` object — `documents` sat one level too high to be
+  // seen at all) — so a typed /recall that found real matches rendered as
+  // "The command returned no output and did not say why," in red. Titles only
+  // ever reached the operator through the separate ordinary-chat citation
+  // footer, never through /recall itself.
   router.post('/crn/second-brain/retrieve', async (req, res) => {
     const { query, k } = req.body || {};
     if (!query) return res.status(400).json({ error: 'query required' });
@@ -467,10 +528,213 @@ module.exports = function retrieveFactory(deps) {
       // nothing now has something to tell them.
       // `matched` is how many cleared the floor before the cut to k — the
       // caller's only way to know it is looking at a sample (R02).
-      res.json({ documents, count: documents.length, matched: matched ?? documents.length, k: kUsed ?? (k || DEFAULT_K), ...(unavailable ? { unavailable } : {}) });
+      const text = unavailable
+        ? `${unavailable.message} ${unavailable.action || ''}`.trim()
+        : documents.length
+          ? `Found ${matched ?? documents.length}${(matched ?? documents.length) > documents.length ? `, showing ${documents.length}` : ''}:\n`
+            + documents.map((d, i) => `${i + 1}. ${d.metadata?.source || d.id} (${(d.similarity || 0).toFixed(2)}) — ${String(d.content || '').replace(/\s+/g, ' ').trim().slice(0, 160)}${String(d.content || '').length > 160 ? '…' : ''}`).join('\n')
+          : 'Nothing in the index scored above the match threshold for that search.';
+      res.json({
+        ok: true,
+        documents, count: documents.length, matched: matched ?? documents.length, k: kUsed ?? (k || DEFAULT_K),
+        ...(unavailable ? { unavailable } : {}),
+        text,
+      });
     } catch (err) {
       console.error('[RETRIEVE] error:', err.message);
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ ok: false, error: err.message });
+    }
+  });
+
+  // ── POST /crn/second-brain/ask-doc — answer from ONE document ─────────────
+  //
+  // /ask races the whole Vault for the top k documents and spends its content
+  // budget across all of them — two windows each (WINDOWS_PER_DOC). That is
+  // right for "what does my corpus say about X" and wrong for "what does THIS
+  // book say about X": a 400,000-character PDF gets the same two 1,200-char
+  // windows as a two-page note, and a question about its last chapter loses to
+  // whatever else in the Vault scored higher. This route takes the document as
+  // a GIVEN instead of a candidate, so it never competes for budget with the
+  // rest of the Vault (DOC_WINDOWS/DOC_MAX_CHARS vs WINDOWS_PER_DOC/MAX_DOC_CHARS
+  // above).
+  //
+  // Two modes, chosen by the operator, not guessed from the phrasing (§08):
+  //   FAST (default)   — same window scoring /ask uses, scoped to this file.
+  //                       One embed call. Can still miss something outside the
+  //                       best-scoring passages.
+  //   FULL ("full: " prefix on the question) — map/reduce over every window
+  //       the document has: one small model call per window asking "is
+  //       anything here relevant", then one call combining what came back.
+  //       Slower and far more tokens, but it is the only mode that can find
+  //       something in the last pages of a long book — which is the gap this
+  //       route exists to close. Bounded by ingest's own CHUNK_CAP (64
+  //       windows/document), so worst case is ~22 batches at FULL_CONCURRENCY
+  //       3, not unbounded.
+  router.post('/crn/second-brain/ask-doc', async (req, res) => {
+    const { path: docQuery, query: rawQuery, model: modelOverride } = req.body || {};
+    if (!docQuery || typeof docQuery !== 'string') {
+      return res.status(400).json({ ok: false, error: 'path required', message: 'Which document? Pass its title or vault-relative path.' });
+    }
+    if (!rawQuery || typeof rawQuery !== 'string') {
+      return res.status(400).json({ ok: false, error: 'query required' });
+    }
+
+    const kernelLLM = deps?.kernelLLM;
+    if (typeof kernelLLM !== 'function') {
+      return res.status(503).json({
+        ok: false, error: 'no_model',
+        message: 'No AI service is available to this block.',
+        remedy: 'Assign a model to the chat role in Settings → Model Assignment, or install a local model in Cookbook.',
+      });
+    }
+
+    const FULL_PREFIX = /^\s*full:\s*/i;
+    const full = FULL_PREFIX.test(rawQuery);
+    const query = rawQuery.replace(FULL_PREFIX, '').trim();
+    if (!query) {
+      return res.status(400).json({ ok: false, error: 'query required', message: '"full:" needs a question after it.' });
+    }
+
+    const index = readIndex();
+    const matches = resolveDocument(index, docQuery);
+
+    if (!matches.length) {
+      const titles = Object.values(index.documents || {}).slice(0, 8).map((d) => d.title || d.path);
+      const text = `Nothing in the index matches "${docQuery}".`
+        + (titles.length ? ` Some indexed documents: ${titles.join(', ')}.` : ' The index is empty — run /index-brain.');
+      return res.json({ ok: true, answered: false, reason: 'doc_not_found', message: text, text, candidates: [] });
+    }
+    if (matches.length > 1) {
+      const candidates = matches.slice(0, 10).map((d) => ({ path: d.path, title: d.title }));
+      const text = `"${docQuery}" matches ${matches.length} documents — say which one:\n`
+        + candidates.map((c) => `- ${c.title} (${c.path})`).join('\n');
+      return res.json({ ok: true, answered: false, reason: 'ambiguous_doc', message: `"${docQuery}" matches ${matches.length} documents.`, text, candidates });
+    }
+
+    const meta = matches[0];
+    const full_path = resolveIndexedPath(meta.path);
+    if (!full_path || !fs.existsSync(full_path)) {
+      return res.status(404).json({ ok: false, error: 'file_missing', message: `${meta.path} is indexed but no longer on disk. Run /index-brain to reconcile.` });
+    }
+    loadExtractors();
+    let text;
+    try { text = await extractText(full_path); }
+    catch (e) { return res.status(500).json({ ok: false, error: 'extraction_failed', message: e.message }); }
+    if (!text) return res.status(422).json({ ok: false, error: 'no_text', message: `${meta.title} has no extractable text.` });
+
+    // ── FAST ──────────────────────────────────────────────────────────────
+    if (!full) {
+      let queryEmbedding, queryModel;
+      try {
+        ({ vector: queryEmbedding, model: queryModel } = await (deps?.embed || embed)(query, { kind: 'query' }));
+      } catch (e) {
+        const msg = 'Searching this document by meaning needs an embedding model, and none is available.';
+        return res.json({
+          ok: true, answered: false,
+          reason: e.code === 'no_embed_model' ? 'no_embedding_model' : (e.code || 'no_embedding_model'),
+          message: msg, text: `${msg} Install one in Cookbook, or assign one to the Embedding role in Settings → Model Assignment.`,
+        });
+      }
+      const rec = readChunks()[meta.path];
+      const windows = (rec && rec.model === queryModel && rec.chunks) || [];
+      const qTerms = terms(query);
+      const picks = windows
+        .map((w) => ({ s: w.s, e: w.e, score: cosineSimilarity(queryEmbedding, w.v) + LEX_WEIGHT * lexicalOverlap(qTerms, text.slice(w.s, w.e)) }))
+        .sort((a, b) => b.score - a.score)
+        .slice(0, DOC_WINDOWS)
+        .sort((a, b) => a.s - b.s);
+
+      let content;
+      if (picks.length) {
+        const per = Math.floor(DOC_MAX_CHARS / picks.length);
+        content = picks.map((pg) => {
+          const pad = Math.max(0, Math.floor((per - (pg.e - pg.s)) / 2));
+          const s0 = Math.max(0, pg.s - pad), e0 = Math.min(text.length, pg.e + pad);
+          return `${s0 > 0 ? '…' : ''}${text.slice(s0, e0)}${e0 < text.length ? '…' : ''}`;
+        }).join('\n[…]\n');
+      } else {
+        content = text.slice(0, DOC_MAX_CHARS);
+      }
+
+      const prompt = [
+        `Answer the question using ONLY the passage below, from "${meta.title}".`,
+        'If the passage does not contain the answer, say exactly that — do not use outside knowledge, and do not guess it might be elsewhere in the document.',
+        '', `QUESTION: ${query}`, '', `PASSAGE FROM ${meta.title}:`, content,
+      ].join('\n');
+
+      try {
+        const out = await kernelLLM(prompt, { role: 'chat', ...(modelOverride ? { model: modelOverride } : {}) });
+        const answer = (typeof out === 'string' ? out : (out?.text || '')).trim();
+        if (!answer) return res.status(502).json({ ok: false, error: 'empty_answer', message: 'The model returned nothing.' });
+        return res.json({
+          ok: true, answered: true, mode: 'fast',
+          answer, text: `${answer}\n\n[1] ${meta.title}`,
+          citations: [{ n: 1, id: meta.path, title: meta.title }],
+          documentsUsed: 1, windowsUsed: picks.length,
+          provider: out?.provider || null, model: out?.model || null,
+        });
+      } catch (e) {
+        return res.status(502).json({ ok: false, error: 'model_failed', message: e.message, remedy: 'Check the chat role in Settings → Model Assignment, or install a local model in Cookbook.' });
+      }
+    }
+
+    // ── FULL — map every window, reduce what came back ─────────────────────
+    const rec = readChunks()[meta.path];
+    const windows = (rec && rec.chunks) || (text.length > 1200 ? chunkText(text) : [{ s: 0, e: text.length }]);
+    if (!windows.length) {
+      return res.json({ ok: true, answered: false, reason: 'no_windows', message: `${meta.title} could not be split into sections; try without "full:".` });
+    }
+
+    const NOTHING = 'NOTHING RELEVANT';
+    const extracts = new Array(windows.length).fill(null);
+    let cursor = 0;
+    const worker = async () => {
+      for (;;) {
+        const i = cursor++;
+        if (i >= windows.length) return;
+        const w = windows[i];
+        const passage = text.slice(w.s, w.e);
+        const at = text.length ? Math.round((w.s / text.length) * 100) : 0;
+        const p = [
+          `This is one section of a longer document, "${meta.title}" (roughly ${at}% of the way through — AEON does not yet track real page numbers).`,
+          `Extract anything relevant to the question below, quoting exact figures, names and dates. If nothing here is relevant, reply with exactly: ${NOTHING}`,
+          '', `QUESTION: ${query}`, '', 'SECTION:', passage,
+        ].join('\n');
+        try {
+          const out = await kernelLLM(p, { role: 'chat', ...(modelOverride ? { model: modelOverride } : {}) });
+          const a = (typeof out === 'string' ? out : (out?.text || '')).trim();
+          if (a && !a.toUpperCase().includes(NOTHING)) extracts[i] = { at, text: a };
+        } catch { /* one bad window must not fail the whole read (R-05: nothing silent — it just isn't counted as relevant) */ }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(FULL_CONCURRENCY, windows.length) }, worker));
+
+    const found = extracts.filter(Boolean);
+    if (!found.length) {
+      const msg = `Read all ${windows.length} sections of ${meta.title}; none were relevant to that question.`;
+      return res.json({ ok: true, answered: false, reason: 'no_matches', message: msg, text: msg, windowsRead: windows.length });
+    }
+
+    const combined = found.map((f) => `[section ~${f.at}% through]\n${f.text}`).join('\n\n---\n\n');
+    const reducePrompt = [
+      `These are the relevant extracts found by reading the whole of "${meta.title}", in document order.`,
+      'Combine them into one answer to the question. Cite roughly where in the document each part came from (e.g. "early in the document", "~70% through"). If the extracts conflict, say so rather than picking one.',
+      '', `QUESTION: ${query}`, '', 'EXTRACTS:', combined,
+    ].join('\n');
+
+    try {
+      const out = await kernelLLM(reducePrompt, { role: 'chat', ...(modelOverride ? { model: modelOverride } : {}) });
+      const answer = (typeof out === 'string' ? out : (out?.text || '')).trim();
+      if (!answer) return res.status(502).json({ ok: false, error: 'empty_answer', message: 'The model returned nothing for the combined read.' });
+      return res.json({
+        ok: true, answered: true, mode: 'full',
+        answer, text: `${answer}\n\n[1] ${meta.title} — read whole (${windows.length} sections, ${found.length} relevant)`,
+        citations: [{ n: 1, id: meta.path, title: meta.title }],
+        documentsUsed: 1, windowsRead: windows.length, windowsRelevant: found.length,
+        provider: out?.provider || null, model: out?.model || null,
+      });
+    } catch (e) {
+      return res.status(502).json({ ok: false, error: 'model_failed', message: e.message, remedy: 'Check the chat role in Settings → Model Assignment, or install a local model in Cookbook.' });
     }
   });
 

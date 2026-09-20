@@ -149,7 +149,16 @@ module.exports = function secondBrainFactory(deps) {
   });
 
   // ─── Read a specific document ─────────────────────────────────
-  router.get('/crn/second-brain/document', (req, res) => {
+  //
+  // Was `fs.readFileSync(resolved, 'utf8')` — a raw byte read decoded as
+  // text. For a PDF (or any binary format) that returns mojibake with
+  // `ok: 200`, not an error: /doc looked like it worked and handed the
+  // operator garbage. /pdf-text a few routes down already does this right;
+  // this route just never got the fix. Response field stays `content` (not
+  // `_extract.cjs`'s `text`) — index.jsx and SecondBrainVisualizer.jsx both
+  // read `data.content` and would silently show "(empty)" for every
+  // document, PDFs included, if the field were renamed here.
+  router.get('/crn/second-brain/document', async (req, res) => {
     const filePath = req.query.path;
     if (!filePath) return res.status(400).json({ error: 'Missing ?path=' });
 
@@ -157,8 +166,13 @@ module.exports = function secondBrainFactory(deps) {
     if (!resolved) return res.status(403).json({ error: 'Access denied' });
     if (!fs.existsSync(resolved)) return res.status(404).json({ error: 'Not found' });
 
-    const content = fs.readFileSync(resolved, 'utf8');
-    res.json({ path: filePath, content });
+    try {
+      const { extractText } = require('./_extract.cjs');
+      const { text, ...meta } = await extractText(resolved);
+      res.json({ path: filePath, content: text, ...meta });
+    } catch (e) {
+      res.status(500).json({ error: 'Extraction failed: ' + e.message });
+    }
   });
 
   // ─── Raw file serving (images etc.) with correct mime type ────

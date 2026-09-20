@@ -75,7 +75,12 @@ module.exports = (app, deps) => {
   // nervous-system fallback chain, local runtime is the always-there floor.
   function _liveDefault() {
     if (process.env.OPENROUTER_API_KEY) return { provider: 'openrouter', model: 'meta-llama/llama-3.3-70b-instruct:free' };
-    if (process.env.GROQ_API_KEY) return { provider: 'groq', model: 'llama-3.3-70b-versatile' };
+    // llama-3.3-70b-versatile 404'd live, 2026-09-20 — Groq retired it
+    // outright (verified against the real /openai/v1/models list; it is not
+    // a rename, the whole Llama 3.3 lineup is gone from their catalogue).
+    // openai/gpt-oss-120b is Groq's current largest general-purpose hosted
+    // model, the closest analog to what 70b-versatile served as the default.
+    if (process.env.GROQ_API_KEY) return { provider: 'groq', model: 'openai/gpt-oss-120b' };
     if (process.env.GEMINI_FREE_KEY_1 || process.env.GEMINI_PAID_KEY) return { provider: 'gemini', model: 'gemini-2.0-flash' };
     const local = firstLocalModel();
     if (local) return { provider: 'local', model: local };
@@ -958,8 +963,10 @@ module.exports = (app, deps) => {
 
     // Prefer cloud providers over local — assign best available
     const priority = ['gemini', 'groq', 'openai', 'claude', 'grok', 'openrouter', 'local', 'lmstudio'];
+    // groq default: Groq retired the Llama 3.x lineup this named — see
+    // _liveDefault above for the full note.
     const defaultModels = {
-      groq: 'llama-3.3-70b-versatile',
+      groq: 'openai/gpt-oss-120b',
       gemini: 'gemini-2.5-flash',
       openai: 'gpt-4o',
       claude: 'claude-sonnet-4-6',

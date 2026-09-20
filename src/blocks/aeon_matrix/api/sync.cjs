@@ -4,17 +4,40 @@ const path = require('path');
 
 module.exports = function createSyncRouter(deps) {
   const router = express.Router();
-  const { supabase, isVercel, getLocalFile, validateSDI, writeOSAudit } = deps;
+  const { supabase, isVercel, getLocalFile, getDataFile, validateSDI, writeOSAudit } = deps;
 
+  // Found live, 2026-09-20 (CEO: "check supabase to matrix sync... triple
+  // checked"). Four entries below never had a reader or writer ANYWHERE else
+  // in the repo — confirmed by grepping the whole tree for their filenames —
+  // leftovers from a retired business-operations block set (inventory,
+  // scheduler, staff, HR were never rebuilt onto the current 17-block set).
+  // Syncing an orphaned file both ways was a no-op dressed as a feature.
+  // Removed per §21 (gate first, prove dead — the grep above is the proof;
+  // this file's own suite is the gate: tests/sync-block-config.test.js).
+  //
+  //   inventory: { file: getLocalFile('inventory.json'), ... }
+  //   scheduler: { file: getLocalFile('scheduler.json'), ... }
+  //   staff:     { file: getLocalFile('staff.json'), ... }
+  //   hr_arsenal:{ file: getLocalFile('hr_arsenal.json'), ... }
+  //
+  // `compare` computed `path.join(__dirname, '../src/blocks/compare/data/…')`
+  // — __dirname is already inside aeon_matrix/api, so this resolved to
+  // aeon_matrix/src/blocks/compare/…, which has never existed. Even fixed,
+  // it would point at a block that is itself gone: council absorbed compare
+  // and keeps its OWN history at getDataFile('council/compare') — a local,
+  // per-install comparison scratchpad, never a declared cloud-sync target.
+  // Repointing this entry at council's path would be a NEW decision to sync
+  // that data (§08); removing a broken pointer to a dead block is not.
+  //
+  // `cookbook` had the same double-`src/blocks` bug AND the wrong root —
+  // cookbook's real state lives at getDataFile('cookbook'), not inside the
+  // install tree. That one WAS a decision already made (cookbook install
+  // state syncing for mobile visibility, same as activity/quick_links/
+  // logistics) — only the path was wrong, so it is fixed below, not removed.
   const BLOCK_CONFIG = {
-    inventory:        { file: getLocalFile('inventory.json'),            table: 'aeon_blocks', tag: 'inventory' },
     clients:          { file: getLocalFile('clients.json'),              table: 'aeon_blocks', tag: 'clients' },
-    scheduler:        { file: getLocalFile('scheduler.json'),            table: 'aeon_blocks', tag: 'scheduler' },
-    staff:            { file: getLocalFile('staff.json'),                table: 'aeon_blocks', tag: 'staff' },
-    hr_arsenal:       { file: getLocalFile('hr_arsenal.json'),           table: 'aeon_blocks', tag: 'hr_arsenal' },
     logistics:        { file: getLocalFile('logistics_ledger.json'),     table: 'aeon_blocks', tag: 'logistics' },
-    compare:          { file: require('path').join(__dirname, '../src/blocks/compare/data/history.json'), table: 'aeon_blocks', tag: 'compare' },
-    cookbook:          { file: require('path').join(__dirname, '../src/blocks/cookbook/data/cookbook_state.json'), table: 'aeon_blocks', tag: 'cookbook' },
+    cookbook:         { file: path.join(getDataFile('cookbook'), 'cookbook_state.json'), table: 'aeon_blocks', tag: 'cookbook' },
     activity:         { file: getLocalFile('activity_heatmap.json'),     table: 'aeon_blocks', tag: 'activity' },
     quick_links:      { file: getLocalFile('quick-links.json'),          table: 'aeon_blocks', tag: 'quick_links' },
   };
@@ -25,9 +48,20 @@ module.exports = function createSyncRouter(deps) {
     try { return JSON.parse(fs.readFileSync(filePath, 'utf8')); } catch { return null; }
   };
 
+  // Used to swallow every write failure into console.error and report
+  // success regardless (R-05). bulk-pull, POST /:block and /:block/patch all
+  // called this and then unconditionally answered {pulled:true}/
+  // {success:true} — a write that actually failed (a missing directory for a
+  // path that was wrong, a full disk, a permissions error) read to the
+  // operator exactly like one that landed. Now it says which.
   const writeLocal = (filePath, data) => {
-    try { fs.writeFileSync(filePath, JSON.stringify(data, null, 2)); } catch (e) {
+    try {
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
+      return { ok: true };
+    } catch (e) {
       console.error('[SYNC] Local write failed:', filePath, e.message);
+      return { ok: false, error: e.message };
     }
   };
 
@@ -86,16 +120,25 @@ module.exports = function createSyncRouter(deps) {
     if (!supabase) return res.json({ success: false, reason: 'no supabase' });
     if (isVercel) return res.json({ success: false, reason: 'cloud env — no local files' });
     const results = {};
+    let anyWriteFailed = false;
     for (const [block, cfg] of Object.entries(BLOCK_CONFIG)) {
       const cloud = await readFromSupabase(cfg.tag);
       if (cloud) {
-        writeLocal(cfg.file, cloud);
-        results[block] = { pulled: true, records: Array.isArray(cloud) ? cloud.length : 1 };
+        const w = writeLocal(cfg.file, cloud);
+        if (w.ok) {
+          results[block] = { pulled: true, records: Array.isArray(cloud) ? cloud.length : 1 };
+        } else {
+          anyWriteFailed = true;
+          results[block] = { pulled: false, reason: `write failed: ${w.error}` };
+        }
       } else {
         results[block] = { pulled: false, reason: 'no cloud data' };
       }
     }
-    res.json({ success: true, results });
+    // `success: true` used to mean only "the loop finished", true even when
+    // every write inside it failed. It now means what an operator reads it
+    // to mean: nothing in `results` silently lied about landing.
+    res.json({ success: !anyWriteFailed, results });
   });
 
   // ═══════════════════════════════════════════════════════════════════
@@ -135,7 +178,8 @@ module.exports = function createSyncRouter(deps) {
       return res.json({ success: true, target: 'cloud' });
     }
 
-    writeLocal(cfg.file, payload);
+    const w = writeLocal(cfg.file, payload);
+    if (!w.ok) return res.status(500).json({ success: false, target: 'local', error: w.error });
     res.json({ success: true, target: 'local' });
 
     if (supabase) {
@@ -176,7 +220,8 @@ module.exports = function createSyncRouter(deps) {
       return res.json({ success: true, target: 'cloud', count: items.length });
     }
 
-    writeLocal(cfg.file, items);
+    const w = writeLocal(cfg.file, items);
+    if (!w.ok) return res.status(500).json({ success: false, target: 'local', error: w.error });
     res.json({ success: true, target: 'local', count: items.length });
 
     if (supabase) {

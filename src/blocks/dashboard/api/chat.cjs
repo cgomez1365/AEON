@@ -486,9 +486,12 @@ module.exports = function createChatRouter(deps) {
           } catch (geminiErr) {
             console.error('[AEON] Gemini Fallback failed, routing to Groq roulette fallback:', geminiErr);
             try {
-              aiResponse = await groqRequest(modifiedPrompt, 'llama-3.1-8b-instant');
+              // llama-3.1-8b-instant 404'd live, 2026-09-20 — retired along
+              // with the rest of Groq's Llama 3.x lineup. gpt-oss-20b is
+              // their current small/fast tier, same role as the last resort.
+              aiResponse = await groqRequest(modifiedPrompt, 'openai/gpt-oss-20b');
               provider = 'Groq Roulette Fallback';
-              activeModel = 'llama-3.1-8b-instant';
+              activeModel = 'openai/gpt-oss-20b';
             } catch (fatalErr) {
               console.error('[AEON] Fatal AI Error during fallback:', fatalErr);
               aiResponse = `**System Alert:** I encountered a critical neural link error while processing that request (Error: ${fatalErr.message.substring(0, 100)}...). This is often caused by safety filters or API rate limits on the external model.`;

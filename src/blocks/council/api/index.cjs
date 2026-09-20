@@ -202,9 +202,12 @@ module.exports = function createCompareRouter(deps) {
       { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash' },
       { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro' },
     ],
+    // Was llama-3.3-70b-versatile / llama-3.1-8b-instant — both 404 live,
+    // 2026-09-20. Groq retired the whole Llama 3.x lineup, not just renamed
+    // it (verified against the real /openai/v1/models list).
     groq: [
-      { id: 'llama-3.3-70b-versatile', name: 'Llama 3.3 70B' },
-      { id: 'llama-3.1-8b-instant', name: 'Llama 3.1 8B' },
+      { id: 'openai/gpt-oss-120b', name: 'GPT-OSS 120B' },
+      { id: 'openai/gpt-oss-20b', name: 'GPT-OSS 20B' },
     ],
   };
 

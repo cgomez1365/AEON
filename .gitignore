@@ -128,7 +128,10 @@ secrets/
 archive/
 data/
 Data/
-tools/bin/cloudflared.exe
+# Was tools/bin/cloudflared.exe only — the tunnel now downloads a
+# platform-matched filename (cloudflared, cloudflared-windows-amd64.exe,
+# cloudflared-linux-arm64, …), none of which matched the old single pattern.
+tools/bin/
 
 # AEON additions
 # Pointer to the AEON home, written by the one-time migration (src/kernel/homeMigration.cjs)

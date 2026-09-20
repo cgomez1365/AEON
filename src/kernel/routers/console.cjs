@@ -235,28 +235,51 @@ module.exports = function ({ storage, kernelLLM, _blockRegistry, _blockReadiness
   });
 
   // ── /god/keys — add an API key from the terminal (settings workflow) ───────
+  //
+  // Found live, 2026-09-20: this wrote to a SINGLE env var per provider
+  // (GROQ_API_KEY, one slot) via /api/settings/secrets — the pre-BO-KEYPOOL
+  // path. Rotation (src/kernel/keyPool.cjs, 18c5cea, same day) added a real
+  // pool: POST /api/connections/:id/keys, one vault ref per account, several
+  // behind one connection. This route was never migrated, so a key added
+  // from the terminal never joined the pool the kernel actually rotates —
+  // it either sat unused or was silently overwritten by the next boot's
+  // vault→env hydration, which runs the other direction. The operator's own
+  // report ("hot swap based on keys and models is not working — mightve
+  // gotten disconnected") is exactly this: the terminal and Settings were
+  // no longer one source of truth, the one guarantee this file's header
+  // promises. Now it resolves the connection the same way /settings/nl
+  // already does (first endpoint matching the provider) and adds to ITS
+  // pool, same as the Settings UI.
   router.post('/keys', async (req, res) => {
     try {
       let { provider, key, arg } = req.body || {};
       // Command bus sends arg="groq gsk_abc123" when dispatched as a single-param command.
       if (arg && (!provider || !key)) { [provider, key] = String(arg).split(/\s+/); }
-      const envVar = PROVIDER_ENV[String(provider || '').toLowerCase()];
-      if (!envVar) return res.status(400).json({ ok: false, error: `Unknown provider "${provider}". Known: ${Object.keys(PROVIDER_ENV).join(', ')}` });
+      provider = String(provider || '').toLowerCase();
+      if (!PROVIDER_ENV[provider]) return res.status(400).json({ ok: false, error: `Unknown provider "${provider}". Known: ${Object.keys(PROVIDER_ENV).join(', ')}` });
       if (!key || String(key).length < 8) return res.status(400).json({ ok: false, error: 'Key looks too short.' });
-      // /api/settings/env explicitly REJECTS anything matching KEY|SECRET|TOKEN|
-      // PASSWORD|CREDENTIAL (every PROVIDER_ENV var does) and tells the caller to
-      // use /api/settings/secrets instead — this endpoint was silently 400ing on
-      // every single call before this fix. Same {vars} body shape either way.
-      const r = await fetch(`${BASE}/api/settings/secrets`, {
+
+      const listRes = await fetch(`${BASE}/api/connections`, { headers: { host: `127.0.0.1:${PORT}` } });
+      const list = await listRes.json();
+      const ep = (list.endpoints || []).find((e) => e.provider === provider);
+      if (!ep) {
+        return res.status(404).json({
+          ok: false, error: `No connection for "${provider}" yet.`,
+          text: `No connection exists for ${provider} yet — add one in Settings → Connections first, then keys can be added from here.`,
+        });
+      }
+
+      const r = await fetch(`${BASE}/api/connections/${encodeURIComponent(ep.id)}/keys`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', host: `127.0.0.1:${PORT}` },
-        body: JSON.stringify({ vars: { [envVar]: String(key).trim() } }),
+        body: JSON.stringify({ apiKey: String(key).trim() }),
       });
       const data = await r.json();
+      const total = data?.keyPool?.total ?? data?.endpoint?.auth_refs?.length;
       res.status(r.status).json({
         ...data,
         text: data.ok !== false && !data.error
-          ? `${provider} key saved (${envVar}). Blocks that need ${provider} will light up on the next restart — run /restart or use Settings → Restart.`
-          : data.error,
+          ? `${provider} account added — the pool now rotates ${total ?? 'several'} key${total === 1 ? '' : 's'}. No restart needed.`
+          : (data.error || 'Could not add the key.'),
       });
     } catch (e) { res.status(502).json({ ok: false, error: e.message }); }
   });

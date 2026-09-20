@@ -286,9 +286,9 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     if (GEMINI_KEY_POOL.length === 0) throw new Error('No Gemini API keys configured in .env');
     if (retries >= GEMINI_KEY_POOL.length) {
       markUnhealthy('gemini', 429, 'key pool exhausted');
-      console.warn('[GEMINI FAILOVER] Gemini key pool exhausted. Falling back to Groq (Llama 3.3)...');
+      console.warn('[GEMINI FAILOVER] Gemini key pool exhausted. Falling back to Groq (GPT-OSS 120B)...');
       if (isHealthy('groq')) {
-        try { return await groqRequest(prompt, 'llama-3.3-70b-versatile', 0, opts); }
+        try { return await groqRequest(prompt, 'openai/gpt-oss-120b', 0, opts); }
         catch (groqErr) { console.warn('[GEMINI FAILOVER] Groq fallback failed:', groqErr.message); }
       }
       console.warn('[GEMINI FAILOVER] Falling back to native local runtime...');
@@ -330,7 +330,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     }
   };
 
-  const groqRequest = async (prompt, modelName = 'llama-3.3-70b-versatile', retries = 0, opts = {}) => {
+  const groqRequest = async (prompt, modelName = 'openai/gpt-oss-120b', retries = 0, opts = {}) => {
     const pool = KEY_POOLS.groq;
     const apiKey = pool.length ? pool[(keyPoolIdx.groq || 0) % pool.length] : process.env.GROQ_API_KEY;
     if (!apiKey) throw new Error('GROQ_API_KEY missing in .env');
@@ -1126,7 +1126,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   // The ordered list of {provider, model, base_url?, apiKey?} a streaming call
   // will try: the role's own assignment first (registry, else the settings
   // file), then the fallback chain kernelLLM uses, with local always last.
-  const _STREAM_FALLBACK_MODELS = { groq: 'llama-3.3-70b-versatile', gemini: 'gemini-flash-latest', openrouter: 'openai/gpt-4o-mini', local: undefined };
+  const _STREAM_FALLBACK_MODELS = { groq: 'openai/gpt-oss-120b', gemini: 'gemini-flash-latest', openrouter: 'openai/gpt-4o-mini', local: undefined };
   const _streamCandidates = async (role, opts = {}) => {
     const settings = loadSettings() || {};
     const candidates = [];
@@ -1428,9 +1428,9 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
         const pick = providers[Math.floor(Math.random() * providers.length)];
         try {
           let text;
-          if (pick === 'groq') text = await groqRequest(prompt, 'llama-3.3-70b-versatile', 0, opts);
+          if (pick === 'groq') text = await groqRequest(prompt, 'openai/gpt-oss-120b', 0, opts);
           if (pick === 'gemini') text = await geminiRequest(prompt, 'gemini-flash-latest', 0, opts);
-          if (text !== undefined) return opts.returnMeta ? { text, provider: pick, model: pick === 'groq' ? 'llama-3.3-70b-versatile' : 'gemini-flash-latest' } : text;
+          if (text !== undefined) return opts.returnMeta ? { text, provider: pick, model: pick === 'groq' ? 'openai/gpt-oss-120b' : 'gemini-flash-latest' } : text;
         } catch (e) {
           const status = /error (\d{3})/i.exec(e.message)?.[1];
           if (status) markUnhealthy(pick, Number(status), e.message);
@@ -1457,7 +1457,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
         let text;
         let usedModel = model;
         if (p === 'groq' && process.env.GROQ_API_KEY) {
-          usedModel = p === provider ? model : 'llama-3.3-70b-versatile';
+          usedModel = p === provider ? model : 'openai/gpt-oss-120b';
           text = await groqRequest(prompt, usedModel, 0, opts);
         } else if (p === 'gemini' && GEMINI_KEY_POOL.length > 0) {
           usedModel = p === provider ? model : 'gemini-flash-latest';

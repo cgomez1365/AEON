@@ -731,7 +731,10 @@ async function resolveForRole(role, supabase) {
  * registry exists and this is never consulted again.
  */
 const ENV_PROVIDER_FALLBACK = [
-  { provider: 'groq',       model: 'llama-3.3-70b-versatile', vars: ['GROQ_API_KEY'] },
+  // llama-3.3-70b-versatile 404'd live, 2026-09-20 — Groq retired the whole
+  // Llama 3.x lineup, not a rename. openai/gpt-oss-120b is the closest
+  // analog among what they host now (verified against the real model list).
+  { provider: 'groq',       model: 'openai/gpt-oss-120b',     vars: ['GROQ_API_KEY'] },
   { provider: 'gemini',     model: 'gemini-2.5-flash',        vars: ['GEMINI_PAID_KEY', 'GEMINI_API_KEY', 'GEMINI_FREE_KEY_1'] },
   { provider: 'openai',     model: 'gpt-4o-mini',             vars: ['OPENAI_API_KEY'] },
   { provider: 'claude',     model: 'claude-sonnet-5',         vars: ['ANTHROPIC_API_KEY'] },

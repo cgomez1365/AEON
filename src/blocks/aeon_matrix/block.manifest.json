@@ -139,6 +139,27 @@
         "when": "embed"
       },
       {
+        "cmd": "/ask-doc",
+        "desc": "Answer a question from ONE document instead of the whole Vault, cited to just that file. Prefix the question with 'full:' to read the whole document section by section instead of just the best-matching passages — slower, but finds things a 200+ page book's best-passage search misses.",
+        "method": "POST",
+        "route": "/api/crn/second-brain/ask-doc",
+        "params": [
+          {
+            "name": "path",
+            "type": "string",
+            "required": true
+          },
+          {
+            "name": "query",
+            "type": "string",
+            "required": true
+          }
+        ],
+        "mode": "instant",
+        "category": "content",
+        "when": "embed"
+      },
+      {
         "cmd": "/push",
         "desc": "Push all blocks to Supabase cloud",
         "method": "POST",
@@ -242,6 +263,11 @@
     {
       "method": "POST",
       "path": "/api/crn/second-brain/ask",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/crn/second-brain/ask-doc",
       "auth": true
     },
     {
