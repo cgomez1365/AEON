@@ -40,6 +40,36 @@ const PROVIDER_ENV = {
   tavily: 'TAVILY_API_KEY',
 };
 
+/**
+ * Forward the caller's session onto an internal loopback call.
+ *
+ * Found live, 2026-09-20 (operator: "model picker failed?", then confirmed
+ * still empty after a registryModels field fix that was real but not
+ * sufficient). Root cause, deeper than that field: EVERY internal fetch in
+ * this file calls a route the settings block declares `auth: true` in its
+ * manifest (`/api/settings/nervous-system`, `/api/settings/nl`,
+ * `/api/connections`, `/api/connections/:id/keys`) — and
+ * manifestRouteAuth.cjs enforces that for real, deliberately: "Loopback is
+ * not authentication" (its own header comment, written for the 2026-08-11
+ * P0-02 audit, months before this file's proxy calls existed). A bare
+ * `fetch()` from server to itself carries no cookie and no bearer header, so
+ * every one of these calls has 401'd since an operator account first
+ * existed — /god/models silently returned no providers, /god/model-swap
+ * silently failed every hotswap, and /god/keys (fixed earlier this same
+ * session for a DIFFERENT reason — the wrong pool endpoint) inherited the
+ * exact same gap. dashboard/api/chat.cjs hit this identical class of defect
+ * already and named it forwardedAuth(); this is the same fix, in the three
+ * callers here that never got it.
+ */
+function forwardedAuth(req) {
+  const headers = { 'Content-Type': 'application/json' };
+  const authorization = req?.headers?.authorization;
+  const cookie = req?.headers?.cookie;
+  if (authorization) headers.Authorization = authorization;
+  if (cookie) headers.Cookie = cookie;
+  return headers;
+}
+
 module.exports = function ({ storage, kernelLLM, _blockRegistry, _blockReadiness } = {}) {
   const router = express.Router();
   const PORT = Number(process.env.PORT) || 3001;
@@ -212,9 +242,9 @@ module.exports = function ({ storage, kernelLLM, _blockRegistry, _blockReadiness
   // which that response never sets. The data was real the whole time — groq
   // and openrouter's vault-stored connections carry 14 and several hundred
   // models respectively — this route just never looked at the right key.
-  router.get('/models', async (_req, res) => {
+  router.get('/models', async (req, res) => {
     try {
-      const r = await fetch(`${BASE}/api/settings/nervous-system`);
+      const r = await fetch(`${BASE}/api/settings/nervous-system`, { headers: forwardedAuth(req) });
       const ns = await r.json();
       const providers = ns.providers || ns.data?.providers || [];
       const groups = (Array.isArray(providers) ? providers : Object.entries(providers).map(([id, v]) => ({ id, ...v })))
@@ -236,7 +266,7 @@ module.exports = function ({ storage, kernelLLM, _blockRegistry, _blockReadiness
       if (!model) return res.status(400).json({ ok: false, error: 'model required' });
       const phrase = `set ${role} to ${provider ? provider + ' ' : ''}${model}`;
       const r = await fetch(`${BASE}/api/settings/nl`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: forwardedAuth(req),
         body: JSON.stringify({ phrase }),
       });
       const data = await r.json();
@@ -269,7 +299,7 @@ module.exports = function ({ storage, kernelLLM, _blockRegistry, _blockReadiness
       if (!PROVIDER_ENV[provider]) return res.status(400).json({ ok: false, error: `Unknown provider "${provider}". Known: ${Object.keys(PROVIDER_ENV).join(', ')}` });
       if (!key || String(key).length < 8) return res.status(400).json({ ok: false, error: 'Key looks too short.' });
 
-      const listRes = await fetch(`${BASE}/api/connections`, { headers: { host: `127.0.0.1:${PORT}` } });
+      const listRes = await fetch(`${BASE}/api/connections`, { headers: { host: `127.0.0.1:${PORT}`, ...forwardedAuth(req) } });
       const list = await listRes.json();
       const ep = (list.endpoints || []).find((e) => e.provider === provider);
       if (!ep) {
@@ -280,7 +310,7 @@ module.exports = function ({ storage, kernelLLM, _blockRegistry, _blockReadiness
       }
 
       const r = await fetch(`${BASE}/api/connections/${encodeURIComponent(ep.id)}/keys`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json', host: `127.0.0.1:${PORT}` },
+        method: 'POST', headers: { host: `127.0.0.1:${PORT}`, ...forwardedAuth(req) },
         body: JSON.stringify({ apiKey: String(key).trim() }),
       });
       const data = await r.json();
