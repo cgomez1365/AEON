@@ -387,12 +387,25 @@ const Terminal2 = ({ onUsageUpdate }) => {
     setShowSessions(false);
   }, [saveSession]);
 
-  // Auto-save on page unload / tab hide (refresh, close, sleep)
+  // Auto-save on page unload / tab hide (refresh, close, sleep).
+  //
+  // Found live, 2026-09-20 ("multiple saves for one chat"): a tab hide is NOT
+  // a teardown — the page is still fully alive — but this used to route it
+  // through the same sendBeacon fire-and-forget call as an actual unload.
+  // sendBeacon has no response to read, so currentSessionId.current never
+  // learned the id the server just minted; every later hide (alt-tab, switch
+  // apps, lock the screen) repeated that with the ref still null, and each one
+  // minted ANOTHER new session carrying the whole growing feed — one real chat
+  // forked into a pile of near-duplicate saves, worst on a session that was
+  // never explicitly saved by hand. A hide now goes through the normal
+  // saveSession() — the same call the Save button makes — which awaits the
+  // response and adopts the id, so the second hide updates instead of
+  // forking. sendBeacon stays, but only for beforeunload, the one case where
+  // the page really may not survive long enough for a normal fetch to land.
   useEffect(() => {
-    const handleUnload = () => {
+    const handleBeforeUnload = () => {
       const msgs = feedRef.current.filter(e => e.type === 'msg' && (e.role === 'user' || e.role === 'assistant'));
       if (msgs.length === 0) return;
-      // sendBeacon is fire-and-forget and survives page unload.
       // Must use a Blob with application/json so the express JSON parser picks it up.
       const blob = new Blob(
         [JSON.stringify({ id: sessionIdRef.current, messages: feedRef.current, autoSaved: true })],
@@ -401,15 +414,15 @@ const Terminal2 = ({ onUsageUpdate }) => {
       navigator.sendBeacon('/api/terminal/sessions', blob);
     };
     const handleVisibility = () => {
-      if (document.visibilityState === 'hidden') handleUnload();
+      if (document.visibilityState === 'hidden') saveSession({ autoSaved: true });
     };
-    window.addEventListener('beforeunload', handleUnload);
+    window.addEventListener('beforeunload', handleBeforeUnload);
     document.addEventListener('visibilitychange', handleVisibility);
     return () => {
-      window.removeEventListener('beforeunload', handleUnload);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
       document.removeEventListener('visibilitychange', handleVisibility);
     };
-  }, []);
+  }, [saveSession]);
 
   const push = useCallback((entry) => {
     const id = feedId.current++;
