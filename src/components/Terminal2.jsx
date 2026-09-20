@@ -239,6 +239,22 @@ const Terminal2 = ({ onUsageUpdate }) => {
   const [pendingImage, setPendingImage] = useState(null); // { dataUri, name }
   const fileInputRef = useRef(null);
   const docInputRef = useRef(null);   // /upload → native file picker (documents)
+  const textareaRef = useRef(null);   // the chat field's own height, grown as it fills
+  // Was a fixed-height <input>, one line, that scrolled its own text
+  // sideways for anything longer — CEO, 2026-09-20: "chat box needs to be
+  // a flex field". `rows={1}` sets a true minimum; this grows it to fit up
+  // to the CSS maxHeight (160px, ~7 lines) and lets it scroll internally
+  // past that, rather than pushing the whole terminal panel taller.
+  // Height is measured from scrollHeight AFTER setting height to 'auto' —
+  // reading scrollHeight without that reset would only ever grow, never
+  // shrink, because the box's own prior height caps what scrollHeight can
+  // report from itself.
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+  }, [input]);
   const [feed, setFeed] = useState([BOOT_MSG]);
   const [isLoading, setIsLoading] = useState(false);
   const [commands, setCommands] = useState([]);
@@ -419,9 +435,14 @@ const Terminal2 = ({ onUsageUpdate }) => {
   useEffect(() => { loadCommands(); }, [loadCommands]);
 
   // ── Model hotswap: providers grouped by key availability ──
+  // Each group's `models` is {id, free}[], already sorted server-side
+  // (src/kernel/modelIntelligence.cjs): free first, then a size/capability
+  // guess read off the model name — never a real benchmark, hence `sortNote`.
   const [modelGroups, setModelGroups] = useState([]);
+  const [modelSortNote, setModelSortNote] = useState('');
   const [showModelPicker, setShowModelPicker] = useState(false);
-  const refreshModelGroups = () => fetch('/api/console/models').then(r => r.json()).then(d => setModelGroups(d.groups || [])).catch(() => {});
+  const refreshModelGroups = () => fetch('/api/console/models').then(r => r.json())
+    .then(d => { setModelGroups(d.groups || []); setModelSortNote(d.sortNote || ''); }).catch(() => {});
   // Lazy-load: fetch fresh data each time the picker opens so a key added in Settings appears immediately.
   useEffect(() => { if (showModelPicker) refreshModelGroups(); }, [showModelPicker]);
 
@@ -1110,39 +1131,61 @@ const Terminal2 = ({ onUsageUpdate }) => {
         </div>
       )}
       {showModelPicker && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 14px', borderTop: '1px solid #1e2d45', fontSize: 11 }}>
-          <Cpu size={12} color="#00f2ff" />
-          <span style={{ color: '#5a6a80' }}>HOTSWAP CHAT MODEL</span>
-          <select aria-label="Hotswap chat model" defaultValue=""
-            onChange={(e) => {
-              const [provider, ...m] = e.target.value.split('::');
-              hotswapModel(provider, m.join('::'));
-            }}
-            style={{ flex: 1, minWidth: 0, maxWidth: 420, background: '#0b0f19', color: '#c8d6e8', border: '1px solid #1e2d45', borderRadius: 2, fontSize: 11, padding: '4px 6px', fontFamily: 'inherit' }}>
-            <option value="" disabled>Pick a model (grouped by key availability)…</option>
-            {modelGroups.map(g => (
-              <optgroup key={g.provider} label={`${g.label || g.provider} ${g.hasKey ? '· ✓ key ready' : '· ✗ no key — add one in Settings'}`}>
-                {(g.models.length ? g.models : ['(no models listed)']).map(m => (
-                  <option key={g.provider + m} value={`${g.provider}::${m}`} disabled={!g.hasKey || m === '(no models listed)'}>{m}</option>
-                ))}
-              </optgroup>
-            ))}
-          </select>
-          <XIcon size={12} style={{ cursor: 'pointer', color: '#ff4455' }} onClick={() => setShowModelPicker(false)} aria-label="Close model picker" />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '6px 14px', borderTop: '1px solid #1e2d45', fontSize: 11 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Cpu size={12} color="#00f2ff" />
+            <span style={{ color: '#5a6a80' }}>HOTSWAP CHAT MODEL</span>
+            <select aria-label="Hotswap chat model" defaultValue=""
+              onChange={(e) => {
+                const [provider, ...m] = e.target.value.split('::');
+                hotswapModel(provider, m.join('::'));
+              }}
+              style={{ flex: 1, minWidth: 0, maxWidth: 420, background: '#0b0f19', color: '#c8d6e8', border: '1px solid #1e2d45', borderRadius: 2, fontSize: 11, padding: '4px 6px', fontFamily: 'inherit' }}>
+              <option value="" disabled>Pick a model (free first, then by capability)…</option>
+              {modelGroups.map(g => (
+                <optgroup key={g.provider} label={`${g.label || g.provider} ${g.hasKey ? '· ✓ key ready' : '· ✗ no key — add one in Settings'}`}>
+                  {(g.models.length ? g.models : [{ id: '(no models listed)', free: false }]).map(m => (
+                    <option key={g.provider + m.id} value={`${g.provider}::${m.id}`} disabled={!g.hasKey || m.id === '(no models listed)'}>
+                      {m.id}{m.free ? ' · free' : ''}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+            <XIcon size={12} style={{ cursor: 'pointer', color: '#ff4455' }} onClick={() => setShowModelPicker(false)} aria-label="Close model picker" />
+          </div>
+          {modelSortNote && (
+            <span style={{ color: '#3a5070', fontSize: 10, paddingLeft: 20 }}>{modelSortNote}</span>
+          )}
         </div>
       )}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderTop: '1px solid #1e2d45' }}>
-        <span style={{ color: sigilColor, fontSize: 14, width: 14, textAlign: 'center', textShadow: `0 0 8px ${sigilColor}` }}>{sigilGlyph}</span>
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, padding: '10px 14px', borderTop: '1px solid #1e2d45' }}>
+        <span style={{ color: sigilColor, fontSize: 14, width: 14, textAlign: 'center', textShadow: `0 0 8px ${sigilColor}`, lineHeight: '20px' }}>{sigilGlyph}</span>
         <input ref={fileInputRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={onFileSelected} />
         <input ref={docInputRef} type="file" accept=".pdf,.html,.htm,.md,.markdown,.txt,.csv,.json" style={{ display: 'none' }} onChange={onDocSelected} />
-        <Paperclip size={14} style={{ cursor: 'pointer', color: pendingImage ? '#00f2ff' : '#4a5568', flexShrink: 0 }} onClick={() => fileInputRef.current?.click()} />
-        <Cpu size={14} aria-label="Hotswap model" style={{ cursor: 'pointer', color: showModelPicker ? '#00f2ff' : '#4a5568', flexShrink: 0 }} onClick={() => setShowModelPicker(v => !v)} />
-        <input
+        <Paperclip size={14} style={{ cursor: 'pointer', color: pendingImage ? '#00f2ff' : '#4a5568', flexShrink: 0, marginBottom: 3 }} onClick={() => fileInputRef.current?.click()} />
+        <Cpu size={14} aria-label="Hotswap model" style={{ cursor: 'pointer', color: showModelPicker ? '#00f2ff' : '#4a5568', flexShrink: 0, marginBottom: 3 }} onClick={() => setShowModelPicker(v => !v)} />
+        {/* Was a single-line <input> — grows with the message instead of
+            scrolling its own text sideways inside a fixed-height box.
+            Enter sends (unchanged); Shift+Enter inserts a real newline,
+            the convention every chat surface this size already uses.
+            Height resets itself via the effect below keyed on `input`,
+            so it also shrinks back to one line the moment dispatch()
+            clears the value on send — no separate reset call needed here. */}
+        <textarea
+          ref={textareaRef}
+          rows={1}
           value={input}
           onChange={e => setInput(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter' && !isLoading) dispatch(input); }}
-          placeholder="Ask, or /command…"
-          style={{ flex: 1, minWidth: 0, background: 'transparent', border: 'none', outline: 'none', color: '#e8f0fa', fontFamily: 'inherit', fontSize: 13 }}
+          onKeyDown={e => {
+            if (e.key === 'Enter' && !e.shiftKey && !isLoading) { e.preventDefault(); dispatch(input); }
+          }}
+          placeholder="Ask, or /command… (Shift+Enter for a new line)"
+          style={{
+            flex: 1, minWidth: 0, background: 'transparent', border: 'none', outline: 'none',
+            color: '#e8f0fa', fontFamily: 'inherit', fontSize: 13, lineHeight: '20px',
+            resize: 'none', overflowY: 'auto', maxHeight: 160, padding: '2px 0',
+          }}
         />
         {/* D1c — while a generation runs this is a STOP control, not a dead
             spinner. The backend can cancel; the operator had no way to ask.
@@ -1152,7 +1195,7 @@ const Terminal2 = ({ onUsageUpdate }) => {
           onClick={() => (isLoading ? stopChat() : dispatch(input))}
           title={isLoading ? 'Stop generating' : 'Send'}
           aria-label={isLoading ? 'Stop generating' : 'Send'}
-          style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: isLoading ? '#ff4455' : sigilColor }}>
+          style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: isLoading ? '#ff4455' : sigilColor, marginBottom: 2 }}>
           {isLoading ? <Square size={13} fill="#ff4455" /> : <Send size={15} />}
         </button>
       </div>

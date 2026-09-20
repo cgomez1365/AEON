@@ -71,8 +71,12 @@ describe('/god/models reads registryModels, not models — WITH a real operator 
     const groq = body.groups.find((g) => g.provider === 'groq');
     const openrouter = body.groups.find((g) => g.provider === 'openrouter');
     expect(groq.hasKey).toBe(true);
-    expect(groq.models).toEqual(['openai/gpt-oss-120b', 'openai/gpt-oss-20b']);
-    expect(openrouter.models).toContain('openrouter/free');
+    // models is now sortModels()'s output shape: {id, free}[], sorted free-first
+    // then by the intelligence heuristic — see tests/model-intelligence.test.js
+    // for that logic's own coverage; this file only checks it's wired in.
+    expect(groq.models.map((m) => m.id)).toEqual(['openai/gpt-oss-120b', 'openai/gpt-oss-20b']);
+    expect(openrouter.models.map((m) => m.id)).toContain('openrouter/free');
+    expect(openrouter.models.find((m) => m.id === 'openrouter/free').free).toBe(true);
   });
 
   it('a provider with genuinely no models still reports empty honestly, not a crash', async () => {
@@ -90,7 +94,14 @@ describe('/god/models reads registryModels, not models — WITH a real operator 
       legacy: { id: 'legacy', label: 'Legacy', configured: true, models: ['old-style-field'] },
     });
     const body = await getModels({ cookie: OPERATOR_COOKIE });
-    expect(body.groups.find((g) => g.provider === 'legacy').models).toEqual(['old-style-field']);
+    expect(body.groups.find((g) => g.provider === 'legacy').models).toEqual([{ id: 'old-style-field', free: false }]);
+  });
+
+  it('the response names its own sort order — the "small note" the CEO asked for', async () => {
+    const getModels = await mountWithNervousSystem({ groq: { id: 'groq', configured: true, registryModels: [] } });
+    const body = await getModels({ cookie: OPERATOR_COOKIE });
+    expect(body.sortNote).toMatch(/free.*first/i);
+    expect(body.sortNote).toMatch(/not a benchmark/i);
   });
 });
 
@@ -101,7 +112,7 @@ describe('/god/models forwards the caller\'s session to its internal call', () =
     });
     const body = await getModels({ cookie: OPERATOR_COOKIE });
     expect(body.ok).toBe(true);
-    expect(body.groups.find((g) => g.provider === 'groq').models).toEqual(['openai/gpt-oss-120b']);
+    expect(body.groups.find((g) => g.provider === 'groq').models).toEqual([{ id: 'openai/gpt-oss-120b', free: false }]);
   });
 
   it('a bearer token works too, not only a cookie', async () => {
@@ -109,7 +120,7 @@ describe('/god/models forwards the caller\'s session to its internal call', () =
       groq: { id: 'groq', label: 'Groq', configured: true, registryModels: ['openai/gpt-oss-120b'] },
     });
     const body = await getModels({ authorization: 'Bearer real-operator-bearer-token' });
-    expect(body.groups.find((g) => g.provider === 'groq').models).toEqual(['openai/gpt-oss-120b']);
+    expect(body.groups.find((g) => g.provider === 'groq').models).toEqual([{ id: 'openai/gpt-oss-120b', free: false }]);
   });
 
   // This is the operator's exact live symptom, reproduced: the browser DID

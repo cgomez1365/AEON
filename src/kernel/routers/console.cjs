@@ -25,6 +25,7 @@ const path = require('path');
 // ReferenceError on every /data/:blockId request. A comment swallowed an
 // import, and the file read as though the import were there.
 const { isInside } = require('../pathContainment.cjs');
+const { sortModels } = require('../modelIntelligence.cjs');
 
 // provider → canonical env var written by the settings workflow
 const PROVIDER_ENV = {
@@ -242,6 +243,13 @@ module.exports = function ({ storage, kernelLLM, _blockRegistry, _blockReadiness
   // which that response never sets. The data was real the whole time — groq
   // and openrouter's vault-stored connections carry 14 and several hundred
   // models respectively — this route just never looked at the right key.
+  //
+  // CEO, 2026-09-20: "auto sort by 1) free models first 2) intelligence".
+  // sortModels() (src/kernel/modelIntelligence.cjs) also drops known
+  // non-chat families outright — its own first test run ranked
+  // whisper-large-v3 (transcription) #1 in a CHAT picker on pure name-size
+  // pattern-matching, which is exactly the failure mode a deny-list this
+  // codebase already built for auto-pick (BO-A4) exists to prevent.
   router.get('/models', async (req, res) => {
     try {
       const r = await fetch(`${BASE}/api/settings/nervous-system`, { headers: forwardedAuth(req) });
@@ -252,10 +260,13 @@ module.exports = function ({ storage, kernelLLM, _blockRegistry, _blockReadiness
           provider: p.id || p.provider || p.name,
           label: p.label || p.id || p.provider,
           hasKey: !!(p.hasKey ?? p.configured ?? p.ready ?? p.available),
-          models: (p.registryModels || p.models || []).map(m => (typeof m === 'string' ? m : m.id || m.name)).filter(Boolean),
+          models: sortModels((p.registryModels || p.models || []).map(m => (typeof m === 'string' ? m : m.id || m.name)).filter(Boolean)),
         }))
         .filter(g => g.provider);
-      res.json({ ok: true, groups });
+      res.json({
+        ok: true, groups,
+        sortNote: 'Sorted: free models first, then a size/capability guess read off the model name — not a benchmark.',
+      });
     } catch (e) { res.status(502).json({ ok: false, error: e.message }); }
   });
 
