@@ -202,6 +202,16 @@ module.exports = function ({ storage, kernelLLM, _blockRegistry, _blockReadiness
   });
 
   // ── /god/models — hotswap dropdown source, grouped by key availability ─────
+  //
+  // Found live, 2026-09-20 (operator: "model picker failed?" — the terminal's
+  // HOTSWAP CHAT MODEL dropdown showed every provider correctly grouped and
+  // marked "✓ key ready", but every group's only entry was the disabled
+  // "(no models listed)" placeholder — nothing was ever selectable). Root
+  // cause: /api/settings/nervous-system's buildNervousSystem() names this
+  // field `registryModels` (settings.js:566); this route read `p.models`,
+  // which that response never sets. The data was real the whole time — groq
+  // and openrouter's vault-stored connections carry 14 and several hundred
+  // models respectively — this route just never looked at the right key.
   router.get('/models', async (_req, res) => {
     try {
       const r = await fetch(`${BASE}/api/settings/nervous-system`);
@@ -212,7 +222,7 @@ module.exports = function ({ storage, kernelLLM, _blockRegistry, _blockReadiness
           provider: p.id || p.provider || p.name,
           label: p.label || p.id || p.provider,
           hasKey: !!(p.hasKey ?? p.configured ?? p.ready ?? p.available),
-          models: (p.models || []).map(m => (typeof m === 'string' ? m : m.id || m.name)).filter(Boolean),
+          models: (p.registryModels || p.models || []).map(m => (typeof m === 'string' ? m : m.id || m.name)).filter(Boolean),
         }))
         .filter(g => g.provider);
       res.json({ ok: true, groups });
