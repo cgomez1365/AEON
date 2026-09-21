@@ -229,7 +229,10 @@ function createSessionValidator(options = {}) {
   }
 
   function isGuardedPath(requestPath) {
-    return /^\/(api|block|core|events|ws)\b/.test(requestPath);
+    // `blocks?`: `\b` never matches between "block" and "s", so /blocks/registry
+    // (every manifest: routes, permissions, required secrets) was reachable
+    // without a session while /api/* was not (found 2026-09-21).
+    return /^\/(api|blocks?|core|events|ws)\b/.test(requestPath);
   }
 
   function unauthorized(res, reason = 'no-session') {
