@@ -67,10 +67,19 @@ module.exports = (app, deps) => {
     const p = loadPolicy();
     if (!p.lockEveryLaunch) return;
     const u = loadUser();
-    if (u && u.sessions && Object.keys(u.sessions).length) {
-      u.sessions = {};
+    // Only sessions from BEFORE this process started. This IIFE runs on every
+    // mount of the Security block, and a store install's rescan re-mounts it:
+    // wiping every session there logged the operator out mid-install
+    // (2026-09-20). validateSession() already refuses `created < bootTime`
+    // statelessly, so this eager pass is disk hygiene and must not touch a
+    // session created after boot.
+    const stale = u && u.sessions
+      ? Object.keys(u.sessions).filter((t) => (u.sessions[t]?.created || 0) < sessions.BOOT_TIME)
+      : [];
+    if (stale.length) {
+      for (const t of stale) delete u.sessions[t];
       saveUser(u);
-      console.log('[GUARDIAN] Boot revoke: all previous sessions cleared (lock-every-launch).');
+      console.log(`[GUARDIAN] Boot revoke: ${stale.length} session(s) from a previous boot cleared (lock-every-launch).`);
     }
   })();
 
