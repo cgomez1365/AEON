@@ -163,7 +163,23 @@ async function bootProof(stagingDir, blockId, { liveRoutes = [], timeoutMs = DEF
     // so EVERY module fails with "Cannot find module 'express'". That is the
     // harness being wrong, not the block, and reporting it as a block defect
     // would be a false negative dressed as a verdict (§08). Say which.
-    const unresolved = result.skipped.filter((s) => /Cannot find module '(express|[^']+)'/.test(s.why));
+    //
+    // Only a BARE package name says that. A relative specifier ('../../../kernel/x')
+    // that does not resolve is a dependency the block declares and this install
+    // does not have — the block's defect, and the most useful thing to name.
+    // (2026-09-20: two store packs required a kernel file retired on 09-14 and
+    // were told the harness was at fault.)
+    const missingSpecifier = (s) => (/Cannot find module '([^']+)'/.exec(s.why) || [])[1];
+    const unresolved = result.skipped.filter((s) => {
+      const spec = missingSpecifier(s);
+      return spec && !spec.startsWith('.') && !path.isAbsolute(spec);
+    });
+    for (const s of result.skipped) {
+      const spec = missingSpecifier(s);
+      if (spec && (spec.startsWith('.') || path.isAbsolute(spec))) {
+        result.errors.push(`api/${s.file} did not mount: it requires '${spec}', which does not exist in this AEON`);
+      }
+    }
     if (unresolved.length && unresolved.length === result.skipped.length && result.mounted === 0) {
       result.environmentError =
         `staging directory ${stagingDir} cannot resolve node_modules — run the proof from a staging `

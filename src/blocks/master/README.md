@@ -52,10 +52,10 @@ heals a few legacy shapes. The frozen JSON-Schema is
 
 | Field | Meaning |
 |---|---|
-| `manifestVersion` | Schema version this manifest conforms to. Leave at `"1.0.0"` — absent is grandfathered to the same thing. |
+| `manifestVersion` | Schema version this manifest conforms to. **New blocks use `"1.1.0"`** (what `_template` ships and `src/kernel/schema.json` declares); absent is grandfathered as `1.0.0`. |
 | `id` | **Must equal the folder name** (`^[a-z0-9_]+$`). This is how the kernel finds your API file, your `.aeon.runtime.json`, and your entry in `_blockRegistry`. |
 | `label` | Display name. Convention: derived from the folder (`my_block` → "My Block") — see Rule 1 below. Set explicitly here so the derivation and the manifest agree. |
-| `icon` | A single emoji, shown in nav and the block registry. No image files — emoji only, so it renders identically everywhere with zero asset pipeline. |
+| `icon` | A lucide-react icon name (`"Workflow"`, `"Shield"` — resolved by `src/components/BlockIcon.jsx`) or a single emoji (`_template` ships `"🧩"`). A drop-in SVG at `public/brand/block-icons/<id>.svg` takes precedence in the sidebar; nothing to declare. |
 | `route` | The URL path the block mounts at in the SPA. Leading slash, matches the folder (`/master`). |
 | `description` | One sentence. Shown on the block's registry/store card and read by the AI model when it reasons about what a block does — write it for a reader who has never opened the folder. |
 | `category` | Loose grouping tag (`system`, `tools`, `core`, `intelligence`, …). Informational only today. |

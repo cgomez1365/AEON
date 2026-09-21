@@ -189,6 +189,24 @@ describe('the proof does not lie about its own failures', () => {
     }
   });
 
+  it('names a missing pack dependency as the BLOCK\'s defect, with the module it needs', async () => {
+    // 2026-09-20: two store packs required a kernel module deleted on 09-14.
+    // The proof reported "cannot resolve node_modules … was not judged" — the
+    // harness's fault — when the cause was the pack's own dead require. A
+    // relative specifier that does not resolve is a dependency the block
+    // declares and the install does not have; only a bare package name that
+    // fails means the staging root is wrong.
+    const p = scaffold({ id: ID, api: true }).payload;
+    const api = p.files.find((f) => f.path.startsWith('api/'));
+    api.content = `require('../../../kernel/module_that_was_retired.cjs');\n${api.content}`;
+    stage(withRoutes(p, [{ method: 'GET', path: `/api/${ID}/status` }]));
+    const r = await bootProof(STAGING_DIR, ID);
+    expect(r.ok).toBe(false);
+    expect(r.environmentError).toBeUndefined();
+    expect(r.errors.join('\n')).toMatch(/module_that_was_retired/);
+    expect(r.errors.join('\n')).toMatch(/did not mount/);
+  });
+
   it('attributes mounts per block, not across the whole staging dir', async () => {
     // A second staged block mounting successfully must not make this one pass.
     const other = path.join(STAGING_DIR, 'bootproof_neighbour');
