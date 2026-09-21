@@ -9,7 +9,7 @@ function getDomain(url) {
 }
 
 export default function QuickLinks() {
-  const { links, manageLinks } = useAeonContext();
+  const { links, linksError, manageLinks } = useAeonContext();
   const [showAdd, setShowAdd] = useState(false);
   const [search, setSearch] = useState('');
   const [name, setName] = useState('');
@@ -34,7 +34,7 @@ export default function QuickLinks() {
 
   const handleDelete = (id) => {
     const item = allLinks.find(l => l.id === id);
-    if (item) manageLinks({ action: 'delete', name: item.name });
+    if (item) manageLinks({ action: 'delete', id: item.id, name: item.name });
   };
 
   const toggleCat = (cat) => setCollapsedCats(prev => ({ ...prev, [cat]: !prev[cat] }));
@@ -52,6 +52,12 @@ export default function QuickLinks() {
       <p style={{ fontSize: '12px', color: 'var(--text-dim)', margin: '0 0 16px 0' }}>
         Bookmarks, portals, and operational links — organized by category
       </p>
+
+      {linksError && (
+        <div role="alert" style={{ margin: '0 0 12px 0', padding: '8px 12px', borderRadius: '8px', fontSize: '12px', border: '1px solid #ff5c5c', background: 'rgba(255,92,92,0.08)', color: '#ff8a8a' }}>
+          {linksError}
+        </div>
+      )}
 
       {/* Search + Add */}
       <div style={{ display: 'flex', gap: '6px', marginBottom: '16px' }}>

@@ -3,6 +3,8 @@ import { collection, onSnapshot, doc, setDoc, deleteDoc } from 'firebase/firesto
 import { db } from '../firebase';
 import { useAuth } from './AuthContext';
 import { getSupabase } from '../supabase';
+import { authFetch } from '../auth';
+import { loadLinks, saveLinks, readLocalLinks } from './linksStore';
 
 const AeonContext = createContext();
 
@@ -50,10 +52,10 @@ export function AeonProvider({ children }) {
   const [scheduler, setScheduler] = useState(DEFAULT_DATA.scheduler);
   const [clients, setClients]     = useState(DEFAULT_DATA.clients);
   const [inventory, setInventory] = useState(DEFAULT_DATA.inventory);
-  const [links, setLinks] = useState(() => {
-    const local = localStorage.getItem('aeon_links');
-    return local ? JSON.parse(local) : DEFAULT_DATA.links;
-  });
+  const [links, setLinks] = useState(() => readLocalLinks(localStorage));
+  // Non-null when the last load/save of links did not reach the server; the
+  // Quick Links page shows it (R-05 — a failed save is never silent).
+  const [linksError, setLinksError] = useState(null);
   const [dictionary, setDictionary] = useState(DEFAULT_DATA.dictionary);
   const [trash, setTrash]         = useState(DEFAULT_DATA.trash);
 
@@ -65,7 +67,9 @@ export function AeonProvider({ children }) {
       setClients(DEFAULT_DATA.clients);
       setScheduler(DEFAULT_DATA.scheduler);
       setInventory(DEFAULT_DATA.inventory);
-      setLinks(DEFAULT_DATA.links);
+      // links are deliberately NOT reset here: with no Firebase (`db` null, the
+      // default install) this branch runs on every mount and used to wipe the
+      // links just hydrated from storage. They hydrate from the server below.
       setDictionary(DEFAULT_DATA.dictionary);
       setTrash(DEFAULT_DATA.trash);
       return;
@@ -129,6 +133,26 @@ export function AeonProvider({ children }) {
     };
   }, [user]);
 
+  // ── Links: server-backed (local file in the data home), Firebase optional ──
+  useEffect(() => {
+    let alive = true;
+    loadLinks({ fetcher: authFetch, storage: localStorage }).then(r => {
+      if (!alive) return;
+      setLinks(r.items);
+      setLinksError(r.error);
+      if (r.error) console.error('[AEON] Links load:', r.error);
+    });
+    return () => { alive = false; };
+  }, []);
+
+  const persistLinks = useCallback(async (items) => {
+    syncToFirestore('links', { items });
+    const r = await saveLinks(items, { fetcher: authFetch, storage: localStorage });
+    setLinksError(r.error);
+    if (!r.ok) console.error('[AEON] Links save:', r.error);
+    return r;
+  }, []);
+
   // ── Supabase auto-mirror on Firebase state changes ─────────────────
   useEffect(() => {
     if (clients.length > 0) mirrorToSupabase('clients', clients);
@@ -183,7 +207,7 @@ export function AeonProvider({ children }) {
     } else if (store === 'links') {
       const updated = [...links, restoredItem];
       setLinks(updated);
-      syncToFirestore('links', { items: updated });
+      persistLinks(updated);
     } else if (store === 'dictionary') {
       const updated = [...dictionary, restoredItem];
       setDictionary(updated);
@@ -202,7 +226,7 @@ export function AeonProvider({ children }) {
     setTrash(updatedTrash);
     syncToFirestore('trash', { items: updatedTrash });
     return { success: true, item: restoredItem };
-  }, [trash, clients, inventory, links, dictionary, scheduler]);
+  }, [trash, clients, inventory, links, dictionary, scheduler, persistLinks]);
 
   // ── SCHEDULER ──────────────────────────────────────────────────────
   const manageSchedule = useCallback((args) => {
@@ -369,27 +393,29 @@ export function AeonProvider({ children }) {
   // ── LINKS ──────────────────────────────────────────────────────────
   const manageLinks = useCallback((args) => {
     if (args.action === 'add') {
-      const updated = [...links, { id: Date.now().toString(), ...args }];
+      const { action: _action, ...fields } = args; // don't persist the verb
+      const updated = [...links, { id: Date.now().toString(), ...fields }];
       setLinks(updated);
-      localStorage.setItem('aeon_links', JSON.stringify(updated));
-      syncToFirestore('links', { items: updated });
+      persistLinks(updated);
     } else if (args.action === 'delete') {
-      const itemToDel = links.find(l => l.name.toLowerCase().includes(args.name.toLowerCase()));
+      // by id when the caller has one (Quick Links does); name substring is the
+      // terminal/NL fallback and used to delete the wrong entry on shared prefixes.
+      const itemToDel = args.id != null
+        ? links.find(l => l.id === args.id)
+        : links.find(l => (l.name || '').toLowerCase().includes((args.name || '').toLowerCase()));
       if (itemToDel) {
         moveToTrash(itemToDel, 'links');
         const updated = links.filter(l => l.id !== itemToDel.id);
         setLinks(updated);
-        localStorage.setItem('aeon_links', JSON.stringify(updated));
-        syncToFirestore('links', { items: updated });
+        persistLinks(updated);
       }
     }
-  }, [links, moveToTrash]);
+  }, [links, moveToTrash, persistLinks]);
 
   const updateLinks = useCallback((data) => {
     setLinks(data);
-    localStorage.setItem('aeon_links', JSON.stringify(data));
-    syncToFirestore('links', { items: data });
-  }, []);
+    persistLinks(data);
+  }, [persistLinks]);
 
   // ── DICTIONARY ─────────────────────────────────────────────────────
   const manageDict = useCallback((args) => {
@@ -419,7 +445,7 @@ export function AeonProvider({ children }) {
       scheduler, manageSchedule, updateSchedulerData,
       clients, addClient, updateClients, manageInvoice, manageCrm,
       inventory, manageInventoryObj, updateInventoryList,
-      links, manageLinks, updateLinks,
+      links, linksError, manageLinks, updateLinks,
       dictionary, manageDict, updateDictionary,
       trash, moveToTrash, restoreFromTrash
     }}>

@@ -32,12 +32,15 @@ from the shared `AeonContext` provider
 - `manageLinks({ action: 'add' | 'delete', ... })` — the mutator the
   add-form and delete button call.
 
-`AeonContext` persists links to the shared Firestore collection
-`aeon_state` (document `links`, `{ items: [...] }`) alongside the other
-shared stores (clients, inventory, scheduler, dictionary, trash), and
-mirrors the same data to `localStorage` under the key `aeon_links` for
-instant load / offline fallback. Deletions route through the shared trash
-store (`moveToTrash`) rather than being destroyed immediately.
+`AeonContext` persists links through `src/kernel/contexts/linksStore.js`:
+the source of truth is the server's `GET/POST /api/sync/quick_links`
+(`quick-links.json` in the data home, served by the aeon_matrix block; mirrored
+to Supabase only when configured), with `localStorage['aeon_links']` as a cache
+and offline fallback. A load/save that does not reach the server is shown as a
+banner on the page, not swallowed. Firestore is optional and, when configured,
+still receives a copy. Legacy browser-only links are migrated up to an empty
+server store on first load. Deletions route through the shared trash store
+(`moveToTrash`) rather than being destroyed immediately.
 
 Favicons are fetched client-side, per link, from Google's public favicon
 service (`https://www.google.com/s2/favicons?domain=...`) — this is the
