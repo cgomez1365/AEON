@@ -145,7 +145,8 @@ Not done: … (each with the phase it stopped in and the exact message)
 6. Never edit or commit `src/blocks/<id>/.aeon.runtime.json`.
 7. **Depend only on `deps`.** Never `require` into `src/kernel/`, `server/`, `services/` or another block by relative path (`require('../../../kernel/...')`). The kernel is refactored and pruned; `deps` (scoped by your manifest permissions) is the only surface it promises to keep. On 2026-09-20 two store packs failed the install boot proof because a kernel file they required by path had been retired. If you need a capability `deps` does not provide, stop that block and report the gap — do not restore or reimplement a kernel file.
 8. **No private data, ever.** A block ships no `data/`, no `training/`, no `.aeon.runtime.json`, no real names, emails, phone numbers, home-directory paths, or keys. Sample data is synthetic and labelled. Never print, store, or test a key you find — record file and pattern only and stop.
-9. If a check cannot run in your environment (no shell, no server), say exactly that in the report and mark PARTIAL. Do not describe a result you did not see.
+9. **No router-level middleware.** Never `router.use(express.json())` (or any `router.use(fn)`). Put the parser on the routes that need it — `router.post('/x', express.json({ limit: '64kb' }), handler)`. Older AEON kernels treat a router-level middleware as matching every URL, so a stopped, freshly installed block answered `/api/auth/login` with 503 and locked the operator out (2026-09-20). Use per-route parsing and explicit body checks; do not depend on a newer kernel.
+10. If a check cannot run in your environment (no shell, no server), say exactly that in the report and mark PARTIAL. Do not describe a result you did not see.
 
 ## 4. Manifest skeleton (1.1.0 — mirrors `src/blocks/_template/block.manifest.json`)
 

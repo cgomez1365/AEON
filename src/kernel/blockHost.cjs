@@ -94,7 +94,18 @@ function createBlockHost({ blocksDir, baseDeps, createScopedDeps, registry, read
     return (router.stack || []).some(layer => {
       if (!layer.regexp || !layer.regexp.test(url)) return false;
       if (layer.route) return !!(layer.route.methods[method] || layer.route.methods._all);
-      return true; // matching nested middleware/router prefix
+      // A plain middleware function (`router.use(express.json())`, cors, a logger)
+      // has a pattern that matches EVERY url. It says nothing about what this
+      // block serves, and counting it made a stopped block 503 the whole server —
+      // including /api/auth/login, so the operator could not log in to start it
+      // (2026-09-20, found installing rebuilt store packs). Only a nested router
+      // can claim a request, and only if one of ITS routes does.
+      const inner = layer.handle;
+      if (!inner || !Array.isArray(inner.stack)) return false;
+      const m = layer.regexp.exec(url);
+      let rest = m ? url.slice(m[0].length) : url;
+      if (!rest.startsWith('/')) rest = `/${rest}`;
+      return routerMatches(inner, { url: rest, method: req.method });
     });
   }
 
