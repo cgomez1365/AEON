@@ -41,6 +41,7 @@ const { loadExtractors, extractText, embed, cosineSimilarity, EMBED_MODEL } = re
 // scanned at all, only ever fetched by exact path). No cycle: ingest.cjs
 // requires _lib.cjs and nothing else in this block.
 const { chunkText } = require('./ingest.cjs');
+const memorySections = require('../../../kernel/memorySections.cjs');
 
 const DEFAULT_K        = 5;
 const MATCH_THRESHOLD   = 0.35; // cosine similarity floor
@@ -519,6 +520,34 @@ module.exports = function retrieveFactory(deps) {
     const { query, k } = req.body || {};
     if (!query) return res.status(400).json({ error: 'query required' });
 
+    // A query that is ONLY a memory section name ("preferences",
+    // "preferences 6 and 7") is resolved from the memory store's category
+    // field: deterministic, complete, in order, full text. It used to run a
+    // whole-index vector search capped at k=5 and rank numbered entries by
+    // similarity. Never reaches the embedder; anything else is unchanged.
+    try {
+      const memFile = path.join(VAULT_ROOT, 'Agents', 'Aeon', 'memory', 'memories.json');
+      let mems = [];
+      try { const raw = JSON.parse(fs.readFileSync(memFile, 'utf8')); if (Array.isArray(raw)) mems = raw; } catch { /* no store */ }
+      const sec = memorySections.parseSectionQuery(query, mems);
+      if (sec) {
+        const { entries, missing } = memorySections.selectSection(mems, sec);
+        const total = mems.filter(m => String(m.category || '').toLowerCase() === sec.category).length;
+        // An empty section falls through to semantic search: "project" is also
+        // an ordinary word, and no memory means no reason to intercept it.
+        if (total) {
+          return res.json({
+            ok: true, section: sec.category, source: 'memory-store',
+            memories: entries, documents: [], count: entries.length, matched: entries.length, total,
+            text: memorySections.renderSection({ category: sec.category, entries, missing, total: sec.numbers.length ? total : undefined }),
+            verbatim: true,
+          });
+        }
+      }
+    } catch (err) {
+      console.error('[RETRIEVE] section lookup failed, using semantic search:', err.message);
+    }
+
     try {
       const { documents, unavailable, matched, k: kUsed } = await retrieve(query, k || DEFAULT_K);
       // `unavailable` rides alongside the (empty) documents rather than
@@ -531,7 +560,7 @@ module.exports = function retrieveFactory(deps) {
       const text = unavailable
         ? `${unavailable.message} ${unavailable.action || ''}`.trim()
         : documents.length
-          ? `Found ${matched ?? documents.length}${(matched ?? documents.length) > documents.length ? `, showing ${documents.length}` : ''}:\n`
+          ? `Found ${matched ?? documents.length}${(matched ?? documents.length) > documents.length ? `, showing ${documents.length} (top ${documents.length} by similarity; the rest are not listed)` : ''}:\n`
             + documents.map((d, i) => `${i + 1}. ${d.metadata?.source || d.id} (${(d.similarity || 0).toFixed(2)}) — ${String(d.content || '').replace(/\s+/g, ' ').trim().slice(0, 160)}${String(d.content || '').length > 160 ? '…' : ''}`).join('\n')
           : 'Nothing in the index scored above the match threshold for that search.';
       res.json({

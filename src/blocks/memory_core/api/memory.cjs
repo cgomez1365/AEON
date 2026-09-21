@@ -24,6 +24,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const memoryPolicy = require('../../../kernel/memory-policy.cjs');
+const sections = require('../../../kernel/memorySections.cjs');
 const crypto = require('crypto');
 
 module.exports = function createMemoryRouter(deps) {
@@ -66,8 +67,23 @@ module.exports = function createMemoryRouter(deps) {
     let out = all;
     if (type) out = out.filter(m => m.type === type);
     if (category) out = out.filter(m => m.category === category);
-    if (q) { const s = String(q).toLowerCase(); out = out.filter(m => (m.text + ' ' + (m.title || '')).toLowerCase().includes(s)); }
-    res.json({ memories: out, count: out.length, dir: MEM_DIR });
+    // A `q` that is only a category word (case-insensitive, plural-tolerant)
+    // is a SECTION lookup — the memory's category field, not its text. It was
+    // text-only: `/memory preference` returned 0 for seven category=preference
+    // memories whose text never said the word. Anything else stays a substring
+    // search.
+    const sec = q ? sections.parseSectionQuery(q, all) : null;
+    let section = null;
+    if (sec) {
+      section = sec.category;
+      out = sections.selectSection(out, sec).entries;
+    } else if (q) {
+      const s = String(q).toLowerCase();
+      out = out.filter(m => (m.text + ' ' + (m.title || '')).toLowerCase().includes(s));
+    }
+    // `text` is the complete rendering (the terminal chip and the narrator read
+    // it); `verbatim` says it is the whole answer, safe to relay unsummarised.
+    res.json({ memories: out, count: out.length, dir: MEM_DIR, ...(section ? { section } : {}), text: sections.renderList(out), verbatim: true });
   });
 
   // ── POST /memory/add — create (path kept for chat-stream auto-extract) ─

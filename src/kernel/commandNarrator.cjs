@@ -36,6 +36,14 @@
  */
 
 const MAX_PAYLOAD_CHARS = 4000;
+const MAX_VERBATIM_CHARS = 8000;
+const MAX_MESSAGE_CHARS = 1000;
+
+/** Clip prose for the prompt, and SAY so with counts — a silent cut reads as the whole. */
+function clip(value, max) {
+  const t = String(value);
+  return t.length <= max ? t : `${t.slice(0, max)}\n… [truncated: showing ${max} of ${t.length} chars]`;
+}
 
 /** Compact a payload for the prompt without hiding its shape. */
 function summarizeForPrompt(data) {
@@ -93,12 +101,13 @@ function buildPrompt({ cmd, ok, title, text, data, error }) {
     `- The command ${ok ? 'SUCCEEDED' : 'FAILED'}. Say so. Never describe a failure as a success or a success as a failure.`,
     '- Use ONLY the data below. Never invent a number, name, file, or status that is not present.',
     '- If the data is empty, say the command returned nothing rather than guessing why.',
+    '- If the message or data is marked truncated, say the list is partial and give the counts shown. Never fill, infer or list items you cannot see; say which are missing.',
     ok
       ? '- Lead with what the operator got.'
       : '- Lead with what went wrong, then the remedy if the data names one.',
     '',
     error ? `Error: ${String(error).slice(0, 500)}` : '',
-    text ? `Message: ${String(text).slice(0, 1000)}` : '',
+    text ? `Message: ${clip(text, MAX_MESSAGE_CHARS)}` : '',
     'Data:',
     summarizeForPrompt(data),
   ].filter(Boolean).join('\n');
@@ -128,6 +137,13 @@ async function narrate(result, llm) {
   // A handler that already wrote a sentence has said it better than a model
   // will, and for free.
   if (ok && typeof text === 'string' && text.trim() && text.trim().length <= 400) {
+    return { narration: text.trim(), source: 'handler', raw };
+  }
+  // A result that says it is the COMPLETE answer (`verbatim`, set by /memory and
+  // the /recall section lookup) is relayed as written. The chat model only ever
+  // sees this narration — never the chip — so a 1–3 sentence paraphrase of a
+  // 7-item list left it to invent items 2, 3 and 7.
+  if (ok && data && data.verbatim === true && typeof text === 'string' && text.trim() && text.trim().length <= MAX_VERBATIM_CHARS) {
     return { narration: text.trim(), source: 'handler', raw };
   }
 
