@@ -4,7 +4,7 @@ const path = require('path');
 
 module.exports = function createSyncRouter(deps) {
   const router = express.Router();
-  const { supabase, isVercel, getLocalFile, getDataFile, validateSDI, writeOSAudit } = deps;
+  const { supabase, isVercel, getLocalFile, getDataFile, writeOSAudit } = deps;
 
   // Found live, 2026-09-20 (CEO: "check supabase to matrix sync... triple
   // checked"). Four entries below never had a reader or writer ANYWHERE else
@@ -36,7 +36,6 @@ module.exports = function createSyncRouter(deps) {
   // logistics) — only the path was wrong, so it is fixed below, not removed.
   const BLOCK_CONFIG = {
     clients:          { file: getLocalFile('clients.json'),              table: 'aeon_blocks', tag: 'clients' },
-    logistics:        { file: getLocalFile('logistics_ledger.json'),     table: 'aeon_blocks', tag: 'logistics' },
     cookbook:         { file: path.join(getDataFile('cookbook'), 'cookbook_state.json'), table: 'aeon_blocks', tag: 'cookbook' },
     activity:         { file: getLocalFile('activity_heatmap.json'),     table: 'aeon_blocks', tag: 'activity' },
     quick_links:      { file: getLocalFile('quick-links.json'),          table: 'aeon_blocks', tag: 'quick_links' },
@@ -257,144 +256,10 @@ module.exports = function createSyncRouter(deps) {
   //    grading hard-failed to Gemini. The real handlers live in resume_grader/api/
   //    (kernel-routed). Do NOT re-add ATS routes here.
 
-  // ═══════════════════════════════════════════════════════════════════
-  //  LOGISTICS — Extracted from src/blocks/logistics/module.js
-  //  Uses aeon_blocks table with tag 'logistics'
-  // ═══════════════════════════════════════════════════════════════════
-
-  const LOGISTICS_FILE = getLocalFile('logistics_ledger.json');
-
-  const loadLogistics = () => {
-    if (!fs.existsSync(LOGISTICS_FILE)) return [];
-    try { return JSON.parse(fs.readFileSync(LOGISTICS_FILE, 'utf8')); } catch { return []; }
-  };
-  const saveLogistics = (data) => fs.writeFileSync(LOGISTICS_FILE, JSON.stringify(data, null, 2));
-
-  const syncLogisticsToSupabase = (entries) => {
-    writeToSupabase('logistics', entries);
-  };
-
-  const loadLogisticsFromSupabase = async () => {
-    return readFromSupabase('logistics');
-  };
-
-  router.post('/logistics/entries', async (req, res) => {
-    const sdiCheck = validateSDI('logistics', req.body);
-    if (!sdiCheck.valid) return res.status(400).json({ error: 'SDI Validation Failed', errors: sdiCheck.errors });
-    const { itemName, barcode, quantity, unit, truck, driver, destination, notes } = req.body;
-
-    const entry = {
-      id: `LOG-${Date.now()}`,
-      itemName,
-      barcode: barcode || '',
-      quantity: quantity || 1,
-      unit: unit || 'each',
-      truck: truck || 'UNASSIGNED',
-      driver: driver || '',
-      destination: destination || '',
-      notes: notes || '',
-      status: 'PENDING',
-      signatureData: null,
-      signedAt: null,
-      createdAt: new Date().toISOString()
-    };
-
-    if (isVercel) {
-      const cloud = (await loadLogisticsFromSupabase()) || [];
-      cloud.unshift(entry);
-      await writeToSupabase('logistics', cloud);
-      return res.json({ success: true, entry });
-    }
-    const entries = loadLogistics();
-    entries.unshift(entry);
-    saveLogistics(entries);
-    syncLogisticsToSupabase(entries);
-    if (typeof writeOSAudit === 'function') {
-      writeOSAudit('LOGISTICS_ADD', `${itemName} x${quantity} -> ${truck}`, 0, 0, req.correlationId || 'AEON-SYS');
-    }
-    res.json({ success: true, entry });
-  });
-
-  router.get('/logistics/entries', async (req, res) => {
-    if (isVercel) {
-      const cloud = await loadLogisticsFromSupabase();
-      return res.json(cloud || []);
-    }
-    const local = loadLogistics();
-    res.json(local);
-    if (supabase) {
-      loadLogisticsFromSupabase().then(cloud => {
-        if (cloud) saveLogistics(cloud);
-      });
-    }
-  });
-
-  router.post('/logistics/status', async (req, res) => {
-    const { entryId, status } = req.body;
-    if (!entryId || !status) return res.status(400).json({ error: 'entryId and status required.' });
-
-    if (isVercel) {
-      const cloud = (await loadLogisticsFromSupabase()) || [];
-      const idx = cloud.findIndex(e => e.id === entryId);
-      if (idx === -1) return res.status(404).json({ error: 'Entry not found.' });
-      cloud[idx].status = status;
-      await writeToSupabase('logistics', cloud);
-      return res.json({ success: true, entry: cloud[idx] });
-    }
-
-    const entries = loadLogistics();
-    const idx = entries.findIndex(e => e.id === entryId);
-    if (idx === -1) return res.status(404).json({ error: 'Entry not found.' });
-    entries[idx].status = status;
-    saveLogistics(entries);
-    syncLogisticsToSupabase(entries);
-    if (typeof writeOSAudit === 'function') {
-      writeOSAudit('LOGISTICS_STATUS', `${entries[idx].itemName}: ${status}`, 0, 0, req.correlationId || 'AEON-SYS');
-    }
-    res.json({ success: true, entry: entries[idx] });
-  });
-
-  router.post('/logistics/sign', async (req, res) => {
-    const { entryId, signatureData } = req.body;
-    if (!entryId || !signatureData) return res.status(400).json({ error: 'entryId and signatureData required.' });
-
-    if (isVercel) {
-      const cloud = (await loadLogisticsFromSupabase()) || [];
-      const idx = cloud.findIndex(e => e.id === entryId);
-      if (idx === -1) return res.status(404).json({ error: 'Entry not found.' });
-      cloud[idx].signatureData = signatureData;
-      cloud[idx].signedAt = new Date().toISOString();
-      cloud[idx].status = 'DELIVERED';
-      await writeToSupabase('logistics', cloud);
-      return res.json({ success: true, entry: cloud[idx] });
-    }
-
-    const entries = loadLogistics();
-    const idx = entries.findIndex(e => e.id === entryId);
-    if (idx === -1) return res.status(404).json({ error: 'Entry not found.' });
-    entries[idx].signatureData = signatureData;
-    entries[idx].signedAt = new Date().toISOString();
-    entries[idx].status = 'DELIVERED';
-    saveLogistics(entries);
-    syncLogisticsToSupabase(entries);
-    if (typeof writeOSAudit === 'function') {
-      writeOSAudit('LOGISTICS_SIGN', `Delivery signed for ${entries[idx].itemName}`, 0, 0, req.correlationId || 'AEON-SYS');
-    }
-    res.json({ success: true, entry: entries[idx] });
-  });
-
-  router.delete('/logistics/entries/:id', async (req, res) => {
-    if (isVercel) {
-      const cloud = (await loadLogisticsFromSupabase()) || [];
-      const filtered = cloud.filter(e => e.id !== req.params.id);
-      await writeToSupabase('logistics', filtered);
-      return res.json({ success: true });
-    }
-    const entries = loadLogistics().filter(e => e.id !== req.params.id);
-    saveLogistics(entries);
-    syncLogisticsToSupabase(entries);
-    res.json({ success: true });
-  });
+  // ── /logistics/* routes retired 2026-09-23: logistics is a store pack with
+  //    its own storage; these Supabase-mirrored copies had no caller in AEON
+  //    and held /api/logistics/status against the pack (Bible §21,
+  //    tests/logistics-routes-retired.test.js). Do NOT re-add them here.
 
   return router;
 };

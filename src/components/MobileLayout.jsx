@@ -255,15 +255,6 @@ export default function MobileLayout({ chatHistory, auditLogs }) {
     navigate(viewMap[view] || "/");
   }, [navigate]);
 
-  const params = new URLSearchParams(window.location.search);
-  const hasToken = params.has('token');
-
-  useEffect(() => {
-    if (!user && hasToken && loc.pathname !== "/signflow") {
-      navigate(`/signflow${window.location.search}`, { replace: true });
-    }
-  }, [user, hasToken, loc.pathname, navigate]);
-
   if (loading) return (
     <div className="aeon-splash">
       <div className="aeon-pulse" />
@@ -273,7 +264,9 @@ export default function MobileLayout({ chatHistory, auditLogs }) {
     </div>
   );
 
-  if (!user && !hasToken) return <GoogleSignIn />;
+  // A ?token= visit used to skip sign-in for the old Firebase signing page
+  // (retired 2026-09-23 with the /signflow redirect); every signed-out visit signs in.
+  if (!user) return <GoogleSignIn />;
 
   return (
     <div className="aeon-shell">

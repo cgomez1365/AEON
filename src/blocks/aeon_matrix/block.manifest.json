@@ -381,31 +381,6 @@
     },
     {
       "method": "GET",
-      "path": "/api/logistics/entries",
-      "auth": true
-    },
-    {
-      "method": "POST",
-      "path": "/api/logistics/entries",
-      "auth": true
-    },
-    {
-      "method": "DELETE",
-      "path": "/api/logistics/entries/:id",
-      "auth": true
-    },
-    {
-      "method": "POST",
-      "path": "/api/logistics/sign",
-      "auth": true
-    },
-    {
-      "method": "POST",
-      "path": "/api/logistics/status",
-      "auth": true
-    },
-    {
-      "method": "GET",
       "path": "/api/narrator/state",
       "auth": true
     },

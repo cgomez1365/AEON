@@ -85,12 +85,11 @@ work, depending on kernel mount order):
 | POST | `/crn/second-brain/vault-push` | Push new/changed docs to Supabase `vault_docs` |
 | GET | `/crn/second-brain/vault-push/status` | Last push stats |
 
-`api/sync.cjs` also lives in this folder and mounts generic `/sync/:block`
-(bulk push/pull + per-block CRUD for inventory, clients, scheduler, staff,
-etc.) and `/logistics/*` routes. These predate the `second_brain` →
-`aeon_matrix` rename and aren't part of the Second Brain feature set — they
-were extracted from other blocks' modules and happen to be mounted from
-here. Left as-is; flagged for a future cleanup (see block owner notes).
+`api/sync.cjs` also lives in this folder and mounts the generic `/sync/:block`
+routes (bulk push/pull + per-block CRUD for clients, cookbook, activity and
+quick_links). They predate the `second_brain` → `aeon_matrix` rename and are not
+part of the Second Brain feature set. Its old `/logistics/*` routes were retired
+on 2026-09-23 — logistics is a store pack with its own storage now.
 
 ## Config / settings
 
