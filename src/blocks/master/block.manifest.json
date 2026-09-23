@@ -83,6 +83,18 @@
         "route": "/api/master/agent",
         "mode": "instant",
         "category": "content"
+      },
+      {
+        "cmd": "/install",
+        "desc": "Install a block cartridge through the airlock — lint gate, staging, approval queue, promote, rescan. It lands stopped; start it from the block list.",
+        "method": "POST",
+        "route": "/api/store/install",
+        "param": "name",
+        "argRequired": true,
+        "argHint": "<cartridge-name | https-url>",
+        "mode": "instant",
+        "category": "system",
+        "dangerous": true
       }
     ],
     "filesystem": {

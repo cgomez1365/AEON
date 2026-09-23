@@ -42,10 +42,14 @@ function baseUrl() {
 }
 
 // ── session token ───────────────────────────────────────────────────────────
-// Stored under the data root so it follows DATA_PATH on portable installs
-// instead of being stranded in the user's home directory on a host machine.
+// Stored under the AEON home's data root — the one resolver every other root
+// uses (DATA_PATH, AEON_HOME, a carried drive, else ~/AEON). It was
+// `DATA_PATH || <install>/data`, so any install without DATA_PATH wrote the
+// session into the app folder, whatever the home was (found 2026-09-23).
 function sessionFile() {
-  const dataRoot = process.env.DATA_PATH || path.join(ROOT, 'data');
+  let dataRoot;
+  try { dataRoot = require('../../src/kernel/aeonHome.cjs').roots({ appRoot: ROOT }).data; }
+  catch { dataRoot = process.env.DATA_PATH || path.join(ROOT, 'data'); }
   return path.join(dataRoot, 'terminal', 'session.json');
 }
 
@@ -306,6 +310,6 @@ async function dispatch(cmdOrId, arg = '', { confirmed = false, timeout = 120000
 module.exports = {
   c, ROOT, baseUrl,
   request, converse, ping, requireConnected,
-  loadSession, saveSession, clearSession, login, withAuth, prompt,
+  loadSession, saveSession, clearSession, sessionFile, login, withAuth, prompt,
   getCommands, scanManifests, dispatch, normalizeCommand,
 };

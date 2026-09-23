@@ -344,6 +344,70 @@ const commands = {
     });
   },
 
+  /**
+   * aeon block <stop|start|remove|restore|removed> [id]
+   *
+   * A block's lifecycle while AEON runs, for adding and removing blocks one by
+   * one. A client of /api/build/blocks/… — the kernel decides (security is
+   * refused; nothing is deleted: remove moves the folder to
+   * <data>/removed-blocks/, restore brings it back).
+   */
+  async block() {
+    const client = require('./terminal/client.cjs');
+    const { c } = client;
+    const sub = argv[1];
+    const id = argv.slice(2).find((a) => !a.startsWith('-'));
+    const routes = {
+      stop:    () => ['POST', `/api/build/blocks/${id}/stop`],
+      start:   () => ['POST', `/api/build/blocks/${id}/start`],
+      remove:  () => ['POST', `/api/build/blocks/${id}/uninstall`],
+      restore: () => ['POST', `/api/build/blocks/${id}/restore`],
+      removed: () => ['GET',  '/api/build/blocks/removed'],
+    };
+    if (!routes[sub] || (sub !== 'removed' && !/^[a-z0-9][a-z0-9_]*$/.test(id || ''))) {
+      console.error(`usage: aeon block <stop|start|remove|restore> <id>   ·   aeon block removed
+
+  ${c.dim('aeon block stop council')}       ${c.dim('# its API answers 503; the rest of AEON is untouched')}
+  ${c.dim('aeon block remove council')}     ${c.dim('# moved aside to <data>/removed-blocks/, never deleted')}
+  ${c.dim('aeon block restore council')}    ${c.dim('# the latest removed copy comes back')}
+  ${c.dim('then: npm run build, and reload the tab, for the screen to follow')}`);
+      process.exit(1);
+    }
+    if (sub === 'remove' && !flags.yes) {
+      if (!process.stdin.isTTY) {
+        console.error(`\n  ${c.yellow('!')} remove moves ${id} out of AEON — pass --yes to confirm (no prompt without a terminal).\n`);
+        process.exit(1);
+      }
+      const answer = await client.prompt(`\n  ${c.yellow('⚠')} Remove ${id} from AEON? It is moved aside, not deleted. ${c.dim('[y/N] ')}`);
+      if (!/^y(es)?$/i.test(answer.trim())) { console.log(`  ${c.dim('cancelled')}\n`); return; }
+    }
+    const [method, route] = routes[sub]();
+    const res = await client.withAuth(() => client.request(method, route, method === 'POST' ? {} : undefined));
+    if (flags.json) console.log(JSON.stringify(res.data, null, 2));
+    if (!res.ok) {
+      if (!flags.json) console.error(`\n  ${c.red('✗')} ${res.data?.error || `failed (${res.status})`}\n`);
+      process.exitCode = 1;
+      return;
+    }
+    if (flags.json) return;
+    const d = res.data || {};
+    if (sub === 'removed') {
+      const list = d.removed || [];
+      console.log(list.length ? `\n${list.map((r) => `  ${c.bold(r.blockId.padEnd(16))} ${c.dim(r.removedAt || '')}`).join('\n')}\n` : `\n  ${c.dim('no removed blocks')}\n`);
+      return;
+    }
+    const line = {
+      stop: `${id} stopped — its API answers 503 until started`,
+      start: `${id} started`,
+      remove: `${id} removed → ${d.movedTo || 'removed-blocks/'}`,
+      restore: `${id} restored`,
+    }[sub];
+    console.log(`\n  ${c.green('✓')} ${line}`);
+    if (d.warning) console.log(`  ${c.yellow('!')} ${d.warning}`);
+    if (d.ui) console.log(`  ${c.dim(d.ui)}`);
+    console.log('');
+  },
+
   // aeon run <block.cmd|/cmd> [arg…] — explicit, no routing, no model.
   async run() {
     const client = require('./terminal/client.cjs');
@@ -437,6 +501,7 @@ ${c.bold('CONSOLE')} ${c.dim('(operate a running AEON, no browser)')}
   aeon run ${c.dim('<cmd> [arg…]')}     dispatch one command, no routing
   aeon agent ${c.dim('"<goal>"')}       multi-step: plan → act → read → repeat
   aeon install ${c.dim('<url|name>')}   install a block cartridge via the airlock
+  aeon block ${c.dim('<stop|start|remove|restore> <id>')}   a block's lifecycle; ${c.dim('aeon block removed')} lists copies
   aeon login ${c.dim('|')} logout       manage this terminal's session
 
 ${c.bold('BLOCK AUTHORING')} ${c.dim('(deterministic, never calls a model)')}
