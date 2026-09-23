@@ -80,7 +80,7 @@
         {
           "file": "api/analytics.cjs",
           "scope": "install",
-          "reason": "Scans the install's data directories to report activity across every block, which cannot be done from inside one namespace."
+          "reason": "Reads and appends the kernel audit log and reads the kernel's LLM call ledger — install-level files, not this block's data."
         },
         {
           "file": "api/token-analytics.cjs",
@@ -94,11 +94,6 @@
   },
   "routes": [
     {
-      "method": "POST",
-      "path": "/api/activity/search",
-      "auth": true
-    },
-    {
       "method": "GET",
       "path": "/api/audit",
       "auth": true
@@ -106,21 +101,11 @@
     {
       "method": "POST",
       "path": "/api/audit",
-      "auth": true
-    },
-    {
-      "method": "GET",
-      "path": "/api/pipeline-metrics",
       "auth": true
     },
     {
       "method": "GET",
       "path": "/api/telemetry",
-      "auth": true
-    },
-    {
-      "method": "GET",
-      "path": "/api/telemetry/live",
       "auth": true
     },
     {

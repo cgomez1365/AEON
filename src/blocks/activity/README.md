@@ -22,11 +22,10 @@ AEON looking at its own activity log, not a user-facing content feature.
   and cost from the ledger, so the two could disagree.
 - `api/_ledgerView.cjs` — pure day-wise helpers (calendar walks at local noon,
   merge, streaks, 1/7/30/90-day windows). `_`-prefixed: never mounted.
-- `api/analytics.cjs` — an older, broader router that predates the
-  heatmap-focused rebuild (see *Known limitations*). Not called by this
-  block's own UI; it's a legacy grab-bag of kernel-adjacent endpoints
-  (search fallback, telemetry proxy, pipeline metrics, audit log) still
-  consumed by other blocks (Dashboard, Fleet Control).
+- `api/analytics.cjs` — shared, non-heatmap routes other surfaces call:
+  `GET /api/telemetry` (TelemetryContext's post-restart fallback) and
+  `GET/POST /api/audit` (App.jsx → the Dashboard's live feed). Three dead
+  routes were retired from it 2026-09-23 (see below).
 - `db/activity_heatmap.json` — the daily ledger (`{ "YYYY-MM-DD": { requests, tokens, models: {...} } }`), pruned to the trailing ~365 days.
 - `block.manifest.json` — kernel contract (permissions, requires, routes).
 - `.aeon.runtime.json` — **auto-generated on every boot** by the kernel
@@ -49,31 +48,25 @@ Internally, `router._recordActivity` is also exposed as a **plain function**
 call anywhere in AEON records into this block's ledger without an HTTP
 round trip.
 
-### `api/analytics.cjs` (mounted at `/api`) — legacy, not activity-specific
+### `api/analytics.cjs` (mounted at `/api`) — shared routes, not activity-specific
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/api/search` | Second Brain matrix keyword search fallback: Supabase-backed (`aeon_notes`/`documents`/`aeon_blocks`) on Vercel; local filesystem walk + keyword scoring over `Data/Second_Brain/*` (including PDF text via `pdf-parse`) otherwise. |
-| GET | `/api/telemetry/live` | Proxies the kernel's live telemetry (`/api/llm-telemetry`, backed by `src/kernel/routers/telemetry.cjs`). |
 | GET | `/api/telemetry` | All-time usage per provider from the call ledger (`staffUsage[provider] = {requests, tokens, errors}`), plus today's derived cost (`totalCost`, `costScope: 'today'`). `TelemetryContext` falls back to it after every restart. Until 2026-09-23 it counted chat-log messages at 150 tokens each, so a fresh install showed 1 request / 150 tokens. |
-| GET | `/api/pipeline-metrics` | Reads `clients.json` (BGI Store client pipeline) and buckets dollar value by status into `drafted`/`ready`/`identified`. |
-| GET / POST | `/api/audit` | Read/append the audit log — Supabase-backed with a local-file cache/fallback. |
+| GET / POST | `/api/audit` | Read/append the audit log — local file (`AUDIT_FILE`), mirrored to Supabase only when a client is configured. The Dashboard's live feed reads it through `App.jsx`. |
 
-None of these five are called by `index.jsx`; they're consumed elsewhere
-(the retired hand-written block matrix listed Dashboard and Fleet Control as
-readers of `/api/llm-telemetry`, `/api/pipeline-metrics`,
-`/api/token-analytics/*`; the generated `docs/BLOCKS.md` replaced it 2026-09-14).
-They're real, mounted, working routes — not dead code — just misfiled under
-this block from an earlier iteration.
+**Retired 2026-09-23** (Bible §21, gate `tests/activity-retired-routes.test.js`),
+each proved dead by `git grep` (no caller) and broken on a running install:
+`GET /api/telemetry/live` (answered HTTP 200 with the kernel's 401 body — the
+loopback never forwarded the session), `POST /api/activity/search` (walked
+`<install>/Data/Second_Brain/*`, which no install has, with a keyword regex
+whose `\b` had become a backspace; also loaded `pdf-parse`), and
+`GET /api/pipeline-metrics` (read `src/blocks/activity/clients.json`, which
+exists nowhere, so it always said `$0/mo`).
 
 ## Config / settings / env keys
 - `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` — server-side, injected via
-  `deps.supabase`. Used opportunistically (Second Brain search, telemetry/
-  audit persistence on Vercel); the block degrades to local-file storage
-  without them, so `requires.apis` lists `supabase` but nothing here hard-fails
-  if it's absent.
-- `AEON_KERNEL_URL` / `PORT` — used to build the base URL for the
-  `/api/telemetry/live` → `/api/llm-telemetry` proxy call (see fix below).
-  Defaults to `http://localhost:${PORT || 3001}` when unset.
+  `deps.supabase`. Used only to mirror the audit log when configured; the
+  block runs entirely on local files without them.
 - `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` — read directly in the
   browser (`index.jsx`) as a fallback path when the primary
   `/api/token-analytics/*` fetches fail, querying `aeon_blocks` for a
@@ -93,9 +86,9 @@ this block from an earlier iteration.
   storage service (outside this block's folder).
 
 ## Dependencies (injected via the `deps` factory argument)
-- `api/token-analytics.cjs`: `getLocalFile`, `getDataFile`, `AUDIT_FILE`, `LOG_FILE`, `TOKEN_LEDGER_FILE`.
-- `api/analytics.cjs`: `isVercel`, `supabase`, `getLocalFile`, `AUDIT_FILE`, `LOG_FILE`, `TOKEN_LEDGER_FILE`, `GEMINI_PRICE_PER_TOKEN`, `GROQ_PRICE_PER_TOKEN`, `validateSDI`.
-- npm: `pdf-parse` (local Second Brain search fallback only, lazily `require`d inside the `/search` handler).
+- `api/token-analytics.cjs`: `getDataFile`, `TOKEN_LEDGER_FILE` (the ledger is its sibling `llm_calls.jsonl`), optional `getDailyCost`.
+- `api/analytics.cjs`: `supabase`, `AUDIT_FILE`, `TOKEN_LEDGER_FILE`, `GEMINI_PRICE_PER_TOKEN`, `GROQ_PRICE_PER_TOKEN`, `validateSDI`, optional `getDailyCost`.
+- Kernel module: `src/kernel/llm-ledger.cjs` (read-only use).
 
 ## Fixed in this pass
 - **Hardcoded `http://localhost:3001`** in `GET /api/telemetry/live` — now
@@ -126,13 +119,10 @@ this block from an earlier iteration.
   for keyboard users; the loading state got `role="status"`/`aria-live`.
 
 ## Known limitations (judgment calls, not fixed here)
-- `GROQ_PRICE_PER_TOKEN` and `getLocalFile` are destructured from `deps` in
-  `api/analytics.cjs` but never used in the file — dead bindings, left alone
-  (not a hardcoded path or a dead route, just unused locals; out of this
-  pass's scope).
-- `api/analytics.cjs`'s five routes (`/search`, `/telemetry`, `/telemetry/
-  live`, `/pipeline-metrics`, `/audit`) are not activity-specific and arguably
-  belong under Dashboard or a shared kernel router instead of this block.
-  Relocating them would mean touching `server/server.js`'s mount list and
-  every other block that calls them — out of scope for an activity-only
-  pass, so they're documented here instead of moved.
+- `api/analytics.cjs`'s two surviving routes (`/telemetry`, `/audit`) are not
+  activity-specific. The Dashboard's live feed and every restart's telemetry
+  fallback therefore depend on this block; the Dashboard manifest declares
+  `requires.blocks: ["activity"]` so that dependency is visible.
+- `server/server.js` mounts `api/token-analytics.cjs` a second time, directly,
+  to wire `_recordActivity` into `services/ai.js`. With the ledger as the
+  source that hook only feeds the legacy heatmap file.
