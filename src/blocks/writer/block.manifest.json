@@ -21,7 +21,9 @@
     "apis": [],
     "env": [],
     "local": [],
-    "blocks": []
+    "blocks": [
+      "memory_core"
+    ]
   },
   "provides": {
     "routes": true,

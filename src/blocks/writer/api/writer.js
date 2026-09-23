@@ -403,11 +403,38 @@ ${styleNote}${draftNote}`;
   // data/writer/ and is cited in refs.
   const MEMORY_TEXT_LIMIT = 2000;
 
+  // WHICH store. Writer's storage is "scoped", and the block loader deletes
+  // VAULT_ROOT from a scoped block's deps — so this used to build Memory Core
+  // with VAULT_ROOT undefined, memory.cjs fell back to its install-relative
+  // default, and every push landed in <install>/src/blocks/aeon_matrix/data/
+  // Vault/…: reported ok, invisible to Memory Core, lost on reinstall (found
+  // live 2026-09-23; tests/writer-memory-scoped-host.test.js). The host still
+  // hands Writer its block-vault resolver, which is rooted in the SAME Vault
+  // Memory Core is given (services/storage.js: <Vault>/blocks/<id>), so the
+  // root is read from there — and if it cannot be, the push is refused rather
+  // than written somewhere the operator will never look.
+  function memoryVaultRoot() {
+    if (typeof VAULT_ROOT === 'string' && VAULT_ROOT) return VAULT_ROOT;
+    if (typeof deps.getBlockVaultFile !== 'function') return null;
+    let own;
+    try { own = deps.getBlockVaultFile('writer'); } catch { return null; }
+    if (typeof own !== 'string') return null;
+    const blocksDir = path.dirname(own);
+    if (path.basename(own) !== 'writer' || path.basename(blocksDir) !== 'blocks') return null;
+    return path.dirname(blocksDir);
+  }
+
   let _memoryCore = null;
   function memoryCore() {
     if (_memoryCore) return _memoryCore;
-    const createMemoryRouter = require('../../memory_core/api/memory.cjs');
-    _memoryCore = createMemoryRouter({ VAULT_ROOT, kernelLLM });
+    const root = memoryVaultRoot();
+    if (!root) {
+      throw new Error('the host did not say where the Vault is, so there is nowhere safe to write the memory');
+    }
+    let createMemoryRouter;
+    try { createMemoryRouter = require('../../memory_core/api/memory.cjs'); }
+    catch { throw new Error('the Memory Core block is not installed. Install it to push drafts into long-term memory — your draft is safe in Writer'); }
+    _memoryCore = createMemoryRouter({ VAULT_ROOT: root, kernelLLM });
     return _memoryCore;
   }
 
@@ -419,7 +446,7 @@ ${styleNote}${draftNote}`;
       let router;
       try { router = memoryCore(); }
       catch (e) {
-        return resolve({ status: 503, body: { reason: 'memory_core_unavailable', error: `Memory Core is not installed on this runtime (${e.message}).` } });
+        return resolve({ status: 503, body: { reason: 'memory_core_unavailable', error: `Memory Core is unavailable: ${e.message}.` } });
       }
       const req = { method, url, originalUrl: url, headers: {}, body: body || {}, params: {}, query: {} };
       const res = {
