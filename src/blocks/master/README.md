@@ -19,29 +19,39 @@ it at request time.
 | File | Purpose |
 |---|---|
 | `block.manifest.json` | Identity + contract. The kernel knows nothing about your block that isn't written here — see field reference below. |
-| `index.jsx` | The UI. Default-export one React component. Use the aurora primitives (`Card`, `StatCard`, `Button`, …) from `src/components/aurora` so the block matches the rest of the app for free. |
+| `index.jsx` | The UI. Default-export one React component. Import React, `lucide-react` and `src/kernel` only. Core blocks (this one, dashboard) use the aurora primitives from `src/components/aurora`, but `aeon lint` flags an import from `src/components` HIGH and `aeon promote` refuses it, so a new block cannot use them yet (open decision, 2026-09-23). |
 | `api/<id>.cjs` | Optional backend. `module.exports = (deps) => router` (see "Router pattern" below). Only needed if your block has server-side logic; a pure-UI block can omit `api/` entirely (set `api_routes: false`, `provides.api: false`). |
 | `README.md` | This file. What the block owns, what it reads, what it writes, and why. |
 
 ## To create a block
 
-1. Copy `src/blocks/master/` → `src/blocks/<your_block_name>/`
-   (the folder name IS the displayed name: `deal_finder` → "Deal Finder").
-2. Edit `block.manifest.json`: set `id` to match the new folder name exactly,
-   `route`, `description`, `nav.group`/`nav.order`, and — most importantly —
-   `contract.permissions` to the *minimum* your block actually needs (see
-   Permissions below; the sandbox silently strips anything you didn't ask for).
-3. Replace `index.jsx` with your UI (keep using the aurora primitives and the
-   accessibility patterns demonstrated below).
-4. If you need a backend, rename `api/master.cjs` → `api/<your_block_name>.cjs`
-   and change the routes inside it; the kernel auto-mounts anything in `api/`.
-5. Run `npm run build` — the screen is discovered at build time, so a running
-   build cannot see a new folder — then restart the server, or
-   `POST /api/build/rescan`, to mount `api/`. Reload the tab. The block appears
-   in nav, in `/blocks/registry`, and (if it declares AI usage) in Settings' AI
-   Model Assignments panel.
-6. Before shipping: run `node tools/aeon-cli.cjs lint <your_block_name>` and
-   fix everything it flags. See "Self-test before you ship" below.
+The Master page ("Make it appear") and `AEON_BLOCK_BUILDER.md` carry the same
+loop; every step was run for real on 2026-09-23 and
+`tests/master-guide-works.test.js` lints the page's own example block.
+
+1. `npm run aeon new <your_block_name>` — copies `_template` to
+   `staging/<your_block_name>/` (the folder name IS the displayed name:
+   `deal_finder` → "Deal Finder").
+2. Edit `block.manifest.json`: `route`, `description`, `nav.group`/`nav.order`,
+   and — most importantly — `contract.permissions` to the *minimum* your block
+   needs (see Permissions below; the sandbox strips anything you didn't ask
+   for). Set `api_routes: true` if you add `api/<your_block_name>.cjs`.
+3. Write `index.jsx` (the accessibility patterns demonstrated below apply).
+4. If you need a backend, write `api/<your_block_name>.cjs` as in "Router
+   pattern" below — **every route path starts with `/<your_block_name>/`**,
+   because the router is mounted at `/api`.
+5. `npm run aeon lint <your_block_name>` until there is no error and no HIGH
+   finding, then `npm run aeon promote <your_block_name>` (it refuses a HIGH).
+6. `node scripts/gen-block-routes.cjs` — writes the manifest's `routes` from
+   your code. `npm run build` only checks them and stops while they are stale.
+7. `npm run build` — the screen is discovered at build time, so a running
+   build cannot see a new folder — then `POST /api/build/rescan` (or restart
+   the server) to mount `api/`. Reload the tab. The block appears in nav, in
+   `/blocks/registry`, and (if it declares AI usage) in Settings' AI Model
+   Assignments panel.
+8. Stop, start, remove, restore it while AEON runs: `aeon block stop|start|
+   remove|restore <your_block_name>` (remove moves it to
+   `<data>/removed-blocks/`, never deletes).
 
 ## block.manifest.json — every field, explained
 
@@ -250,14 +260,19 @@ exist.
 ### Routing
 
 ```json
-"routes": [ { "method": "ALL", "path": "/master/*", "auth": true } ]
+"routes": [ { "method": "GET", "path": "/api/master/widget", "auth": true } ]
 ```
 
-Declares the route table for the block's mounted API, mainly for
-documentation/audit — the actual mount happens because `api/<id>.cjs`
-exists (see "Router pattern" below). `auth: true` means requests need a
-valid session/bearer token (the normal case for anything not explicitly
-public).
+**Generated — never hand-written.** `node scripts/gen-block-routes.cjs` reads
+your `api/` code and writes one entry per real method and path; `npm run build`
+fails while the manifest does not match. The kernel's manifest auth
+(`src/kernel/manifestRouteAuth.cjs`) enforces `auth: true` — once an operator
+account exists, a request without a session is refused, whether or not the
+global guard is on. It matches by method, so register each verb by name
+(`router.get`, `router.post`, …): a computed registration
+(`methods.forEach(m => router[m](...))`) is declared as `ALL`, which the guard
+never matches (the files block's `/api/notes` answered without a session until
+2026-09-23 for exactly this reason).
 
 ### env
 

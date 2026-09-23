@@ -23,11 +23,12 @@ Paste this whole file as the system prompt (or first message) of any AI coding a
 | `staging/<id>/` | Where a new block lives until `aeon promote` moves it through the lint airlock |
 | `public/brand/block-icons/<id>.svg` | The sidebar icon — drop the file, nothing to declare |
 | `public/brand/block-icons/png/<id>.png` | PNG fallback of the same icon |
-| `src/kernel/blockStandard.cjs` | The kernel NAV map. Overwrites `manifest.nav` on boot; unlisted blocks land in SYSTEM at order 99 |
+| `src/kernel/blockStandard.cjs` | The kernel NAV map. Overwrites `manifest.nav` on boot for the blocks it lists; a block it does not list keeps its `nav.group` if that is a real group (finance, agent, work, content, tools, system — else system) and its `nav.order` (else 99) |
 | `src/kernel/blockRegistry.js` | Browser-side discovery — a **build-time** glob. New folders need `npm run build` (or `npm run dev`) |
 | `server/block-loader.js` | Server-side mounting of `api/*.cjs`; deps scoped by `contract.permissions` |
-| `src/kernel/schema.json` · `src/kernel/staging.cjs` | The manifest schema and the lint that enforces it |
-| `tools/aeon-cli.cjs` | `npm run aeon new | lint | dev | promote | pack` |
+| `src/kernel/schema.json` · `src/kernel/staging.cjs` | The manifest schema and the lint that enforces it (any HIGH finding and promote refuses) |
+| `scripts/gen-block-routes.cjs` | Writes the manifest's `routes` from your api/ code. `npm run build` only checks them (`--check`) and stops while they are stale |
+| `tools/aeon-cli.cjs` | `npm run aeon new | lint | dev | promote | pack` · `aeon block stop | start | remove | restore` · `aeon install` |
 | `docs/BLOCKS.md` | Generated registry (`npm run prep:docs`). Read, never edit |
 
 ## 2. The loop
@@ -49,9 +50,9 @@ npm run aeon new <id>
 - **On failure:** if `staging/<id>` already exists, stop and ask whether to overwrite. Never delete it yourself.
 
 ### Phase C — Write the four files (in `staging/<id>/`)
-1. **`block.manifest.json`** — start from the copied template; set `route`, `description`, `category`, `tier: "experimental"`, `contract.permissions` (from Phase A), `contract.storage` (`local.indexed: false`, `access: "scoped"`), `contract.memory` (`mode` and `indexed` must agree), `contract.commands` if the block should answer in the terminal (`{ cmd, desc, route, method, param, when }`), `api_routes: true` only if there is an `api/` file. Leave `routes: []` — the build fills it.
-2. **`index.jsx`** — default-export exactly one React component. Relative `fetch()` only (`/api/<id>/...`). No secrets, no `VITE_` secrets, no hardcoded host or port.
-3. **`api/<id>.cjs`** (optional) — `module.exports = (deps) => router`. `deps` carries only what the manifest declares: `blockStorage` when `filesystem` is `read`/`write`; `kernelLLM` when `ai: true`. Expose `GET /<id>/widget` returning JSON if the manifest has a `widget` section. Never compute a storage path; use `deps.blockStorage.writeData(...)`.
+1. **`block.manifest.json`** — start from the copied template; set `route`, `description`, `category`, `tier: "experimental"`, `contract.permissions` (from Phase A), `contract.storage` (`local.indexed: false`, `access: "scoped"`), `contract.memory` (`mode` and `indexed` must agree), `contract.commands` if the block should answer in the terminal (`{ cmd, desc, route, method, param, when }`), `api_routes: true` only if there is an `api/` file (`aeon new` starts it at `false`). Leave `routes: []` — Phase E1 writes it; the build does not.
+2. **`index.jsx`** — default-export exactly one React component. Relative `fetch()` only (`/api/<id>/...`). No secrets, no `VITE_` secrets, no hardcoded host or port. Import React, `lucide-react` and `src/kernel` only — an import from `src/components` (the aurora library included) is a HIGH lint finding today and promote refuses the block.
+3. **`api/<id>.cjs`** (optional) — `module.exports = (deps) => router`. The router is mounted at `/api` (and `/block/<id>`), so **every route path starts with `/<id>/`**: `router.get('/<id>/status')` answers `/api/<id>/status`; a bare `'/status'` would answer `/api/status` and collide with any other block that did the same. `deps` carries only what the manifest declares: `blockStorage` when `filesystem` is `read`/`write`; `kernelLLM` when `ai: true`. Expose `GET /<id>/widget` returning JSON if the manifest has a `widget` section. Never compute a storage path; use `deps.blockStorage.writeData(...)`.
 4. **`README.md`** — one paragraph: owns, reads, writes.
 5. **Icon** — `public/brand/block-icons/<id>.svg` (square, single colour, no background) and `png/<id>.png`. If you cannot produce one, set `nav.icon` to a lucide-react name and say so in the report.
 - **Exit check:** all four files exist; `index.jsx` has one default export; `api/<id>.cjs` (if present) exports a function; the manifest parses as JSON.
@@ -61,7 +62,7 @@ npm run aeon new <id>
 ```
 npm run aeon lint <id>
 ```
-- **Exit check:** zero errors. HIGH findings are errors. Read every line it prints.
+- **Exit check:** zero errors and no HIGH finding (`aeon promote` refuses a HIGH: "lint failed — block stays in staging/"). Read every line it prints.
 - **On failure:** fix the manifest or the source the finding names. Never loosen the lint. Re-run. Limit: 5 rounds, then report what remains and stop.
 
 ### Phase E — Promote
@@ -70,6 +71,14 @@ npm run aeon promote <id>
 ```
 - **Exit check:** `src/blocks/<id>/` exists and `staging/<id>/` is gone.
 - **On failure:** promote refuses only on lint errors — go back to Phase D.
+
+### Phase E1 — Write the routes
+```
+node scripts/gen-block-routes.cjs
+```
+The manifest's `routes` are generated from your api/ code. `npm run build` begins with `gen-block-routes --check`, which only compares, so skipping this stops the build at its first line (`[GEN routes] STALE — <id> (0 declared, N real)`).
+- **Exit check:** `node scripts/gen-block-routes.cjs --check` prints PASS, and every declared path starts with `/api/<id>/` (or is one of your plugin's absolute paths).
+- **On failure:** a path without `/<id>/` means a route was declared bare — fix it in `api/<id>.cjs`, return to Phase D.
 
 ### Phase E2 — Boot proof through the real pipeline
 `aeon lint` and `aeon promote` **read** the block; neither runs it (`promoteBlock` only re-lints). The pipeline's `submitBuild` does: it mounts the staged block through the real block host and calls every route the manifest declares. Run the block through it (in a scratch clone / isolated `AEON_HOME`, never the operator's live install) and require `boot.ok`.
@@ -85,15 +94,25 @@ npm run build
 - **On failure:** read the first error; it names the file. Fix, rebuild.
 
 ### Phase G — Mount and verify (server running)
-Start or restart the server (`node server.cjs`, or the operator's launcher), then run every check:
+Mount it without a restart — `POST /api/build/rescan` (signed in; it answers `{ ok, generation, blocks, mounted }`) — or restart the server. Once an operator account exists every route below needs the session: add `-H "Authorization: Bearer $TOKEN"` (the token `POST /api/auth/login` returns), or use `npm run aeon blocks`, which uses the terminal's saved sign-in (`npm run aeon login`). Then run every check:
 ```
-curl -s http://127.0.0.1:3001/blocks/registry | grep -c '"<id>"'      # expect 1
-curl -s http://127.0.0.1:3001/api/<id>/widget                            # expect JSON, if declared
-curl -s http://127.0.0.1:3001/api/<id>/<your first route>                # expect your JSON
+curl -s -X POST -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3001/api/build/rescan
+curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3001/blocks/registry | grep -c '"<id>"'   # expect 1
+curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3001/api/<id>/widget                        # expect JSON, if declared
+curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3001/api/<id>/<your first route>            # expect your JSON
 ```
-Then open the console in a browser: the block must appear in the sidebar (SYSTEM group at order 99 unless the kernel NAV map lists it) and render at its route with no console errors.
+Then open the console in a browser: the block must appear in the sidebar (in its own `nav.group` if that is a real group, else SYSTEM; at its `nav.order`, else 99 — unless the kernel NAV map lists it) and render at its route with no console errors.
 - **Exit check:** every command above returns what it says; the block renders; the server log shows it mounted and no `[BLOCK ROUTER]` skip for it.
-- **On failure:** `0` from the registry with a green build means the folder starts with `_`, `nav.hidden` is true, or the manifest `id` differs from the folder. A 404 on `/api/<id>/...` means `api_routes` is false or the file does not export a router. Fix, return to Phase D.
+- **On failure:** `0` from the registry with a green build means the folder starts with `_`, `nav.hidden` is true, or the manifest `id` differs from the folder. A 404 on `/api/<id>/...` means `api_routes` is false, the file does not export a router, the route was declared without `/<id>/`, or the kernel was not rescanned. Fix, return to Phase D.
+
+### Phase G2 — Lifecycle
+```
+npm run aeon block stop <id>      # its API answers 503 ("block is stopped") until started
+npm run aeon block start <id>     # answers again
+```
+(`aeon block remove <id> --yes` moves it aside to `<data>/removed-blocks/`, `aeon block restore <id>` brings it back; over HTTP: `POST /api/build/blocks/:id/{stop,start,uninstall,restore}`.)
+- **Exit check:** stopped → 503; started → your JSON again.
+- **On failure:** a route still answering while stopped is mounted outside your api/ router — find it and move it in.
 
 ### Phase H — Tests
 Write one vitest file `tests/<id>.test.js` that mounts `api/<id>.cjs` with stub deps and asserts your first route and the widget shape. Run:
@@ -126,7 +145,9 @@ Permissions above the floor: … (why)
 Files: src/blocks/<id>/{block.manifest.json,index.jsx,api/<id>.cjs,README.md}; icon: <path or "lucide:<Name>, no file">
 Lint: clean (round N of 5)
 Build: built in …
+Routes: gen-block-routes PASS, every path under /api/<id>/
 Mounted: registry 1 · widget JSON · <route> JSON · renders at <route>
+Lifecycle: stop → 503 · start → JSON
 Tests: tests/<id>.test.js N/N · gates 4/4
 Boot proof: stage live|queued, boot.ok, N probes
 Private-data scan: clean (archive <sha256 prefix>)
@@ -141,7 +162,7 @@ Not done: … (each with the phase it stopped in and the exact message)
 2. Never hardcode `localhost`, a port, or a filesystem path.
 3. Never put a secret in browser code or a `VITE_` variable.
 4. `id` = folder name = manifest `id` = `api/<id>.cjs` filename.
-5. `manifest.nav` is a request; the kernel rewrites it. Do not fight it — tell the operator they can drag the block to any section on the Home dashboard.
+5. `manifest.nav` is a request; the kernel rewrites it for the blocks its NAV map lists, and for a new block honours only a real `nav.group` and a numeric `nav.order`. Do not fight it — tell the operator they can drag the block to any section on the Home dashboard.
 6. Never edit or commit `src/blocks/<id>/.aeon.runtime.json`.
 7. **Depend only on `deps`.** Never `require` into `src/kernel/`, `server/`, `services/` or another block by relative path (`require('../../../kernel/...')`). The kernel is refactored and pruned; `deps` (scoped by your manifest permissions) is the only surface it promises to keep. On 2026-09-20 two store packs failed the install boot proof because a kernel file they required by path had been retired. If you need a capability `deps` does not provide, stop that block and report the gap — do not restore or reimplement a kernel file.
 8. **No private data, ever.** A block ships no `data/`, no `training/`, no `.aeon.runtime.json`, no real names, emails, phone numbers, home-directory paths, or keys. Sample data is synthetic and labelled. Never print, store, or test a key you find — record file and pattern only and stop.

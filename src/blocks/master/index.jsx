@@ -39,6 +39,15 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Card, StatCard } from '../../components/aurora';
 import { Dna, Radio, LayoutGrid, RefreshCw } from 'lucide-react';
 
+// 2026-09-23 — every instruction below was followed literally in a scratch
+// clone (aeon new → the prompt's four files → lint → promote → build → rescan →
+// curl → aeon block stop/start/remove/restore) and corrected where it failed:
+// the prompt's aurora import made `aeon promote` refuse, its api routes mounted
+// at /api/status instead of /api/<id>/status, "the build fills routes" was
+// false (build only checks them), and the lifecycle was missing.
+// tests/master-guide-works.test.js lints the prompt's own files and checks
+// every path its screen fetches is one its api serves.
+
 // ── Where everything lives ───────────────────────────────────────────────
 // Paths are relative to the AEON repo root. <id> is your block's folder name.
 const PATHS = [
@@ -49,24 +58,39 @@ const PATHS = [
   ['public/brand/block-icons/<id>.svg', 'Your sidebar icon. Drop the file here and the sidebar picks it up — nothing to declare.'],
   ['public/brand/block-icons/png/<id>.png', 'PNG fallback for the same icon (dashboard tiles, exports).'],
   ['public/brand/block-icons/sections/', 'Section icons (finance, agent, work, content, tools, system). Add one per custom section.'],
-  ['src/kernel/blockStandard.cjs', 'The NAV map: route, group, order, icon per known block. Overwrites manifest.nav on every boot. Unlisted blocks land in SYSTEM at order 99.'],
+  ['src/kernel/blockStandard.cjs', 'The NAV map: route, group, order, icon per known block — for those it overwrites manifest.nav on every boot. A block it does not list keeps its nav.group when that is a real group (finance, agent, work, content, tools, system; anything else → system) and its nav.order (else 99).'],
   ['src/kernel/blockRegistry.js', 'Browser-side discovery. import.meta.glob over src/blocks/*/index.jsx — resolved at BUILD time.'],
   ['server/block-loader.js', 'Server-side mounting. Reads your manifest, scopes deps by contract.permissions, mounts api/*.cjs under /api.'],
   ['src/kernel/schema.json', 'The manifest schema. Required: id, label, route, version.'],
-  ['src/kernel/staging.cjs', 'validateManifest() and the lint rules `npm run aeon lint` runs.'],
-  ['tools/aeon-cli.cjs', 'The CLI: aeon new | lint | dev | promote | pack.'],
+  ['src/kernel/staging.cjs', 'validateManifest() and the lint rules `npm run aeon lint` runs. Any HIGH finding and `aeon promote` refuses.'],
+  ['scripts/gen-block-routes.cjs', 'Writes your manifest\'s `routes` from your api/ code. Run it after promote: `npm run build` only CHECKS routes and fails while they are stale.'],
+  ['tools/aeon-cli.cjs', 'The CLI: aeon new | lint | dev | promote | pack (authoring) · aeon block stop | start | remove | restore (lifecycle) · aeon install (a cartridge).'],
   ['src/blocks/<id>/.aeon.runtime.json', 'Written by the kernel at boot (api base, runtime, models). Never edit; never commit.'],
   ['docs/BLOCKS.md', 'Generated registry of every installed block (`npm run prep:docs`). Read it; do not edit it.'],
 ];
 
 // ── Make it appear ───────────────────────────────────────────────────────
+// Each step was run for real on 2026-09-23; the notes say what it printed.
 const STEPS = [
-  ['npm run aeon new <id>', 'Copies src/blocks/_template into staging/<id> and personalises id, route and label.'],
-  ['Edit the four files', 'Manifest first. index.jsx default-exports one React component. api/<id>.cjs exports `(deps) => router`.'],
-  ['npm run aeon lint <id>', 'Schema, id = folder, route starts with /, v1.1 storage and memory rules, circular imports. Fix until clean.'],
-  ['npm run aeon promote <id>', 'staging/<id> → src/blocks/<id>. Refuses on any lint error.'],
+  ['npm run aeon new <id>', 'Copies src/blocks/_template into staging/<id> and personalises id and route. api_routes starts false — set it true when you add api/<id>.cjs.'],
+  ['Edit the four files', 'Manifest first. index.jsx default-exports one React component. api/<id>.cjs exports `(deps) => router`, and every route starts with /<id>/ — the router mounts at /api, so router.get(\'/status\') would answer /api/status, not /api/<id>/status.'],
+  ['npm run aeon lint <id>', 'Schema, id = folder, route starts with /, v1.1 storage and memory rules, code checks, circular imports. Any HIGH finding is a failure: promote refuses. Import only React, lucide-react and src/kernel — an import from src/components is flagged HIGH today.'],
+  ['npm run aeon promote <id>', 'staging/<id> → src/blocks/<id>. Refuses on any lint error or HIGH finding ("lint failed — block stays in staging/").'],
+  ['node scripts/gen-block-routes.cjs', 'Writes your manifest\'s routes from your api/ code. Skip it and the next step stops at its first line: "[GEN routes] STALE — <id> (0 declared, 2 real)".'],
   ['npm run build  (or npm run dev)', 'THE STEP EVERYONE MISSES. The browser discovers blocks through a build-time glob; a running production build cannot see a new folder until it is rebuilt. No error is logged — the block is simply absent.'],
-  ['Restart the server', 'The kernel syncs your manifest (writes nav + .aeon.runtime.json), mounts api/, and lists you at /blocks/registry.'],
+  ['POST /api/build/rescan  (or restart the server)', 'Mounts api/ in the running AEON with no restart, and lists you at /blocks/registry. Then reload the tab.'],
+];
+
+// ── Run it, stop it, remove it — the block lifecycle ────────────────────
+// A client of POST /api/build/blocks/:id/{stop,start,uninstall,restore}; the
+// kernel decides, and refuses the security block. Verified 2026-09-23.
+const LIFECYCLE = [
+  ['aeon block stop <id>', 'Its API answers 503 ("block is stopped") until started. The rest of AEON is untouched.'],
+  ['aeon block start <id>', 'It answers again.'],
+  ['aeon block remove <id> --yes', 'Moved aside to <data>/removed-blocks/<id>@<time>, never deleted. Its API stops answering at once.'],
+  ['aeon block removed', 'Lists the removed copies.'],
+  ['aeon block restore <id>', 'The latest removed copy comes back and is mounted again.'],
+  ['aeon pack <id>  ·  /install <name>', 'pack writes dist-blocks/<id>-<version>.aeon; /install (terminal) or aeon install installs a cartridge through the airlock: lint gate, staging, approval, promote, rescan. It lands stopped — start it with aeon block start.'],
 ];
 
 // ── Icons ────────────────────────────────────────────────────────────────
@@ -82,8 +106,8 @@ const GROUPS = ['finance (Home)', 'agent', 'work', 'content', 'tools', 'system']
 
 const ANATOMY = [
   ['block.manifest.json', 'Identity + contract. nav, permissions, storage, memory, commands, widget. Manifest is truth; the kernel rewrites nav on boot.'],
-  ['index.jsx', 'The UI. Default-export one React component. Use aurora primitives (Card, StatCard). Relative fetch() only.'],
-  ['api/<id>.cjs', 'Optional backend: module.exports = (deps) => router. Mounted under /api/. deps carries only what contract.permissions declares.'],
+  ['index.jsx', 'The UI. Default-export one React component. Relative fetch() only. Import React, lucide-react and src/kernel only: the aurora library (src/components/aurora) is used by core blocks, but `aeon lint` flags an import from src/components HIGH and promote refuses it.'],
+  ['api/<id>.cjs', 'Optional backend: module.exports = (deps) => router. Mounted at /api (and /block/<id>), so every path starts with /<id>/. deps carries only what contract.permissions declares.'],
   ['README.md', 'One paragraph: what it owns, what it reads, what it writes.'],
   ['AEON_BLOCK_BUILDER.md', 'Master only: the agent that builds blocks. Not part of your block — the thing that writes it.'],
 ];
@@ -91,7 +115,9 @@ const ANATOMY = [
 const RULES = [
   ['Folder is truth', 'The displayed name derives from the folder name (my_block → "My Block"); manifest labels are ignored and a mismatch is logged. id must equal the folder.'],
   ['Never call what does not exist', 'Fetch only endpoints your own api/ provides or the kernel guarantees (/core, /api/ai, /blocks/registry).'],
+  ['Namespace every route', 'router.get(\'/<id>/status\'), never router.get(\'/status\'): the router mounts at /api, and /api/status is a name every block would want.'],
   ['Declare a widget', 'Expose GET /api/<id>/widget + a manifest widget section, and the dashboard shows your quick-view automatically.'],
+  ['No router-level middleware', 'Never router.use(...). Put express.json() on the route that needs it. A router-level middleware answered /api/auth/login for a stopped block and locked the operator out (2026-09-20).'],
   ['Ask for nothing extra', 'Permissions start at the floor and the sandbox strips deps you did not declare. Every widening is a deliberate choice in contract.permissions.'],
   ['Never compute a storage path', 'Declare "filesystem": "write" and use the injected deps.blockStorage (writeData / publishState / writeMemoryDocument). It is scoped to your block; a hand-built path escapes the namespace and is refused. "none" means no storage at all.'],
   ['A command that needs something says so', 'contract.commands entries take `when`: "supabase", "runtime == local", "!ready". The terminal refuses with the reason instead of running a no-op.'],
@@ -196,8 +222,9 @@ Create these inside src/blocks/my_block/:
 
 Notes on the manifest:
 - nav.group/order/icon are a REQUEST. The kernel's NAV map (src/kernel/blockStandard.cjs) overwrites
-  manifest.nav on every boot; a block it does not list lands in the SYSTEM group at order 99. The
-  operator can drag it to any section on the Home dashboard. Groups: finance, agent, work, content, tools, system.
+  manifest.nav for the blocks it lists. A new block keeps its nav.group if it is one of finance, agent,
+  work, content, tools, system (anything else becomes system) and its nav.order (else 99). The operator
+  can drag it to any section on the Home dashboard.
 - contract.permissions is the security declaration. The sandbox hands api/ ONLY what is declared:
   "filesystem": "none" | "read" | "write"    "network": "none" | "internal" | "external"
   "secrets": true (Vault credentials, server-side only)   "ai": true (kernel LLM via deps.kernelLLM / /api/ai)
@@ -207,16 +234,20 @@ Notes on the manifest:
   indexed by the Aeon Matrix; memory.indexed must equal (mode !== "none").
 - contract.commands: slash-commands for the terminal — { cmd, desc, route, method, param, when }.
   "when": "supabase" makes the terminal refuse with a reason when there is no cloud link.
-- routes: leave []. npm run build fills it from your code.
+- routes: leave []. After promote, \`node scripts/gen-block-routes.cjs\` writes it from your api/ code.
+  npm run build does NOT write it: its first step only checks, and stops while it is stale.
 
 ### 2. index.jsx  (REQUIRED — the UI)
 import React, { useState, useEffect } from 'react';
-import { Card, StatCard } from '../../components/aurora';
 
 export default function MyBlock() {
   const [data, setData] = useState(null);
+  const [error, setError] = useState('');
   useEffect(() => {
-    fetch('/api/my_block/status').then(r => r.json()).then(setData).catch(console.error);
+    fetch('/api/my_block/status')
+      .then(r => (r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status))))
+      .then(setData)
+      .catch(e => setError(e.message));
   }, []);
   return (
     <div className="block-root">
@@ -226,10 +257,16 @@ export default function MyBlock() {
           What this block does, in plain language for any user.
         </p>
       </header>
-      <Card><p>{data ? JSON.stringify(data) : 'Loading...'}</p></Card>
+      <section style={{ border: '1px solid var(--line, #272d39)', borderRadius: 10, padding: 16 }}>
+        {error ? <p role="alert">Could not load: {error}</p> : <p>{data ? JSON.stringify(data) : 'Loading...'}</p>}
+      </section>
     </div>
   );
 }
+
+Imports: React, lucide-react, and src/kernel only. Do not import from src/components (e.g. the aurora
+library): aeon lint flags a relative path that climbs out of the block, anywhere but src/kernel, as
+HIGH, and promote refuses the block.
 
 ### 3. api/my_block.cjs  (optional — backend routes; set "api_routes": true)
 const express = require('express');
@@ -240,10 +277,14 @@ module.exports = (deps) => {
   //   "ai": true                     → deps.kernelLLM(prompt, { role })
   //   "secrets": true                → provider key pools
   // NEVER compute a path yourself — deps.blockStorage.writeData('state.json', obj).
+  // The router is mounted at /api (and /block/my_block), so EVERY path starts with /my_block/.
+  // A route declared as '/status' would answer /api/status — not /api/my_block/status — and collide.
   const router = express.Router();
-  router.get('/status', (req, res) => res.json({ ok: true }));
-  // Widget endpoint — the dashboard calls this for the tile
-  router.get('/widget', (req, res) => res.json({ summary: 'Everything is fine.' }));
+  router.get('/my_block/status', (req, res) => res.json({ ok: true }));
+  // Widget endpoint — only if the manifest has a "widget" section: { endpoint: '/api/my_block/widget', label }
+  router.get('/my_block/widget', (req, res) => res.json({ label: 'My Block', kind: 'stat', value: 0, sub: 'items' }));
+  // A body parser goes on the route that needs it — never router.use(...):
+  // router.post('/my_block/save', express.json({ limit: '64kb' }), (req, res) => { ... });
   return router;
 };
 
@@ -260,29 +301,41 @@ If neither exists, nav.icon (a lucide-react name or an emoji) is used.
 2. NEVER put secrets in index.jsx or any browser-side file. Vault reads are server-only (api/*.cjs).
 3. NEVER use VITE_ prefixed env vars for secrets.
 4. The block id, folder name, manifest id and api filename MUST all match exactly. Lowercase [a-z0-9_].
-5. api/*.cjs must export \`module.exports = (deps) => router\` — no named exports.
+5. api/*.cjs must export \`module.exports = (deps) => router\` — no named exports. Every route path
+   starts with /<id>/ (the router mounts at /api). No router.use(...) — parsers go on the route.
 6. index.jsx must default-export exactly one React component.
 7. Declare every permission you need in contract.permissions. The sandbox strips undeclared deps.
-8. GET /api/<id>/widget MUST return JSON — the dashboard renders it.
+8. If the manifest declares a widget, GET /api/<id>/widget MUST return JSON — the dashboard renders it.
 9. A folder starting with _ never registers. Do not name your block that way.
+10. aeon lint must show no HIGH finding. promote refuses a block that has one.
 
 ## What NOT to do
 - Do not edit server/server.js, server/block-loader.js, or src/kernel/*.
 - Do not create routes outside your api/ file.
-- Do not import from other blocks' source folders.
+- Do not import from other blocks' source folders, or from src/components (lint HIGH).
 - Do not write to VAULT_ROOT or DATA_ROOT directly — use deps.blockStorage.
 - Do not edit or commit src/blocks/my_block/.aeon.runtime.json — the kernel writes it at boot.
 
 ## Make it appear — in this order
 1. npm run aeon new my_block        (or copy src/blocks/_template to staging/my_block by hand)
-2. edit the files above
-3. npm run aeon lint my_block       fix until clean
-4. npm run aeon promote my_block    staging/ → src/blocks/
-5. npm run build   (or run npm run dev)
+2. edit the files above; set "api_routes": true if you wrote api/my_block.cjs
+3. npm run aeon lint my_block       fix until there is no error and no HIGH finding
+4. npm run aeon promote my_block    staging/ → src/blocks/ (refuses on any HIGH)
+5. node scripts/gen-block-routes.cjs   writes the manifest's routes from your code
+6. npm run build   (or run npm run dev)
    The browser finds blocks through a BUILD-TIME glob (src/kernel/blockRegistry.js, import.meta.glob).
    A running production build cannot see a new folder until it is rebuilt. Nothing is logged — the
    block is just absent. This is the step most people miss.
-6. restart the server — it syncs your manifest, mounts api/, and lists you at /blocks/registry.`;
+7. POST /api/build/rescan (signed in) — or restart the server — mounts api/ and lists you at
+   /blocks/registry. Reload the tab.
+8. Check it: GET /api/my_block/status answers; the block is in the sidebar and renders.
+
+## Run it, stop it, remove it
+aeon block stop my_block      its API answers 503 until started
+aeon block start my_block
+aeon block remove my_block --yes   moved aside to <data>/removed-blocks/, never deleted
+aeon block restore my_block
+(the same, over HTTP: POST /api/build/blocks/:id/{stop,start,uninstall,restore})`;
 
 // ── The builder persona ──────────────────────────────────────────────────
 // A looped agent, as one Markdown file: paste it into any AI that can run
@@ -381,7 +434,7 @@ function ReferencePanel({ registry, onRefresh }) {
 
       {/* ── Make it appear ─────────────────────────────────────────────── */}
       <Card>
-        <h3 style={{ marginTop: 0 }}>Make it appear — six steps, in order</h3>
+        <h3 style={{ marginTop: 0 }}>Make it appear — {STEPS.length} steps, in order</h3>
         <ol style={{ paddingLeft: 20, margin: 0 }}>
           {STEPS.map(([step, why]) => (
             <li key={step} style={{ margin: '9px 0' }}>
@@ -390,6 +443,24 @@ function ReferencePanel({ registry, onRefresh }) {
             </li>
           ))}
         </ol>
+      </Card>
+
+      {/* ── Lifecycle ──────────────────────────────────────────────────── */}
+      <Card>
+        <h3 style={{ marginTop: 0 }}>Run it, stop it, remove it — the block lifecycle</h3>
+        <p style={{ marginTop: 0, ...DIM }}>
+          From the AEON folder, signed in ({CODE('npm run aeon login')}). The same over HTTP:
+          {CODE(' POST /api/build/blocks/:id/{stop,start,uninstall,restore}')} and {CODE('GET /api/build/blocks/removed')}.
+          The security block cannot be stopped or removed. A screen follows after {CODE('npm run build')} and a reload.
+        </p>
+        <ul role="list" style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+          {LIFECYCLE.map(([cmd, what]) => (
+            <li key={cmd} style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 300px) 1fr', gap: 14, padding: '8px 0', borderBottom: '1px solid var(--line, #272d39)' }}>
+              {CODE(cmd)}
+              <span style={DIM}>{what}</span>
+            </li>
+          ))}
+        </ul>
       </Card>
 
       {/* ── Where everything lives ─────────────────────────────────────── */}
@@ -427,8 +498,9 @@ function ReferencePanel({ registry, onRefresh }) {
         <h3 style={{ marginTop: 0 }}>Nav and groups — the kernel owns the sidebar</h3>
         <p style={{ marginTop: 0, ...DIM }}>
           {CODE('manifest.nav')} is a request. On every boot {CODE('src/kernel/blockStandard.cjs')} overwrites it from its NAV map
-          (route, group, order, icon). A block the map does not list still loads — in the SYSTEM group at order 99 — and the
-          operator can drag it to any section, or a new one, on the Home dashboard. {CODE('nav.hidden: true')} keeps it out of nav.
+          (route, group, order, icon) for the blocks the map lists. A block the map does not list keeps its {CODE('nav.group')} when
+          that is one of the groups below (anything else becomes system) and its {CODE('nav.order')} (else 99). The operator can
+          drag any block to any section, or a new one, on the Home dashboard. {CODE('nav.hidden: true')} keeps it out of nav.
         </p>
         <p style={{ marginBottom: 0, ...DIM }}>Groups: {GROUPS.map((g, i) => <React.Fragment key={g}>{i > 0 && ' · '}{CODE(g)}</React.Fragment>)}</p>
       </Card>

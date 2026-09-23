@@ -4,7 +4,7 @@
   "label": "Master",
   "icon": "Cpu",
   "route": "/master",
-  "description": "The block standard. Complete AI-system instructions and reference for building any AEON block from scratch — manifest contract, file anatomy, four rules, and a ready-to-paste prompt.",
+  "description": "The block standard: how to build an AEON block and see it appear — every path, the build loop as it really runs, the lifecycle (stop, start, remove, restore), a ready-to-paste prompt and the Block Builder agent.",
   "category": "system",
   "tier": "core",
   "nav": {
