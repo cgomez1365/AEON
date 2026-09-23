@@ -400,6 +400,10 @@ module.exports = (app, deps) => {
     const blocks = [];
     if (fs.existsSync(srcBlocks)) {
       for (const folder of fs.readdirSync(srcBlocks)) {
+        // `_blank` / `_template` are scaffolds: the kernel never mounts a `_`
+        // folder, so listing them counted 19 "installed" blocks on a 17-block
+        // install and offered lifecycle buttons that can only 404.
+        if (folder.startsWith('_')) continue;
         const manifestPath = path.join(srcBlocks, folder, 'block.manifest.json');
         if (fs.existsSync(manifestPath)) {
           try {
