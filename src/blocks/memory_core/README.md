@@ -87,7 +87,7 @@ constant needs to change.
 | Method | Path | Notes |
 |---|---|---|
 | `GET` | `/api/memory` | Full list, pinned float to top then newest-first. Query: `?type=`, `?category=`, `?q=` (substring match on text+title). |
-| `POST` | `/api/memory/add` | Create. Body: `{text, category?, type?, title?, tags?, pinned?, source?, refs?}`. `text` must be 6+ chars. Deduped on normalized (trim+lowercase) text — a repeat is a no-op, not a second row. **Path is a contract**: the dashboard chat-stream auto-extract loop POSTs here fire-and-forget; don't rename it without updating `chat-stream.cjs`. |
+| `POST` | `/api/memory/add` | Create. Body: `{text, category?, type?, title?, tags?, pinned?, source?, refs?}`. `text` must be 6+ chars. Deduped on normalized (trim+lowercase) text — a repeat is a no-op, not a second row, and its `text` says so. Every response carries a one-line `text` for the terminal chip (what was stored, and whether it was reworded). Add, edit, delete and distill ask the kernel to index the Vault (`deps.requestIndex`), so `/recall` finds a new memory within a second instead of after the next scan. **Path is a contract**: the dashboard chat-stream auto-extract loop POSTs here fire-and-forget; don't rename it without updating `chat-stream.cjs`. |
 | `PUT` | `/api/memory/:id` | Edit any of `text, category, type, title, tags, pinned`. |
 | `POST` | `/api/memory/:id/pin` | Toggle pin. |
 | `DELETE` | `/api/memory/:id` | Remove (and its `.md` mirror). |

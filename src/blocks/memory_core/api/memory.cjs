@@ -31,6 +31,17 @@ module.exports = function createMemoryRouter(deps) {
   const router = express.Router();
   const { kernelLLM, VAULT_ROOT, TERMINAL_HISTORY_FILE } = deps;
 
+  // Every memory is also a Vault file (the .md mirror), and the Second Brain
+  // only finds Vault files it has indexed. The store never asked, so a memory
+  // saved at 08:40 was invisible to /recall until the next boot, nightly or
+  // manual scan (measured 2026-09-23). vaultSync — the other kernel writer into
+  // the Vault — asks via this same hook; the kernel coalesces the requests into
+  // one incremental scan.
+  const requestIndex = (kind) => {
+    try { if (typeof deps.requestIndex === 'function') deps.requestIndex({ blockId: 'memory_core', kind }); }
+    catch { /* indexing is best-effort; the memory itself is already saved */ }
+  };
+
   const MEM_DIR = path.join(VAULT_ROOT || path.join(__dirname, '..', '..', 'aeon_matrix', 'data', 'Vault'), 'Agents', 'Aeon', 'memory');
   const STORE = path.join(MEM_DIR, 'memories.json');
   try { if (!fs.existsSync(MEM_DIR)) fs.mkdirSync(MEM_DIR, { recursive: true }); } catch {}
@@ -106,7 +117,9 @@ module.exports = function createMemoryRouter(deps) {
     const all = load();
     // Dedupe: identical text is a no-op, not a second copy
     const dupe = all.find(m => m.text.trim().toLowerCase() === normalized.text.toLowerCase());
-    if (dupe) return res.json({ ok: true, memory: dupe, deduped: true });
+    // `text` is what the terminal chip prints. Without it /remember showed the
+    // record as JSON, and a repeat looked exactly like a save.
+    if (dupe) return res.json({ ok: true, memory: dupe, deduped: true, text: `Already in memory — nothing new saved: ${dupe.text}` });
     const m = {
       id: newId(), text: normalized.text,
       ...(normalized.changed ? { originalText: String(text).trim() } : {}),
@@ -116,8 +129,13 @@ module.exports = function createMemoryRouter(deps) {
       refs: Array.isArray(refs) ? refs.slice(0, 5) : [],
     };
     all.push(m); save(all); mdMirror(m);
+    requestIndex('memory-add');
+    const said = [`Saved to memory (${m.category}): ${m.text}`];
+    if (normalized.changed) said.push(`Reworded from "${m.originalText}" so it reads as being about you when AEON recalls it.`);
+    if (normalized.residualPerson) said.push('It still says "I" or "you" somewhere; recalled into a prompt, that reads as the model. Consider editing it in Memory Core.');
     res.json({
       ok: true, memory: m, normalized: normalized.changed,
+      text: said.join('\n'),
       // Reported, never silently corrected: a fact still carrying "I" or
       // "your" mid-sentence will read as being about the MODEL once injected.
       ...(normalized.residualPerson ? {
@@ -133,9 +151,10 @@ module.exports = function createMemoryRouter(deps) {
     const m = all.find(x => x.id === req.params.id);
     if (!m) return res.status(404).json({ error: 'not found' });
     for (const k of ['text', 'category', 'type', 'title', 'tags', 'pinned']) {
-      if (req.body[k] !== undefined) m[k] = req.body[k];
+      if ((req.body || {})[k] !== undefined) m[k] = req.body[k];
     }
     save(all); mdMirror(m);
+    requestIndex('memory-edit');
     res.json({ ok: true, memory: m });
   });
 
@@ -156,6 +175,7 @@ module.exports = function createMemoryRouter(deps) {
     if (idx === -1) return res.status(404).json({ error: 'not found' });
     const [gone] = all.splice(idx, 1);
     save(all); mdRemove(gone.id);
+    requestIndex('memory-delete');
     res.json({ ok: true, removed: gone.id });
   });
 
@@ -249,7 +269,7 @@ ${String(transcript).slice(0, 8000)}`;
         };
         all.push(m); mdMirror(m); added.push(m);
       }
-      if (added.length) save(all);
+      if (added.length) { save(all); requestIndex('memory-distill'); }
       res.json({ ok: true, added, candidates: arr.length });
     } catch (e) { res.status(500).json({ error: 'distill failed: ' + e.message }); }
   });

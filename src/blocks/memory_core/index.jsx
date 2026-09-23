@@ -54,16 +54,32 @@ export default function MemoryCore() {
   }, []);
   useEffect(() => { load(); }, [load]);
 
+  // `fn` may return the note to show — the server's own account of what
+  // happened beats a fixed string.
   const act = async (fn, msg) => {
     setBusy(true);
-    try { await fn(); if (msg) { setNote(msg); setTimeout(() => setNote(''), 2500); } await load(); }
+    try {
+      const said = await fn();
+      const m = typeof said === 'string' ? said : msg;
+      if (m) { setNote(m); setTimeout(() => setNote(''), 4000); }
+      await load();
+    }
     catch (e) { setNote('failed: ' + e.message); }
     setBusy(false);
   };
 
+  // fetch() does not throw on a 4xx/5xx. Every action below used to report
+  // "memory saved" / "deleted" / "memory updated" whatever the server said.
+  const must = async (req) => {
+    const r = await req;
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || d.ok === false) throw new Error(d.error || `server answered ${r.status}`);
+    return d;
+  };
+
   const add = () => act(async () => {
     if (newText.trim().length < 6) throw new Error('too short');
-    await fetch('/api/memory/add', {
+    const d = await must(fetch('/api/memory/add', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         text: newText.trim(),
@@ -73,21 +89,25 @@ export default function MemoryCore() {
         ...(newCat ? { category: newCat } : {}),
         source: 'operator',
       }),
-    });
+    }));
     setNewText(''); setNewType(''); setNewCat('');
+    // A repeat is not a save, and a reworded fact should say what was stored.
+    if (d.deduped) return 'already in memory — nothing new saved';
+    if (d.normalized) return `saved as: ${d.memory?.text}`;
+    return d.warning ? `memory saved — ${d.warning}` : 'memory saved';
   }, 'memory saved');
 
-  const pin = (id) => act(() => fetch(`/api/memory/${id}/pin`, { method: 'POST' }));
-  const del = (id) => act(() => fetch(`/api/memory/${id}`, { method: 'DELETE' }), 'deleted');
+  const pin = (id) => act(() => must(fetch(`/api/memory/${id}/pin`, { method: 'POST' })));
+  const del = (id) => act(() => must(fetch(`/api/memory/${id}`, { method: 'DELETE' })), 'deleted');
 
   const startEdit = (m) => { setEditingId(m.id); setEditText(m.text); };
   const cancelEdit = () => { setEditingId(null); setEditText(''); };
   const saveEdit = (id) => act(async () => {
     if (editText.trim().length < 6) throw new Error('too short');
-    await fetch(`/api/memory/${id}`, {
+    await must(fetch(`/api/memory/${id}`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: editText.trim() }),
-    });
+    }));
     setEditingId(null); setEditText('');
   }, 'memory updated');
   const distill = () => act(async () => {
