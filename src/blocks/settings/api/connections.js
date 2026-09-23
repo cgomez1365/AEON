@@ -137,17 +137,31 @@ module.exports = (app, deps) => {
       // keys if this was the provider's last endpoint. Without this, deleted
       // keys ghost in process.env + pools until restart (Fleet Control bug).
       let provider = null;
+      let heldRefs = [];
       try {
         const before = await endpoints.load(supabase);
-        provider = (before.endpoints || []).find(e => e.id === req.params.id)?.provider || null;
+        const ep = (before.endpoints || []).find(e => e.id === req.params.id);
+        provider = ep?.provider || null;
+        heldRefs = ep ? endpoints.credentialRefs(ep) : [];
       } catch {}
       const reg = await endpoints.removeEndpoint(req.params.id, supabase);
       if (provider && deps.dehydrateProvider
         && !(reg.endpoints || []).some(e => e.provider === provider)) {
         deps.dehydrateProvider(provider);
       }
-      audit('CONN_REMOVE', `Endpoint ${req.params.id}`, 200, 0);
-      res.json({ ok: true, endpoints: reg.endpoints });
+      // The connection's keys go with it (measured 2026-09-23: they stayed in
+      // the vault, encrypted, referenced by nothing, shown nowhere). A ref
+      // another connection still uses is kept — auth_ref can be shared.
+      const stillUsed = new Set((reg.endpoints || []).flatMap(e => endpoints.credentialRefs(e)));
+      const removedKeys = [];
+      const keptKeys = [];
+      for (const ref of heldRefs) {
+        if (stillUsed.has(ref)) { keptKeys.push(ref); continue; }
+        try { await vault.removeSecret(ref, supabase); removedKeys.push(ref); }
+        catch (e) { keptKeys.push(ref); console.warn(`[CONNECTIONS] could not remove key ${ref}: ${e.message}`); }
+      }
+      audit('CONN_REMOVE', `Endpoint ${req.params.id}${removedKeys.length ? ` + ${removedKeys.length} key(s)` : ''}`, 200, 0);
+      res.json({ ok: true, endpoints: reg.endpoints, removedKeys, keptKeys });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
