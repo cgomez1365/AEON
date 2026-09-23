@@ -126,7 +126,7 @@ function compareFile(storedHash, stat) {
 // as "1b4367dbf594" and the summary it embedded began "--- id: … category:
 // fact pinned: false created: …" — the vector described the bookkeeping, not
 // the memory. Obsidian-style notes carry the same block. Measured 2026-09-23.
-const FRONTMATTER_RE = /^﻿?---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/;
+const FRONTMATTER_RE = /^\uFEFF?---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/;
 function splitFrontmatter(text) {
   const m = FRONTMATTER_RE.exec(String(text || ''));
   if (!m) return { meta: null, body: String(text || '') };
@@ -479,6 +479,29 @@ module.exports = function ingestFactory(deps) {
               }
               onEvent({ file: relPosix, action: 'space-migrate-kept', from: existing.embeddingModel, to: currentSpace });
             } catch { /* unreadable or no embedder — leave it, try next scan */ }
+          }
+          // Frontmatter refresh: an entry derived before titles and summaries
+          // skipped YAML frontmatter still carries a summary that opens with
+          // the fence ("--- id: … category: fact …") and a title that is a
+          // generated file name. The file has not changed, so nothing else
+          // would ever re-derive it. Detected from the stored summary — no
+          // file read for any other document — and done once: the fresh
+          // summary no longer starts with the fence. A fresh entry that could
+          // not be embedded never replaces one that carries a vector.
+          if (existing && typeof existing.summary === 'string' && /^---\s/.test(existing.summary)) {
+            try {
+              const text = await extractText(full);
+              const fresh = await buildEntry(full, relPosix, text, stat);
+              const hasVector = Array.isArray(fresh.embedding) && fresh.embedding.length > 0;
+              if (hasVector || !Array.isArray(existing.embedding)) {
+                index.documents[relPosix] = fresh;
+                results.ingested++;
+                if (hasVector) results.embedded++;
+                onEvent({ file: relPosix, action: 'frontmatter-refresh' });
+                if (results.ingested % 10 === 0) checkpoint();
+                continue;
+              }
+            } catch { /* unreadable — leave it, try next scan */ }
           }
           // Chunk backfill: indexed before windows existed, or too short to
           // have needed them. Costs a re-extract; that is the price of not
@@ -865,7 +888,7 @@ module.exports = function ingestFactory(deps) {
     try { res.end(); } catch { /* already gone */ }
   });
 
-  const BACKFILL_ACTIONS = new Set(['embed-backfill', 'space-migrate', 'chunk-backfill']);
+  const BACKFILL_ACTIONS = new Set(['embed-backfill', 'space-migrate', 'chunk-backfill', 'frontmatter-refresh']);
   const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
   /** The scan's result as one sentence an operator can act on. Counts only what the run reported. */

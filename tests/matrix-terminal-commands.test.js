@@ -410,3 +410,49 @@ describe('names are typed the way people say them', () => {
     expect(r.chip).toMatch(/\[1\] Carrier_Handbook-2026/);
   });
 });
+
+describe('entries indexed before the frontmatter fix are refreshed once', () => {
+  // The title/summary fix only applies when a file is (re)indexed, and the
+  // scan skips unchanged files — so every memory already in the CEO's index
+  // would have kept its "1b4367dbf594" title forever. An entry whose stored
+  // summary still starts with the frontmatter fence is re-derived on the next
+  // scan, once, without the file having to change.
+  it('an unchanged memory file indexed the old way gets its real title on the next /scan', async () => {
+    const rel = 'Agents/Aeon/memory/1b4367dbf594.md';
+    write(rel, '---\nid: 1b4367dbf594\ncategory: fact\npinned: false\n---\n\nThe operator\'s preferred invoice terms are net 15\n');
+    await scan();
+    // Rewrite the stored entry the way the old rule produced it; the file is untouched.
+    ingestMod._resetStores();
+    const idxFile = path.join(dataRoot, 'vault_index.json');
+    const idx = JSON.parse(fs.readFileSync(idxFile, 'utf8'));
+    idx.documents[rel].title = '1b4367dbf594';
+    idx.documents[rel].summary = '--- id: 1b4367dbf594 category: fact pinned: false --- The operator\'s preferred invoice terms are net 15';
+    fs.writeFileSync(idxFile, JSON.stringify(idx));
+
+    const r = await ingestMod({ isVercel: false, VAULT_ROOT: vault, DATA_ROOT: dataRoot, embed: bow }).runSecondBrainScan();
+    const after = JSON.parse(fs.readFileSync(idxFile, 'utf8')).documents[rel];
+    expect(after.title).toBe("The operator's preferred invoice terms are net 15");
+    expect(after.summary).not.toMatch(/^---/);
+    expect(Array.isArray(after.embedding)).toBe(true);
+    expect(r.ingested).toBeGreaterThanOrEqual(1);
+
+    // Once: the next scan leaves it alone.
+    const again = await ingestMod({ isVercel: false, VAULT_ROOT: vault, DATA_ROOT: dataRoot, embed: bow }).runSecondBrainScan();
+    expect(again.ingested).toBe(0);
+  });
+});
+
+describe('a short note is quoted from its content, not its frontmatter', () => {
+  it('/recall and /ask see the memory, not "--- id: … category: …"', async () => {
+    write('Agents/Aeon/memory/1b4367dbf594.md', '---\nid: 1b4367dbf594\ncategory: fact\npinned: false\ncreated: 2026-09-23T08:40:57.366Z\nsource: api\n---\n\nThe operator\'s preferred invoice terms are net 15\n');
+    await scan();
+    const r = await fetch(`${base}/crn/second-brain/retrieve`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query: 'preferred invoice terms net 15' }),
+    });
+    const body = await r.json();
+    const doc = body.documents.find((d) => d.id === 'Agents/Aeon/memory/1b4367dbf594.md');
+    expect(doc).toBeTruthy();
+    expect(doc.content).toMatch(/^The operator's preferred invoice terms are net 15/);
+    expect(body.text).not.toMatch(/category: fact/);
+  });
+});

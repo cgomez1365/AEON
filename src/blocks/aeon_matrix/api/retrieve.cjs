@@ -67,6 +67,17 @@ const DOC_MAX_CHARS     = 9000;
 const FULL_CONCURRENCY  = 3;
 const STOP = new Set(['the','and','for','are','but','not','you','all','any','can','her','was','one','our','out','who','get','has','him','his','how','its','new','now','old','see','two','way','why','did','does','what','when','where','with','from','this','that','they','them','then','than','have','will','your','about','into','over','some','more','most','such','only','also','been','were','said','says','make','made','like','just','know','take','according','say','does','did']);
 const terms = (t) => new Set((String(t).toLowerCase().match(/[a-z][a-z0-9]{2,}/g) || []).filter(w => !STOP.has(w)));
+// Where a document's content starts: past a leading YAML frontmatter block.
+// A short note has no windows, so it is quoted from its head — and for every
+// memory_core mirror the head was "--- id: … category: fact pinned: …", which
+// is what /recall showed and what /ask handed the model (audit 2026-09-23).
+const FRONTMATTER_RE = /^\uFEFF?---\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/;
+function contentStart(text) {
+  const m = FRONTMATTER_RE.exec(String(text || ''));
+  if (!m) return 0;
+  const rest = String(text).slice(m[0].length);
+  return rest.trim() ? m[0].length + (rest.length - rest.trimStart().length) : 0;
+}
 function lexicalOverlap(queryTerms, text) {
   if (!queryTerms.size) return 0;
   const have = terms(text);
@@ -309,7 +320,8 @@ module.exports = function retrieveFactory(deps) {
             return `${s0 > 0 ? '…' : ''}${text.slice(s0, e0)}${e0 < text.length ? '…' : ''}`;
           }).join('\n[…]\n');
         } else {
-          content = text.slice(0, MAX_DOC_CHARS);
+          const at = contentStart(text);
+          content = text.slice(at, at + MAX_DOC_CHARS);
         }
         const passage = picks.length ? { s: picks[0].s, e: picks[0].e, windows: picks.map(pg => ({ s: pg.s, e: pg.e })) } : null;
         results.push({
@@ -715,7 +727,8 @@ module.exports = function retrieveFactory(deps) {
           return `${s0 > 0 ? '…' : ''}${text.slice(s0, e0)}${e0 < text.length ? '…' : ''}`;
         }).join('\n[…]\n');
       } else {
-        content = text.slice(0, DOC_MAX_CHARS);
+        const at = contentStart(text);
+        content = text.slice(at, at + DOC_MAX_CHARS);
       }
 
       const prompt = [
