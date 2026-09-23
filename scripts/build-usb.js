@@ -697,15 +697,18 @@ AEON · Broken Gear Industries · Apache-2.0
 `);
 }
 
+// Exports first: main() runs from inside this file when it is the CLI, and
+// build-usb-carry.cjs requires it back mid-run. Assigned after main(), that
+// require returned an empty object and --carry-home crashed on EXCLUDE.
+module.exports = {
+  main, writeEnvUsb, writeLaunchers, writeReadme, seedVault,
+  shouldExclude, EXCLUDE, copyTree, dirSize, human,
+  NODE_VERSION, NODE_ASSET,
+};
+
 // Only assemble a bundle when invoked as a script. Required so the generators
 // below can be unit-tested (tests/usb-portable.test.js) without the import
 // itself writing to a drive.
 if (require.main === module) {
   main().catch((e) => fail(e.stack || e.message));
 }
-
-module.exports = {
-  main, writeEnvUsb, writeLaunchers, writeReadme, seedVault,
-  shouldExclude, EXCLUDE, copyTree, dirSize, human,
-  NODE_VERSION, NODE_ASSET,
-};

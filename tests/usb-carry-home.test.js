@@ -260,3 +260,22 @@ describe('verify-usb --carry-home', () => {
     expect(out).toMatch(/resolves its home elsewhere|does not mark a carried home/);
   });
 });
+
+describe('the real CLI entry path', () => {
+  // Unit tests load build-usb.js as a module, where its exports are complete.
+  // The CLI runs main() from inside that file BEFORE `module.exports = …`
+  // executed, so the carry builder's require('./build-usb.js') got an empty
+  // object and crashed on EXCLUDE ("Cannot read properties of undefined") —
+  // found running the real build against the drive, 2026-09-22.
+  it('`build-usb.js --carry-home --dry-run` plans without crashing and writes nothing', () => {
+    const { execFileSync } = require('child_process');
+    const target = path.join(tmp, 'drive');
+    fs.mkdirSync(target);
+    const out = execFileSync(process.execPath,
+      [path.join(process.cwd(), 'scripts', 'build-usb.js'), '--target', target, '--carry-home', '--dry-run'],
+      { encoding: 'utf8', env: { ...process.env, AEON_HOME: path.join(tmp, 'no-home') } });
+    expect(out.replace(/\x1b\[[0-9;]*m/g, '')).toMatch(/DRY RUN/);
+    expect(out).toMatch(/tracked files/);
+    expect(fs.readdirSync(target)).toEqual([]);
+  });
+});

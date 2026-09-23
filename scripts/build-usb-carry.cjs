@@ -585,10 +585,17 @@ async function buildCarried(args, { download, log = console.log } = {}) {
     if (ping.status) log('  ! an AEON is running on this machine — its files are copied as they are now; close it first for a quiet snapshot');
   } catch { /* none running */ }
 
+  const files = installFileList(ROOT, buildUsb.EXCLUDE);
+  if (args.dryRun) {
+    const src = aeonHome.roots({ appRoot: ROOT, env: process.env });
+    log(`\n  DRY RUN — nothing written. Would copy ${files.length} tracked files, dist/, node_modules,`);
+    log(`  and${plan.dataAction === 'keep' ? ' NOT' : ''} the home at ${src.home}; then stage Node for macOS, Windows and Linux.\n`);
+    return { plan, dryRun: true, files: files.length };
+  }
+
   // 1. app
   const staging = `${plan.app}.incoming`;
   fs.rmSync(staging, { recursive: true, force: true });
-  const files = installFileList(ROOT, buildUsb.EXCLUDE);
   let appBytes = 0;
   for (const rel of files) appBytes += copyFileData(path.join(ROOT, rel), path.join(staging, rel));
   log(`  ✓ source: ${files.length} tracked files`);
