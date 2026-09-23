@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Folder, FileText, Upload, FolderPlus, ChevronRight, Home, ArrowLeft, X, RefreshCw, Trash2, Download, Cloud, Monitor, Save, Columns, PenLine } from 'lucide-react';
 import { getSupabase } from '../../kernel/supabase';
-import { WORKSPACE } from '../../config.js';
 import ModalPortal from '../../components/ModalPortal.jsx';
+import { joinPath, parentOf, crumbsFor } from './localPaths.js';
 
 const BUCKET = 'aeon-files';
 const IS_LOCAL_ENV = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
@@ -29,15 +29,15 @@ const formatSize = (bytes) => {
 
 const folderPrefix = (folder) => folder ? folder + '/' : '';
 
-// The host's path separator, inferred from the workspace path the server
-// reported rather than assumed. Every path-splitting site below used a
-// hardcoded backslash, which is correct on Windows and wrong everywhere
-// else — breadcrumbs rendered as one unsplittable blob on macOS and Linux,
-// and "up one folder" jumped straight to the root.
-const SEP = /^[A-Za-z]:\\|\\\\/.test(String(WORKSPACE || '')) ? '\\' : '/';
+// Local paths are always the absolute paths the SERVER reports — see
+// localPaths.js for why the build-time WORKSPACE constant was the wrong source
+// (it is '' on every install, so New folder and Upload at the landing view
+// pointed at the disk root and the workspace instead of the Vault on screen).
 
 function FilePane({ mode, onPreview, onEdit }) {
   const [currentFolder, setCurrentFolder] = useState('');
+  // Local only: the folder the server lands on (the Vault), as it reported it.
+  const [landing, setLanding]             = useState('');
   const [entries, setEntries]             = useState([]);
   const [loading, setLoading]             = useState(false);
   const [showNewFolder, setShowNewFolder] = useState(false);
@@ -103,15 +103,22 @@ function FilePane({ mode, onPreview, onEdit }) {
         }
         setEntries([...folders, ...files]);
       } else {
-        const body = JSON.stringify({ dirPath: folder || WORKSPACE });
+        // An empty folder asks the server for its default landing folder (the
+        // Vault). Whatever was asked for, the folder we are IN is the absolute
+        // path the server says it listed — every later path is built from it.
+        const body = JSON.stringify({ dirPath: folder || '' });
         const res = await fetch(`${LOCAL_API}/list`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
-        if (!res.ok) throw new Error(await res.text());
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
         const data = await res.json();
         const sorted = (data.entries || []).sort((a, b) => {
           if (a.type === b.type) return a.name.localeCompare(b.name);
           return a.type === 'dir' ? -1 : 1;
         });
         setEntries(sorted.map(f => ({ ...f, storagePath: f.path })));
+        const here = data.path || folder;
+        if (!folder) setLanding(here);
+        setCurrentFolder(here);
+        return;
       }
       setCurrentFolder(folder);
     } catch (e) {
@@ -134,22 +141,10 @@ function FilePane({ mode, onPreview, onEdit }) {
       parts.pop();
       loadDir(parts.join('/'));
     } else {
-      // F-4. This split on a literal backslash, so on macOS and Linux — where
-      // the separator is '/' — the whole path was one segment and "up" could
-      // only ever jump to the root. SEP is derived from the paths the server
-      // actually returns, so the same code is right on either platform.
-      //
-      // The leading separator is preserved rather than filtered away: a POSIX
-      // path split on '/' begins with an empty segment, and dropping it turns
-      // "/Users/cris/Vault" into the relative "Users/cris" — which resolves
-      // against the workspace instead of the disk and lands somewhere the
-      // operator did not ask for.
-      const posixRoot = SEP === '/' && currentFolder.startsWith('/');
-      const parts = currentFolder.split(SEP).filter(Boolean);
-      if (parts.length > 1) {
-        parts.pop();
-        loadDir((posixRoot ? SEP : '') + parts.join(SEP));
-      } else loadDir('');
+      // F-4 (separator per platform) and the POSIX leading '/' both live in
+      // parentOf(), derived from the absolute path the server reported.
+      const up = parentOf(currentFolder);
+      loadDir(up && up !== currentFolder ? up : '');
     }
   };
 
@@ -166,7 +161,9 @@ function FilePane({ mode, onPreview, onEdit }) {
         // BO-H8e — this printed "not yet implemented" while POST /api/fs/mkdir
         // had been mounted all along (host_os/api/fs.cjs). A control that
         // reports its own absence, over a capability that exists. §08.
-        const dirPath = `${currentFolder || WORKSPACE}/${newFolderName.trim()}`;
+        // currentFolder is the absolute folder on screen (never '' once loaded).
+        if (!currentFolder) throw new Error('The folder has not loaded yet — refresh and try again.');
+        const dirPath = joinPath(currentFolder, newFolderName.trim());
         const res = await fetch(`${LOCAL_API}/mkdir`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -205,13 +202,16 @@ function FilePane({ mode, onPreview, onEdit }) {
             return;
           }
         }
+        if (!currentFolder) throw new Error('The folder has not loaded yet — refresh and try again.');
         const formData = new FormData();
-        const uploadPath = currentFolder || WORKSPACE;
-        formData.append('targetDir', uploadPath);
+        // The folder on screen. '' used to fall through to the server's
+        // workspace, so a file uploaded at the landing view (the Vault) was
+        // "saved" somewhere the list never showed.
+        formData.append('targetDir', currentFolder);
         for (let i = 0; i < files.length; i++) { formData.append('files', files[i]); }
         setUploadStatus(`⬆️ Saving ${files.length} file(s) to Local Disk...`);
         const res = await fetch(`${LOCAL_API}/upload`, { method: 'POST', body: formData });
-        if (!res.ok) throw new Error(await res.text());
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
         uploaded = files.length;
       }
       setUploadStatus(`✅ ${uploaded} file(s) saved successfully!`);
@@ -249,8 +249,7 @@ function FilePane({ mode, onPreview, onEdit }) {
 
     // A bare name stays in the current folder; anything containing a
     // separator is taken as a destination path the operator meant.
-    const dir = entry.storagePath.slice(0, entry.storagePath.lastIndexOf(SEP));
-    const to = next.includes('/') || next.includes('\\') ? next : `${dir}${SEP}${next}`;
+    const to = next.includes('/') || next.includes('\\') ? next : joinPath(parentOf(entry.storagePath), next);
 
     try {
       const res = await fetch(`${LOCAL_API}/rename`, {
@@ -329,8 +328,8 @@ function FilePane({ mode, onPreview, onEdit }) {
   };
 
   const crumbs = mode === 'cloud'
-    ? currentFolder.split('/').filter(Boolean)
-    : currentFolder.replace(WORKSPACE, '').split(SEP).filter(Boolean);
+    ? currentFolder.split('/').filter(Boolean).map((label, i, all) => ({ label, path: all.slice(0, i + 1).join('/') }))
+    : crumbsFor(currentFolder, landing);
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: 'rgba(0,0,0,0.2)', borderRadius: '12px', padding: '20px', border: `1px solid rgba(255,255,255,0.05)`, minWidth: 0 }}>
@@ -396,15 +395,12 @@ function FilePane({ mode, onPreview, onEdit }) {
         <button onClick={() => loadDir('')} style={{ background: 'transparent', border: 'none', color: themeColor, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px' }}>
           <Home size={12} /> {mode === 'cloud' ? 'Cloud' : 'Local'}
         </button>
-        {crumbs.map((crumb, i) => {
-          const path = mode === 'cloud' ? crumbs.slice(0, i + 1).join('/') : WORKSPACE + SEP + crumbs.slice(0, i + 1).join(SEP);
-          return (
-            <React.Fragment key={i}>
-              <ChevronRight size={10} color="#475569" />
-              <button onClick={() => loadDir(path)} style={{ background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer', fontSize: '11px' }}>{crumb}</button>
-            </React.Fragment>
-          );
-        })}
+        {crumbs.map((crumb, i) => (
+          <React.Fragment key={i}>
+            <ChevronRight size={10} color="#475569" />
+            <button onClick={() => loadDir(crumb.path)} style={{ background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer', fontSize: '11px' }}>{crumb.label}</button>
+          </React.Fragment>
+        ))}
       </div>
 
       {uploadStatus && (

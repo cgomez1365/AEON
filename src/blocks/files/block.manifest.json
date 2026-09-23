@@ -4,7 +4,7 @@
   "label": "Files",
   "icon": "Folder",
   "route": "/files",
-  "description": "File browser and document manager with cloud sync and Second Brain integration",
+  "description": "File browser for this computer's own folders (the Vault first) — upload, new folder, rename, edit, delete behind an add-only lock. An optional Cloud pane and Cloud Notes need Supabase.",
   "category": "core",
   "tier": "core",
   "nav": {
@@ -18,15 +18,12 @@
   },
   "widget": null,
   "requires": {
-    "apis": [
-      "supabase"
-    ],
-    "env": [
-      "SUPABASE_URL",
-      "SUPABASE_SERVICE_ROLE_KEY"
-    ],
+    "apis": [],
+    "env": [],
     "local": [],
-    "blocks": []
+    "blocks": [
+      "host_os"
+    ]
   },
   "provides": {
     "routes": true,
@@ -80,15 +77,27 @@
   },
   "routes": [
     {
-      "method": "ALL",
+      "method": "DELETE",
+      "path": "/api/notes",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/notes",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/notes",
+      "auth": true
+    },
+    {
+      "method": "PUT",
       "path": "/api/notes",
       "auth": true
     }
   ],
-  "env": [
-    "SUPABASE_URL",
-    "SUPABASE_SERVICE_ROLE_KEY"
-  ],
+  "env": [],
   "ai": {
     "capabilities": [],
     "canGenerate": false,
@@ -100,7 +109,9 @@
     "tables": [],
     "scope": "block"
   },
-  "dependencies": [],
+  "dependencies": [
+    "host_os"
+  ],
   "deployment": {
     "target": "hybrid",
     "runtime": "any"

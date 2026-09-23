@@ -2,71 +2,72 @@
 
 **ID:** `files`
 **Route:** `/files`
-**Icon:** 📁
 **Tier:** `core`
-**Status:** `ACTIVE`
+**Depends on:** `host_os` (every Local-pane operation is a `/api/fs/*` route it owns)
+**Needs no cloud.** Supabase is optional — only the Cloud pane and Cloud Notes use it.
 
-Dual-pane file browser and document manager. Browses the local disk and a
-Supabase Storage cloud bucket side by side, with upload, download, delete,
-inline preview, and in-browser text/code editing. Uploads that land in the
-Second Brain folder trigger an automatic re-index.
+A file browser for this computer's own folders, landing in the Vault (where a
+dropped file lights up the Aeon Matrix on its next index). A Cloud pane shows a
+Supabase Storage bucket beside it when Supabase is configured.
 
-## What it does
+## What works with no cloud at all (the Local pane)
 
-- **Local pane** — browses the host filesystem starting at `WORKSPACE`
-  (`src/config.js`). Backed by `src/blocks/host_os/api/fs.cjs`
-  (`/api/fs/list`, `/read`, `/write`, `/delete`, `/upload`, `/serve`,
-  `/mkdir`). That router is desktop-only (`host_os` manifest sets
-  `contract.targets.vercel: false`) and 403s every local-fs route when
-  running on Vercel — there is no persistent local disk in serverless.
-- **Cloud pane** — browses a Supabase Storage bucket (`aeon-files`) directly
-  from the browser via `src/kernel/supabase.js`. Folders are modeled as
-  `.keep` placeholder objects (Supabase Storage has no real directories).
-- **Dual view** — both panes side by side (local dev only; the toggle is
-  hidden when the app isn't running on `localhost`/`127.0.0.1`).
-- **Upload** — drag-and-drop onto the file list, or the **Upload** button
-  (native file picker). Both paths call the same `uploadFilesList()`
-  function, so drag-and-drop is a convenience layer, not the only way in —
-  keyboard/screen-reader users have the button as a fully equivalent
-  alternative.
-- **Download / Delete** — per-row icon buttons. Cloud downloads use a
-  60-second Supabase signed URL; local downloads stream through
-  `/api/fs/serve?download=1`.
-- **Preview** — images/PDF/video open in a modal viewer (cloud: signed URL,
-  60s; local: `/api/fs/serve`).
-- **Edit** — text-ish files (`.txt .md .json .js .jsx .html .css .py .bat`)
-  open in an in-browser textarea editor (local mode only) and save back via
-  `/api/fs/write` — a route owned by **host_os**, not this block (BO-A2d).
-- **Second Brain re-index** — uploads do not trigger indexing themselves. The
-  Vault is re-indexed on every boot, nightly, and from Matrix ▸ Index; see
-  `docs/MEMORY_ARCHITECTURE.md`. (Earlier revisions said uploads under
-  `WORKSPACE/Data/Second_Brain` ran a separate indexer script; no code has done
-  that since the Second Brain moved into the Vault, and the script was removed
-  2026-09-14.)
+All of it is served by **host_os** (`src/blocks/host_os/api/fs.cjs`); this block
+is the screen.
+
+- **Browse** — lands in the Vault (`POST /api/fs/list` with no path). The
+  folder on screen is always the absolute path the server says it listed;
+  breadcrumbs, Up, New folder, Upload and Rename are all built from it
+  (`localPaths.js`). Browsing is bounded to the operator's home, the workspace
+  and the Vault; credential and shell-config folders (`.ssh`, `.aws`,
+  `Library/LaunchAgents`, AEON's `secrets`, `.env`, …) are refused by name.
+- **Add-only lock (default)** — browse, upload and create folders; nothing can
+  be edited, renamed, overwritten or deleted until the operator unlocks the hub
+  (🔒/🔓, persisted, enforced server-side with HTTP 423).
+- **Upload** — drag-and-drop or the Upload button (same code path), 50 MB per
+  file, 20 per upload, into the folder on screen.
+- **New folder**, **Rename / move** (unlocked), **Delete** (unlocked).
+- **Open** — text-like files (`.txt .md .json .js .jsx .html .css .py .bat`)
+  open in an editor and save back through `/api/fs/write` (overwriting needs the
+  hub unlocked); images, PDF and video open in a viewer via `/api/fs/serve`.
+- **Download** — `/api/fs/serve?download=1`.
+
+Uploads do not index anything themselves. The Vault is re-indexed on every
+boot, nightly, and from Matrix ▸ Index (`docs/MEMORY_ARCHITECTURE.md`).
+
+## What needs Supabase
+
+- **Cloud pane** — browses the `aeon-files` Storage bucket from the browser via
+  `src/kernel/supabase.js`. Without keys every cloud action says
+  "Cloud storage not configured — add Supabase keys in Settings." The Cloud and
+  Dual toggles appear only when the app is opened on `localhost`/`127.0.0.1`.
+- **Cloud Notes** — `api/notes.js`, `GET/POST/PUT/DELETE /api/notes` over the
+  Supabase `aeon_notes` table. Nothing in this block's screen calls it (its one
+  caller is the Aeon Matrix visualizer). Without Supabase it answers **503
+  `CLOUD_NOT_CONFIGURED`** immediately. There is no local notes store.
+
+Because none of that is needed for the Local pane, the manifest declares no
+required API or env var — the registry reports files **ready** on a local-only
+install (it reported `missingApis: ["supabase"]` until 2026-09-23).
+
+## Routes this block serves
+
+| Method | Path | Auth |
+|---|---|---|
+| GET, POST, PUT, DELETE | `/api/notes` | session required once an account exists |
+
+Each verb is registered by name. A computed registration
+(`methods.forEach(m => app[m](...))`) is generated into the manifest as `ALL`,
+and the kernel's manifest auth never matches `ALL` against a real request
+method — so until 2026-09-23 `/api/notes` answered without a session whenever
+the global guard was off. `tests/files-block.test.js` sends a real request per
+verb and requires 401.
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `block.manifest.json` | Block Standard v4 manifest (permissions, routes, env, deployment target `hybrid`) |
-| `index.jsx` | Main UI — `FileManager` (local/cloud/dual toggle, preview modal, editor modal) + `FilePane` (per-mode browser) |
-| `api/notes.js` | `/api/notes` CRUD (CommonJS plugin pattern) — Supabase `aeon_notes` table, used for CEO notes, vault-synced on every write |
-| _(removed BO-A2d)_ | `api/fs/read.js` and `api/fs/write.js` were Vercel-only Supabase proxies that also mounted in local dev, colliding with `host_os/api/fs.cjs` on `POST /api/fs/read` and `/api/fs/write`. They had zero callers — their only documented consumer, `components/DataNotes.jsx`, had already been deleted — and carried wildcard CORS on a write route. **host_os owns filesystem access.** |
-
-## Cloud requirements
-
-Declared in the manifest: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`
-(`requires.env`), `supabase` (`requires.apis`). All Supabase access in this
-block is a **soft dependency** — if the keys aren't configured,
-`src/kernel/supabase.js` exports `null` and every cloud-mode code path
-(`loadDir`, `handleCreateFolder`, `uploadFilesList`, `handleDelete`,
-`handleFileClick`, `handleDownload`) fails soft with a friendly
-"Cloud storage not configured — add Supabase keys in Settings." message
-instead of throwing. Local-only usage works with zero cloud config.
-
-## To activate
-
-Auto-detected by the AEON kernel's block loader — drop a folder with a
-`block.manifest.json` + `index.jsx` under `src/blocks/` and it appears in
-the nav with zero edits elsewhere. No restart needed in dev (hot-remount via
-`kernel.rescan()`).
+| `block.manifest.json` | Manifest. `routes` is generated by `scripts/gen-block-routes.cjs` — do not hand-edit it |
+| `index.jsx` | The screen — `FileManager` (Local / Cloud / Dual, preview and editor modals) + `FilePane` |
+| `localPaths.js` | Pure path helpers for the Local pane (join, parent, breadcrumbs; POSIX and Windows) |
+| `api/notes.js` | Cloud Notes (Supabase) |

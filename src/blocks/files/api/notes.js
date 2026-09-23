@@ -91,12 +91,25 @@ const _handler = async (req, res) => {
 };
 
 module.exports = (app, deps) => {
-  // Supports GET, POST, PUT, DELETE by delegating to the internal handler.
-  // The handler is wrapped in a deadline so a wedged upstream ends the REQUEST
-  // rather than holding the socket open indefinitely (BO-E4).
-  const methods = ['get', 'post', 'put', 'delete', 'options'];
-  methods.forEach(m => app[m]('/api/notes', (req, res) => {
+  // GET, POST, PUT, DELETE delegate to the internal handler, wrapped in a
+  // deadline so a wedged upstream ends the REQUEST rather than holding the
+  // socket open indefinitely (BO-E4).
+  //
+  // Each verb is registered by name, not through `methods.forEach(m => app[m])`.
+  // The manifest's routes are generated from this source
+  // (scripts/gen-block-routes.cjs), and a computed verb can only be declared as
+  // `ALL` — which the kernel's manifest auth never matches against a real
+  // request method. Measured 2026-09-23: with an account and the global guard
+  // off, every /api/notes verb reached this handler with no session. Named
+  // verbs make the declaration GET/POST/PUT/DELETE, and each one is enforced.
+  // (OPTIONS is preflight: pre-auth by design, answered inside the handler.)
+  const handle = (req, res) => {
     cloud.withDeadline(Promise.resolve().then(() => _handler(req, res)), cloud.DEFAULT_DEADLINE_MS, 'Cloud Notes')
       .catch(err => { if (!res.headersSent) cloud.sendFailure(res, err, 'Cloud Notes'); });
-  }));
+  };
+  app.get('/api/notes', handle);
+  app.post('/api/notes', handle);
+  app.put('/api/notes', handle);
+  app.delete('/api/notes', handle);
+  app.options('/api/notes', handle);
 };
