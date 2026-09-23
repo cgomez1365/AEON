@@ -383,8 +383,12 @@ function normalizeManifest(folder) {
   return out;
 }
 
-/** Check readiness of a block against live env + a desktop-file probe. */
-function checkReadiness(manifest, env) {
+/**
+ * Check readiness of a block against live env + a desktop-file probe, and
+ * against the blocks installed beside it (`installed`: a Set of ids; read from
+ * the blocks folder when not given).
+ */
+function checkReadiness(manifest, env, installed) {
   env = env || process.env;
   const missing = [];
   for (const a of manifest.requires.apis || []) {
@@ -467,12 +471,28 @@ function checkReadiness(manifest, env) {
     }
   }
 
+  // ── Declared block dependencies ──────────────────────────────────────────
+  // requires.blocks was normalized into every manifest and never read: with
+  // fleet_control removed, cookbook still counted as ready while its hwfit calls
+  // answered 404 (measured 2026-09-23, one block removed at a time). Blocks are
+  // added and removed one by one (Bible §03), so a missing one is named. It
+  // degrades rather than un-readies — the line drawn above for AI roles: Writer
+  // drafts without memory_core; only "push to memory" needs it.
+  const wanted = manifest.requires?.blocks || [];
+  let missingBlocks = [];
+  if (wanted.length) {
+    let have = installed;
+    if (!have) { try { have = new Set(listBlockFolders()); } catch { have = null; } }
+    missingBlocks = have ? wanted.filter((id) => !have.has(id)) : [];
+  }
+
   return {
     ready: missing.length === 0 && localMissing.length === 0,
     missingApis: missing,
     localMissing,
+    missingBlocks,
     roles,
-    degraded: !!roles && Object.values(roles).some(r => r.ready === false),
+    degraded: (!!roles && Object.values(roles).some(r => r.ready === false)) || missingBlocks.length > 0,
   };
 }
 
@@ -530,7 +550,8 @@ function writeRuntimeConfig(folder, manifest, ctx) {
  */
 function syncAllBlocks(ctx = {}) {
   const registry = [];
-  for (const folder of listBlockFolders()) {
+  const installed = new Set(listBlockFolders());
+  for (const folder of installed) {
     mergeBlockEnv(folder);                 // cartridge defaults fill gaps (central wins)
     let manifest;
     try {
@@ -555,7 +576,7 @@ function syncAllBlocks(ctx = {}) {
     if (fs.existsSync(legacy)) { try { fs.unlinkSync(legacy); } catch {} }
     // Flash runtime config.
     if (ctx.writeRuntime !== false) writeRuntimeConfig(folder, manifest, ctx);
-    registry.push({ ...manifest, readiness: checkReadiness(manifest, process.env) });
+    registry.push({ ...manifest, readiness: checkReadiness(manifest, process.env, installed) });
   }
   return registry;
 }
