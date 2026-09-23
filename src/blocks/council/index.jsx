@@ -3,10 +3,12 @@
  * Members (each = a persona + an assigned model AEON can reach) answer
  * independently → read each other and may revise → the chair synthesizes a
  * verdict. Every debate is saved to the Second Brain vault as history.
- * Runs through /api/ai, so it works on whatever providers are alive.
+ * Each turn goes through /api/council/speak (kernelLLM.stream), so it works on
+ * whatever providers are alive and says when an answer was cut off.
  */
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Landmark, Play, Loader, ChevronDown, Copy, Check, Users, Plus, Trash2, Save, Clock, X, Pencil } from 'lucide-react';
+import { Landmark, Play, Loader, ChevronDown, Copy, Check, Users, Plus, Trash2, Save, Clock, X, Pencil, Scissors } from 'lucide-react';
+import { runDebate, savePayload } from './debate.mjs';
 
 // A persona and a debate question are prose, not a label — CEO, on the 2017
 // Air blind test: "council block needs flex fields!! on all text boxes."
@@ -25,16 +27,25 @@ function useAutoGrow(ref, value, maxPx) {
   }, [ref, value, maxPx]);
 }
 
-async function ask(prompt, provider, model) {
-  const r = await fetch('/api/ai', {
+// One councilor's turn. /api/council/speak (not /api/ai) because it reports
+// whether the model cut the answer off at its output limit, and which provider
+// actually answered — /api/ai returns the text alone.
+async function ask(prompt, member) {
+  const r = await fetch('/api/council/speak', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prompt, role: 'chat', provider, model }),
+    body: JSON.stringify({ prompt, provider: member.provider, model: member.model }),
   });
   let d = null;
   try { d = await r.json(); } catch { /* empty/non-JSON body — e.g. backend unreachable */ }
-  if (!r.ok) throw new Error(d?.error || `LLM call failed (${r.status || 'no response'})`);
-  return (d?.text || d?.response || '').trim();
+  if (!r.ok) {
+    const e = new Error(d?.error || `LLM call failed (${r.status || 'no response'})`);
+    if (d?.partialText) e.partialText = d.partialText;
+    throw e;
+  }
+  return d || { text: '' };
 }
+
+const CUT_NOTE = 'Cut off — the model stopped at its output limit (free OpenRouter models stop at 1024 tokens). Give this seat a model with a larger budget, or shorten its persona.';
 
 export default function Council() {
   const [members, setMembers] = useState([]);
@@ -44,6 +55,7 @@ export default function Council() {
   const [statusLine, setStatusLine] = useState('');
   const [opinions, setOpinions] = useState({});
   const [verdict, setVerdict] = useState('');
+  const [verdictCut, setVerdictCut] = useState(false);
   const [error, setError] = useState(null);
   const [open, setOpen] = useState({});
   const [copied, setCopied] = useState(false);
@@ -80,45 +92,30 @@ export default function Council() {
     if (!q || runningRef.current) return;
     if (councilors.length < 2) { setError('Add at least 2 councilors in the Roster tab.'); return; }
     runningRef.current = true;
-    setError(null); setVerdict(''); setOpinions({}); setOpen({}); setSaved(false);
+    setError(null); setVerdict(''); setVerdictCut(false); setOpinions({}); setOpen({}); setSaved(false);
+    // Every value the chair and the Vault transcript use comes from this run
+    // (./debate.mjs). It used to be read from `opinions` as captured when
+    // CONVENE was clicked, so the chair — and the saved transcript — got the
+    // openings repeated, or the PREVIOUS debate's final positions.
     try {
-      setPhase('opening');
-      const openings = {};
-      for (const c of councilors) {
-        setStatusLine(`${c.label} is forming an opinion…`);
-        try {
-          openings[c.id] = await ask(
-            `${c.persona ? c.persona + '\n\n' : ''}You are one voice on a small advisory council. Give your independent, honest position on the question below. Be concrete and take a stance. 150 words max.\n\nQUESTION: ${q}`,
-            c.provider, c.model);
-        } catch (e) { openings[c.id] = `(unavailable: ${e.message})`; }
-        setOpinions(prev => ({ ...prev, [c.id]: { opening: openings[c.id] } }));
-      }
-      setPhase('deliberating');
-      for (const c of councilors) {
-        setStatusLine(`${c.label} is weighing the others…`);
-        const others = councilors.filter(o => o.id !== c.id).map(o => `${o.label}: ${openings[o.id]}`).join('\n\n');
-        try {
-          const revised = await ask(
-            `${c.persona ? c.persona + '\n\n' : ''}You are ${c.label} on an advisory council. The question was: ${q}\n\nYour opening position:\n${openings[c.id]}\n\nThe other councilors said:\n${others}\n\nGive your FINAL position. If the others changed your mind, say what changed; if not, defend your stance against their strongest point. 120 words max.`,
-            c.provider, c.model);
-          setOpinions(prev => ({ ...prev, [c.id]: { ...prev[c.id], revised } }));
-        } catch { /* keep opening */ }
-      }
-      setPhase('verdict');
-      setStatusLine(`${chair?.label || 'The chair'} is writing the verdict…`);
-      const record = councilors.map(c => `${c.label}\n  Opening: ${openings[c.id]}\n  Final: ${opinions[c.id]?.revised || openings[c.id]}`).join('\n\n');
-      const v = await ask(
-        `You chair an advisory council. Question: ${q}\n\nDeliberation record:\n${record}\n\nWrite the council's verdict:\n1. THE VERDICT — one clear, actionable recommendation (2-3 sentences).\n2. WHERE THE COUNCIL AGREED — bullets, name the councilors.\n3. WHERE IT SPLIT — the strongest dissent and who held it.\n4. CONFIDENCE — high/medium/low with one sentence why.`,
-        chair.provider, chair.model);
-      setVerdict(v);
+      const result = await runDebate({
+        question: q, councilors, chair, ask,
+        onOpinion: (id, o) => setOpinions(prev => ({ ...prev, [id]: o })),
+        onStatus: setStatusLine,
+        onPhase: setPhase,
+      });
+      setVerdict(result.verdict);
+      setVerdictCut(!!result.verdictTruncated);
+      if (result.verdictError) setError(result.verdictError);
       setPhase('done');
       setStatusLine('');
-      // Persist to the vault
+      // Persist to the vault — a debate without a verdict is saved too, with
+      // the reason, so the opinions the operator waited for are not lost.
       try {
-        const payload = { question: q, verdict: v, opinions: councilors.map(c => ({ label: c.label, opening: openings[c.id], revised: opinions[c.id]?.revised })) };
-        const r = await fetch('/api/council/debate/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        const r = await fetch('/api/council/debate/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(savePayload(q, councilors, result)) });
         if (r.ok) setSaved(true);
-      } catch {}
+        else setError(prev => `${prev ? prev + ' ' : ''}The debate could not be saved to the Vault (${r.status}).`);
+      } catch (e) { setError(prev => `${prev ? prev + ' ' : ''}The debate could not be saved to the Vault: ${e.message}`); }
     } catch (e) { setError(e.message); setPhase('error'); }
     runningRef.current = false;
   };
@@ -207,6 +204,8 @@ export default function Council() {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 10, marginBottom: 16 }}>
             {councilors.filter(c => opinions[c.id]).map(c => {
               const o = opinions[c.id]; const expanded = open[c.id];
+              const shown = o.revised || o.opening || `(no answer — ${o.error || 'unavailable'})`;
+              const cut = o.revised ? o.revisedTruncated : o.openingTruncated;
               return (
                 <div key={c.id} style={{ borderTop: `2px solid ${c.color}`, background: 'var(--bg-card)', border: '1px solid var(--border-mute)', borderRadius: 10, padding: 14 }}>
                   <div role="button" tabIndex={0} aria-expanded={!!expanded} aria-label={`${c.label}'s opinion, ${expanded ? 'expanded' : 'collapsed'}`}
@@ -217,11 +216,19 @@ export default function Council() {
                     <span aria-hidden="true" style={{ width: 8, height: 8, borderRadius: '50%', background: c.color, flexShrink: 0 }} />
                     <span style={{ fontSize: 12, fontWeight: 700 }}>{c.label}</span>
                     <span style={{ fontSize: 9, fontFamily: 'var(--font-mono)', color: 'var(--text-faint)' }}>{c.model}</span>
+                    {cut && (
+                      <span title={CUT_NOTE} style={{ fontSize: 9, color: 'var(--amber, #f59e0b)', border: '1px solid var(--amber, #f59e0b)', borderRadius: 3, padding: '1px 5px', display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                        <Scissors size={9} aria-hidden="true" /> CUT OFF
+                      </span>
+                    )}
                     <ChevronDown size={12} aria-hidden="true" style={{ marginLeft: 'auto', color: 'var(--text-dim)', transform: expanded ? 'rotate(180deg)' : 'none' }} />
                   </div>
-                  <div style={{ fontSize: 11.5, color: 'var(--text-dim)', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
-                    {(o.revised || o.opening).slice(0, expanded ? 100000 : 260)}{!expanded && (o.revised || o.opening).length > 260 ? '…' : ''}
+                  <div style={{ fontSize: 11.5, color: o.opening ? 'var(--text-dim)' : 'var(--coral, #ff6b6b)', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
+                    {shown.slice(0, expanded ? 100000 : 260)}{!expanded && shown.length > 260 ? '…' : ''}
                   </div>
+                  {cut && expanded && <div role="note" style={{ fontSize: 10.5, color: 'var(--amber, #f59e0b)', marginTop: 6, lineHeight: 1.5 }}>{CUT_NOTE}</div>}
+                  {o.revisedError && <div role="note" style={{ fontSize: 10.5, color: 'var(--text-faint)', marginTop: 6 }}>Final round failed ({o.revisedError}) — showing the opening position.</div>}
+                  {o.servedBy?.fallback && <div role="note" style={{ fontSize: 10.5, color: 'var(--text-faint)', marginTop: 6 }}>Answered by {o.servedBy.provider}{o.servedBy.model ? `/${o.servedBy.model}` : ''} — this seat's own model could not.</div>}
                 </div>
               );
             })}
@@ -239,6 +246,7 @@ export default function Council() {
               </button>
             </div>
             <div style={{ fontSize: 12.5, color: 'var(--text)', lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>{verdict}</div>
+            {verdictCut && <div role="note" style={{ fontSize: 11, color: 'var(--amber, #f59e0b)', marginTop: 10, display: 'flex', alignItems: 'center', gap: 5 }}><Scissors size={11} aria-hidden="true" /> {CUT_NOTE}</div>}
           </div>
         )}
 
@@ -267,12 +275,19 @@ function RosterPanel({ members, availModels, onChange }) {
   useAutoGrow(editPersonaRef, edit.persona, 120);
   useAutoGrow(formPersonaRef, form.persona, 120);
   const [err, setErr] = useState('');
-  const modelOpts = availModels.map(m => ({ value: `${m.engine}|${m.id}`, label: `${m.id} (${m.engine})` }));
+  // A "role:<name>" engine is a seat that follows a Settings role — the only
+  // way to seat a custom / LM Studio / OpenAI-compatible endpoint's model.
+  const optLabel = (engine, id) => (!engine
+    ? `${id || 'your chat model'} (follows Settings → chat)`
+    : String(engine).startsWith('role:') ? `${id} (follows Settings → ${engine.slice(5)})` : `${id} (${engine})`);
+  const modelOpts = availModels.map(m => ({ value: `${m.engine}|${m.id}`, label: optLabel(m.engine, m.id) }));
 
   const add = async () => {
-    if (!form.label || !form.model) return;
+    if (!form.label || !form.model) { setErr('A new member needs a name and a model.'); return; }
     const [provider, model] = form.model.split('|');
-    await fetch('/api/council/members', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ label: form.label, persona: form.persona, provider, model }) });
+    const r = await fetch('/api/council/members', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ label: form.label, persona: form.persona, provider, model }) }).catch(() => null);
+    if (!r || !r.ok) { setErr((await r?.json().catch(() => ({})))?.error || 'Could not add that member.'); return; }
+    setErr('');
     setForm({ label: '', persona: '', model: '' }); setAdding(false); onChange();
   };
 
@@ -363,7 +378,7 @@ function RosterPanel({ members, availModels, onChange }) {
             <>
               <select value={`${m.provider}|${m.model}`} onChange={e => setModel(m.id, e.target.value)}
                 aria-label={`Change model for ${m.label}`} className="council-focusable" style={{ ...inp, maxWidth: 220 }}>
-                <option value={`${m.provider}|${m.model}`}>{m.model} ({m.provider})</option>
+                <option value={`${m.provider}|${m.model}`}>{optLabel(m.provider, m.model)}</option>
                 {modelOpts.filter(o => o.value !== `${m.provider}|${m.model}`).map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
               </select>
 

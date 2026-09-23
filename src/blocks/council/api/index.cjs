@@ -55,15 +55,24 @@ module.exports = function createCompareRouter(deps) {
     'A systems thinker focused on second-order effects.',
     'A first-principles reasoner who values rigor.',
   ];
+  // Seats are named for the voice, not the model — the model is shown beside
+  // every opinion anyway, and two seats on one model would otherwise share a
+  // name.
+  const SEAT_NAMES = ['The Pragmatist', 'The Skeptic', 'The Systems Thinker', 'The First-Principles Reasoner'];
   async function buildSeed() {
     let avail = [];
     try { avail = await liveModels(); } catch {}
-    const picks = avail.slice(0, 4);
+    let picks = avail.slice(0, 4);
+    // A debate needs two voices. One reachable model (the common free-tier
+    // install) used to seed ONE councilor, and CONVENE answered "Add at least
+    // 2 councilors" on a council the operator never built. Two personas on
+    // the same model still argue.
+    if (picks.length === 1) picks = [picks[0], picks[0]];
     const seed = picks.map((m, i) => ({
-      id: 'm' + (i + 1), label: m.name || m.id, persona: PERSONAS[i % PERSONAS.length],
+      id: 'm' + (i + 1), label: SEAT_NAMES[i % SEAT_NAMES.length], persona: PERSONAS[i % PERSONAS.length],
       provider: m.engine, model: m.id, color: COLORS[i % COLORS.length], chair: false,
     }));
-    if (picks[0]) seed.push({ id: 'chair', label: `${picks[0].name || picks[0].id} (chair)`, persona: 'The chair — synthesizes the debate into a verdict.', provider: picks[0].engine, model: picks[0].id, color: COLORS[seed.length % COLORS.length], chair: true });
+    if (picks[0]) seed.push({ id: 'chair', label: 'The Chair', persona: 'The chair — synthesizes the debate into a verdict.', provider: picks[0].engine, model: picks[0].id, color: COLORS[seed.length % COLORS.length], chair: true });
     return seed;
   }
   const loadMembers = () => {
@@ -73,9 +82,19 @@ module.exports = function createCompareRouter(deps) {
   const saveMembers = (m) => { try { fs.writeFileSync(MEMBERS_FILE, JSON.stringify(m, null, 2)); } catch {} };
 
   // GET /council/members — seeds from live models on first run
+  //
+  // An EMPTY seed is not saved. It used to be: a first open with no reachable
+  // model wrote members.json = [], and since [] is not "missing" the roster
+  // never seeded again — the UI's promise that it "fills in automatically once
+  // AEON can reach a model" was false from the first visit. The UI refuses to
+  // delete below two members, so an empty roster is never the operator's own
+  // choice.
   router.get('/council/members', async (_req, res) => {
     let members = loadMembers();
-    if (!members) { members = await buildSeed(); saveMembers(members); }
+    if (!Array.isArray(members) || members.length === 0) {
+      members = await buildSeed();
+      if (members.length) saveMembers(members);
+    }
     res.json({ members });
   });
 
@@ -151,9 +170,17 @@ module.exports = function createCompareRouter(deps) {
   });
 
   // POST /council/debate/save — persist a completed debate to the vault
+  //
+  // A debate whose chair failed is still saved (with the reason) — the
+  // operator waited for every opinion, and discarding them because the last
+  // call failed lost the part that worked. An answer the model cut off at its
+  // output limit is marked as cut off in the record, so a reader of the Vault
+  // file months later does not take a sentence that stops mid-way as the
+  // councilor's whole position.
+  const CUT = '_(cut off — the model stopped at its output limit)_';
   router.post('/council/debate/save', (req, res) => {
-    const { question, opinions, verdict } = req.body || {};
-    if (!question || !verdict) return res.status(400).json({ error: 'question and verdict required' });
+    const { question, opinions, verdict, verdictTruncated, verdictError } = req.body || {};
+    if (!question || (!verdict && !verdictError)) return res.status(400).json({ error: 'question and verdict required' });
     const ts = new Date();
     const id = ts.toISOString().replace(/[:.]/g, '-');
     const lines = [
@@ -162,12 +189,72 @@ module.exports = function createCompareRouter(deps) {
       '## Voices', '',
     ];
     for (const o of (opinions || [])) {
-      lines.push(`### ${o.label}`, `*Opening:* ${o.opening || ''}`, '', `*Final:* ${o.revised || o.opening || ''}`, '');
+      lines.push(`### ${o.label}`);
+      if (!o.opening) { lines.push(`_No answer — ${o.error || 'unavailable'}_`, ''); continue; }
+      lines.push(`*Opening:* ${o.opening}`, ...(o.openingTruncated ? ['', CUT] : []), '');
+      const finalTruncated = o.revised ? o.revisedTruncated : o.openingTruncated;
+      lines.push(`*Final:* ${o.revised || o.opening}`, ...(finalTruncated ? ['', CUT] : []), '');
     }
-    lines.push('## Verdict', '', verdict, '');
+    lines.push('## Verdict', '', verdict || `_No verdict — ${verdictError}_`, ...(verdict && verdictTruncated ? ['', CUT] : []), '');
     try { fs.writeFileSync(path.join(DEBATES_DIR, `${id}.md`), lines.join('\n')); }
     catch (e) { return res.status(500).json({ error: e.message }); }
+    // The Second Brain only learned about a debate at the next boot scan, so
+    // /ask could not find the one the operator had just held. Ask the Matrix
+    // for an incremental index now (coalesced by the kernel; a no-op when the
+    // host does not provide it).
+    try { deps.requestIndex?.({ blockId: 'council', kind: 'debate', path: `Agents/council/debates/${id}.md` }); } catch { /* indexing is best-effort */ }
     res.json({ ok: true, id });
+  });
+
+  // POST /council/speak — one councilor's turn.
+  //
+  // The UI used POST /api/ai, which answers { text, role } and nothing else:
+  // an answer a free model cut off at 1024 tokens (finish_reason "length")
+  // read as complete, and the CEO saw it only as a WARN in the server log.
+  // kernelLLM.stream reports truncated / truncationReason and which provider
+  // actually served (a fallback is said, not hidden), so this asks it and
+  // collects the tokens.
+  //
+  // Members that follow a Settings role (provider "role:<name>", or none at
+  // all for rosters saved before roles were offered) are dispatched BY ROLE —
+  // kernelLLM's explicit-provider path knows six provider names, and a custom /
+  // LM Studio / OpenAI-compatible endpoint is reachable only through its role.
+  const SPEAK_SYSTEM = 'You are a member of an advisory council inside AEON, a private AI workspace. Answer in plain prose. Respect the word limit you are given: you may be running on a model with a small output budget.';
+  const routeFor = (provider, model) => {
+    const p = String(provider || '');
+    if (!p) return { role: 'chat' };
+    if (p.startsWith('role:')) return { role: p.slice(5) || 'chat' };
+    return { role: 'chat', provider: p, model: model || undefined };
+  };
+  router.post('/council/speak', async (req, res) => {
+    const { prompt, provider, model } = req.body || {};
+    if (!prompt || typeof prompt !== 'string') return res.status(400).json({ error: 'prompt required' });
+    if (typeof kernelLLM !== 'function') return res.status(503).json({ error: 'No AI service is available to this block.' });
+    const route = routeFor(provider, model);
+    try {
+      if (typeof kernelLLM.stream === 'function') {
+        const r = await kernelLLM.stream(
+          [{ role: 'system', content: SPEAK_SYSTEM }, { role: 'user', content: prompt }],
+          { ...route, onToken: () => {} },
+        );
+        return res.json({
+          text: r.text || '', truncated: !!r.truncated, truncationReason: r.truncationReason || null,
+          provider: r.provider || null, model: r.model || null, fallback: !!r.fallback,
+        });
+      }
+      // No streaming kernel: answer anyway, and say truncation is unknown
+      // (null) rather than claiming the answer was complete.
+      const text = await kernelLLM(prompt, route);
+      res.json({ text: text || '', truncated: null, truncationReason: null, provider: route.provider || null, model: route.model || null, fallback: false });
+    } catch (e) {
+      const rateLimited = !!e.rateLimited || e.status === 429;
+      const status = rateLimited ? 429 : e.noProviderAvailable ? 503 : 502;
+      res.status(status).json({
+        error: e.message || 'The model call failed.',
+        rateLimited,
+        partialText: typeof e.partialText === 'string' && e.partialText ? e.partialText : null,
+      });
+    }
   });
 
   // GET /council/debates — history from the vault (newest first)
@@ -211,6 +298,10 @@ module.exports = function createCompareRouter(deps) {
     ],
   };
 
+  // Roles that cannot hold a conversation: an embedder returns vectors, a
+  // transcriber takes audio.
+  const NON_CHAT_ROLE = /embed|transcri|speech|tts|stt|image|vision/i;
+
   // Live-provider truth: env keys for cloud, native LR registry for local,
   // plus whatever models the operator's settings roles + endpoint registry name.
   async function liveModels() {
@@ -248,13 +339,30 @@ module.exports = function createCompareRouter(deps) {
     } catch {}
 
     // Endpoint registry role mappings
+    //
+    // Each chat-capable role assigned in Settings → Model Assignment is also
+    // offered as a member that FOLLOWS that role (engine "role:<name>"). This
+    // is the only way to seat a model served by a registry endpoint whose
+    // provider is not one of the six engineAlive knows — custom, LM Studio,
+    // OpenAI, Grok: kernelLLM can dispatch those by role, never by explicit
+    // provider. Without it, an install whose only model was such an endpoint
+    // showed "No models are reachable" (found live 2026-09-23).
     try {
-      const endpointsMod = require(path.join(__dirname, '..', '..', '..', 'kernel', 'endpoints.cjs'));
+      const endpointsMod = deps._endpoints || require(path.join(__dirname, '..', '..', '..', 'kernel', 'endpoints.cjs'));
       const reg = await endpointsMod.load(null);
       const byId = Object.fromEntries((reg.endpoints || []).map(e => [e.id, e]));
       for (const m of Object.values(reg.roles || {})) {
         const ep = byId[m.endpoint_id];
         if (ep && m.model) add(m.model, m.model, ep.provider);
+      }
+      for (const [role, m] of Object.entries(reg.roles || {})) {
+        if (NON_CHAT_ROLE.test(role)) continue;
+        const ep = byId[m?.endpoint_id];
+        if (!ep || !m.model) continue;
+        const k = `role:${role}|${m.model}`;
+        if (seen.has(k)) continue;
+        seen.add(k);
+        models.push({ id: m.model, name: `${m.model} — follows your “${role}” model (${ep.label || ep.provider})`, engine: `role:${role}` });
       }
     } catch {}
 

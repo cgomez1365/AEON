@@ -159,6 +159,11 @@
       "method": "GET",
       "path": "/api/council/models",
       "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/council/speak",
+      "auth": true
     }
   ],
   "env": [],
