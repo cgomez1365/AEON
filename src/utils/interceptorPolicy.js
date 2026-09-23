@@ -127,8 +127,10 @@ export function shouldBannerResponse({ url, ok, status, selfReported = false, ha
   // Any 4xx: not found, bad input, a missing block, a permission state — each
   // a condition the caller explains (the terminal chip, a page's own notice).
   // It was 401/403 only, so `/doc missing.md` answered in its chip AND raised
-  // the banner (2026-09-23). A 5xx is a defect and still banners.
-  if (selfReported && status >= 400 && status < 500) return false;
+  // the banner (2026-09-23). A 5xx is a defect and still banners — except 501,
+  // the server's own "this cannot be done here" (a restart with nothing to
+  // relaunch AEON), which the header shows as the reason and remedy.
+  if (selfReported && ((status >= 400 && status < 500) || status === 501)) return false;
   return !matchesEndpoint(url, IGNORED_ENDPOINTS);
 }
 

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef, Suspense } from "react";
 import { Routes, Route, Navigate, useNavigate, useLocation } from "react-router-dom";
+import { requestRestart } from "../utils/restartRequest.js";
 import { useAuth } from "../kernel/hooks/useAuth";
 
 // Core Layout Components
@@ -163,9 +164,8 @@ function DesktopNav({ user, groups, iconOverrides }) {
   const handleRestart = async () => {
     if (!window.confirm('⚡ FULL SYSTEM RESTART\n\nThis will close all servers and relaunch the Command Center.\nContinue?')) return;
     setRestarting(true);
-    try {
-      await fetch('/api/system/restart', { method: 'POST' });
-    } catch {} // Server dies before responding — expected
+    const r = await requestRestart();
+    if (!r.restarting) { setRestarting(false); window.alert(r.message); return; }
     // Wait for the server to come back online, then reload
     const waitForServer = () => {
       setTimeout(() => {
@@ -392,7 +392,8 @@ export default function DesktopLayout({ chatHistory, auditLogs }) {
             className="reset-btn"
             onClick={async () => {
               if (!window.confirm('⚡ FULL SYSTEM RESTART?')) return;
-              try { await fetch('/api/system/restart', { method: 'POST' }); } catch {}
+              const r = await requestRestart();
+              if (!r.restarting) { window.alert(r.message); return; }
               const wait = () => setTimeout(() => { fetch('/api/health').then(() => window.location.reload()).catch(() => wait()); }, 2000);
               wait();
             }}
@@ -400,7 +401,7 @@ export default function DesktopLayout({ chatHistory, auditLogs }) {
           >
             🔄 RESTART
           </button>
-          <button className="reset-btn">
+          <button className="reset-btn" onClick={() => navigate('/host')} title="This machine's health (Host OS)" style={{ cursor: 'pointer' }}>
             <span style={{ color: "#00ff40" }}>●</span> SYSTEM HEALTH
           </button>
         </div>
