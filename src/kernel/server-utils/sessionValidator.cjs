@@ -26,6 +26,42 @@ const PRE_AUTH_ROUTES = Object.freeze([
   /^\/api\/security\/recovery\/.*/,
 ]);
 
+/**
+ * The path a guard must judge: the one Express will route.
+ *
+ * Two ways the guards used to judge a different path than the router served
+ * (both measured 2026-09-23 on a live server, account present):
+ *  - Case. Express routes case-insensitively, the guards compared
+ *    case-sensitively: /API/connections answered 200 with no session while
+ *    /api/connections answered 401.
+ *  - Mount. A block router mounted at /api sees req.path === '/health'; asked
+ *    about that, isPreAuthRequest() said no, and GET /api/health — pre-auth by
+ *    this file — answered 401. originalUrl is the request as it arrived.
+ */
+function fullRequestPath(req) {
+  const raw = req?.originalUrl || req?.path || req?.url || '';
+  return String(raw).split('?')[0];
+}
+
+/**
+ * Account-independent pre-auth decision for one method + path. The ONE
+ * authority: the gates ask it per request and scripts/gen-block-routes.cjs asks
+ * it per declared route, so a manifest's `auth` cannot drift from what the
+ * gate actually does. (/api/auth/setup is open only while no account exists —
+ * a runtime fact, so it stays in isPreAuthRequest.)
+ */
+function isPreAuthRoute(method, requestPath) {
+  const m = String(method || 'GET').toUpperCase();
+  const p = String(requestPath || '').toLowerCase();
+  if (p === '/' || p === '/api/health') return true;
+  if (m === 'GET' && p === '/api/security/policy') return true;
+  return PRE_AUTH_ROUTES.some((pattern) => pattern.test(p));
+}
+
+// Case-insensitive for the same reason: /BLOCKS/registry is /blocks/registry
+// to Express.
+const GUARDED_PATH = /^\/(api|blocks?|core|events|ws)\b/i;
+
 function createSessionValidator(options = {}) {
   const securityDir = options.securityDir || storage.getVaultFile(path.join('blocks', 'security'));
   const policyFile = path.join(securityDir, 'policy.json');
@@ -222,17 +258,16 @@ function createSessionValidator(options = {}) {
 
   function isPreAuthRequest(req) {
     if (req.method === 'OPTIONS') return true;
-    if (req.path === '/' || req.path === '/api/health') return true;
-    if (req.method === 'GET' && req.path === '/api/security/policy') return true;
-    if (req.path === '/api/auth/setup' && !hasAccount()) return true;
-    return PRE_AUTH_ROUTES.some((pattern) => pattern.test(req.path));
+    const p = fullRequestPath(req);
+    if (p.toLowerCase() === '/api/auth/setup' && !hasAccount()) return true;
+    return isPreAuthRoute(req.method, p);
   }
 
   function isGuardedPath(requestPath) {
     // `blocks?`: `\b` never matches between "block" and "s", so /blocks/registry
     // (every manifest: routes, permissions, required secrets) was reachable
     // without a session while /api/* was not (found 2026-09-21).
-    return /^\/(api|blocks?|core|events|ws)\b/.test(requestPath);
+    return GUARDED_PATH.test(String(requestPath || ''));
   }
 
   function unauthorized(res, reason = 'no-session') {
@@ -262,6 +297,7 @@ function createSessionValidator(options = {}) {
     revokeAllSessions,
     pruneIdleSessions,
     isPreAuthRequest,
+    isPreAuthRoute,
     isGuardedPath,
     unauthorized,
     getLastGlobalActivity: () => lastGlobalActivity,
@@ -276,4 +312,5 @@ module.exports = {
   createSessionValidator,
   DEFAULT_POLICY,
   PRE_AUTH_ROUTES,
+  isPreAuthRoute,
 };

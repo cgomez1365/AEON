@@ -35,7 +35,7 @@ const blocksDir = path.join(ROOT, 'src', 'blocks');
 // the scaffold was validated like a real block (found 2026-09-23).
 const isScaffold = (name) => name.startsWith('_');
 
-const { PRE_AUTH_ROUTES } = require(
+const { isPreAuthRoute } = require(
   path.join(ROOT, 'src', 'kernel', 'server-utils', 'sessionValidator.cjs')
 );
 
@@ -129,8 +129,11 @@ function collect(blockDir) {
 const routesFor = (blockDir) =>
   collect(blockDir).map(r => ({
     ...r,
-    // Truthful, not stamped. The gate's own frozen list is the authority.
-    auth: !PRE_AUTH_ROUTES.some(rx => rx.test(r.path)),
+    // Truthful, not stamped. The gate's own decision is the authority — the
+    // same function it asks per request, so /api/health and GET
+    // /api/security/policy (open at the gate, never on the frozen list) stop
+    // being declared auth:true.
+    auth: !isPreAuthRoute(r.method, r.path),
   }));
 
 const check = process.argv.includes('--check');

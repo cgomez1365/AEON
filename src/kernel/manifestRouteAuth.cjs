@@ -28,13 +28,28 @@
 /**
  * Compile a manifest route path into a matcher.
  * `/api/writer/doc/:id` matches `/api/writer/doc/abc` but not `/api/writer/doc`.
+ *
+ * Case-insensitive because Express routes case-insensitively: with a
+ * case-sensitive matcher `/API/connections` reached the GET /api/connections
+ * handler and this guard never recognised it (measured 2026-09-23).
  */
 function compilePath(routePath) {
   const source = String(routePath || '')
     .replace(/[.+?^${}()|[\]\\]/g, '\\$&')  // escape regex metachars, keep : and *
     .replace(/:[A-Za-z0-9_]+/g, '[^/]+')     // :param -> one segment
     .replace(/\*/g, '.*');                   // wildcard
-  return new RegExp(`^${source}/?$`);
+  return new RegExp(`^${source}/?$`, 'i');
+}
+
+/**
+ * Does a declared method cover the request's method?
+ *  - `ALL` covers every method. The generator emits it for computed verb lists
+ *    (files' /api/notes, resume_grader's /grade); comparing `r.method === method`
+ *    meant nothing ever matched it and those routes were never protected.
+ *  - HEAD is served by the GET handler in Express, so a GET declaration covers it.
+ */
+function methodCovers(declared, method) {
+  return declared === method || declared === 'ALL' || (declared === 'GET' && method === 'HEAD');
 }
 
 /**
@@ -75,12 +90,16 @@ function manifestAuthGuard(manifest, sessions) {
     // first-run setup impossible. See the lockout constraint above.
     if (!sessions.hasAccount()) return next();
 
-    // OPTIONS/preflight and the documented pre-auth routes stay reachable.
-    if (sessions.isPreAuthRequest(req)) return next();
-
     const method = String(req.method || 'GET').toUpperCase();
     const p = requestPath(req);
-    const hit = protectedList.find((r) => r.method === method && r.re.test(p));
+
+    // OPTIONS/preflight and the documented pre-auth routes stay reachable —
+    // judged on the FULL path. Inside a block router mounted at /api, req.path
+    // is mount-relative ('/health'), which no pre-auth rule names, so GET
+    // /api/health answered 401 here while the global gate let it through.
+    if (sessions.isPreAuthRequest({ method, path: p, originalUrl: p, headers: req.headers, query: req.query })) return next();
+
+    const hit = protectedList.find((r) => methodCovers(r.method, method) && r.re.test(p));
     if (!hit) return next();
 
     const session = sessions.validateSession(req);
@@ -101,4 +120,4 @@ function manifestAuthGuard(manifest, sessions) {
   };
 }
 
-module.exports = { manifestAuthGuard, protectedRoutes, compilePath };
+module.exports = { manifestAuthGuard, protectedRoutes, compilePath, methodCovers };

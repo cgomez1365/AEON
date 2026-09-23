@@ -196,7 +196,7 @@
     {
       "method": "GET",
       "path": "/api/health",
-      "auth": true
+      "auth": false
     },
     {
       "method": "GET",

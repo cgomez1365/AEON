@@ -88,15 +88,26 @@ describe('declared paths are the paths that are actually served', () => {
 });
 
 describe('the auth flag is derived from the gate, not stamped', () => {
-  const { PRE_AUTH_ROUTES } = require('../src/kernel/server-utils/sessionValidator.cjs');
+  // isPreAuthRoute is what the gate asks per request. The frozen regex list
+  // alone missed /api/health and GET /api/security/policy, which the gate
+  // opens by name — so their manifests said auth:true while the gate said open,
+  // and the manifest guard (which believed the manifest) refused /api/health.
+  const { isPreAuthRoute } = require('../src/kernel/server-utils/sessionValidator.cjs');
 
   it('agrees with the auth gate for every declared route', () => {
     for (const id of blockIds) {
       for (const r of manifestOf(id).routes || []) {
-        const expected = !PRE_AUTH_ROUTES.some(rx => rx.test(r.path));
+        const expected = !isPreAuthRoute(r.method, r.path);
         expect(r.auth, `${id}: ${r.method} ${r.path}`).toBe(expected);
       }
     }
+  });
+
+  it('the gate-opened routes are declared open', () => {
+    const find = (id, method, p) => (manifestOf(id).routes || []).find(r => r.method === method && r.path === p);
+    expect(find('host_os', 'GET', '/api/health')?.auth).toBe(false);
+    expect(find('security', 'GET', '/api/security/policy')?.auth).toBe(false);
+    expect(find('security', 'POST', '/api/security/policy')?.auth).toBe(true);
   });
 
   it('login, status and recovery are declared pre-auth — not everything is guarded', () => {
