@@ -386,3 +386,27 @@ describe('the narration under the chip relays these answers instead of re-writin
     expect(recall.out.narration).toBe(recall.r.body.text.trim());
   });
 });
+
+describe('names are typed the way people say them', () => {
+  // Live, 2026-09-23: "/doc carrier handbook" → nothing matches, for a file
+  // named Carrier-Handbook-2026.pdf. A PDF has no "# heading", so its title is
+  // its file name, hyphens and all. The graph already treats space, hyphen and
+  // underscore as one separator (index.cjs normaliseName); /doc and /ask-doc
+  // did not.
+  beforeEach(() => {
+    write('Reading_Library/Carrier_Handbook-2026.md', 'Damaged pallets must be photographed and reported within 48 hours or the carrier claim is void.');
+  });
+
+  it('/doc carrier handbook opens Carrier_Handbook-2026.md', async () => {
+    const r = await dispatch('/doc', 'carrier handbook');
+    expect(r.outcome.chipStatus).toBe(CHIP_STATUS.OK);
+    expect(r.chip).toMatch(/Reading_Library\/Carrier_Handbook-2026\.md/);
+    expect(r.chip).toMatch(/48 hours/);
+  });
+
+  it('/ask-doc resolves the same spelling', async () => {
+    await scan();
+    const r = await dispatch('/ask-doc', '"carrier handbook" when must damage be reported?');
+    expect(r.chip).toMatch(/\[1\] Carrier_Handbook-2026/);
+  });
+});

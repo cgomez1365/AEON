@@ -147,9 +147,14 @@ module.exports = function retrieveFactory(deps) {
     const byName = all.filter((d) => path.basename(d.path).toLowerCase() === qBase);
     if (byName.length) return byName;
 
+    // Space, hyphen and underscore are one separator: an operator types
+    // "carrier handbook" for Carrier_Handbook-2026.pdf, whose title IS its
+    // file name (a PDF has no "# heading"). Same rule as /doc and the graph.
+    const loose = (t) => String(t || '').toLowerCase().replace(/[\s_-]+/g, ' ').trim();
+    const qn = loose(qLower);
     return all.filter((d) =>
-      (d.title || '').toLowerCase().includes(qLower) ||
-      path.basename(d.path).toLowerCase().includes(qLower));
+      loose(d.title).includes(qn) ||
+      loose(path.basename(d.path)).includes(qn));
   }
 
   /**

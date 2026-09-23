@@ -227,9 +227,14 @@ module.exports = function secondBrainFactory(deps) {
 
     // Containment needs a few characters, or "a" would match the whole Vault.
     if (ql.length < 3) return { hits: [], by: null, searched, titleOf };
+    // People type titles, not file names: "carrier handbook" for
+    // Carrier_Handbook-2026.pdf. Space, hyphen and underscore are one
+    // separator here, as they already are in the graph (normaliseName).
+    const loose = (t) => String(t || '').toLowerCase().replace(/[\s_-]+/g, ' ').trim();
+    const qn = loose(ql);
     const onDisk = new Set(files);
-    const byTitle = docs.filter((d) => onDisk.has(d.path) && String(d.title || '').toLowerCase().includes(ql)).map((d) => d.path);
-    const byName = files.filter((f) => path.posix.basename(f).toLowerCase().includes(ql));
+    const byTitle = docs.filter((d) => onDisk.has(d.path) && loose(d.title).includes(qn)).map((d) => d.path);
+    const byName = files.filter((f) => loose(path.posix.basename(f)).includes(qn));
     return { hits: [...new Set([...byTitle, ...byName])], by: 'title or file name', searched, titleOf };
   }
 
