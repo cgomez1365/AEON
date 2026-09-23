@@ -2722,6 +2722,87 @@ function BlockLifecyclePanel({ blocks }) {
           </div>
         ))}
       </div>
+
+      <StorePacksSection client={client} ids={ids} busy={busy} setBusy={setBusy} onChange={() => { loadStates(); loadRemoved(); }} />
+    </div>
+  );
+}
+
+// ── From the store ────────────────────────────────────────────────────
+// The store AEON_STORE names. Install goes through the same airlock as every
+// build (hash-checked against the store's catalog first); a new block lands
+// stopped, so Start follows. Its permissions and warnings are shown before
+// anything is installed.
+function StorePacksSection({ client, ids, busy, setBusy, onChange }) {
+  const [store, setStore] = useState(null);
+  const [error, setError] = useState(null);
+  const [notes, setNotes] = useState({});
+  const [started, setStarted] = useState([]);   // started this visit; the list above is bundle-time
+  const load = useCallback(async () => {
+    const r = await client.storeList();
+    if (r.ok) { setStore(r.data); setError(null); } else setError(r.error);
+  }, [client]);
+  useEffect(() => { load(); }, [load]);
+
+  const install = async (it) => {
+    const perms = [`tier ${it.tier}`, ...(it.warnings || [])].join('\n• ');
+    if (!window.confirm(`Install "${it.label || it.id}" ${it.version} from the store?\n\n• ${perms}\n\nIt lands stopped; you start it when you are ready.`)) return;
+    setBusy(`${it.id}:install`);
+    const r = await client.install(it.id);
+    setNotes(n => ({ ...n, [it.id]: { ok: r.ok, text: r.ok ? r.message : r.error } }));
+    setBusy(null);
+    load(); onChange();
+  };
+  const start = async (id) => {
+    setBusy(`${id}:start`);
+    const r = await client.start(id);
+    setNotes(n => ({ ...n, [id]: { ok: r.ok, text: r.ok ? r.message : r.error } }));
+    if (r.ok) setStarted(x => [...x, id]);
+    setBusy(null);
+    onChange();
+  };
+
+  return (
+    <div style={{ marginTop: 14, borderTop: '1px solid var(--border, #1f2937)', paddingTop: 10 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, color: 'var(--text-dim)', marginBottom: 6 }}>FROM THE STORE</div>
+      {error && <div role="alert" style={{ fontSize: 11, color: '#f87171' }}>{error}</div>}
+      {store && !store.configured && <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>{store.hint}</div>}
+      {store?.configured && (
+        <div style={{ fontSize: 11, color: 'var(--text-dim)', marginBottom: 6, overflowWrap: 'anywhere' }}>
+          {store.store || 'Store'} · {store.source}
+        </div>
+      )}
+      {store?.configured && store.items.length === 0 && <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>The store lists no packs.</div>}
+      {(store?.items || []).map((it) => {
+        const installed = !!it.installedVersion;
+        const note = notes[it.id];
+        return (
+          <div key={`${it.id}@${it.version}`} style={{ padding: '6px 0' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 12 }}>
+              <b>{it.label || it.id}</b>
+              <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>{it.id} · {it.version}</span>
+              <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 10,
+                background: installed ? 'rgba(16,185,129,.15)' : 'rgba(148,163,184,.15)', color: installed ? '#10b981' : '#94a3b8' }}>
+                {installed ? `Installed ${it.installedVersion}` : it.installable ? 'Available' : 'Buy on the store page'}
+              </span>
+              <span style={{ flex: 1 }} />
+              {!installed && it.installable && (
+                <button type="button" className="settings-btn" style={{ fontSize: 11 }} disabled={!!busy} onClick={() => install(it)}>
+                  {busy === `${it.id}:install` ? 'Installing…' : 'Install'}
+                </button>
+              )}
+              {installed && !ids.includes(it.id) && !started.includes(it.id) && (
+                <button type="button" className="settings-btn settings-btn--secondary" style={{ fontSize: 11 }} disabled={!!busy} onClick={() => start(it.id)}>
+                  {busy === `${it.id}:start` ? 'Starting…' : 'Start'}
+                </button>
+              )}
+            </div>
+            {it.description && <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 2 }}>{it.description}</div>}
+            {(it.warnings || []).map((w) => <div key={w} style={{ fontSize: 11, color: '#fbbf24', marginTop: 2 }}>! {w}</div>)}
+            {note && <div role={note.ok ? 'status' : 'alert'} style={{ fontSize: 11, marginTop: 4, lineHeight: 1.45, color: note.ok ? 'var(--text-dim, #94a3b8)' : '#f87171' }}>{note.text}</div>}
+          </div>
+        );
+      })}
     </div>
   );
 }

@@ -6,6 +6,7 @@
 //   GET  /api/build/blocks/:id/state
 //   POST /api/build/blocks/:id/stop | start | uninstall | restore
 //   GET  /api/build/blocks/removed
+//   GET  /api/store/source · POST /api/store/install {name}   (the store)
 // Security is refused by the kernel for stop and uninstall; its words are
 // shown as-is rather than re-invented here.
 
@@ -54,13 +55,13 @@ export function describeChange(action, id, data = {}) {
 export function createLifecycleClient({ base = '', fetchImpl } = {}) {
   const doFetch = fetchImpl || ((...a) => fetch(...a));
 
-  async function request(method, url) {
+  async function request(method, url, body = {}) {
     let res;
     try {
       res = await doFetch(`${base}${url}`, {
         method,
         headers: { ...SELF_REPORTED, ...(method === 'POST' ? { 'Content-Type': 'application/json' } : {}) },
-        ...(method === 'POST' ? { body: '{}' } : {}),
+        ...(method === 'POST' ? { body: JSON.stringify(body) } : {}),
         credentials: 'same-origin',
       });
     } catch (e) {
@@ -87,5 +88,20 @@ export function createLifecycleClient({ base = '', fetchImpl } = {}) {
     start: change('start'),
     remove: change('uninstall'),
     restore: change('restore'),
+    // The store AEON_STORE names (src/kernel/storeSource.cjs): what it offers,
+    // and an install by id that the kernel hash-checks against the catalog.
+    storeList: () => request('GET', '/api/store/source'),
+    install: async (id) => {
+      const r = await request('POST', '/api/store/install', { name: String(id || '') });
+      return r.ok ? { ...r, message: describeInstall(id, r.data) } : r;
+    },
   };
+}
+
+/** Operator-facing sentence for a store install (the airlock's verdict). */
+export function describeInstall(id, data = {}) {
+  const sha = data.sha ? ` Verified against the store (SHA-256 ${String(data.sha).slice(0, 12)}…).` : '';
+  if (data.stage === 'live') return `${id} installed and stopped, as every new block lands.${sha} Press Start to run it. ${UI_NOTE}`;
+  if (data.stage === 'queued') return `${id} is waiting for your approval (its permissions need a review) — approve it in Master → approvals, then Start it.${sha}`;
+  return `${id}: ${data.stage || 'installed'}.${sha} ${UI_NOTE}`;
 }
