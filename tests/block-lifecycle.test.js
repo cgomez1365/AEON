@@ -52,6 +52,7 @@ beforeEach(async () => {
     pipeline: {}, approvals: {}, ideMode: {},
     kernelRescan: (reason) => { rescans.push(reason); return { ok: true }; },
     commandRescan: () => { commandRescans++; return 0; },
+    isMounted: (id) => id !== 'fresh_block',
     blocksDir, removedDir,
   }));
   await new Promise((r) => { server = app.listen(0, '127.0.0.1', r); });
@@ -79,6 +80,18 @@ describe('stop and start work for shipped blocks, not only pipeline-installed on
     const start = await post('/blocks/council/start');
     expect(start.status).toBe(200);
     expect(rs.isRunning('council')).toBe(true);
+  });
+
+  it('starting a block promoted but not yet mounted mounts it, instead of claiming it runs (agent C4)', async () => {
+    makeBlock('fresh_block');
+    const r = await post('/blocks/fresh_block/start');
+    expect(r.status).toBe(200);
+    expect(rescans).toContain('start:fresh_block');
+    expect(commandRescans).toBe(1);
+    expect(r.body.rescan).toBeTruthy();
+    // A block already mounted is not rescanned on start.
+    await post('/blocks/council/start');
+    expect(rescans.filter((x) => x.startsWith('start:'))).toEqual(['start:fresh_block']);
   });
 
   it('security cannot be stopped — it would lock the operator out', async () => {

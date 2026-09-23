@@ -365,6 +365,7 @@ try {
     pipeline: _pipeline, approvals: _approvals, ideMode: _ideMode,
     kernelRescan: (reason) => loader.rescan(reason),
     commandRescan: _commandRescan,
+    isMounted: (id) => (loader.blockRegistry || []).some((b) => b && b.id === id),
   });
   app.use('/api/build', buildRouter);
   _routerDeps.ideMode = _ideMode;

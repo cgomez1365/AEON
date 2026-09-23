@@ -147,6 +147,12 @@ module.exports = function createBuildRouter(deps) {
     const id = req.params.id;
     if (!isInstalled(id)) return refuse(res, 404, `no installed block "${id}"`);
     const r = runState.setRunning(id, true, { operator: operator(req), allowAuto: true });
+    // Promoted by `aeon promote` but never rescanned, a block is on disk and
+    // unmounted: "running:true" with every route 404 (agent C4, 2026-09-23).
+    // Starting it mounts it.
+    if (r.ok && typeof deps.isMounted === 'function' && !deps.isMounted(id)) {
+      return res.json({ ...r, rescan: rescanAll(`start:${id}`) });
+    }
     res.status(r.ok ? 200 : 400).json(r);
   });
   router.post('/blocks/:id/stop', (req, res) => {
