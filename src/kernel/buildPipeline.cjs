@@ -178,10 +178,10 @@ function createBuildPipeline({
       if (!promo.ok) return { ok: false, stage: 'promote', error: promo.error, lint: promo.lint, verdict, blockId: staged.id };
       // Interruption mode: every self-built block lands live-but-STOPPED.
       // Mounted code the operator hasn't started never handles a request.
-      runState.registerManual(staged.id, { by: `pipeline:${envelope.source}` });
+      runState.registerManual(staged.id, { by: `pipeline:${envelope.source}`, reset: true });
       const scan = rescan(`build:${staged.id}`);
       return { ok: true, stage: 'live', blockId: staged.id, verdict, boot, promoted: true, rescan: scan, adminProvisioned: provisioned,
-               runState: 'stopped', note: `manual-start block — POST /api/build/blocks/${staged.id}/start to begin serving` };
+               runState: runState.isRunning(staged.id) ? 'running' : 'stopped', note: `manual-start block — POST /api/build/blocks/${staged.id}/start to begin serving` };
     }
 
     // MEDIUM / HIGH → human queue (W5). Distinct behaviors carried on the item (GAP 2).
@@ -222,10 +222,10 @@ function createBuildPipeline({
       // finding) — human approval does NOT override the lint gate. Report, stop.
       return { ok: false, stage: 'promote', error: promo.error, lint: promo.lint, approval: decision.item };
     }
-    runState.registerManual(item.blockId, { by: `pipeline:approved` });
+    runState.registerManual(item.blockId, { by: `pipeline:approved`, reset: true });
     const scan = rescan(`approve:${item.blockId}`);
     return { ok: true, stage: 'live', blockId: item.blockId, approval: decision.item, rescan: scan,
-             runState: 'stopped', note: `manual-start block — POST /api/build/blocks/${item.blockId}/start to begin serving` };
+             runState: runState.isRunning(item.blockId) ? 'running' : 'stopped', note: `manual-start block — POST /api/build/blocks/${item.blockId}/start to begin serving` };
   }
 
   function rejectBuild(approvalId, { approver = 'operator', note } = {}) {

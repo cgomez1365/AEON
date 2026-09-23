@@ -108,11 +108,16 @@ function withLock(fn) {
   }
 }
 
-/** Called by the build pipeline at promote time. Idempotent. */
-function registerManual(blockId, { by = 'pipeline' } = {}) {
+/**
+ * Called by the build pipeline at promote time. Idempotent — unless `reset`,
+ * which a promote passes: a block removed while running used to come back
+ * RUNNING on reinstall (the old entry survived) while the install response
+ * said "stopped" (measured 2026-09-23). An install lands stopped, every time.
+ */
+function registerManual(blockId, { by = 'pipeline', reset = false } = {}) {
   return withLock(() => {
     const state = loadFresh(); // never start a write from the cache
-    if (!state[blockId]) {
+    if (reset || !state[blockId]) {
       state[blockId] = { mode: 'manual', running: false, registeredBy: by, registeredAt: new Date().toISOString(), changedAt: null, changedBy: null };
       save(state);
     }
@@ -130,10 +135,21 @@ function isRunning(blockId) {
   return s.mode === 'auto' || s.running === true;
 }
 
-/** Explicit operator click — the only way a manual block starts or stops. */
-function setRunning(blockId, running, { operator = 'operator' } = {}) {
+/**
+ * Explicit operator click — the only way a manual block starts or stops.
+ *
+ * `allowAuto`: a shipped (hand-built, always-running) block has no entry, so
+ * stop answered 400 for all 17 of them (measured 2026-09-23) — the operator
+ * could not take one out of service without moving files. The operator route
+ * passes allowAuto and the block becomes manual with the requested state.
+ * The caller decides which blocks may never be stopped (security).
+ */
+function setRunning(blockId, running, { operator = 'operator', allowAuto = false } = {}) {
   const r = withLock(() => {
     const state = loadFresh(); // never start a write from the cache
+    if (!state[blockId] && allowAuto) {
+      state[blockId] = { mode: 'manual', running: true, registeredBy: `operator:${operator}`, registeredAt: new Date().toISOString(), changedAt: null, changedBy: null };
+    }
     const s = state[blockId];
     if (!s || s.mode !== 'manual') return { ok: false, error: `block "${blockId}" is not a manual-start block` };
     s.running = running === true;
@@ -148,9 +164,20 @@ function setRunning(blockId, running, { operator = 'operator' } = {}) {
   return { ok: true, blockId, ...s };
 }
 
+/** Drop a block's run state — on uninstall, so a later install starts clean. */
+function forget(blockId) {
+  return withLock(() => {
+    const state = loadFresh();
+    if (!(blockId in state)) return false;
+    delete state[blockId];
+    save(state);
+    return true;
+  });
+}
+
 function listManual() {
   const state = load();
   return Object.entries(state).map(([blockId, s]) => ({ blockId, ...s }));
 }
 
-module.exports = { registerManual, getState, isRunning, setRunning, listManual, STATE_FILE };
+module.exports = { registerManual, getState, isRunning, setRunning, forget, listManual, STATE_FILE };

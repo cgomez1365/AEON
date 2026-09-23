@@ -345,9 +345,14 @@ try {
   const _ideMode = require('../src/kernel/ideMode.cjs');
   const { createBuildPipeline } = require('../src/kernel/buildPipeline.cjs');
   const _vault = require('../src/kernel/vault.cjs');
+  // A kernel rescan remounts block APIs; commands are scanned by the command
+  // registry, which nothing told — after a block left, its /commands stayed
+  // listed and answered "Command failed (404)" (measured 2026-09-23). The
+  // registry is created further down, so it is looked up at call time.
+  const _commandRescan = () => { try { return _routerDeps.commandRescan?.(); } catch (e) { console.warn('[CMD REGISTRY] rescan failed:', e.message); } };
   const _pipeline = createBuildPipeline({
     getVaultSecrets: async () => { try { return await _vault.listRefs(supabase); } catch { return []; } },
-    rescan: (reason) => loader.rescan(reason),
+    rescan: (reason) => { const r = loader.rescan(reason); _commandRescan(); return r; },
     // M3 — what is already served, so a staged block colliding with it is
     // refused BEFORE promotion rather than discovered after.
     getLiveRoutes: () => {
@@ -359,6 +364,7 @@ try {
   const buildRouter = require('../src/kernel/routers/build.cjs')({
     pipeline: _pipeline, approvals: _approvals, ideMode: _ideMode,
     kernelRescan: (reason) => loader.rescan(reason),
+    commandRescan: _commandRescan,
   });
   app.use('/api/build', buildRouter);
   _routerDeps.ideMode = _ideMode;

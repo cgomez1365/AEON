@@ -84,21 +84,112 @@ module.exports = function createBuildRouter(deps) {
   });
   router.get('/ide-mode/audit', (req, res) => res.json({ lines: ideMode.readAudit(Number(req.query.lines) || 100) }));
 
-  // Interruption mode — explicit start/end for self-built blocks (trading-block pattern).
+  // ── Block lifecycle: start / stop / uninstall / restore ─────────────────
+  // Measured 2026-09-23, one block at a time: 16 of 17 blocks can leave and
+  // AEON continues — but stop answered 400 for every shipped block (only
+  // pipeline installs had run state), there was no uninstall, and a rescan
+  // left removed blocks' commands listed. Nothing here deletes: uninstall moves
+  // the folder to <data>/removed-blocks/<id>@<time>, restore moves it back.
   const runState = require('../runState.cjs');
+  const fs = require('fs');
+  const path = require('path');
+  const blocksDir = deps.blocksDir || require('../blocksDir.cjs').BLOCKS_DIR;
+  const removedDir = deps.removedDir || path.join(
+    require('../aeonHome.cjs').roots({ appRoot: path.join(__dirname, '..', '..', '..') }).data, 'removed-blocks');
+  // Without security every guarded route answers 401 and login 404 — the
+  // operator is locked out (measured). It can be neither stopped nor removed here.
+  const NEVER_STOP = new Set(['security']);
+  const ID_RE = /^[a-z0-9][a-z0-9_]*$/;
+  const blockPath = (id) => path.join(blocksDir, id);
+  const isInstalled = (id) => ID_RE.test(id) && fs.existsSync(path.join(blockPath(id), 'block.manifest.json'));
+  const refuse = (res, status, error) => res.status(status).json({ ok: false, error });
+  // A kernel rescan remounts block APIs; the command registry scans on its own.
+  // Both, every time, or a removed block's /commands keep answering 404.
+  const rescanAll = (reason) => {
+    const result = kernelRescan ? kernelRescan(reason) : { ok: false, error: 'rescan unavailable (Vercel mode)' };
+    try { deps.commandRescan?.(); } catch (e) { result.commandRescanError = e.message; }
+    return result;
+  };
+  const dependentsOf = (id) => {
+    const out = [];
+    for (const d of fs.readdirSync(blocksDir, { withFileTypes: true })) {
+      if (!d.isDirectory() || d.name.startsWith('_') || d.name === id) continue;
+      try {
+        const m = JSON.parse(fs.readFileSync(path.join(blocksDir, d.name, 'block.manifest.json'), 'utf8'));
+        if ((m.requires?.blocks || []).includes(id)) out.push(d.name);
+      } catch { /* not a block */ }
+    }
+    return out.sort();
+  };
+  // rename, or copy + remove when the two roots are on different volumes.
+  const move = (from, to) => {
+    fs.mkdirSync(path.dirname(to), { recursive: true });
+    try { fs.renameSync(from, to); }
+    catch (e) {
+      if (e.code !== 'EXDEV') throw e;
+      fs.cpSync(from, to, { recursive: true });
+      fs.rmSync(from, { recursive: true, force: true });
+    }
+  };
+  const removedCopies = () => {
+    if (!fs.existsSync(removedDir)) return [];
+    return fs.readdirSync(removedDir, { withFileTypes: true })
+      .filter((d) => d.isDirectory() && d.name.includes('@'))
+      .map((d) => ({ blockId: d.name.split('@')[0], path: path.join(removedDir, d.name), removedAt: d.name.split('@')[1] }))
+      .sort((a, b) => String(b.removedAt).localeCompare(String(a.removedAt)));
+  };
+  const UI_NOTE = 'The block\'s screen changes after `npm run build` (then reload the tab); no restart is needed.';
+
   router.get('/blocks', (_req, res) => res.json({ blocks: runState.listManual() }));
+  router.get('/blocks/removed', (_req, res) => res.json({ removed: removedCopies() }));
   router.get('/blocks/:id/state', (req, res) => res.json({ blockId: req.params.id, ...runState.getState(req.params.id) }));
   router.post('/blocks/:id/start', (req, res) => {
-    const r = runState.setRunning(req.params.id, true, { operator: operator(req) });
+    const id = req.params.id;
+    if (!isInstalled(id)) return refuse(res, 404, `no installed block "${id}"`);
+    const r = runState.setRunning(id, true, { operator: operator(req), allowAuto: true });
     res.status(r.ok ? 200 : 400).json(r);
   });
   router.post('/blocks/:id/stop', (req, res) => {
-    const r = runState.setRunning(req.params.id, false, { operator: operator(req) });
+    const id = req.params.id;
+    if (NEVER_STOP.has(id)) return refuse(res, 409, `"${id}" cannot be stopped: without it every guarded route answers 401 and login is gone — the operator would be locked out.`);
+    if (!isInstalled(id)) return refuse(res, 404, `no installed block "${id}"`);
+    const r = runState.setRunning(id, false, { operator: operator(req), allowAuto: true });
     res.status(r.ok ? 200 : 400).json(r);
   });
 
+  router.post('/blocks/:id/uninstall', (req, res) => {
+    const id = req.params.id;
+    if (NEVER_STOP.has(id)) return refuse(res, 409, `"${id}" cannot be uninstalled: without it the operator is locked out of every guarded route.`);
+    if (!isInstalled(id)) return refuse(res, 404, `no installed block "${id}"`);
+    const dependents = dependentsOf(id);
+    const movedTo = path.join(removedDir, `${id}@${new Date().toISOString().replace(/[:.]/g, '-')}`);
+    try { move(blockPath(id), movedTo); }
+    catch (e) { return refuse(res, 500, `could not move ${id} aside: ${e.message}`); }
+    try { runState.forget(id); } catch { /* state file unavailable; a reinstall resets anyway */ }
+    const rescan = rescanAll(`uninstall:${id}`);
+    try { global.broadcastTerminalEvent?.('BLOCK-LIFECYCLE', `${id} UNINSTALLED by ${operator(req)}`); } catch {}
+    res.json({
+      ok: true, removed: id, movedTo, dependents, rescan, ui: UI_NOTE,
+      ...(dependents.length ? { warning: `${dependents.join(', ')} declare${dependents.length === 1 ? 's' : ''} a dependency on ${id} and will be degraded until it is restored.` } : {}),
+      restore: `POST /api/build/blocks/${id}/restore`,
+    });
+  });
+
+  router.post('/blocks/:id/restore', (req, res) => {
+    const id = req.params.id;
+    if (!ID_RE.test(id)) return refuse(res, 400, 'invalid block id');
+    if (isInstalled(id)) return refuse(res, 409, `"${id}" is already installed — remove it first to restore an older copy.`);
+    const copy = removedCopies().find((c) => c.blockId === id);
+    if (!copy) return refuse(res, 404, `no removed copy of "${id}" under ${removedDir}`);
+    try { move(copy.path, blockPath(id)); }
+    catch (e) { return refuse(res, 500, `could not restore ${id}: ${e.message}`); }
+    const rescan = rescanAll(`restore:${id}`);
+    try { global.broadcastTerminalEvent?.('BLOCK-LIFECYCLE', `${id} RESTORED by ${operator(req)}`); } catch {}
+    res.json({ ok: true, restored: id, from: copy.path, rescan, ui: UI_NOTE });
+  });
+
   router.post('/rescan', (_req, res) => {
-    const result = kernelRescan ? kernelRescan('manual') : { ok: false, error: 'rescan unavailable (Vercel mode)' };
+    const result = rescanAll('manual');
     res.status(result.ok ? 200 : 503).json(result);
   });
 
