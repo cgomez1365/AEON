@@ -246,6 +246,9 @@ module.exports = function (deps) {
       answer, ...(answerReason ? { answerReason } : {}),
       sources: sources.map(({ text, ...rest }) => rest),
       text: lines.join('\n'),
+      // A cited answer plus its source list: the terminal's narrator relays it
+      // as written rather than paying a second model call to paraphrase it.
+      verbatim: true,
       ...(Object.keys(degraded).length ? { degraded } : {}),
     });
   });

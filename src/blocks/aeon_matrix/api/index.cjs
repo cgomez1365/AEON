@@ -249,7 +249,7 @@ module.exports = function secondBrainFactory(deps) {
           + shown.map((f) => `- ${f}`).join('\n')
           + (inside.length > shown.length ? `\n…and ${inside.length - shown.length} more.` : '')
           + (shown.length ? `\nThen: /doc ${argFor(shown[0])}` : '');
-        return res.json({ ok: true, found: false, reason: 'folder', folder: rel, files: shown, total: inside.length, text });
+        return res.json({ ok: true, found: false, reason: 'folder', folder: rel, files: shown, total: inside.length, text, verbatim: true });
       }
       const text = `Nothing in the Vault matches "${typed}". Searched: the exact path, `
         + `${searched.files.toLocaleString()} file names in every Vault folder (saved chats included), `
@@ -264,7 +264,7 @@ module.exports = function secondBrainFactory(deps) {
         + shown.map((p) => `- ${p}${titleOf.get(p) ? ` — ${titleOf.get(p)}` : ''}`).join('\n')
         + (hits.length > shown.length ? `\n…and ${hits.length - shown.length} more — type more of the path.` : '')
         + `\nThen: /doc ${argFor(shown[0])}`;
-      return res.json({ ok: true, found: false, reason: 'ambiguous', candidates: shown.map((p) => ({ path: p, title: titleOf.get(p) || null })), total: hits.length, text });
+      return res.json({ ok: true, found: false, reason: 'ambiguous', candidates: shown.map((p) => ({ path: p, title: titleOf.get(p) || null })), total: hits.length, text, verbatim: true });
     }
 
     const rel = hits[0];
@@ -284,6 +284,10 @@ module.exports = function secondBrainFactory(deps) {
       res.json({
         ok: true, found: true, path: `Vault/${rel}`, matchedBy: by, content: body, ...meta,
         text: `${rel}${how}\n\n${clipped}`,
+        // The terminal's narrator relays a `verbatim` result as written (up to
+        // 8,000 chars) instead of asking a model to paraphrase it. Opening a
+        // document should show the document, not a summary of it.
+        verbatim: true,
       });
     } catch (e) {
       const text = `${rel} was found but could not be read: ${e.message}`;

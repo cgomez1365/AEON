@@ -17,7 +17,7 @@
  *
  * The embedder is the bag-of-words stub ask-doc.test.js uses — no model.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -298,6 +298,7 @@ describe('the rest of the loop: ask, recall, notes with frontmatter', () => {
     // unanswered /ask (no `answer` field) rendered its whole body as JSON.
     const hit = await dispatch('/ask', 'what was the council verdict on three packs or ten?');
     expect(hit.chip).toMatch(/\[1\] Council debate/);
+    expect(hit.body.data.verbatim).toBe(true);   // a cited answer is relayed, not re-narrated
     const miss = await dispatch('/ask', 'zxqw plorbin frimble');
     expect(miss.chip).toMatch(/Nothing in the index/);
     expect(miss.chip).not.toMatch(/```json/);
@@ -346,5 +347,42 @@ describe('the rest of the loop: ask, recall, notes with frontmatter', () => {
     expect(r.status).toBe(200);
     expect(r.outcome.chipStatus).toBe(CHIP_STATUS.FAIL);
     expect(r.chip).toMatch(/Nothing in the index matches "nothing-here\.md"/);
+  });
+});
+
+// ── What the terminal says underneath the chip ───────────────────────────
+describe('the narration under the chip relays these answers instead of re-writing them', () => {
+  // Terminal2 hands every command result to /api/commands/narrate, and the
+  // chat model only ever sees that narration. A result over 400 characters
+  // went to a model to be paraphrased — a /doc became a summary of the
+  // document, a /recall list lost items (the defect `verbatim` exists for,
+  // commandNarrator.cjs), and an /ask answer that a model had ALREADY written,
+  // with citations, was re-written by a second call. Seen live 2026-09-23:
+  // /doc research/state.md narrated as "STUB REPLY (2654 chars of prompt received)".
+  const narrator = require('../src/kernel/commandNarrator.cjs');
+  const relay = async (cmd, arg) => {
+    const r = await dispatch(cmd, arg);
+    const llm = vi.fn(async () => 'a paraphrase');
+    const out = await narrator.narrate({ cmd, ok: r.outcome.kind === 'ok', text: r.body.text, data: r.body.data }, llm);
+    return { out, llm, r };
+  };
+
+  it('/doc relays the document', async () => {
+    write('Notes/long-note.md', `# Long note\n\n${'Dispatch reviews fuel exceptions every Monday morning. '.repeat(12)}`);
+    const { out, llm, r } = await relay('/doc', 'long-note.md');
+    expect(r.body.text.length).toBeGreaterThan(400);
+    expect(llm).not.toHaveBeenCalled();
+    expect(out.source).toBe('handler');
+    expect(out.narration).toMatch(/Dispatch reviews fuel exceptions/);
+  });
+
+  it('/recall relays its list', async () => {
+    write('Notes/invoice-terms.md', `# Invoice terms\n\n${'Invoice terms are net fifteen days for all clients. '.repeat(10)}`);
+    write('Notes/payment-policy.md', `# Payment policy\n\n${'Clients pay each invoice on receipt; late fees after thirty days. '.repeat(10)}`);
+    await scan();
+    const recall = await relay('/recall', 'invoice terms clients days');
+    expect(recall.r.body.text.length).toBeGreaterThan(400);
+    expect(recall.llm).not.toHaveBeenCalled();
+    expect(recall.out.narration).toBe(recall.r.body.text.trim());
   });
 });

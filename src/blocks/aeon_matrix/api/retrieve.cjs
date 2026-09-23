@@ -505,6 +505,9 @@ module.exports = function retrieveFactory(deps) {
         // reached the operator through the separate, best-effort narrator
         // call, and never through the chip itself.
         text: `${answer.trim()}\n\n${sources.map((s) => `[${s.n}] ${s.title}`).join('  ')}`,
+        // Already a model's cited answer — a second model call to "narrate"
+        // it cost tokens and could drop the citations.
+        verbatim: true,
       });
     } catch (e) {
       res.status(502).json({
@@ -587,6 +590,9 @@ module.exports = function retrieveFactory(deps) {
         documents, count: documents.length, matched: matched ?? documents.length, k: kUsed ?? (k || DEFAULT_K),
         ...(unavailable ? { unavailable } : {}),
         text,
+        // The list is the answer: relayed as written, never paraphrased by
+        // the terminal's narrator (which dropped and invented items).
+        verbatim: true,
       });
     } catch (err) {
       console.error('[RETRIEVE] error:', err.message);
@@ -659,7 +665,7 @@ module.exports = function retrieveFactory(deps) {
       const candidates = matches.slice(0, 10).map((d) => ({ path: d.path, title: d.title }));
       const text = `"${docQuery}" matches ${matches.length} documents — say which one:\n`
         + candidates.map((c) => `- ${c.title} (${c.path})`).join('\n');
-      return res.json({ ok: true, answered: false, reason: 'ambiguous_doc', message: `"${docQuery}" matches ${matches.length} documents.`, text, candidates });
+      return res.json({ ok: true, answered: false, reason: 'ambiguous_doc', message: `"${docQuery}" matches ${matches.length} documents.`, text, candidates, verbatim: true });
     }
 
     const meta = matches[0];
@@ -719,7 +725,7 @@ module.exports = function retrieveFactory(deps) {
         if (!answer) return res.status(502).json({ ok: false, error: 'empty_answer', message: 'The model returned nothing.' });
         return res.json({
           ok: true, answered: true, mode: 'fast',
-          answer, text: `${answer}\n\n[1] ${meta.title}`,
+          answer, text: `${answer}\n\n[1] ${meta.title}`, verbatim: true,
           citations: [{ n: 1, id: meta.path, title: meta.title }],
           documentsUsed: 1, windowsUsed: picks.length,
           provider: out?.provider || null, model: out?.model || null,
@@ -779,7 +785,7 @@ module.exports = function retrieveFactory(deps) {
       if (!answer) return res.status(502).json({ ok: false, error: 'empty_answer', message: 'The model returned nothing for the combined read.' });
       return res.json({
         ok: true, answered: true, mode: 'full',
-        answer, text: `${answer}\n\n[1] ${meta.title} — read whole (${windows.length} sections, ${found.length} relevant)`,
+        answer, text: `${answer}\n\n[1] ${meta.title} — read whole (${windows.length} sections, ${found.length} relevant)`, verbatim: true,
         citations: [{ n: 1, id: meta.path, title: meta.title }],
         documentsUsed: 1, windowsRead: windows.length, windowsRelevant: found.length,
         provider: out?.provider || null, model: out?.model || null,

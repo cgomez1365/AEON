@@ -62,5 +62,7 @@ describe('/orion — Second Brain sources', () => {
     const d = await search('fuel card dates');
     expect(d.text).toMatch(/Fuel card CSV notes — Second Brain \(Projects\/Northwind\/fuel-card-notes\.md\)/);
     expect(d.sources.find((s) => s.kind === 'vault').path).toBe('Projects/Northwind/fuel-card-notes.md');
+    // A cited answer + sources is complete: the terminal's narrator relays it.
+    expect(d.verbatim).toBe(true);
   });
 });
