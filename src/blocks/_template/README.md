@@ -1,7 +1,7 @@
 # _template — the modder's empty game folder (K2)
 
 Nobody builds from a blank file; they build from a working empty one. Copy this
-folder → rename → restart → live. Folders starting with `_` are never mounted.
+folder → rename → routes → build → rescan → live (no restart). Folders starting with `_` are never mounted.
 
 ## Every manifest field, explained
 
@@ -49,7 +49,7 @@ folder → rename → restart → live. Folders starting with `_` are never moun
 
 ## Make it appear — the step everyone misses
 
-`aeon new` → edit → `aeon lint` → `aeon promote` → **`npm run build` (or `npm run dev`)** → restart.
+`aeon new` → edit → `aeon lint` → `aeon promote` → `node scripts/gen-block-routes.cjs` → **`npm run build` (or `npm run dev`)** → `POST /api/build/rescan` (or `aeon block start <id>`, which mounts a promoted block). No restart.
 The browser finds blocks through a build-time glob. A running production build cannot see a new
 folder until it is rebuilt, and nothing is logged — the block is simply absent. The Master block
 in the console has the full guide and a copyable AI prompt.

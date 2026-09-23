@@ -81,4 +81,4 @@ VERIFY: confirm no `__BLANK__` remains anywhere in the folder (search all files)
 - [ ] every API route starts with `/crn/<id>/`
 - [ ] no file written outside the new folder
 
-Done. The operator moves the folder to `src/blocks/` (or through `staging/` + `npm run aeon lint <id>`) and restarts — the block loader mounts it automatically from the manifest. You do not register anything anywhere else: THE MANIFEST IS THE ONLY DECLARATION.
+Done. The operator moves the folder to `src/blocks/` (or through `staging/` + `npm run aeon lint <id>`) then runs `node scripts/gen-block-routes.cjs`, `npm run build` and a rescan (`POST /api/build/rescan`) — the block loader mounts it from the manifest, no restart. You do not register anything anywhere else: THE MANIFEST IS THE ONLY DECLARATION.
