@@ -206,6 +206,33 @@ describe('guard OFF, account present — the manifest guard is the only protecti
   });
 });
 
+describe('a block router\'s /block/<id> copy is judged as the /api route it serves (agent C4)', () => {
+  // blockHost mounts every router-shaped block API twice: at /api and at
+  // /block/<id>. Manifests declare only the /api form, and the guard matched
+  // req.originalUrl — so /block/host_os/fs/list answered the Vault listing with
+  // no session while /api/fs/list was refused (measured 2026-09-23, guard off).
+  beforeEach(() => {
+    seedAccount();
+    sessions.savePolicy({ ...sessions.loadPolicy(), guardEnabled: false, lockEveryLaunch: false });
+  });
+
+  it.each([
+    ['GET', '/block/probe/probe/secret'],
+    ['GET', '/BLOCK/probe/PROBE/secret'],
+    ['POST', '/block/probe/probe/stop'],
+  ])('%s %s is refused without a session', async (method, p) => {
+    const r = await call(p, method);
+    expect(r.status, `${method} ${p} answered ${r.status}: ${r.body}`).toBe(401);
+    expect(r.body).not.toMatch(/reached/);
+  });
+
+  it('and answers with one', async () => {
+    const r = await call('/block/probe/probe/secret', 'GET', { authorization: 'Bearer fixture-token' });
+    expect(r.status).toBe(200);
+    expect(r.body).toMatch(/reached/);
+  });
+});
+
 describe('pre-auth routes stay open through a mounted block router', () => {
   beforeEach(() => {
     seedAccount();

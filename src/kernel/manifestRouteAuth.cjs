@@ -68,10 +68,20 @@ function protectedRoutes(manifest) {
     }));
 }
 
-/** The path a block route was declared against, independent of mount point. */
+/**
+ * The path a block route was declared against, independent of mount point.
+ *
+ * blockHost mounts a router-shaped block API twice — at /api and at
+ * /block/<id> — with the same handlers. Manifests declare only the /api form,
+ * so /block/<id>/x is judged as /api/x. Matched against the raw URL, the
+ * /block copy of every protected route answered with no session once the
+ * guard was off (agent C4 measured /block/host_os/fs/list returning the Vault
+ * listing, 2026-09-23). Case-insensitive, as Express routes.
+ */
 function requestPath(req) {
-  const url = req.originalUrl || req.url || '';
-  return url.split('?')[0];
+  const url = (req.originalUrl || req.url || '').split('?')[0];
+  const m = /^\/block\/[^/]+(\/.*)?$/i.exec(url);
+  return m ? `/api${m[1] || ''}` : url;
 }
 
 /**
