@@ -13,9 +13,13 @@ export const SELF_REPORTED = { 'x-aeon-self-reported': '1' };
 /** Operator-facing sentence for the current state. */
 export function loginGuardText({ enabled, accountConfigured }) {
   if (!accountConfigured) return 'No operator account yet — AEON is open to anyone on this computer. Create one under Security to turn login on.';
+  // Off is a half state, measured 2026-09-23: routes a block declares
+  // auth:true still refuse without a session (the manifest guard enforces
+  // them once an account exists), while kernel routes — block Stop/Remove,
+  // the command list, the block registry — answer without one.
   return enabled
-    ? 'On — every screen and API asks for your operator password.'
-    : 'Off — anyone who can reach this computer\'s AEON gets in without a password. Remote access stays locked while this is off.';
+    ? 'On — AEON asks for your operator password when it opens and on every protected screen.'
+    : 'Off — AEON stops asking for a password when it opens, and kernel controls (block Stop/Remove, the command list) answer anything on this computer without a password. Block screens marked protected still need you signed in and will fail until you are. Remote Access stays locked while this is off.';
 }
 
 export function createLoginGuardClient({ base = '', fetchImpl } = {}) {

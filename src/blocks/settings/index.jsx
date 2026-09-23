@@ -292,7 +292,7 @@ function LoginGuardToggle() {
   const toggle = async () => {
     if (!state) return;
     const next = !state.enabled;
-    if (!next && !window.confirm('Turn login OFF?\n\nAnyone who can reach AEON on this computer gets in without a password, and Remote Access stays locked until it is back on.')) return;
+    if (!next && !window.confirm('Turn login OFF?\n\nAEON stops asking for a password when it opens, and kernel controls such as block Stop/Remove answer anything on this computer without one. Block screens marked protected still need you signed in. Remote Access stays locked until login is back on.')) return;
     setBusy(true);
     const r = await client.set(next);
     if (r.ok) { setState(r); setError(null); showToast(next ? 'Login required — AEON asks for your password' : 'Login turned off'); }
