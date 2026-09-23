@@ -2304,8 +2304,16 @@ function TunnelPanel() {
         <span style={{ fontWeight: 800, fontSize: 14, letterSpacing: 1 }}>CLOUDFLARE TUNNEL</span>
       </div>
       <div style={{ fontSize: 12, opacity: 0.6, marginBottom: 12, lineHeight: 1.5 }}>
-        Reach this AEON from your phone or any browser — while this computer is on. No account needed. One click.
+        Reach this AEON from your phone or any browser — while this computer is on. No Cloudflare account needed.
+        Anyone with the link reaches your AEON login, so your operator password is what protects it.
       </div>
+      {status && !status?.tunnel?.running && !status?.tunnel?.secured && (
+        <div role="status" style={{ fontSize: 12, color: '#f59e0b', marginBottom: 10, lineHeight: 1.5 }}>
+          {status?.tunnel?.accountExists === false
+            ? 'Start is locked: create your operator account first (Security → Set up). Without it the tunnel would publish every screen and key with no password.'
+            : 'Start is locked: login is switched off. Turn "Require login" back on (Security) — otherwise a tunnel visitor gets in with no password.'}
+        </div>
+      )}
       {status?.tunnel?.url && (
         <div style={{ fontSize: 13, marginBottom: 10, padding: '8px 12px', borderRadius: 8, background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.2)' }}>
           <a href={status.tunnel.url} target="_blank" rel="noreferrer" style={{ color: '#10b981', fontWeight: 600 }}>{status.tunnel.url}</a>{' '}
@@ -2314,7 +2322,7 @@ function TunnelPanel() {
         </div>
       )}
       <div style={{ display: 'flex', gap: 8 }}>
-        <button type="button" disabled={busy || status?.tunnel?.running} onClick={() => call('/api/settings/connectivity/tunnel/start')}
+        <button type="button" disabled={busy || status?.tunnel?.running || (status && !status?.tunnel?.secured)} onClick={() => call('/api/settings/connectivity/tunnel/start')}
           style={{ padding: '10px 20px', borderRadius: 8, border: 'none', background: '#10b981', color: '#fff', fontWeight: 700, cursor: 'pointer', fontSize: 13 }}>
           {busy ? 'Working…' : status?.tunnel?.running ? 'Tunnel live' : 'Start tunnel'}
         </button>
@@ -2323,7 +2331,7 @@ function TunnelPanel() {
       </div>
       {tunnelNote && <div style={{ fontSize: 11, opacity: 0.65, marginTop: 8 }}>{tunnelNote}</div>}
       {status?.tunnel?.running && !status?.tunnel?.secured && (
-        <div style={{ fontSize: 11, color: '#f59e0b', marginTop: 8 }}>⚠ AEON_MOBILE_SECRET not set — external API calls will be refused.</div>
+        <div role="alert" style={{ fontSize: 11, color: '#f87171', marginTop: 8 }}>⚠ The tunnel is live and login is OFF — anyone with the link can use this AEON. Stop the tunnel or turn login back on.</div>
       )}
     </div>
   );

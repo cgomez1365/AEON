@@ -10,6 +10,7 @@
  *   POST /api/settings/connectivity/firebase/test   { apiKey, projectId }? → ping identitytoolkit
  *   POST /api/settings/connectivity/firebase/save   { apiKey, projectId, ... } → encrypted Vault
  *   POST /api/settings/connectivity/tunnel/start    → { url: https://*.trycloudflare.com }
+ *                                                     409 unless an account exists and login is on
  *   POST /api/settings/connectivity/tunnel/stop
  */
 const fs = require('fs');
@@ -114,6 +115,21 @@ async function pingFirebase(apiKey) {
 
 module.exports = (app, deps) => {
   const supabase = deps && deps.supabase ? deps.supabase : null;
+  // Injectable like the Security block's own routes; lazy so a test can set
+  // VAULT_PATH before the validator resolves its store.
+  const sessions = () => (deps && deps.sessionValidator)
+    || require('../../../kernel/server-utils/sessionValidator.cjs');
+  // What actually protects tunnel traffic. cloudflared connects to
+  // http://localhost:<PORT>, so every tunnel request reaches this server FROM
+  // 127.0.0.1 — security.js's Bearer gate and rate limiter both skip loopback
+  // callers and never see it. The operator login (session guard) is the only
+  // thing between a tunnel visitor and AEON.
+  const tunnelProtection = () => {
+    const v = sessions();
+    const accountExists = !!v.hasAccount();
+    const loginRequired = !!v.guardActive();
+    return { accountExists, loginRequired, secured: accountExists && loginRequired };
+  };
   const settingsService = require(path.join(ROOT, 'services', 'settings.js'));
   const cloudCredentials = settingsService.createCloudCredentialStore();
 
@@ -132,7 +148,9 @@ module.exports = (app, deps) => {
         running: !!_tunnel.proc,
         url: _tunnel.url,
         startedAt: _tunnel.startedAt,
-        secured: !!process.env.AEON_MOBILE_SECRET, // tunnel traffic must Bearer-auth
+        // secured = a tunnel visitor must log in. NOT AEON_MOBILE_SECRET: the
+        // Bearer gate never applies to tunnel traffic (see tunnelProtection).
+        ...tunnelProtection(),
       },
       runtime: _isCloud() ? 'cloud' : 'local',
     });
@@ -266,6 +284,17 @@ module.exports = (app, deps) => {
     try {
       if (_tunnel.proc) return res.json({ ok: true, url: _tunnel.url, alreadyRunning: true });
 
+      // Refuse BEFORE anything is downloaded or spawned: a tunnel with no
+      // login in front of it publishes every route of this AEON to anyone
+      // who has the URL.
+      const guard = tunnelProtection();
+      if (!guard.accountExists) {
+        return res.status(409).json({ ok: false, ...guard, error: 'Remote access needs an operator account first. Tunnel visitors reach AEON as if they were on this computer, so your login is the only thing protecting it. Create your account (Security → Set up), then start the tunnel.' });
+      }
+      if (!guard.loginRequired) {
+        return res.status(409).json({ ok: false, ...guard, error: 'Remote access needs login turned on. The login guard is off, so a tunnel visitor would reach every route with no password. Turn "Require login" back on (Security), then start the tunnel.' });
+      }
+
       if (!CLOUDFLARED_TARGET) {
         throw new Error(`Cloudflare Tunnel has no published build for ${os.platform()}/${os.arch()} — cloudflare/cloudflared does not ship one. The tunnel is not available on this machine.`);
       }
@@ -332,11 +361,8 @@ module.exports = (app, deps) => {
       proc.on('exit', () => { _tunnel.proc = null; _tunnel.url = null; });
 
       res.json({
-        ok: true, url,
-        secured: !!process.env.AEON_MOBILE_SECRET,
-        note: process.env.AEON_MOBILE_SECRET
-          ? 'Live while this computer is on. API calls from outside require your AEON_MOBILE_SECRET as a Bearer token.'
-          : 'Live — but AEON_MOBILE_SECRET is not set, so all external API calls will be refused. Set it in .env to use the tunnel.',
+        ok: true, url, ...tunnelProtection(),
+        note: 'Live while this computer is on. Anyone with this URL reaches your AEON login screen — your password is what protects it. Stop the tunnel when you are done.',
       });
     } catch (e) {
       if (_tunnel.proc) { try { _tunnel.proc.kill(); } catch {} _tunnel.proc = null; }

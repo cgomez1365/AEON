@@ -76,7 +76,10 @@ describe('POST /tunnel/start requests the binary THIS machine can run', () => {
     const requested = [];
 
     const app = express(); app.use(express.json());
-    connectivity(app, {});
+    // An operator account with login on: since 2026-09-23 the tunnel refuses to
+    // start without one (tests/settings-tunnel-precondition.test.js). This test
+    // is about WHICH binary is fetched, so it stands past that precondition.
+    connectivity(app, { sessionValidator: { hasAccount: () => true, guardActive: () => true } });
     const server = await new Promise((resolve) => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
 
     // Stub AFTER the server is listening: the route's internal `fetch(...)`
