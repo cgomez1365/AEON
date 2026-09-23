@@ -83,6 +83,12 @@ module.exports = (app, deps) => {
     return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
   }
 
+  // The trail the operator can read (Operator Console audit / /api/audit).
+  // Never pass a password, passphrase or token here — names and outcomes only.
+  function osAudit(action, details, status = 200) {
+    if (deps && deps.writeOSAudit) { try { deps.writeOSAudit(action, details, status, 0); } catch {} }
+  }
+
   function appendRecoveryAudit(event, method) {
     const auditFile = path.join(sessions.SECURITY_DIR, 'audit.log');
     fs.mkdirSync(path.dirname(auditFile), { recursive: true });
@@ -91,6 +97,9 @@ module.exports = (app, deps) => {
       timestamp: new Date().toISOString(),
       method,
     })}\n`, { mode: 0o600 });
+    // Recovery used to reach ONLY this file, which no screen reads: a password
+    // reset through break-glass was invisible on the audit screen (2026-09-23).
+    osAudit(event, `Recovery: ${method}`, 200);
   }
 
   function isEmergencyCredential(u, password) {
@@ -216,6 +225,9 @@ module.exports = (app, deps) => {
   // lockout, one deliberately generic error that never reveals which factor was
   // wrong. Persists on every call so accounting survives the two-step 2FA flow.
   function registerAuthFailure(u, res) {
+    // Each failure is on the trail, not only the lockout five of them cause.
+    // Generic on purpose: never the submitted value, never which factor.
+    osAudit('AUTH_FAIL', `Failed sign-in for ${u.username}`, 401);
     u.failedAttempts = (u.failedAttempts || 0) + 1;
     if (u.failedAttempts >= MAX_FAILED) {
       u.lockedUntil = Date.now() + LOCKOUT_MS;
@@ -286,7 +298,7 @@ module.exports = (app, deps) => {
     }
     const token = issueSession(u, req);
     saveUser(u);
-    if (deps && deps.writeOSAudit) deps.writeOSAudit('AUTH_LOGIN', `Login: ${u.username}`, 200, 0);
+    osAudit('AUTH_LOGIN', `Login: ${u.username}${emergencyMatch ? ' (emergency passphrase)' : backupToConsume ? ' (2FA backup code)' : ''}`, 200);
 
     res.setHeader('Set-Cookie',
       `aeon_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_TTL_MS / 1000}`);
@@ -347,7 +359,9 @@ module.exports = (app, deps) => {
         lockedUntil: failedAttempts >= MAX_FAILED ? timestamp + LOCKOUT_MS : 0,
       };
       saveUser(u);
+      osAudit('RECOVERY_FAIL', `Recovery answers rejected for ${u.username}`, 401);
       if (failedAttempts >= MAX_FAILED) {
+        osAudit('RECOVERY_LOCKOUT', `Recovery locked for ${u.username}`, 429);
         return res.status(429).json({
           error: 'Recovery is locked for 15 minutes after 5 failed attempts',
           retryAfter: LOCKOUT_MS / 1000,
@@ -428,6 +442,7 @@ module.exports = (app, deps) => {
     if (ctx) {
       delete ctx.user.sessions[ctx.token];
       saveUser(ctx.user);
+      osAudit('AUTH_LOGOUT', `Logout: ${ctx.user.username}`, 200);
     }
     res.setHeader('Set-Cookie', 'aeon_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0');
     res.json({ ok: true });
