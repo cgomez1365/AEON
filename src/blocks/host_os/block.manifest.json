@@ -244,6 +244,11 @@
       "auth": true
     },
     {
+      "method": "GET",
+      "path": "/api/system/health",
+      "auth": true
+    },
+    {
       "method": "POST",
       "path": "/api/system/restart",
       "auth": true

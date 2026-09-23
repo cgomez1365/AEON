@@ -10,7 +10,7 @@ module.exports = function createSystemRouter(deps) {
     requireShellAuth, supabase, isVercel,
     LOG_FILE, AUDIT_FILE, NOTES_FILE, TERMINAL_HISTORY_FILE,
     SDI_SCHEMAS, validateSDI, SDI_VIOLATION_LOG,
-    getLocalFile, runReaper
+    getLocalFile, getDataFile, runReaper
   } = deps;
 
   // SDI: View all violations
@@ -90,24 +90,107 @@ module.exports = function createSystemRouter(deps) {
     }
   });
 
-  // System restart
+  // ── Restart: only when something will bring AEON back ─────────────
+  //
+  // Measured 2026-09-23 on macOS: this answered { success: true, "Restarting
+  // AEON Command Center..." }, spawned `cmd.exe /c scripts/restart.bat` — a
+  // Windows binary, and a script that exists on NO platform since the repo
+  // reorg — and exited 500 ms later. launch.js exits when its server child
+  // exits, so nothing relaunched AEON: the header RESTART button told the
+  // operator it was restarting and left a dead app. settings' /restart already
+  // refuses in this case (BO-SHIP P8f); this route now applies the same rule.
+  //
+  // A relauncher must be PROVEN present before the process is allowed to die:
+  // restart.bat on Windows (it is cmd.exe-only), or a supervisor that restarts
+  // on exit (the same env signals settings reads).
+  const RESTART_SCRIPT = path.join(__dirname, '..', '..', '..', '..', 'scripts', 'restart.bat');
+  function restartCapability() {
+    if (isVercel) {
+      return { canRestart: false, reason: 'AEON in the cloud is restarted by its host, not from inside the app.', remedy: 'Redeploy from your hosting dashboard.' };
+    }
+    if (process.platform === 'win32' && fs.existsSync(RESTART_SCRIPT)) return { canRestart: true, via: 'restart.bat' };
+    const supervisor = ['AEON_SUPERVISED', 'PM2_HOME', 'NODEMON'].find((k) => process.env[k]);
+    if (supervisor) return { canRestart: true, via: 'supervisor', signal: supervisor };
+    return {
+      canRestart: false,
+      reason: 'AEON cannot restart itself in this launch mode — nothing would bring it back up.',
+      remedy: 'Stop AEON and start it again with your launcher (LAUNCH.bat, launch.command, launch.sh, or npm start).',
+      detail: 'A restart needs scripts/restart.bat on Windows, or a supervisor that relaunches AEON when it exits (AEON_SUPERVISED, pm2, nodemon).',
+    };
+  }
+
   router.post('/system/restart', requireShellAuth, (req, res) => {
-    if (isVercel) return res.json({ success: false, message: 'SYSTEM: Command unavailable in Cloud environment. Please run via Local Command Center.' });
-    console.log('[AEON SYSTEM] FULL RESTART INITIATED BY CEO');
-    res.json({ success: true, message: 'Restarting AEON Command Center...' });
-    const { spawn } = require('child_process');
-    // NOTE: restart.bat moved to scripts/ during the repo reorg (BUILD_LOG.md
-    // 2026-07 entry). __dirname is src/blocks/host_os/api, so this walks up to
-    // the repo root before descending into scripts/.
-    const restartScript = path.join(__dirname, '..', '..', '..', '..', 'scripts', 'restart.bat');
-    // aeon-shell-allow: launching a .bat requires cmd.exe; restartScript is a
-    // server-side path.join constant, never request-derived.
-    const child = spawn('cmd.exe', ['/c', restartScript], {
-      detached: true, stdio: 'ignore', windowsHide: false
+    const cap = restartCapability();
+    if (!cap.canRestart) {
+      return res.status(501).json({ ok: false, success: false, restarting: false, error: cap.reason, remedy: cap.remedy, detail: cap.detail });
+    }
+    console.log(`[AEON SYSTEM] Restart requested by the operator — relaunch via ${cap.via}.`);
+    res.json({ ok: true, success: true, restarting: true, via: cap.via, message: `Restarting AEON (relaunched by ${cap.via}).` });
+    setTimeout(() => {
+      try {
+        if (cap.via === 'restart.bat') {
+          const { spawn } = require('child_process');
+          // aeon-shell-allow: launching a .bat requires cmd.exe; RESTART_SCRIPT
+          // is a server-side path.join constant, never request-derived.
+          const child = spawn('cmd.exe', ['/c', RESTART_SCRIPT], { detached: true, stdio: 'ignore', windowsHide: false });
+          child.on('error', (e) => console.error('[AEON SYSTEM] restart.bat spawn failed:', e.message));
+          child.unref();
+        }
+      } finally { process.exit(0); }
+    }, 500);
+  });
+
+  // ── GET /api/system/health — this machine and this AEON, in one read ──
+  //
+  // /api/health above is a liveness ping (the header polls it). This is what
+  // the Host screen shows: the machine (CPU, memory, load, disk), the AEON
+  // process (pid, uptime, memory, Node), and whether Restart can work here —
+  // so a Restart control can be offered or explained, never faked.
+  // requireOperator: a read of machine facts, same gate as the audit screen.
+  router.get('/system/health', requireOperator({ name: 'Host health' }), (req, res) => {
+    const os = require('os');
+    const gb = (b) => Math.round((b / 1024 ** 3) * 10) / 10;
+    const mb = (b) => Math.round(b / 1024 ** 2);
+    const mem = process.memoryUsage();
+    let disk = null;
+    try {
+      const where = deps.VAULT_ROOT || (getDataFile ? getDataFile('host_os') : process.cwd());
+      let probe = where;
+      while (probe && !fs.existsSync(probe)) probe = path.dirname(probe);
+      if (typeof fs.statfsSync === 'function' && probe) {
+        const st = fs.statfsSync(probe);
+        disk = { path: probe, freeGb: gb(st.bavail * st.bsize), totalGb: gb(st.blocks * st.bsize) };
+      }
+    } catch (e) { disk = { error: e.message }; }
+    const cpus = os.cpus() || [];
+    res.json({
+      ok: true,
+      checkedAt: new Date().toISOString(),
+      machine: {
+        hostname: os.hostname(),
+        platform: process.platform,
+        arch: os.arch(),
+        osRelease: os.release(),
+        cpuModel: cpus[0] ? cpus[0].model : null,
+        cpuThreads: cpus.length,
+        // Windows has no load average; os.loadavg() returns zeros there.
+        loadAvg: process.platform === 'win32' ? null : os.loadavg().map((n) => Math.round(n * 100) / 100),
+        uptimeSec: Math.round(os.uptime()),
+        totalMemGb: gb(os.totalmem()),
+        freeMemGb: gb(os.freemem()),
+        ...(process.platform === 'darwin' ? { freeMemNote: 'macOS keeps unused memory as cache and counts it as used, so "free" reads far lower than what applications can actually get. Low free memory here is normal.' } : {}),
+      },
+      disk,
+      aeon: {
+        pid: process.pid,
+        uptimeSec: Math.round(process.uptime()),
+        node: process.version,
+        rssMb: mb(mem.rss),
+        heapUsedMb: mb(mem.heapUsed),
+        environment: isVercel ? 'vercel' : 'local',
+      },
+      restart: restartCapability(),
     });
-    child.on('error', (e) => console.error('[AEON SYSTEM] restart.bat spawn failed:', e.message));
-    child.unref();
-    setTimeout(() => process.exit(0), 500);
   });
 
   // System scan & sync

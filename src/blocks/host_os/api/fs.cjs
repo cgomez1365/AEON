@@ -429,39 +429,85 @@ module.exports = function createFsRouter(deps) {
   });
 
   // POST /api/fs/upload
+  //
+  // The upload storage is owned HERE, so it obeys the same two rules as every
+  // other route in this file. It used to be the kernel's shared `deps.upload`
+  // (services/storage.js), whose only boundary was "inside home, workspace or
+  // vault". Measured live 2026-09-23 with the hub LOCKED:
+  //   - /fs/write refused to overwrite Vault/Agents/keep.md (423), and an
+  //     upload of a file named keep.md into that folder silently replaced it.
+  //   - /fs/read refused Vault/.ssh by name, and an upload wrote into it. On a
+  //     real machine that is ~/.ssh/authorized_keys or ~/Library/LaunchAgents.
+  //   - no folder meant the workspace, while /fs/list (and the screen) showed
+  //     the Vault — "saved", and never visible.
+  // Now: the folder and every file name go through safePath (roots + refusal
+  // list); an existing file is replaced only when the hub is unlocked; no
+  // folder means the same landing folder /fs/list uses.
+  const UPLOAD_LIMITS = (upload && upload.limits) || {
+    fileSize: 50 * 1024 * 1024, files: 20, fields: 50, parts: 100, fieldNameSize: 300, fieldSize: 1024 * 1024,
+  };
+  const uploadName = (original) => {
+    const base = path.basename(String(original || '').replace(/\\/g, '/'));
+    return base && base !== '.' && base !== '..' ? base : `upload_${Date.now()}`;
+  };
+  const refusal = (verdict) => Object.assign(new Error(verdict.error), { status: verdict.status, code: 'UPLOAD_REFUSED' });
+  const hubUpload = require('multer')({
+    storage: require('multer').diskStorage({
+      destination: (req, file, cb) => {
+        try {
+          const requested = typeof req.body.targetDir === 'string' ? req.body.targetDir.trim() : '';
+          const verdict = safePath(requested || VAULT_ROOT || WORKSPACE);
+          if (!verdict.ok) return cb(refusal(verdict));
+          fs.mkdirSync(verdict.path, { recursive: true });
+          file.hubDir = verdict.path; // read back by filename() below — same object
+          cb(null, verdict.path);
+        } catch (e) { cb(new Error(`cannot write to upload target: ${e.message}`)); }
+      },
+      filename: (req, file, cb) => {
+        const name = uploadName(file.originalname);
+        const verdict = safePath(path.join(file.hubDir, name), { write: true });
+        if (!verdict.ok) return cb(refusal(verdict));
+        if (fs.existsSync(verdict.path) && readLock()) {
+          return cb(Object.assign(new Error(`${name} already exists in that folder. File Manager is in add-only mode — unlock it (🔓) to replace it, or rename the file you are uploading.`), { status: 423, code: 'UPLOAD_LOCKED' }));
+        }
+        cb(null, name);
+      },
+    }),
+    limits: UPLOAD_LIMITS,
+  });
+
   router.post('/fs/upload', (req, res, next) => {
-    console.log('--- Incoming upload request ---');
-    next();
-  }, (req, res, next) => {
-    // BO-H8b — multer had no error handler. LIMIT_FILE_SIZE against the 50 MB
-    // cap, and any error the storage engine passes to cb(), had nowhere to
-    // land: it fell through to the global handler as an opaque 500, or worse.
-    // Wrapping it here keeps the failure attached to the route that caused it
-    // and gives the size limit the 413 it has always deserved.
-    upload.array('files', 20)(req, res, (err) => {
+    // BO-H8b — every multer failure is answered here with its own status:
+    // 413 over the size cap, 403 a refused folder or name, 423 a replace while
+    // locked. multer removes files it already stored for the request.
+    hubUpload.array('files', 20)(req, res, (err) => {
       if (!err) return next();
       const tooBig = err.code === 'LIMIT_FILE_SIZE';
       const tooMany = err.code === 'LIMIT_FILE_COUNT';
-      res.status(tooBig ? 413 : 400).json({
+      const status = tooBig ? 413 : (err.status || 400);
+      if (status === 403 || status === 423) {
+        if (deps.writeOSAudit) { try { deps.writeOSAudit('FS_UPLOAD_REFUSED', err.message, status, 0); } catch {} }
+      }
+      res.status(status).json({
         correlation_id: req.correlationId || 'AEON-SYS',
         error: tooBig ? 'File exceeds the 50 MB upload limit.'
           : tooMany ? 'Too many files — 20 per upload.'
           : err.message,
         code: err.code || 'UPLOAD_FAILED',
+        ...(status === 423 ? { locked: true } : {}),
+        ...(status === 403 ? { blocked: true } : {}),
       });
     });
   }, (req, res) => {
-    console.log('Upload parsed successfully. Files:', req.files?.length);
     try {
       const uploaded = (req.files || []).map(f => ({
         name: f.originalname,
         path: f.path,
         size: f.size
       }));
-      console.log('Sending success response:', uploaded.map(u => u.name));
       res.json({ success: true, uploaded });
     } catch (error) {
-      console.error('Upload Error:', error.message);
+      console.error('[FS] upload error:', error.message);
       res.status(500).json({ correlation_id: req.correlationId || 'AEON-SYS', error: error.message });
     }
   });
