@@ -28,7 +28,7 @@ AEON looking at its own activity log, not a user-facing content feature.
 - `api/_ledgerView.cjs` — pure day-wise helpers (calendar walks at local noon,
   merge, streaks, 1/7/30/90-day windows). `_`-prefixed: never mounted.
 - `api/analytics.cjs` — shared, non-heatmap routes other surfaces call:
-  `GET /api/telemetry` (TelemetryContext's post-restart fallback) and
+  `GET /api/telemetry` (all-time usage per provider; survives a restart) and
   `GET/POST /api/audit` (App.jsx → the Dashboard's live feed). Three dead
   routes were retired from it 2026-09-23 (see below).
 - `db/activity_heatmap.json` — the daily ledger (`{ "YYYY-MM-DD": { requests, tokens, models: {...} } }`), pruned to the trailing ~365 days.
@@ -56,7 +56,7 @@ round trip.
 ### `api/analytics.cjs` (mounted at `/api`) — shared routes, not activity-specific
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/telemetry` | All-time usage per provider from the call ledger (`staffUsage[provider] = {requests, tokens, errors}`), plus today's derived cost (`totalCost`, `costScope: 'today'`). `TelemetryContext` falls back to it after every restart. Until 2026-09-23 it counted chat-log messages at 150 tokens each, so a fresh install showed 1 request / 150 tokens. |
+| GET | `/api/telemetry` | All-time usage per provider from the call ledger (`staffUsage[provider] = {requests, tokens, errors}`), plus today's derived cost (`totalCost`, `costScope: 'today'`). No UI calls it since `TelemetryContext` was retired (2026-09-23); it is the read API for usage that survives a restart. Until 2026-09-23 it counted chat-log messages at 150 tokens each, so a fresh install showed 1 request / 150 tokens. |
 | GET / POST | `/api/audit` | Read/append the audit log — local file (`AUDIT_FILE`), mirrored to Supabase only when a client is configured. The Dashboard's live feed reads it through `App.jsx`. |
 
 **Retired 2026-09-23** (Bible §21, gate `tests/activity-retired-routes.test.js`),

@@ -17,8 +17,8 @@ module.exports = (deps) => {
   // GET /api/telemetry — all-time usage per provider, from the call ledger.
   //
   // The kernel's live counters (/api/llm-telemetry) are in memory and reset on
-  // restart; TelemetryContext falls back to this route whenever they read
-  // zero, i.e. after every restart. It used to count chat-log MESSAGES —
+  // restart; this route survives one. (Its one UI caller, TelemetryContext,
+  // was retired 2026-09-23 — it read nothing it fetched.) It used to count chat-log MESSAGES —
   // `Number(msg.tokens) || 150` — so a fresh install with no LLM call at all
   // reported 1 request / 150 tokens for "aeon_cortex", the seeded
   // "SYSTEM INITIALIZED" line (measured 2026-09-23).

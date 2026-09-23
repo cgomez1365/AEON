@@ -75,6 +75,10 @@ const RETIRED = {
   'src/assets/typescript.svg': 'template asset; no reference',
   // Exposure that only a deployment could reach.
   'api/debug.js': 'returned stack traces to any caller on a Vercel deployment',
+  // 2026-09-23 (agent C3): mounted in App.jsx, read by nothing — polled
+  // /api/llm-telemetry (and /api/telemetry) every 10 s on every page and priced
+  // every token at one flat rate. The Dashboard reads the ledger directly.
+  'src/kernel/contexts/TelemetryContext.jsx': 'no consumer of its context; a 10 s poll per tab for nothing',
 };
 
 // The depth-map images whose only consumer was mathModels.js.

@@ -6,7 +6,6 @@ import DesktopLayout from "./components/DesktopLayout";
 import MobileLayout from "./components/MobileLayout";
 import AuthGate from "./components/AuthGate";
 import CloudSetupGate from "./components/CloudSetupGate";
-import { TelemetryProvider } from "./kernel/contexts/TelemetryContext";
 import { shouldBannerResponse, describeResponseBanner, decideNetworkBanner, isSelfReported } from "./utils/interceptorPolicy";
 // Boot-time appearance lives in the kernel, shared with Settings → Appearance.
 // It used to be a private copy here, which is how theme and sidebar width came
@@ -227,7 +226,7 @@ export default function App() {
     <BrowserRouter>
       <AuthProvider>
         <AeonProvider>
-          <TelemetryProvider>
+          <>
             {ideMode.active && (
               <div style={{
                 position: 'sticky', top: 0, width: '100%', zIndex: 10000,
@@ -259,7 +258,7 @@ export default function App() {
                 )}
               </AuthGate>
             </CloudSetupGate>
-          </TelemetryProvider>
+          </>
         </AeonProvider>
       </AuthProvider>
     </BrowserRouter>
