@@ -1085,7 +1085,7 @@ function JobCard({ job, copied, onCancel, onDismiss, onRetry, onCopy, onReport, 
               padding: '6px 10px', background: 'rgba(244,67,54,0.08)',
               borderRadius: '6px', fontFamily: 'var(--font-mono, monospace)',
             }}>
-              {job.errorMsg.slice(0, 300)}
+              {job.errorMsg.length > 700 ? `${job.errorMsg.slice(0, 700)}…` : job.errorMsg}
             </div>
           )}
           <div style={{ display: 'flex', gap: '6px' }}>

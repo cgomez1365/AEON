@@ -565,7 +565,7 @@ Write in full prose (not bullet dumps) except where a table or numbered steps ge
       // no report to write, and saying so is the only honest output.
       if (!allFindings.length) {
         const why = stoppedEarly === 'search'
-          ? `Every search attempt failed. ${searchDegraded || ''}`.trim()
+          ? `Every search attempt failed${searchDegraded ? ` (${searchDegraded})` : ''}.`
           : stoppedEarly === 'time'
             ? 'The time budget ran out before any search returned usable results.'
             : 'No search returned usable results.';
