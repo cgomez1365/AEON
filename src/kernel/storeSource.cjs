@@ -59,18 +59,20 @@ async function loadCatalog(source) {
   return { store: catalog?.store || null, generatedAt: catalog?.generatedAt || null, items };
 }
 
+/** Numeric dotted-version comparison: <0, 0, >0. */
+function compareVersions(a, b) {
+  const pa = String(a || '0').split('.').map(Number);
+  const pb = String(b || '0').split('.').map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] || 0) - (pb[i] || 0);
+    if (d) return d;
+  }
+  return 0;
+}
+
 /** The newest catalog entry for an id (versions compared numerically). */
 function pickItem(items, id) {
-  const cmp = (a, b) => {
-    const pa = String(a.version || '0').split('.').map(Number);
-    const pb = String(b.version || '0').split('.').map(Number);
-    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-      const d = (pa[i] || 0) - (pb[i] || 0);
-      if (d) return d;
-    }
-    return 0;
-  };
-  return items.filter((it) => it && it.id === id).sort(cmp).pop() || null;
+  return items.filter((it) => it && it.id === id).sort((a, b) => compareVersions(a.version, b.version)).pop() || null;
 }
 
 /** Read or download one cartridge and prove it is the one the catalog lists. */
@@ -107,4 +109,4 @@ async function fetchCartridge(source, item) {
   return { buf, sha: got };
 }
 
-module.exports = { resolveSource, loadCatalog, pickItem, fetchCartridge, sha256 };
+module.exports = { resolveSource, loadCatalog, pickItem, compareVersions, fetchCartridge, sha256 };

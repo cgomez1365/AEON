@@ -91,6 +91,10 @@ export function createLifecycleClient({ base = '', fetchImpl } = {}) {
     // The store AEON_STORE names (src/kernel/storeSource.cjs): what it offers,
     // and an install by id that the kernel hash-checks against the catalog.
     storeList: () => request('GET', '/api/store/source'),
+    update: async (id) => {
+      const r = await request('POST', '/api/store/update', { name: String(id || '') });
+      return r.ok ? { ...r, message: r.data.message } : r;
+    },
     install: async (id) => {
       const r = await request('POST', '/api/store/install', { name: String(id || '') });
       return r.ok ? { ...r, message: describeInstall(id, r.data) } : r;

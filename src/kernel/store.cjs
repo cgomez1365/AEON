@@ -162,4 +162,100 @@ async function installCartridge(pipeline, source, { operator = 'operator', env =
   return { ...result, blockId, sha, from, purchase: summary };
 }
 
-module.exports = { readCartridgeBuffer, purchaseSummary, listCatalog, findCartridgeFile, installCartridge, DIST_DIR };
+/**
+ * Update an installed pack to the store's newest version.
+ *
+ * The pipeline refuses to install over a live block ("bump version and use
+ * the update flow") and there was no update flow: an operator had to remove
+ * the pack and install it again (store builder B4, 2026-09-23). This is it:
+ *   1. resolve the newest catalog version; nothing to do if installed is current
+ *   2. fetch it and prove it by the catalog's SHA-256 — before touching anything
+ *   3. it must be a pack that goes live on its own (score LOW); one that needs
+ *      approval is refused here with how to do it through the queue, rather
+ *      than leaving the pack half-removed while it waits
+ *   4. move the installed folder aside (<data>/removed-blocks/<id>@<time>),
+ *      install the new one through the same airlock, restore the old folder if
+ *      the new one does not go live, and start it again if it was running.
+ * The pack's data lives in the data home, not its folder, so it carries over.
+ */
+async function updateFromStore(pipeline, id, {
+  operator = 'operator', env = process.env, blocksDir, stagingDir, removedDir, rescan = () => {}, runState,
+} = {}) {
+  const storeSource = require('./storeSource.cjs');
+  const aside = require('./blockAside.cjs');
+  const BLOCKS = blocksDir || require('./blocksDir.cjs').BLOCKS_DIR;
+  const STAGING = stagingDir || require('./staging.cjs').STAGING_DIR;
+  const REMOVED = removedDir || aside.defaultRemovedDir();
+  const rs = runState || require('./runState.cjs');
+  if (!/^[a-z0-9][a-z0-9_]*$/.test(String(id || ''))) return { ok: false, status: 400, error: 'invalid block id' };
+
+  const manifestFile = path.join(BLOCKS, id, 'block.manifest.json');
+  if (!fs.existsSync(manifestFile)) return { ok: false, status: 404, error: `${id} is not installed — install it from the store instead` };
+  let installed = '0.0.0';
+  try { installed = JSON.parse(fs.readFileSync(manifestFile, 'utf8')).version || '0.0.0'; } catch { /* unreadable: treat as oldest */ }
+
+  const src = storeSource.resolveSource(env);
+  if (!src) return { ok: false, status: 409, error: 'no store is configured (set AEON_STORE)' };
+  const { items } = await storeSource.loadCatalog(src);
+  const item = storeSource.pickItem(items, id);
+  if (!item) return { ok: false, status: 404, error: `"${id}" is not in the store's catalog` };
+  if (storeSource.compareVersions(item.version, installed) <= 0) {
+    return { ok: true, upToDate: true, id, installed, latest: item.version, message: `${id} ${installed} is the newest version in the store.` };
+  }
+
+  const { buf, sha } = await storeSource.fetchCartridge(src, item);
+  const { manifest, files } = readCartridgeBuffer(buf);
+  if (manifest.id !== id || String(manifest.version) !== String(item.version)) {
+    return { ok: false, status: 422, error: `${item.file} carries ${manifest.id} ${manifest.version}, not ${id} ${item.version} as the catalog says — not installed` };
+  }
+
+  const check = await pipeline.validateBuild('store', { manifest, files });
+  // submitBuild goes live on the GATE's verdict (verdict.score); lint findings
+  // (check.score) must be clean too or the staged lint stops it.
+  const score = check.verdict?.score !== 'LOW' ? (check.verdict?.score || 'unknown') : check.score;
+  if (!check.ok || check.errors?.length || score !== 'LOW') {
+    return {
+      ok: false, status: 409, id, installed, latest: item.version, score,
+      error: `${id} ${item.version} needs your review before it runs (score ${score}), so it is not swapped in automatically. `
+        + `Remove ${id} (its data stays), then install it — it will wait in the approval queue.`,
+    };
+  }
+
+  const wasRunning = !!rs.isRunning?.(id);
+  const keptAt = path.join(REMOVED, aside.asideName(id));
+  aside.moveDir(path.join(BLOCKS, id), keptAt);
+  let result;
+  try {
+    result = await pipeline.submitBuild('store', {
+      spec: `BGI Store update: ${id} ${installed} → ${item.version}`,
+      manifest, files, meta: { cartridge: `store:${item.file}`, sha, update: { from: installed } },
+    }, { operator });
+  } catch (e) {
+    result = { ok: false, stage: 'submit', error: e.message };
+  }
+
+  if (!result.ok || result.stage !== 'live') {
+    // Put the working version back; keep the failed attempt, never delete it.
+    const failed = path.join(STAGING, id);
+    if (fs.existsSync(failed)) aside.moveDir(failed, path.join(REMOVED, aside.asideName(id, '-failed-update')));
+    if (fs.existsSync(path.join(BLOCKS, id))) aside.moveDir(path.join(BLOCKS, id), path.join(REMOVED, aside.asideName(id, '-failed-update')));
+    aside.moveDir(keptAt, path.join(BLOCKS, id));
+    try { rescan(`update-rollback:${id}`); } catch { /* reported below */ }
+    if (wasRunning) { try { rs.setRunning(id, true, { operator, allowAuto: true }); } catch {} }
+    return {
+      ok: false, status: 422, id, installed, latest: item.version, rolledBack: true, stage: result.stage,
+      error: `${id} ${item.version} did not install (${result.error || result.stage}); ${installed} is back in place${wasRunning ? ' and running' : ''}.`,
+      result,
+    };
+  }
+
+  if (wasRunning) { try { rs.setRunning(id, true, { operator, allowAuto: true }); } catch {} }
+  return {
+    ok: true, updated: true, id, from: installed, to: item.version, sha, keptAt,
+    running: !!rs.isRunning?.(id),
+    message: `${id} updated ${installed} → ${item.version} (verified against the store). The previous version is kept at ${keptAt}.`
+      + (wasRunning ? ' It is running again.' : ' It is stopped; start it when ready.'),
+  };
+}
+
+module.exports = { readCartridgeBuffer, purchaseSummary, listCatalog, findCartridgeFile, installCartridge, updateFromStore, DIST_DIR };

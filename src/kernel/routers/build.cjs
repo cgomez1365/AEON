@@ -94,8 +94,8 @@ module.exports = function createBuildRouter(deps) {
   const fs = require('fs');
   const path = require('path');
   const blocksDir = deps.blocksDir || require('../blocksDir.cjs').BLOCKS_DIR;
-  const removedDir = deps.removedDir || path.join(
-    require('../aeonHome.cjs').roots({ appRoot: path.join(__dirname, '..', '..', '..') }).data, 'removed-blocks');
+  const aside = require('../blockAside.cjs');
+  const removedDir = deps.removedDir || aside.defaultRemovedDir();
   // Without security every guarded route answers 401 and login 404 — the
   // operator is locked out (measured). It can be neither stopped nor removed here.
   const NEVER_STOP = new Set(['security']);
@@ -122,15 +122,7 @@ module.exports = function createBuildRouter(deps) {
     return out.sort();
   };
   // rename, or copy + remove when the two roots are on different volumes.
-  const move = (from, to) => {
-    fs.mkdirSync(path.dirname(to), { recursive: true });
-    try { fs.renameSync(from, to); }
-    catch (e) {
-      if (e.code !== 'EXDEV') throw e;
-      fs.cpSync(from, to, { recursive: true });
-      fs.rmSync(from, { recursive: true, force: true });
-    }
-  };
+  const move = aside.moveDir;
   const removedCopies = () => {
     if (!fs.existsSync(removedDir)) return [];
     return fs.readdirSync(removedDir, { withFileTypes: true })
@@ -168,7 +160,7 @@ module.exports = function createBuildRouter(deps) {
     if (NEVER_STOP.has(id)) return refuse(res, 409, `"${id}" cannot be uninstalled: without it the operator is locked out of every guarded route.`);
     if (!isInstalled(id)) return refuse(res, 404, `no installed block "${id}"`);
     const dependents = dependentsOf(id);
-    const movedTo = path.join(removedDir, `${id}@${new Date().toISOString().replace(/[:.]/g, '-')}`);
+    const movedTo = path.join(removedDir, aside.asideName(id));
     try { move(blockPath(id), movedTo); }
     catch (e) { return refuse(res, 500, `could not move ${id} aside: ${e.message}`); }
     try { runState.forget(id); } catch { /* state file unavailable; a reinstall resets anyway */ }

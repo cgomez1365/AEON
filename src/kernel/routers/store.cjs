@@ -5,6 +5,7 @@
  *   GET  /api/store/source           what the configured store (AEON_STORE) offers + installed versions
  *   GET  /api/store/catalog/:id      one cartridge — THE PURCHASE SCREEN payload
  *                                    (Tier 2/3 perms + warnings shown here, pre-install)
+ *   POST /api/store/update           { name } → newest store version replaces the installed one
  *   POST /api/store/install          { name | base64 | url } → standard pipeline
  *                                    (name: dist-blocks/, then the store, SHA-256 checked)
  *                                    (gate → staging → lint → LOW live-STOPPED / queue)
@@ -35,14 +36,22 @@ module.exports = function createStoreRouter(deps) {
         try { return JSON.parse(fs.readFileSync(path.join(BLOCKS_DIR, id, 'block.manifest.json'), 'utf8')).version || '0.0.0'; }
         catch { return null; }
       };
+      // One row per pack: its newest version. Older cartridges stay in the
+      // catalog as history; listing each as its own row showed two
+      // "Installed 0.1.0" lines and no way to update (store builder B4).
+      const newest = [...new Set(items.map((it) => it.id))].map((id) => storeSource.pickItem(items, id));
       res.json({
         configured: true, source: src.kind === 'url' ? src.catalogUrl : src.dir, store: name, generatedAt,
-        items: items.map((it) => ({
-          id: it.id, version: it.version, label: it.label, description: it.description, tier: it.tier,
-          warnings: it.warnings || [], size: it.size, sha256: it.sha256,
-          installable: src.kind === 'dir' || !!it.download,
-          installedVersion: installedVersion(it.id),
-        })),
+        items: newest.map((it) => {
+          const inst = installedVersion(it.id);
+          return {
+            id: it.id, version: it.version, label: it.label, description: it.description, tier: it.tier,
+            warnings: it.warnings || [], size: it.size, sha256: it.sha256,
+            installable: src.kind === 'dir' || !!it.download,
+            installedVersion: inst,
+            updateAvailable: !!inst && storeSource.compareVersions(it.version, inst) > 0,
+          };
+        }),
       });
     } catch (e) { res.status(502).json({ configured: true, error: e.message, items: [] }); }
   });
@@ -55,6 +64,16 @@ module.exports = function createStoreRouter(deps) {
       const { manifest } = store.readCartridgeBuffer(fs.readFileSync(file));
       res.json({ file: require('path').basename(file), ...store.purchaseSummary(manifest) });
     } catch (e) { res.status(422).json({ error: e.message }); }
+  });
+
+  // Replace an installed pack with the store's newest version (store.cjs
+  // updateFromStore: verified first, swapped only if it goes live on its own,
+  // the old folder kept aside and put back if the new one fails).
+  router.post('/update', async (req, res) => {
+    try {
+      const result = await store.updateFromStore(pipeline, (req.body || {}).name, { operator: operator(req), rescan: deps.rescan });
+      res.status(result.ok ? 200 : (result.status || 422)).json(result);
+    } catch (e) { res.status(422).json({ ok: false, error: e.message }); }
   });
 
   router.post('/install', async (req, res) => {

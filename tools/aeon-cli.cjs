@@ -371,6 +371,27 @@ const commands = {
    * <data>/removed-blocks/, restore brings it back).
    */
   /**
+   * aeon update <id> — replace an installed pack with the store's newest
+   * version (verified against the catalog; the old folder is kept aside and
+   * put back if the new one fails; a running pack is started again).
+   */
+  async update() {
+    const client = require('./terminal/client.cjs');
+    const { c } = client;
+    if (!/^[a-z0-9][a-z0-9_]*$/.test(arg || '')) {
+      console.error(`usage: aeon update <id>   ${c.dim('# newest version from the store (AEON_STORE)')}`);
+      process.exit(1);
+    }
+    const res = await client.withAuth(() => client.request('POST', '/api/store/update', { name: arg }));
+    const d = res.data || {};
+    if (flags.json) { console.log(JSON.stringify(d, null, 2)); if (!res.ok) process.exitCode = 1; return; }
+    if (!res.ok || d.ok === false) { console.error(`\n  ${c.red('✗')} ${d.error || `failed (${res.status})`}\n`); process.exitCode = 1; return; }
+    console.log(`\n  ${c.green('✓')} ${d.message}`);
+    if (d.updated) console.log(`  ${c.dim('then: npm run build, and reload the tab, for the screen to follow')}`);
+    console.log('');
+  },
+
+  /**
    * aeon store — what the configured store (AEON_STORE) offers, and which of
    * it is installed here. Install one with `aeon install <id>`.
    */
@@ -384,7 +405,8 @@ const commands = {
     if (!d.configured) { console.log(`\n  ${c.yellow('!')} ${d.hint}\n`); return; }
     console.log(`\n  ${c.bold(d.store || 'Store')}  ${c.dim(d.source)}\n`);
     for (const it of d.items) {
-      const state = it.installedVersion ? c.green(`installed ${it.installedVersion}`) : it.installable ? c.dim('available') : c.yellow('buy on the store page');
+      const state = it.updateAvailable ? c.yellow(`installed ${it.installedVersion} — update: aeon update ${it.id}`)
+        : it.installedVersion ? c.green(`installed ${it.installedVersion}`) : it.installable ? c.dim('available') : c.yellow('buy on the store page');
       console.log(`  ${c.bold(String(it.id).padEnd(16))} ${String(it.version).padEnd(8)} ${state}  ${c.dim(it.description || '')}`);
       for (const w of it.warnings || []) console.log(`  ${' '.repeat(26)}${c.yellow('!')} ${w}`);
     }
@@ -550,6 +572,7 @@ ${c.bold('CONSOLE')} ${c.dim('(operate a running AEON, no browser)')}
   aeon agent ${c.dim('"<goal>"')}       multi-step: plan → act → read → repeat
   aeon install ${c.dim('<id|file|url>')} install a pack via the airlock (store: AEON_STORE)
   aeon store                store packs, and which are installed
+  aeon update <id>          update an installed pack to the store's newest version
   aeon block ${c.dim('<stop|start|remove|restore> <id>')}   a block's lifecycle; ${c.dim('aeon block removed')} lists copies
   aeon login ${c.dim('|')} logout       manage this terminal's session
 

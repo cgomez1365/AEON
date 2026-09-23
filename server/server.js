@@ -375,7 +375,10 @@ try {
   if (!isVercel) setInterval(() => { try { _approvals.checkStaleQueue(); } catch {} }, 3600 * 1000).unref();
   console.log('[BUILD PIPELINE] /api/build mounted — envelope→gate→staging→approve→promote→rescan→live');
 
-  const storeRouter = require('../src/kernel/routers/store.cjs')({ pipeline: _pipeline });
+  const storeRouter = require('../src/kernel/routers/store.cjs')({
+    pipeline: _pipeline,
+    rescan: (reason) => { const r = loader.rescan(reason); _commandRescan(); return r; },
+  });
   app.use('/api/store', storeRouter);
   console.log('[BGI STORE] /api/store mounted — catalog + purchase-screen perms + install via airlock');
 } catch (e) { console.error('[BUILD PIPELINE] mount failed:', e.message); }

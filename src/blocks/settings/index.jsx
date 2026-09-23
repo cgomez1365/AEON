@@ -2753,6 +2753,14 @@ function StorePacksSection({ client, ids, busy, setBusy, onChange }) {
     setBusy(null);
     load(); onChange();
   };
+  const update = async (it) => {
+    if (!window.confirm(`Update "${it.label || it.id}" from ${it.installedVersion} to ${it.version}?\n\nThe current version is kept aside and put back if the new one fails. Its data stays where it is.`)) return;
+    setBusy(`${it.id}:update`);
+    const r = await client.update(it.id);
+    setNotes(n => ({ ...n, [it.id]: { ok: r.ok, text: r.ok ? `${r.message} ${LIFECYCLE_UI_NOTE}` : r.error } }));
+    setBusy(null);
+    load(); onChange();
+  };
   const start = async (id) => {
     setBusy(`${id}:start`);
     const r = await client.start(id);
@@ -2786,6 +2794,11 @@ function StorePacksSection({ client, ids, busy, setBusy, onChange }) {
                 {installed ? `Installed ${it.installedVersion}` : it.installable ? 'Available' : 'Buy on the store page'}
               </span>
               <span style={{ flex: 1 }} />
+              {it.updateAvailable && (
+                <button type="button" className="settings-btn" style={{ fontSize: 11 }} disabled={!!busy} onClick={() => update(it)}>
+                  {busy === `${it.id}:update` ? 'Updating…' : `Update to ${it.version}`}
+                </button>
+              )}
               {!installed && it.installable && (
                 <button type="button" className="settings-btn" style={{ fontSize: 11 }} disabled={!!busy} onClick={() => install(it)}>
                   {busy === `${it.id}:install` ? 'Installing…' : 'Install'}
