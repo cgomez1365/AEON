@@ -123,10 +123,12 @@ export function shouldBannerResponse({ url, ok, status, selfReported = false, ha
   // AuthGate handles it, so it must never raise the forensics banner.
   const p = pathOf(url);
   if (status === 401 && (p.startsWith('/api/auth/') || p.startsWith('/api/security/'))) return false;
-  // A caller that renders its own 401 inline gets one rendering, not two.
-  // Scoped to 401/403 on purpose: a self-reporting panel still deserves the
-  // banner for a 500, which is a defect rather than a permission state.
-  if (selfReported && (status === 401 || status === 403)) return false;
+  // A caller that renders its own failure inline gets one rendering, not two.
+  // Any 4xx: not found, bad input, a missing block, a permission state — each
+  // a condition the caller explains (the terminal chip, a page's own notice).
+  // It was 401/403 only, so `/doc missing.md` answered in its chip AND raised
+  // the banner (2026-09-23). A 5xx is a defect and still banners.
+  if (selfReported && status >= 400 && status < 500) return false;
   return !matchesEndpoint(url, IGNORED_ENDPOINTS);
 }
 

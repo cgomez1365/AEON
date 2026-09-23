@@ -36,6 +36,10 @@ const EXTRA_ROUTES = [];
 // they depend on settings.blockLayout, which is fetched at runtime, so they
 // can't be static module-level constants anymore.
 const BLOCK_ROUTES = [...getRoutes(), ...EXTRA_ROUTES];
+// "/" belongs to the Dashboard block. Without it the catch-all redirected to
+// "/" and rendered an empty viewport (measured 2026-09-23, dashboard removed);
+// land on the first installed block instead.
+const HOME_ROUTE = BLOCK_ROUTES.some((r) => r.path === '/') ? '/' : (BLOCK_ROUTES[0]?.path || '/');
 
 /**
  * The honest zero-block state. AEON's central claim is that it is a shell and
@@ -295,12 +299,20 @@ export default function DesktopLayout({ chatHistory, auditLogs }) {
   }, []);
   useEffect(() => { refreshIcons(); }, [refreshIcons]);
 
+  // Optimistic, then honest: a save the server refused (or never received)
+  // reverts, instead of showing as saved until the next reload (2026-09-23).
+  // A refused save also raises the global banner; a network failure is logged.
+  const layoutRef = useRef(blockLayout);
+  useEffect(() => { layoutRef.current = blockLayout; }, [blockLayout]);
   const saveBlockLayout = useCallback((next) => {
+    const previous = layoutRef.current;
     setBlockLayout(next);
     fetch('/api/settings/block-layout', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(next),
-    }).catch(() => {});
+    })
+      .then((r) => { if (!r.ok) setBlockLayout(previous); })
+      .catch((e) => { console.warn('[LAYOUT] block layout not saved:', e.message); setBlockLayout(previous); });
   }, []);
 
   const NAV_GROUPS = useMemo(() => getNavGroups(EXTRA_NAV, blockLayout), [blockLayout]);
@@ -439,7 +451,7 @@ export default function DesktopLayout({ chatHistory, auditLogs }) {
                 (BO-A2c — the empty-shell test.) */}
             {BLOCK_ROUTES.length === 0
               ? <Route path="*" element={<EmptyShell />} />
-              : <Route path="*" element={<Navigate to="/" replace />} />}
+              : <Route path="*" element={<Navigate to={HOME_ROUTE} replace />} />}
           </Routes>
           </Suspense>
         </div>

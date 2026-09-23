@@ -265,6 +265,11 @@ async function start({ json = false } = {}) {
       console.log(`\n  ${c.red('✗')} ${res.data?.error || `failed (${res.status})`}\n`);
       return;
     }
+    // The block's own verdict, one level down — see aeon-cli.cjs dispatchAndRender.
+    if (res.data?.data?.ok === false) {
+      console.log(`\n  ${c.red('✗')} ${res.data.data.error || res.data.text || 'the command reported a failure'}\n`);
+      return;
+    }
 
     const payload = res.data;
     const d = payload?.data || {};

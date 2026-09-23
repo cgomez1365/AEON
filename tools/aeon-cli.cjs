@@ -455,6 +455,15 @@ async function dispatchAndRender(client, render, cmdOrId, argText, { json, yes, 
     process.exitCode = 1;
     return res;
   }
+  // A block reports its own verdict one level down ({ ok, text, data:{ ok:false,
+  // error } }) — the envelope the UI's chip reads. Judging by HTTP status alone
+  // printed `/doc missing.md` ("no document matches") as a success (2026-09-23).
+  if (res.data?.data?.ok === false) {
+    if (json) console.log(JSON.stringify(res.data, null, 2));
+    else console.error(`\n  ${c.red('✗')} ${res.data.data.error || res.data.text || 'the command reported a failure'}\n`);
+    process.exitCode = 1;
+    return res;
+  }
   console.log('');
   console.log(render.auto(res.data, { renderer, query: argText, json }));
   console.log('');

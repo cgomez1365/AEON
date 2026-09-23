@@ -5,6 +5,10 @@
 // Every failure is RETURNED, never swallowed (R-05).
 export const LINKS_KEY = 'aeon_links';
 export const LINKS_URL = '/api/sync/quick_links';
+// The Quick Links page explains a failure itself (including a missing Aeon
+// Matrix block, which serves this route); without this every page raised the
+// global "[API FAILED]" banner for it (2026-09-23).
+const OWN = { 'x-aeon-self-reported': '1' };
 
 export function readLocalLinks(storage) {
   try {
@@ -19,7 +23,7 @@ function writeLocalLinks(storage, items) {
 }
 
 async function post(fetcher, items) {
-  const r = await fetcher(LINKS_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: items }) });
+  const r = await fetcher(LINKS_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', ...OWN }, body: JSON.stringify({ data: items }) });
   if (r.ok) return { ok: true, error: null };
   let detail = '';
   try { const b = await r.json(); detail = b.error || ''; } catch { /* no body */ }
@@ -37,7 +41,7 @@ export async function saveLinks(items, { fetcher, storage }) {
 export async function loadLinks({ fetcher, storage }) {
   const local = readLocalLinks(storage);
   try {
-    const r = await fetcher(LINKS_URL);
+    const r = await fetcher(LINKS_URL, { headers: { ...OWN } });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const body = await r.json();
     const server = Array.isArray(body && body.data) ? body.data : [];

@@ -24,7 +24,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Send, Loader, Cpu, Clock, Zap, ChevronRight, ChevronDown, ShieldAlert, Paperclip, Square, X as XIcon, Archive, History, Plus, Trash2, Pencil, BookmarkPlus, Check } from 'lucide-react';
-import { describeStreamFailure } from '../utils/interceptorPolicy.js';
+import { describeStreamFailure, SELF_REPORTED_HEADER } from '../utils/interceptorPolicy.js';
 import { describeDispatchOutcome, describeDenial, describeCommandOutput } from '../utils/commandOutcome.js';
 
 // ── Markdown rendering — the panel is a narrow column and nothing leaves it ──
@@ -617,12 +617,16 @@ const Terminal2 = ({ onUsageUpdate }) => {
 
     try {
       const res = await fetch('/api/chat/stream', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json', [SELF_REPORTED_HEADER]: '1' },
         signal: controller.signal,
         body: JSON.stringify({ message: text, role: 'chat', history: feed.filter(e => e.type === 'msg' && (e.role === 'user' || e.role === 'assistant')).slice(-20).map(e => ({ role: e.role, content: e.content })) }),
       });
       if (!res.ok || !res.body) {
-        const err = new Error(`chat/stream ${res.status}`);
+        // The chat backend lives in the Dashboard block; with it removed the
+        // operator read "chat/stream 404" (measured 2026-09-23). Say what is true.
+        const err = new Error(res.status === 404
+          ? 'The terminal\'s chat is served by the Dashboard block, which is not installed. Restore it: node tools/aeon-cli.cjs block restore dashboard'
+          : `chat/stream ${res.status}`);
         err.aeonKind = 'api';
         throw err;
       }
@@ -775,8 +779,10 @@ const Terminal2 = ({ onUsageUpdate }) => {
     });
     if (resumeChipId) patch(chipId, { status: 'running', label: text });
     try {
+      // The chip reports the outcome; a 4xx here must not also raise the
+      // global banner (a 5xx still does — interceptorPolicy).
       const res = await fetch('/api/commands/dispatch', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json', [SELF_REPORTED_HEADER]: '1' },
         body: JSON.stringify({ cmd: cmdToken, arg, confirmed }),
       });
       const data = await res.json().catch(() => ({}));
