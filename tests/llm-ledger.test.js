@@ -154,9 +154,12 @@ describe('#15 — one router, one data root', () => {
     const src = fs.readFileSync(
       path.join(process.cwd(), 'server', 'server.js'), 'utf8'
     );
-    const mount = src.slice(src.indexOf('token-analytics.cjs'));
-    const block = mount.slice(0, mount.indexOf('});'));
-    expect(block, 'the token-analytics mount must pass getDataFile').toMatch(/getDataFile/);
+    // Since da80677 server.js mounts no copy of the router; the recorder's
+    // instance is built by activityRecorder.cjs from the deps passed here.
+    const at = src.indexOf('createActivityRecorder({');
+    expect(at, 'server.js wires the activity recorder').toBeGreaterThan(-1);
+    const block = src.slice(at, src.indexOf('}));', at));
+    expect(block, 'the recorder\'s instance must get getDataFile').toMatch(/getDataFile: storage\.getDataFile/);
   });
 
   it('operator telemetry never lands inside src/blocks/', () => {
