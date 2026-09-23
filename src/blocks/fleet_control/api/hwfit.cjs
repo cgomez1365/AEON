@@ -267,7 +267,14 @@ module.exports = function createHwfitRouter(deps) {
     const neededGb = estimateVramGb(paramsB, quant, ctx);
 
     const gpuVram = system.gpu_vram_gb || 0;
-    const ramGb = system.available_ram_gb || system.total_ram_gb || 0;
+    // Rank against TOTAL — the basis detectRam() names as ranking_basis_gb.
+    // This was `available_ram_gb || total_ram_gb`, and available_ram_gb is
+    // os.freemem(): on macOS it reads a fraction of a GB on a healthy machine,
+    // so the verdict flipped with the instant (0.0 GB free → falls back to
+    // total, Qwen3-8B fits; 0.5 GB free → 35 of 37 "Does Not Fit"), while the
+    // response still said ranking_basis_gb: 8. A manual override sets
+    // total_ram_gb, and ignore_detected_ram zeroes it, so both still apply.
+    const ramGb = system.total_ram_gb || 0;
 
     if (system.has_gpu && gpuVram > 0) {
       if (neededGb <= gpuVram * 0.9) {
