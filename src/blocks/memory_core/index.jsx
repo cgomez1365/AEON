@@ -119,7 +119,11 @@ export default function MemoryCore() {
 
   const shown = memories.filter(m => {
     if (filter && m.type !== filter && m.category !== filter) return false;
-    if (q && !(m.text + ' ' + (m.title || '')).toLowerCase().includes(q.toLowerCase())) return false;
+    // Every word, in any order — the same rule as /memory in the terminal.
+    if (q) {
+      const hay = (m.text + ' ' + (m.title || '')).toLowerCase();
+      if (!q.toLowerCase().split(/\s+/).filter(Boolean).every(w => hay.includes(w))) return false;
+    }
     return true;
   });
 

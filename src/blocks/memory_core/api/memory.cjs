@@ -89,8 +89,14 @@ module.exports = function createMemoryRouter(deps) {
       section = sec.category;
       out = sections.selectSection(out, sec).entries;
     } else if (q) {
-      const s = String(q).toLowerCase();
-      out = out.filter(m => (m.text + ' ' + (m.title || '')).toLowerCase().includes(s));
+      // Every word, in any order. One substring made "/memory northwind pilot"
+      // find a memory that "/memory pilot northwind" could not (audit
+      // 2026-09-23). An exact phrase still matches — it contains every word.
+      const words = String(q).toLowerCase().split(/\s+/).filter(Boolean);
+      out = out.filter(m => {
+        const hay = (m.text + ' ' + (m.title || '')).toLowerCase();
+        return words.every(w => hay.includes(w));
+      });
     }
     // `text` is the complete rendering (the terminal chip and the narrator read
     // it); `verbatim` says it is the whole answer, safe to relay unsummarised.

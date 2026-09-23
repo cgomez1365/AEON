@@ -107,3 +107,17 @@ describe('a saved memory can be recalled without waiting for the next scan', () 
     expect(requestIndex).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('/memory finds a memory by its words, in any order', () => {
+  it('"pilot northwind" finds "Northwind pilot with the dispatch team…"', async () => {
+    // The search was one substring: "/memory northwind pilot" found it and
+    // "/memory pilot northwind" or "/memory northwind dispatch" did not.
+    await dispatch('/remember', 'Northwind pilot with the dispatch team is on 2026-10-06');
+    await dispatch('/remember', 'Acme Fuel contract renews on 2026-10-01');
+    for (const q of ['northwind pilot', 'pilot northwind', 'northwind dispatch']) {
+      const r = await dispatch('/memory', q);
+      expect(r.chip, q).toMatch(/Northwind pilot with the dispatch team/);
+      expect(r.chip, q).not.toMatch(/Acme Fuel/);
+    }
+  });
+});
