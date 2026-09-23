@@ -1,12 +1,57 @@
 // Stateless resume-vs-JD grader — the shipped ATS in its simplest form:
 // paste a resume + a job description, get an instant compliance-first fit score.
 // No candidate records, no storage, no pipeline. (The legacy candidate-pipeline
-// endpoints — intake/candidates/grade/grade-all/alert — remain mounted but the
-// shipped UI no longer uses them.)
+// endpoints — intake/candidates/grade/grade-all/alert — were removed in the
+// 2026-07-24 cleanup; this comment said they were still mounted.)
 let _kernelLLM = null;
 
 function bandFromScore(sc) {
   return sc >= 85 ? 'A' : sc >= 70 ? 'B' : sc >= 55 ? 'C' : sc >= 40 ? 'D' : 'F';
+}
+
+// The rubric DEFINES the score as the weighted sum of these four. A model
+// asked for both routinely mis-adds: measured 2026-09-23, score 91 over
+// subscores summing to 74 — the UI showed an "A" above bars that add up to a
+// C. When the breakdown is complete, the sum is computed here.
+const SUBSCORE_MAX = { skills: 40, experience: 30, seniority: 15, requirements: 15 };
+
+function reconcile(data) {
+  const out = { ...data };
+  const subs = data && typeof data.subscores === 'object' && data.subscores ? data.subscores : null;
+  const complete = subs && Object.keys(SUBSCORE_MAX).every((k) => Number.isFinite(Number(subs[k])));
+  const modelScore = Math.max(0, Math.min(100, Math.round(Number(data.score) || 0)));
+  if (complete) {
+    const clamped = {};
+    for (const [k, max] of Object.entries(SUBSCORE_MAX)) clamped[k] = Math.max(0, Math.min(max, Math.round(Number(subs[k]))));
+    out.subscores = clamped;
+    out.score = Object.values(clamped).reduce((a, b) => a + b, 0);
+    if (Number.isFinite(Number(data.score)) && modelScore !== out.score) {
+      out.scoreNote = `The model's overall score (${modelScore}) did not match its own breakdown (${out.score}). The breakdown is the rubric's definition of the score, so ${out.score} is shown.`;
+    }
+  } else {
+    out.score = modelScore;
+  }
+  out.grade = bandFromScore(out.score);
+  // Rubric: RECOMMEND needs an A or B; a C is at most MAYBE; below that, PASS.
+  const rec = String(data.interviewRecommendation || '').toUpperCase();
+  if (out.grade === 'C' && rec === 'RECOMMEND') out.interviewRecommendation = 'MAYBE';
+  else if ((out.grade === 'D' || out.grade === 'F') && rec && rec !== 'PASS') out.interviewRecommendation = 'PASS';
+  return out;
+}
+
+/**
+ * One call to the grading role. The streaming transport is preferred because
+ * it reports whether the model stopped at its output limit — kernelLLM's
+ * blocking form returns the text alone, so a cut-off JSON answer surfaced as
+ * "Unexpected token … is not valid JSON".
+ */
+async function askGrader(prompt) {
+  if (typeof _kernelLLM.stream === 'function') {
+    const r = await _kernelLLM.stream([{ role: 'user', content: prompt }], { role: 'grading', onToken: () => {} });
+    return { text: r.text || '', truncated: !!r.truncated };
+  }
+  const out = await _kernelLLM(prompt, { role: 'grading' });
+  return { text: (typeof out === 'string' ? out : out?.text || out?.response || '') + '', truncated: null };
 }
 
 async function handler(req, res) {
@@ -53,19 +98,42 @@ Respond in strict JSON only, using the following schema exactly:
   "interviewRecommendation": "RECOMMEND|MAYBE|PASS"
 }`;
 
+  let answer;
   try {
-    const llmOut = await _kernelLLM(prompt, { role: 'grading' });
-    let raw = (typeof llmOut === 'string' ? llmOut : llmOut?.text || llmOut?.response || '') + '';
-    raw = raw.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
-    const m = raw.match(/\{[\s\S]*\}/);
-    const data = JSON.parse(m ? m[0] : raw);
-    const sc = Math.max(0, Math.min(100, Number(data.score) || 0));
-    data.score = sc;
-    data.grade = bandFromScore(sc);
-    return res.status(200).json({ success: true, result: data });
+    answer = await askGrader(prompt);
   } catch (err) {
-    return res.status(500).json({ error: 'Grading failed: ' + err.message });
+    // A rate limit clears in seconds and must not read as a fault; "nothing is
+    // configured" is fixed in Settings; anything else is the provider's error.
+    const rateLimited = !!err.rateLimited || err.status === 429;
+    const status = rateLimited ? 429 : err.noProviderAvailable ? 503 : 502;
+    return res.status(status).json({
+      error: rateLimited
+        ? `${err.message} Nothing was graded — try again in a minute.`
+        : err.noProviderAvailable
+          ? 'No model is assigned to grading. Assign one in Settings → Model Assignment (the Grading role), or install a local model.'
+          : `Grading failed: ${err.message}`,
+      rateLimited,
+    });
   }
+
+  const raw = answer.text.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+  const m = raw.match(/\{[\s\S]*\}/);
+  let data = null;
+  try { data = JSON.parse(m ? m[0] : raw); } catch { data = null; }
+  if (!data || typeof data !== 'object') {
+    if (answer.truncated) {
+      return res.status(502).json({
+        truncated: true,
+        error: 'The model\'s answer was cut off at its output limit before the grade was finished. '
+          + 'Assign a model with a larger output budget to the Grading role in Settings (free OpenRouter models stop at 1024 tokens, and reasoning models spend part of that thinking), or shorten the résumé and job description.',
+      });
+    }
+    return res.status(502).json({
+      error: 'The model did not answer with a grade (its reply was not the JSON the grader asks for). Try again, or assign a different model to the Grading role in Settings.',
+      preview: raw.slice(0, 160),
+    });
+  }
+  return res.status(200).json({ success: true, result: reconcile(data), ...(answer.truncated ? { truncated: true } : {}) });
 }
 
 module.exports = (app, deps) => {

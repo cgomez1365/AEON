@@ -79,6 +79,11 @@
   },
   "routes": [
     {
+      "method": "POST",
+      "path": "/api/resume-grader/extract",
+      "auth": true
+    },
+    {
       "method": "ALL",
       "path": "/api/resume-grader/grade",
       "auth": true

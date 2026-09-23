@@ -3,8 +3,8 @@ import React, { useState } from "react";
 // =============================================
 //  RESUME GRADER
 //  Paste your resume + a job description -> instant, compliance-first fit score.
-//  Stateless: nothing is stored. (Legacy candidate-pipeline API endpoints remain
-//  mounted but are no longer used by this UI.)
+//  Stateless: nothing is stored. A PDF or .txt résumé can be uploaded; its
+//  text is read into the box (api/extract-resume.js) before grading.
 // =============================================
 
 const GRADE_COLORS = { A: '#00ff40', B: '#00f2ff', C: '#ffea00', D: '#ff8800', F: '#ff4466' };
@@ -19,12 +19,42 @@ const textareaStyle = {
   color: '#e5e2e1', fontSize: '13px', fontFamily: 'inherit', lineHeight: 1.5, outline: 'none',
 };
 
+// base64 without a data: prefix — the extract route takes JSON, not multipart.
+const fileToBase64 = (file) => new Promise((resolve, reject) => {
+  const r = new FileReader();
+  r.onload = () => resolve(String(r.result).split(',')[1] || '');
+  r.onerror = () => reject(r.error || new Error('Could not read that file.'));
+  r.readAsDataURL(file);
+});
+
 export default function ResumeGrader() {
   const [resume, setResume] = useState('');
   const [jd, setJd] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState(null);
+  const [reading, setReading] = useState(false);
+  const [fileNote, setFileNote] = useState('');
+
+  // A résumé usually lives in a PDF. Its text lands in the box so the operator
+  // can read (and fix) what the grader will see before grading.
+  const loadFile = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setReading(true); setError(''); setFileNote('');
+    try {
+      const res = await fetch('/api/resume-grader/extract', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename: file.name, data: await fileToBase64(file) }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok || !d.ok) throw new Error(d.error || `Could not read ${file.name} (${res.status}).`);
+      setResume(d.text);
+      setFileNote(`Read ${file.name}${d.pages ? ` (${d.pages} page${d.pages === 1 ? '' : 's'})` : ''} — check the text below before grading.`);
+    } catch (err) { setError(err.message); }
+    finally { setReading(false); }
+  };
 
   const grade = async () => {
     if (!resume.trim()) { setError('Paste your resume first.'); return; }
@@ -56,8 +86,15 @@ export default function ResumeGrader() {
       {/* Inputs */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
         <div>
-          <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, letterSpacing: '1px', color: 'rgba(0,242,255,0.7)', marginBottom: '6px' }}>YOUR RESUME</label>
-          <textarea style={textareaStyle} value={resume} onChange={e => setResume(e.target.value)} placeholder="Paste your full resume text here…" />
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+            <label htmlFor="rg-resume" style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '1px', color: 'rgba(0,242,255,0.7)' }}>YOUR RESUME</label>
+            <label style={{ fontSize: '11px', color: '#00f2ff', cursor: reading ? 'wait' : 'pointer', border: '1px solid rgba(0,242,255,0.3)', borderRadius: '6px', padding: '2px 8px' }}>
+              {reading ? 'Reading…' : 'Upload PDF / .txt'}
+              <input type="file" accept=".pdf,.txt,.md,application/pdf,text/plain" onChange={loadFile} disabled={reading} style={{ display: 'none' }} aria-label="Upload a résumé file (PDF or text)" />
+            </label>
+          </div>
+          <textarea id="rg-resume" style={textareaStyle} value={resume} onChange={e => setResume(e.target.value)} placeholder="Paste your full resume text here, or upload a PDF…" />
+          {fileNote && <div role="status" style={{ fontSize: '11px', color: 'rgba(229,226,225,0.55)', marginTop: '4px' }}>{fileNote}</div>}
         </div>
         <div>
           <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, letterSpacing: '1px', color: 'rgba(0,242,255,0.7)', marginBottom: '6px' }}>JOB DESCRIPTION <span style={{ color: 'rgba(229,226,225,0.35)', fontWeight: 400 }}>(optional)</span></label>
@@ -117,6 +154,8 @@ export default function ResumeGrader() {
               })}
             </div>
           )}
+
+          {result.scoreNote && <p role="note" style={{ fontSize: '11px', lineHeight: 1.5, color: '#ffea00', margin: '0 0 12px' }}>{result.scoreNote}</p>}
 
           {result.rationale && <p style={{ fontSize: '13px', lineHeight: 1.6, color: 'rgba(229,226,225,0.85)', marginBottom: '16px' }}>{result.rationale}</p>}
 
