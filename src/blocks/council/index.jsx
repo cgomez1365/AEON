@@ -8,6 +8,23 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Landmark, Play, Loader, ChevronDown, Copy, Check, Users, Plus, Trash2, Save, Clock, X, Pencil } from 'lucide-react';
 
+// A persona and a debate question are prose, not a label — CEO, on the 2017
+// Air blind test: "council block needs flex fields!! on all text boxes."
+// These were fixed one-line <input>s that scrolled their own text sideways
+// as it grew, the same defect the terminal's chat box had (2026-09-20: "chat
+// box needs to be a flex field"). Grows to fit up to maxPx, then scrolls
+// internally rather than pushing the panel taller. Reading scrollHeight
+// without resetting height to 'auto' first would only ever grow, never
+// shrink, since the box's own prior height caps what it can report.
+function useAutoGrow(ref, value, maxPx) {
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, maxPx)}px`;
+  }, [ref, value, maxPx]);
+}
+
 async function ask(prompt, provider, model) {
   const r = await fetch('/api/ai', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -35,6 +52,8 @@ export default function Council() {
   const [debates, setDebates] = useState([]);
   const [viewing, setViewing] = useState(null);
   const runningRef = useRef(false);
+  const questionRef = useRef(null);
+  useAutoGrow(questionRef, question, 200);
 
   const councilors = members.filter(m => !m.chair);
   const chair = members.find(m => m.chair) || councilors[0];
@@ -165,10 +184,11 @@ export default function Council() {
       {/* ── DEBATE ─────────────────────────────────────────────── */}
       {tab === 'debate' && <div role="tabpanel" id="council-panel-debate" aria-labelledby="council-tab-debate">
         <div style={{ display: 'flex', gap: 8, marginBottom: 18 }}>
-          <textarea value={question} onChange={e => setQuestion(e.target.value)}
+          <textarea ref={questionRef} value={question} onChange={e => setQuestion(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !busy && question.trim()) { e.preventDefault(); convene(); } }}
             aria-label="Question for the council" className="council-focusable"
-            placeholder="Put a question before the council — a decision, a tradeoff, a plan to stress-test…" rows={2}
-            style={{ flex: 1, background: 'var(--surface-1)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 14px', color: 'var(--text)', fontFamily: 'inherit', fontSize: 13, outline: 'none', resize: 'vertical' }} />
+            placeholder="Put a question before the council — a decision, a tradeoff, a plan to stress-test… (Shift+Enter for a new line)" rows={2}
+            style={{ flex: 1, background: 'var(--surface-1)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 14px', color: 'var(--text)', fontFamily: 'inherit', fontSize: 13, outline: 'none', resize: 'none', overflowY: 'auto', maxHeight: 200 }} />
           <button onClick={convene} disabled={busy || !question.trim()} className="council-focusable" style={{ background: 'var(--accent-dim)', border: '1px solid var(--accent)', borderRadius: 8, color: 'var(--accent)', padding: '0 20px', cursor: busy ? 'default' : 'pointer', fontWeight: 700, fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
             {busy ? <Loader size={14} aria-hidden="true" style={{ animation: 'spin 1s linear infinite' }} /> : <Play size={14} aria-hidden="true" />}
             {busy ? 'IN SESSION' : 'CONVENE'}
@@ -242,6 +262,10 @@ function RosterPanel({ members, availModels, onChange }) {
   const [form, setForm] = useState({ label: '', persona: '', model: '' });
   const [editingId, setEditingId] = useState(null);
   const [edit, setEdit] = useState({ label: '', persona: '' });
+  const editPersonaRef = useRef(null);
+  const formPersonaRef = useRef(null);
+  useAutoGrow(editPersonaRef, edit.persona, 120);
+  useAutoGrow(formPersonaRef, form.persona, 120);
   const [err, setErr] = useState('');
   const modelOpts = availModels.map(m => ({ value: `${m.engine}|${m.id}`, label: `${m.id} (${m.engine})` }));
 
@@ -313,9 +337,13 @@ function RosterPanel({ members, availModels, onChange }) {
               <input autoFocus style={inp} className="council-focusable" aria-label="Member name" value={edit.label}
                 onChange={e => setEdit({ ...edit, label: e.target.value })}
                 onKeyDown={e => { if (e.key === 'Enter') saveEdit(m.id); if (e.key === 'Escape') setEditingId(null); }} />
-              <input style={inp} className="council-focusable" aria-label="Member persona" placeholder="Persona / role — how this voice thinks" value={edit.persona}
+              <textarea ref={editPersonaRef} rows={1} style={{ ...inp, fontFamily: 'inherit', resize: 'none', overflowY: 'auto', maxHeight: 120, lineHeight: 1.5 }}
+                className="council-focusable" aria-label="Member persona" placeholder="Persona / role — how this voice thinks (Shift+Enter for a new line)" value={edit.persona}
                 onChange={e => setEdit({ ...edit, persona: e.target.value })}
-                onKeyDown={e => { if (e.key === 'Enter') saveEdit(m.id); if (e.key === 'Escape') setEditingId(null); }} />
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveEdit(m.id); }
+                  if (e.key === 'Escape') setEditingId(null);
+                }} />
               <div style={{ display: 'flex', gap: 6 }}>
                 <button onClick={() => saveEdit(m.id)} className="council-focusable" style={{ ...inp, cursor: 'pointer', color: 'var(--accent)', border: '1px solid var(--accent)', fontWeight: 600, padding: '5px 12px' }}>Save</button>
                 <button onClick={() => setEditingId(null)} className="council-focusable" style={{ ...inp, cursor: 'pointer', color: 'var(--text-dim)', padding: '5px 12px' }}>Cancel</button>
@@ -373,7 +401,10 @@ function RosterPanel({ members, availModels, onChange }) {
       {adding ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 12, border: '1px dashed var(--border)', borderRadius: 8, marginTop: 4 }}>
           <input style={inp} className="council-focusable" aria-label="Council member name" placeholder="Name (e.g. The Skeptic)" value={form.label} onChange={e => setForm({ ...form, label: e.target.value })} />
-          <input style={inp} className="council-focusable" aria-label="Council member persona or role (optional)" placeholder="Persona / role (optional) — how this voice thinks" value={form.persona} onChange={e => setForm({ ...form, persona: e.target.value })} />
+          <textarea ref={formPersonaRef} rows={1} style={{ ...inp, fontFamily: 'inherit', resize: 'none', overflowY: 'auto', maxHeight: 120, lineHeight: 1.5 }}
+            className="council-focusable" aria-label="Council member persona or role (optional)"
+            placeholder="Persona / role (optional) — how this voice thinks" value={form.persona}
+            onChange={e => setForm({ ...form, persona: e.target.value })} />
           <select style={inp} className="council-focusable" aria-label="Assign a model to this council member" value={form.model} onChange={e => setForm({ ...form, model: e.target.value })}>
             <option value="">Assign a model…</option>
             {modelOpts.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
