@@ -67,6 +67,22 @@ describe('with an operator account present', () => {
     expect(r.ok).toBe(false);
   });
 
+  it('a handler\'s own 404 ("no record with that id") is an answer, not a missing route', async () => {
+    // hr_arsenal's employees/get answers 404 for an unknown id; once the proof
+    // ran handlers, reading every 404 as "no route" refused a correct block.
+    stage(`const e=require('express');module.exports=function(d){const r=e.Router();r.get('/${ID}/status',(q,s)=>s.status(404).json({ok:false,error:'There is no record with that id.'}));return r;};`);
+    const r = await bootProof(STAGING_DIR, ID);
+    expect(r.errors).toEqual([]);
+    expect(r.ok).toBe(true);
+  });
+
+  it('a declared route nothing serves is still a missing route', async () => {
+    stage(`const e=require('express');module.exports=function(d){const r=e.Router();r.get('/${ID}/other',(q,s)=>s.json({ok:true}));return r;};`);
+    const r = await bootProof(STAGING_DIR, ID);
+    expect(r.ok).toBe(false);
+    expect(r.errors.join(' ')).toMatch(/declared in the manifest but no route answered/);
+  });
+
   it('a block that writes finds its own storage, and the handler really runs', async () => {
     stage(`const e=require('express');module.exports=function(d){const r=e.Router();r.get('/${ID}/status',(q,s)=>{d.blockStorage.writeJSON('probe.json',{n:1});s.json({ok:true,read:d.blockStorage.readJSON('probe.json')});});return r;};`);
     const r = await bootProof(STAGING_DIR, ID);

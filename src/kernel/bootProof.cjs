@@ -88,7 +88,7 @@ function request(port, method, urlPath, timeoutMs) {
   return new Promise((resolve) => {
     const req = http.request(
       { host: '127.0.0.1', port, method, path: urlPath, timeout: timeoutMs },
-      (res) => { res.resume(); res.on('end', () => resolve({ status: res.statusCode })); }
+      (res) => { res.resume(); res.on('end', () => resolve({ status: res.statusCode, unrouted: res.headers['x-aeon-proof-unrouted'] === '1' })); }
     );
     req.on('error', (e) => resolve({ status: 0, error: e.message }));
     req.on('timeout', () => { req.destroy(); resolve({ status: 0, error: `no response in ${timeoutMs}ms` }); });
@@ -201,6 +201,10 @@ async function bootProof(stagingDir, blockId, { liveRoutes = [], timeoutMs = DEF
     const app = express();
     app.use(express.json());
     app.use(host.router);
+    // Nothing matched: only then is a 404 "no route". A handler's own 404 ("no
+    // record with that id") never reaches this — the proof runs handlers now,
+    // so it must not read a correct answer as a missing route.
+    app.use((_req, res) => res.status(404).set('x-aeon-proof-unrouted', '1').end());
 
     server = await new Promise((resolve, reject) => {
       const s = app.listen(0, '127.0.0.1', () => resolve(s));
@@ -222,7 +226,8 @@ async function bootProof(stagingDir, blockId, { liveRoutes = [], timeoutMs = DEF
       //                     that read as success. A declaration with no route
       //                     behind it is the §08 defect, not evidence of one.
       // 401/403/400/422   = booted and enforcing something. That IS ability.
-      const ok = res.status > 0 && res.status < 500 && res.status !== 404;
+      // 404 from a handler (the route exists and said "not found") = booted.
+      const ok = res.status > 0 && res.status < 500 && !(res.status === 404 && res.unrouted);
       result.probes.push({
         path: r.path, method: r.method, status: res.status, ok,
         ...(r.widget ? { widget: true } : {}),
@@ -231,7 +236,7 @@ async function bootProof(stagingDir, blockId, { liveRoutes = [], timeoutMs = DEF
       if (!ok) {
         result.errors.push(
           res.status === 0 ? `${r.method} ${r.path} — ${res.error}`
-            : res.status === 404 ? `${r.method} ${r.path} is declared in the manifest but no route answered it`
+            : res.status === 404 && res.unrouted ? `${r.method} ${r.path} is declared in the manifest but no route answered it`
             : `${r.method} ${r.path} returned ${res.status}`
         );
       }
