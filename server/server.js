@@ -464,16 +464,21 @@ try {
   // a second copy nobody knew was there. Writing operator data into
   // src/blocks/ was wrong regardless — that is source, and portable mode
   // relocates the data root out from under it.
-  const tokenAnalyticsRouter = require('../src/blocks/activity/api/token-analytics.cjs')({
-    getLocalFile: storage.getLocalFile, AUDIT_FILE: storage.AUDIT_FILE,
-    LOG_FILE: storage.LOG_FILE, TOKEN_LEDGER_FILE: storage.TOKEN_LEDGER_FILE,
-    getDataFile: storage.getDataFile,
-  });
-  app.use('/api', tokenAnalyticsRouter);
-  if (tokenAnalyticsRouter._recordActivity) ai.setActivityRecorder(tokenAnalyticsRouter._recordActivity);
-  console.log('[TOKEN HEATMAP] Routes mounted: /api/token-analytics/*');
+  //
+  // The routes are the block's alone now (a kernel-held copy outlived
+  // `aeon block remove activity`); only the recorder is wired here, and it
+  // follows the block in and out without a restart. See activityRecorder.cjs.
+  const { createActivityRecorder } = require('../src/kernel/activityRecorder.cjs');
+  ai.setActivityRecorder(createActivityRecorder({
+    blocksDir: require('../src/kernel/blocksDir.cjs').BLOCKS_DIR,
+    deps: {
+      getLocalFile: storage.getLocalFile, AUDIT_FILE: storage.AUDIT_FILE,
+      LOG_FILE: storage.LOG_FILE, TOKEN_LEDGER_FILE: storage.TOKEN_LEDGER_FILE,
+      getDataFile: storage.getDataFile,
+    },
+  }));
 } catch (e) {
-  console.error('[TOKEN HEATMAP] Mount failed:', e.message);
+  console.error('[TOKEN HEATMAP] Recorder not wired:', e.message);
 }
 
 // Second Brain RAG
