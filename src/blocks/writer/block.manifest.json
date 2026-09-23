@@ -186,7 +186,9 @@
     "tables": [],
     "scope": "block"
   },
-  "dependencies": [],
+  "dependencies": [
+    "memory_core"
+  ],
   "deployment": {
     "target": "universal",
     "runtime": "any"

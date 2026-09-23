@@ -143,7 +143,17 @@ Respond in strict JSON only, using the following schema exactly:
   return res.status(200).json({ success: true, result: reconcile(data), ...(answer.truncated ? { truncated: true } : {}) });
 }
 
+// Each verb is registered BY NAME. This was a forEach over
+// ['get', 'post', 'options'] calling app[m](PATH, h) — a computed verb,
+// which scripts/gen-block-routes.cjs can only declare as method ALL — and the
+// kernel's manifest auth never matches ALL, so once an operator account
+// existed the grade still answered without a session (measured by agent C3,
+// 2026-09-23; tests/resume-grader-route-auth.test.js). Named verbs are
+// declared as POST/GET and guarded. OPTIONS (CORS preflight) is pre-auth by
+// design and is not a declared route.
 module.exports = (app, deps) => {
   if (deps && deps.kernelLLM) _kernelLLM = deps.kernelLLM;
-  ['get', 'post', 'options'].forEach(m => app[m]('/api/resume-grader/grade', (req, res) => handler(req, res)));
+  app.post('/api/resume-grader/grade', (req, res) => handler(req, res));
+  app.get('/api/resume-grader/grade', (req, res) => handler(req, res));
+  app.options('/api/resume-grader/grade', (req, res) => handler(req, res));
 };

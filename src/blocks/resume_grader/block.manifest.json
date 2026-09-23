@@ -84,7 +84,12 @@
       "auth": true
     },
     {
-      "method": "ALL",
+      "method": "GET",
+      "path": "/api/resume-grader/grade",
+      "auth": true
+    },
+    {
+      "method": "POST",
       "path": "/api/resume-grader/grade",
       "auth": true
     }
