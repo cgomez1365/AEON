@@ -708,5 +708,6 @@ async function buildCarried(args, { download, log = console.log } = {}) {
 module.exports = {
   buildCarried, planCarry, copyFileData, copyTreeMaterialized, sweepOsJunk, sweepDriveRoot, installFileList,
   copyHome, driveRoots, writeCarriedMarker, unparseableJson, isUniversalMachO, parseShasums, stageRuntimes,
-  writeCarriedLaunchers, macLauncher, linuxLauncher, windowsLauncher, APP_FOLDER, DATA_FOLDER, LEGACY_MAC_NODE,
+  writeCarriedLaunchers, writeDriveReadme, macLauncher, linuxLauncher, windowsLauncher, APP_FOLDER, DATA_FOLDER,
+  LEGACY_MAC_NODE,
 };

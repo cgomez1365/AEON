@@ -63,6 +63,18 @@ describe('launchers', () => {
     expect(s).toContain('runtime/node/mac/$ARCH/node');
   });
 
+  it('the drive README names each OS\'s floor and the Node for older Macs', () => {
+    carry.writeDriveReadme(tmp, {
+      built: '2026-09-23',
+      runtimes: { mac: 'universal', macLegacy: `${carry.LEGACY_MAC_NODE}, x64 + arm64`, win: 'x64', linux: 'x64' },
+    });
+    const txt = read('README_DRIVE.txt');
+    expect(txt).toMatch(/launch\.command\s+macOS 11 or newer/);
+    expect(txt).toMatch(/LAUNCH\.bat\s+64-bit Windows 10 or newer/);
+    expect(txt).toContain(`${carry.LEGACY_MAC_NODE}, x64 + arm64 for`);
+    expect(txt).toContain('EJECT BEFORE UNPLUGGING');
+  });
+
   it('every launcher checks that its Node runs before trusting it', () => {
     // Node 24 needs macOS 13.5 (measured: minos 13.5); a 2017 MacBook Air
     // stops at 12. A Node that will not start must not become a port error.
