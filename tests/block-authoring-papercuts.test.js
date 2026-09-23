@@ -82,7 +82,14 @@ describe('the route generator skips scaffolds the way the kernel does', () => {
 describe('the Master README names the step that makes a block appear', () => {
   it('npm run build, not just a restart', () => {
     const readme = fs.readFileSync(path.join(ROOT, 'src', 'blocks', 'master', 'README.md'), 'utf8');
-    const step5 = readme.split('\n').find((l) => /^5\. /.test(l)) || '';
-    expect(step5).toMatch(/npm run build/);
+    // Any numbered step, not "step 5": the loop gained lint/promote and the
+    // routes step ahead of the build (agent C4, 2026-09-23), which moved it to 7.
+    const steps = readme.split('\n').filter((l) => /^\d+\. /.test(l));
+    const build = steps.find((l) => /npm run build/.test(l)) || '';
+    expect(build).toMatch(/npm run build/);
+    // …and the build comes before the step that mounts the block.
+    const buildAt = readme.indexOf(build);
+    expect(buildAt).toBeGreaterThan(-1);
+    expect(readme.indexOf('POST /api/build/rescan', buildAt)).toBeGreaterThan(buildAt);
   });
 });
