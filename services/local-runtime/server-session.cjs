@@ -77,6 +77,19 @@ function reserveLoopbackPort() {
 }
 
 /** Sibling of the runtime entrypoint. */
+// Every llama-server this process started and has not seen exit. The graceful
+// path (SIGINT/SIGTERM → shutdown()) stops them, and closing the terminal
+// hangs up the whole process group; process.exit — the crash handler's fatal
+// path — did neither, and an idle llama-server never writes, so never notices
+// its parent is gone (four were found 2026-09-22, orphaned for two days; on a
+// carried drive one keeps the drive from ejecting). 'exit' handlers must be
+// synchronous, and kill() only signals, which is all this needs. A SIGKILLed
+// parent runs no handler at all; nothing here covers that.
+const LIVE_CHILDREN = new Set();
+process.on('exit', () => {
+  for (const c of LIVE_CHILDREN) { try { c.kill(); } catch { /* already gone */ } }
+});
+
 function serverBinaryFor(entryAbsPath) {
   const exe = os.platform() === 'win32' ? 'llama-server.exe' : 'llama-server';
   return path.join(path.dirname(entryAbsPath), exe);
@@ -190,6 +203,11 @@ class ServerSession {
         TMP: process.env.TMP || os.tmpdir(),
       },
     });
+
+    const child = this.child;
+    LIVE_CHILDREN.add(child);
+    child.once('exit', () => LIVE_CHILDREN.delete(child));
+    child.once('error', () => LIVE_CHILDREN.delete(child));
 
     // BOTH streams are kept. Discarding stderr is what left the old failure
     // with no diagnostic trail whatsoever.
