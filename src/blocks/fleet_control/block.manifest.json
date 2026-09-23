@@ -119,10 +119,7 @@
       "auth": true
     }
   ],
-  "env": [
-    "AEON_LLM_BACKEND",
-    "VITE_GAS_URL"
-  ],
+  "env": [],
   "ai": {
     "capabilities": [],
     "canGenerate": false,

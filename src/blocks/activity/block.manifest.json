@@ -18,13 +18,8 @@
   },
   "widget": null,
   "requires": {
-    "apis": [
-      "supabase"
-    ],
-    "env": [
-      "SUPABASE_URL",
-      "SUPABASE_SERVICE_ROLE_KEY"
-    ],
+    "apis": [],
+    "env": [],
     "local": [],
     "blocks": []
   },
@@ -134,10 +129,7 @@
       "auth": true
     }
   ],
-  "env": [
-    "SUPABASE_URL",
-    "SUPABASE_SERVICE_ROLE_KEY"
-  ],
+  "env": [],
   "ai": {
     "capabilities": [],
     "canGenerate": false,

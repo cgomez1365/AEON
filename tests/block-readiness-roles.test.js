@@ -55,7 +55,7 @@ beforeEach(clearRegistry);
 afterAll(() => { try { fs.rmSync(tempSecrets, { recursive: true, force: true }); } catch {} });
 
 describe('the manifests this change actually touches', () => {
-  it('exactly writer, memory_core and resume_grader declare AI roles', () => {
+  it('exactly writer, memory_core, resume_grader and dashboard declare AI roles', () => {
     // If another block starts declaring roles, its reported state changes too —
     // this test is the reminder to go verify it, not a style check.
     //
@@ -70,6 +70,13 @@ describe('the manifests this change actually touches', () => {
     // It is now the same shape as writer — no hard API requirements, one
     // declared AI role — so `ready` reflects that the block mounts and its
     // non-AI work functions, while `roles` reports whether grading can serve.
+    //
+    // dashboard was added 2026-09-23 (agent C3), verified the same way: it
+    // declared requires.apis ["supabase","groq","gemini","local"] and needed
+    // none — on a fresh install with only a local stub provider, /blocks/registry
+    // said ready:false while POST /api/chat/stream answered. chat-stream.cjs
+    // routes by role ('chat', via kernelLLM.describeRole), so the role is now
+    // declared and requires.apis is empty (tests/home-blocks-manifest.test.js).
     const blocksDir = path.join(__dirname, '..', 'src', 'blocks');
     const declaring = fs.readdirSync(blocksDir).filter((id) => {
       try {
@@ -77,7 +84,7 @@ describe('the manifests this change actually touches', () => {
         return (m.contract?.ai?.roles || []).length > 0;
       } catch { return false; }
     });
-    expect(declaring.sort()).toEqual(['memory_core', 'resume_grader', 'writer']);
+    expect(declaring.sort()).toEqual(['dashboard', 'memory_core', 'resume_grader', 'writer']);
   });
 
   it('resume_grader declares no API it does not use', () => {

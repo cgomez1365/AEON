@@ -18,19 +18,12 @@
   },
   "widget": null,
   "requires": {
-    "apis": [
-      "supabase",
-      "groq",
-      "gemini",
-      "local"
-    ],
-    "env": [
-      "SUPABASE_URL",
-      "SUPABASE_SERVICE_ROLE_KEY",
-      "AEON_LLM_BACKEND"
-    ],
+    "apis": [],
+    "env": [],
     "local": [],
-    "blocks": []
+    "blocks": [
+      "activity"
+    ]
   },
   "provides": {
     "routes": true,
@@ -71,7 +64,9 @@
       "canGenerate": false,
       "canAnalyze": false,
       "canAutomate": false,
-      "roles": [],
+      "roles": [
+        "chat"
+      ],
       "role": "chat",
       "blurb": "Powers the Neural Terminal chat"
     },
@@ -170,11 +165,7 @@
       "auth": true
     }
   ],
-  "env": [
-    "SUPABASE_URL",
-    "SUPABASE_SERVICE_ROLE_KEY",
-    "AEON_LLM_BACKEND"
-  ],
+  "env": [],
   "ai": {
     "capabilities": [],
     "canGenerate": false,
@@ -186,7 +177,9 @@
     "tables": [],
     "scope": "block"
   },
-  "dependencies": [],
+  "dependencies": [
+    "activity"
+  ],
   "deployment": {
     "target": "universal",
     "runtime": "any"

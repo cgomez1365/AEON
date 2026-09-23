@@ -21,7 +21,9 @@
     "apis": [],
     "env": [],
     "local": [],
-    "blocks": []
+    "blocks": [
+      "aeon_matrix"
+    ]
   },
   "provides": {
     "routes": true,
@@ -86,7 +88,9 @@
     "tables": [],
     "scope": "shared"
   },
-  "dependencies": [],
+  "dependencies": [
+    "aeon_matrix"
+  ],
   "deployment": {
     "target": "universal",
     "runtime": "any"
