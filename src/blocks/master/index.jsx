@@ -356,7 +356,9 @@ function AgentCard() {
     if (!md) return;
     navigator.clipboard.writeText(md).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
   };
-  const phases = md ? (md.match(/^### Phase [A-I] — .+$/gm) || []).map((l) => l.replace(/^### /, '')) : [];
+  // [A-I]\d? — the persona has sub-phases (E1, E2, G2, H2, H3); `[A-I] —`
+  // alone silently dropped five of its fourteen phases from this list.
+  const phases = md ? (md.match(/^### Phase [A-I]\d? — .+$/gm) || []).map((l) => l.replace(/^### /, '')) : [];
   return (
     <Card>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 10 }}>
@@ -375,7 +377,7 @@ function AgentCard() {
       {err && <p role="alert" style={{ color: 'var(--danger, #ff4455)', fontSize: 12.5, margin: '6px 0' }}>{err}</p>}
       {phases.length > 0 && (
         <ol style={{ paddingLeft: 20, margin: '6px 0 10px', columns: 2, columnGap: 24 }}>
-          {phases.map((p) => <li key={p} style={{ fontSize: 12.5, margin: '3px 0', breakInside: 'avoid' }}>{p.replace(/^Phase [A-I] — /, '')}</li>)}
+          {phases.map((p) => <li key={p} style={{ fontSize: 12.5, margin: '3px 0', breakInside: 'avoid' }}>{p.replace(/^Phase ([A-I]\d?) — /, '$1 · ')}</li>)}
         </ol>
       )}
       <button onClick={() => setOpen((o) => !o)} aria-expanded={open}

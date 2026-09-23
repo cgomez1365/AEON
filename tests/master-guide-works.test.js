@@ -94,6 +94,18 @@ describe('the Master prompt, followed literally', () => {
   });
 });
 
+describe('the agent card lists every phase the persona has', () => {
+  it('the page\'s phase regex matches every "### Phase" heading (E1, E2, G2, H2, H3 included)', () => {
+    const m = pageSrc.match(/md\.match\((\/\^### Phase[^\n]*?\/gm)\)/);
+    expect(m, 'phase regex in AgentCard').toBeTruthy();
+    const src = m[1];
+    const re = new RegExp(src.slice(1, src.lastIndexOf('/')), 'gm');
+    const headings = builder.match(/^### Phase .+$/gm) || [];
+    expect(headings.length).toBeGreaterThan(9);
+    expect((builder.match(re) || []).length).toBe(headings.length);
+  });
+});
+
 describe('the lifecycle is on the page, and every CLI verb it names exists', () => {
   it('names stop / start / remove / restore, by CLI and by route', () => {
     for (const doc of [pageSrc, builder]) {
