@@ -300,28 +300,43 @@ function sha256File(file) {
 }
 
 /**
+ * Node for Macs older than macOS 13.5. Node 24's macOS builds need 13.5
+ * (measured: LC_BUILD_VERSION minos 13.5, both slices); a 2017 MacBook Air
+ * stops at macOS 12. Node 22 LTS needs 11.0 (measured on v22.23.2) and runs
+ * the same node_modules — every native addon in the install is N-API, and
+ * package.json's floor is 22.13, which CI tests.
+ */
+const LEGACY_MAC_NODE = 'v22.23.2';
+
+/**
  * Stage Node for every platform, verified against nodejs.org's SHASUMS256.
  * macOS: this machine's own Node when it is universal and the same version,
- * else the Intel and Apple Silicon builds side by side.
+ * else the Intel and Apple Silicon builds side by side — plus Node 22 for
+ * macOS 11 to 13.4 when the primary is newer than that.
  */
 async function stageRuntimes(target, { version = process.version, download, log = () => {} }) {
-  const base = `https://nodejs.org/dist/${version}`;
   const cache = path.join(os.tmpdir(), 'aeon-usb-cache', version);
   fs.mkdirSync(cache, { recursive: true });
   const rt = path.join(target, 'runtime');
-  const res = { mac: null, win: null, linux: null, npm: null };
+  const res = { mac: null, macLegacy: null, win: null, linux: null, npm: null };
 
-  const sumsFile = path.join(cache, 'SHASUMS256.txt');
-  if (!fs.existsSync(sumsFile)) await download(`${base}/SHASUMS256.txt`, sumsFile);
-  const sums = parseShasums(fs.readFileSync(sumsFile, 'utf8'));
-  const fetchVerified = async (name) => {
-    const f = path.join(cache, name);
-    if (!fs.existsSync(f)) await download(`${base}/${name}`, f);
-    const want = sums.get(name);
-    const got = sha256File(f);
-    if (!want || want !== got) { fs.rmSync(f, { force: true }); throw new Error(`${name}: SHA-256 does not match nodejs.org (${got})`); }
-    return f;
+  /** A fetcher for one Node release: cached, and checked against its SHASUMS256. */
+  const fetcherFor = async (ver) => {
+    const dir = path.join(os.tmpdir(), 'aeon-usb-cache', ver);
+    fs.mkdirSync(dir, { recursive: true });
+    const sumsFile = path.join(dir, 'SHASUMS256.txt');
+    if (!fs.existsSync(sumsFile)) await download(`https://nodejs.org/dist/${ver}/SHASUMS256.txt`, sumsFile);
+    const sums = parseShasums(fs.readFileSync(sumsFile, 'utf8'));
+    return async (name) => {
+      const f = path.join(dir, name);
+      if (!fs.existsSync(f)) await download(`https://nodejs.org/dist/${ver}/${name}`, f);
+      const want = sums.get(name);
+      const got = sha256File(f);
+      if (!want || want !== got) { fs.rmSync(f, { force: true }); throw new Error(`${name}: SHA-256 does not match nodejs.org (${got})`); }
+      return f;
+    };
   };
+  const fetchVerified = await fetcherFor(version);
   const untar = (arc, member, dest) => {
     const tmp = fs.mkdtempSync(path.join(cache, 'x-'));
     try {
@@ -345,6 +360,18 @@ async function stageRuntimes(target, { version = process.version, download, log 
     res.mac = 'x64 + arm64';
   }
   log(`  ✓ macOS Node: ${res.mac}`);
+
+  const legacyDir = path.join(rt, 'node', 'mac-legacy');
+  fs.rmSync(legacyDir, { recursive: true, force: true });
+  if (Number(version.slice(1).split('.')[0]) > Number(LEGACY_MAC_NODE.slice(1).split('.')[0])) {
+    const fetchLegacy = await fetcherFor(LEGACY_MAC_NODE);
+    for (const arch of ['x64', 'arm64']) {
+      const name = `node-${LEGACY_MAC_NODE}-darwin-${arch}.tar.gz`;
+      untar(await fetchLegacy(name), `node-${LEGACY_MAC_NODE}-darwin-${arch}/bin/node`, path.join(legacyDir, arch, 'node'));
+    }
+    res.macLegacy = `${LEGACY_MAC_NODE}, x64 + arm64`;
+    log(`  ✓ macOS 11–13.4 Node: ${res.macLegacy}`);
+  }
 
   // Windows (+ npm, which is pure JS and the same everywhere)
   const AdmZip = require('adm-zip');
@@ -403,16 +430,22 @@ ROOT="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
 APP="$ROOT/AEON"
 
 case "$(uname -m)" in arm64) ARCH=arm64 ;; *) ARCH=x64 ;; esac
+# A Node built for a newer macOS will not start here: Node 24 needs macOS
+# 13.5, and a 2017 MacBook Air stops at 12. Try each; the first that runs
+# wins. mac-legacy is Node 22, for macOS 11 to 13.4.
 NODE=""
-for c in "$ROOT/runtime/node/mac/node" "$ROOT/runtime/node/mac/$ARCH/node"; do
-  if [ -f "$c" ]; then NODE="$c"; break; fi
+for c in "$ROOT/runtime/node/mac/node" "$ROOT/runtime/node/mac/$ARCH/node" "$ROOT/runtime/node/mac-legacy/$ARCH/node"; do
+  [ -f "$c" ] || continue
+  chmod +x "$c" 2>/dev/null || true
+  if "$c" -e 0 >/dev/null 2>&1; then NODE="$c"; break; fi
 done
-if [ -n "$NODE" ]; then
-  chmod +x "$NODE" 2>/dev/null || true
-elif command -v node >/dev/null 2>&1; then
+if [ -z "$NODE" ] && command -v node >/dev/null 2>&1 \\
+   && node -e "const [a, b] = process.versions.node.split('.').map(Number); process.exit(a > 22 || (a === 22 && b >= 13) ? 0 : 1)" >/dev/null 2>&1; then
   NODE="$(command -v node)"
-else
-  echo "  [X] No Node.js for this Mac on the drive, and none installed."
+fi
+if [ -z "$NODE" ]; then
+  echo "  [X] No Node.js on this drive runs on this Mac (macOS $(sw_vers -productVersion 2>/dev/null || echo unknown), $(uname -m)),"
+  echo "      and none 22.13 or newer is installed. AEON needs macOS 11 or newer."
   exit 1
 fi
 
@@ -421,7 +454,10 @@ export AEON_NO_DESKTOP_ICON=1
 export npm_config_cache="$ROOT/.npm-cache"
 
 # Another AEON may already own 3001 on this machine. Take the first free port.
-PORT="$("$NODE" "$APP/tools/free-port.cjs" 3001 3020)" || { echo "  [X] Ports 3001-3020 are all in use."; exit 1; }
+# free-port.cjs exits 2 when every port is taken; anything else is not that.
+PORT="$("$NODE" "$APP/tools/free-port.cjs" 3001 3020)"; rc=$?
+if [ "$rc" -eq 2 ]; then echo "  [X] Ports 3001-3020 are all in use."; exit 1; fi
+if [ "$rc" -ne 0 ] || [ -z "$PORT" ]; then echo "  [X] Could not choose a port: $NODE exited $rc."; exit 1; fi
 export PORT
 
 cd "$APP"
@@ -466,7 +502,9 @@ export AEON_HOME="$ROOT/AEON-Data"
 export AEON_NO_DESKTOP_ICON=1
 export npm_config_cache="$ROOT/.npm-cache"
 
-PORT="$("$NODE" "$APP/tools/free-port.cjs" 3001 3020)" || { echo "  [X] Ports 3001-3020 are all in use."; exit 1; }
+PORT="$("$NODE" "$APP/tools/free-port.cjs" 3001 3020)"; rc=$?
+if [ "$rc" -eq 2 ]; then echo "  [X] Ports 3001-3020 are all in use."; exit 1; fi
+if [ "$rc" -ne 0 ] || [ -z "$PORT" ]; then echo "  [X] Could not choose a port: $NODE exited $rc."; exit 1; fi
 export PORT
 
 cd "$APP"
@@ -500,6 +538,9 @@ if not exist "%NODE%" (
   where node >nul 2>&1 || (echo   [X] No Node.js on the drive and none installed on this PC. & pause & exit /b 1)
   set "NODE=node"
 )
+rem A Node that cannot start here must not surface as a port error below.
+"%NODE%" -e 0 >nul 2>&1
+if errorlevel 1 (echo   [X] Node.js on this drive does not run on this PC. AEON needs 64-bit Windows 10 or newer. & pause & exit /b 1)
 
 set "AEON_HOME=%ROOT%\\AEON-Data"
 set "AEON_NO_DESKTOP_ICON=1"
@@ -548,9 +589,9 @@ ${built} by scripts/build-usb.js --carry-home.
 
 START IT
 ---------------------------------------------------------------------
-  macOS     double-click  launch.command
-  Windows   double-click  LAUNCH.bat
-  Linux     ./launch.sh
+  macOS     double-click  launch.command     macOS 11 or newer
+  Windows   double-click  LAUNCH.bat         64-bit Windows 10 or newer
+  Linux     ./launch.sh                      x86-64
 
 It opens in your browser (http://localhost:3001, or the next free port
 if this machine already runs an AEON). Sign in as usual — AEON asks for
@@ -565,8 +606,9 @@ WHAT'S HERE
   AEON-Data/     YOUR data: Vault, settings, the key vault, .env with
                  the master key and cloud keys. Anyone holding this drive
                  holds your keys — treat it like a key.
-  runtime/       Node.js for macOS (${runtimes.mac}), Windows (${runtimes.win}),
-                 Linux (${runtimes.linux}), and npm.
+  runtime/       Node.js for macOS (${runtimes.mac}${runtimes.macLegacy ? `; ${runtimes.macLegacy} for
+                 macOS 11 to 13.4` : ''}), Windows (${runtimes.win}), Linux (${runtimes.linux}),
+                 and npm.
 
 WHAT WORKS WHERE
 ---------------------------------------------------------------------
@@ -666,5 +708,5 @@ async function buildCarried(args, { download, log = console.log } = {}) {
 module.exports = {
   buildCarried, planCarry, copyFileData, copyTreeMaterialized, sweepOsJunk, sweepDriveRoot, installFileList,
   copyHome, driveRoots, writeCarriedMarker, unparseableJson, isUniversalMachO, parseShasums, stageRuntimes,
-  writeCarriedLaunchers, macLauncher, linuxLauncher, windowsLauncher, APP_FOLDER, DATA_FOLDER,
+  writeCarriedLaunchers, macLauncher, linuxLauncher, windowsLauncher, APP_FOLDER, DATA_FOLDER, LEGACY_MAC_NODE,
 };

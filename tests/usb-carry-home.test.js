@@ -62,6 +62,67 @@ describe('launchers', () => {
     expect(s).toContain('runtime/node/mac/node');
     expect(s).toContain('runtime/node/mac/$ARCH/node');
   });
+
+  it('every launcher checks that its Node runs before trusting it', () => {
+    // Node 24 needs macOS 13.5 (measured: minos 13.5); a 2017 MacBook Air
+    // stops at 12. A Node that will not start must not become a port error.
+    const mac = read('launch.command');
+    expect(mac).toContain('runtime/node/mac-legacy/$ARCH/node');
+    expect(mac).toMatch(/"\$c" -e 0/);
+    expect(read('LAUNCH.bat')).toMatch(/"%NODE%" -e 0/);
+  });
+});
+
+/**
+ * The mac launcher, run for real against a fixture drive: bash, the actual
+ * script, a stub server.cjs that reports which Node started it.
+ */
+describe.skipIf(process.platform === 'win32')('the mac launcher, run', () => {
+  const { spawnSync } = require('child_process');
+  const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
+  const REFUSED = '#!/bin/sh\necho "dyld: built for macOS 13.5 which is newer than running OS" >&2\nexit 134\n';
+  const works = (label) => `#!/bin/sh\nPICKED=${label} exec "${process.execPath}" "$@"\n`;
+
+  function launcherDrive({ primary, legacy, freePort }) {
+    const d = path.join(tmp, 'ldrive');
+    fs.mkdirSync(d, { recursive: true }); // a mounted volume always exists
+    carry.writeCarriedLaunchers(d);
+    const exe = (p, body) => { write(p, body); fs.chmodSync(p, 0o755); };
+    if (primary) exe(path.join(d, 'runtime', 'node', 'mac', 'node'), primary);
+    if (legacy) exe(path.join(d, 'runtime', 'node', 'mac-legacy', arch, 'node'), legacy);
+    write(path.join(d, 'AEON', 'tools', 'free-port.cjs'), freePort ?? fs.readFileSync(path.join(process.cwd(), 'tools', 'free-port.cjs')));
+    write(path.join(d, 'AEON', 'node_modules', 'express', 'index.js'), 'module.exports = {};');
+    write(path.join(d, 'AEON', 'server.cjs'), "console.log('STARTED with ' + (process.env.PICKED || '?') + ' on port ' + process.env.PORT);");
+    // No browser, no waiting: stub the two commands the launcher backgrounds.
+    exe(path.join(tmp, 'stubbin', 'open'), '#!/bin/sh\nexit 0\n');
+    exe(path.join(tmp, 'stubbin', 'sleep'), '#!/bin/sh\nexit 0\n');
+    return d;
+  }
+  const run = (d) => spawnSync('bash', [path.join(d, 'launch.command')], {
+    env: { PATH: `${path.join(tmp, 'stubbin')}:/usr/bin:/bin`, HOME: tmp }, encoding: 'utf8', timeout: 30000,
+  });
+
+  it('falls back to the Node for older macOS when the primary will not start', () => {
+    const r = run(launcherDrive({ primary: REFUSED, legacy: works('legacy') }));
+    expect(r.stdout).toMatch(/STARTED with legacy on port \d+/);
+    expect(r.stdout + r.stderr).not.toMatch(/Ports 3001-3020 are all in use/);
+  });
+
+  it('prefers the primary Node when it runs', () => {
+    const r = run(launcherDrive({ primary: works('primary'), legacy: works('legacy') }));
+    expect(r.stdout).toMatch(/STARTED with primary/);
+  });
+
+  it('says "ports in use" only when the port probe says so', () => {
+    const busy = run(launcherDrive({ primary: works('primary'), freePort: 'process.exit(2);' }));
+    expect(busy.status).toBe(1);
+    expect(busy.stdout).toMatch(/Ports 3001-3020 are all in use/);
+
+    const broken = run(launcherDrive({ primary: works('primary'), freePort: "throw new Error('boom');" }));
+    expect(broken.status).toBe(1);
+    expect(broken.stdout).not.toMatch(/Ports 3001-3020 are all in use/);
+    expect(broken.stdout).toMatch(/Could not choose a port/);
+  });
 });
 
 describe('copying for exFAT', () => {
@@ -248,6 +309,8 @@ describe('verify-usb --carry-home', () => {
     carry.writeCarriedLaunchers(d);
     write(path.join(d, 'README_DRIVE.txt'), 'readme');
     write(path.join(d, 'runtime', 'node', 'mac', 'node'), Buffer.from([0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 2]));
+    write(path.join(d, 'runtime', 'node', 'mac-legacy', 'x64', 'node'), 'node 22');
+    write(path.join(d, 'runtime', 'node', 'mac-legacy', 'arm64', 'node'), 'node 22');
     write(path.join(d, 'runtime', 'node', 'win', 'node.exe'), 'MZ');
     write(path.join(d, 'runtime', 'node', 'linux', 'node'), '\x7fELF');
     write(path.join(d, 'runtime', 'npm', 'bin', 'npm-cli.js'), '// npm');
@@ -280,6 +343,15 @@ describe('verify-usb --carry-home', () => {
     const out = strip(verify(d).out);
     expect(out).toMatch(/1 OS junk file/);
     expect(out).toMatch(/1 symlink/);
+  });
+
+  it('warns when Macs older than macOS 13.5 have no Node on the drive', () => {
+    const d = fixtureDrive();
+    fs.rmSync(path.join(d, 'runtime', 'node', 'mac-legacy'), { recursive: true });
+    const r = verify(d);
+    expect(strip(r.out)).toMatch(/no Node for macOS 11–13\.4/);
+    expect(r.code).toBe(0);
+    expect(strip(verify(fixtureDrive()).out)).toMatch(/macOS 11–13\.4: Node 22/);
   });
 
   it('fails sidecars at the drive root, not only inside its folders', () => {

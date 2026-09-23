@@ -376,6 +376,10 @@ function verifyCarried() {
                                           : FAIL('macOS Node is single-architecture', 'use runtime/node/mac/{x64,arm64}');
   } else if (fs.existsSync(macX) && fs.existsSync(macA)) PASS('macOS Node (x64 + arm64)');
   else FAIL('no macOS Node for every Mac', 'Intel and Apple Silicon both need one');
+  // Node 24 needs macOS 13.5; build-usb-carry stages Node 22 (macOS 11+) beside it.
+  ['x64', 'arm64'].every((a) => fs.existsSync(path.join(RT, 'node', 'mac-legacy', a, 'node')))
+    ? PASS('macOS 11–13.4: Node 22 (x64 + arm64)')
+    : WARN('no Node for macOS 11–13.4', 'a Mac older than macOS 13.5 (e.g. a 2017 MacBook Air) cannot start AEON from this drive');
   fs.existsSync(path.join(RT, 'node', 'win', 'node.exe')) ? PASS('Windows Node (x64)') : FAIL('no Windows Node');
   fs.existsSync(path.join(RT, 'node', 'linux', 'node')) ? PASS('Linux Node (x64)') : FAIL('no Linux Node');
   fs.existsSync(path.join(RT, 'npm', 'bin', 'npm-cli.js')) ? PASS('npm (for a one-time reinstall on a new CPU)') : WARN('no npm on the drive', 'self-heal needs the host\'s npm');
