@@ -1,148 +1,104 @@
 # Host OS
 
-Kernel-level access to the host machine: shell execution, the local
-filesystem, and OS/process metrics. This is AEON's "hands" — the block that
-lets the Neural Terminal, the VP agent, and other blocks actually *do* things
-on the machine AEON is running on, instead of only reading/writing app state.
+The block that touches the computer AEON runs on: its files (for the Files
+block and the `/read` / `/writefile` terminal commands), a short table of named
+OS actions, the audit trail of what the machine was asked to do, and the
+**Host OS screen** (`/host`) — this machine's health and a truthful Restart.
 
-Backend-only block: there is no `index.jsx`, no widget, and no dashboard tile.
-Everything here is consumed via `/api/*` — by Terminal 2.0 (the `>` shell
-verb and the command palette), by other blocks (`aeon_matrix`'s scan/sync
-step, the `files` block's file browser), and by the VP/agent tooling that
-calls routes dynamically off the live API catalog rather than through a
-hardcoded frontend `fetch()`.
+Local-only (`contract.targets.vercel: false`). Every `/api/fs/*` route refuses
+with 403 on Vercel.
 
-## Why local-only
+## The screen (`index.jsx`, route `/host`)
 
-`contract.targets.vercel` is `false` and every route in `api/os.cjs` and
-`api/fs.cjs` starts with `if (isVercel) return res.status(403)...`. This is
-intentional, not an oversight: `child_process.exec`/`spawn` and raw
-filesystem access have no meaning in a stateless serverless function — there
-is no "host" to reach. On Vercel these endpoints exist (so callers get a
-clean 403 instead of a 500/timeout) but always refuse. `api/system.cjs`
-is the exception — its Supabase-sync and `/health` routes are harmless in
-the cloud and stay live there.
+- **This computer** — name, OS, processor, load average (not on Windows),
+  memory (with the macOS note: unused memory is kept as cache and counted as
+  used, so "free" reads low and that is normal), free disk on the drive holding
+  the Vault, machine uptime.
+- **AEON** — pid, Node version, how long it has run, memory, and the File
+  Manager's lock state.
+- **Restart AEON** — enabled only when the server says a restart can work (see
+  below); otherwise disabled with the reason and what to do instead. After a
+  restart it waits for a *new* process to answer before saying AEON is back.
+- **What this machine was asked to do** — the last entries of the OS audit log.
 
-## Security posture
+Refreshes every 15 s. Until 2026-09-23 there was no screen: the kernel's NAV map
+listed `/host`, but the build-time registry only finds blocks with an
+`index.jsx`.
 
-This block intentionally declares `contract.permissions.shell: true` and
-`filesystem: "write"` — the strongest permission pair a block can hold in
-AEON. That's correct for what it does, not an oversight to "fix down." The
-gating that makes it safe to hold that power lives in several layers:
+## Restart — only when something brings AEON back
 
-1. **Global operator gate** (`src/kernel/authGate.cjs`, mounted in
-   `server/server.js` ahead of the block router) — dormant on local dev
-   unless `AEON_OPERATOR_PASSWORD` is set, always-on in cloud/tunnel
-   deployments. Applies to every `/api`, `/block`, `/core`, `/events`
-   request except an explicit allowlist (`/api/auth/*`, `/api/health`).
-2. **Shell-tier gate** (`requireShellAuth` in `security/security.js`) —
-   fails **closed**: if `AEON_MOBILE_SECRET` isn't configured, every route
-   guarded by it (`/os/execute`, `/exec`, `/os/open`, `/os-bridge`,
-   `/desktop-tasks` POST, `/system/restart`) returns 503
-   rather than silently allowing localhost. When the secret *is* set,
-   localhost is trusted and remote/tunnel callers need a matching
-   `Authorization: Bearer <AEON_MOBILE_SECRET>` header.
-3. **Allowlisted exec** (`POST /api/exec`) — the one exec route meant for
-   lower-trust callers. Commands must start with one of
-   `SAFE_EXEC_PREFIXES` (python/node/npm/git-readonly/ffmpeg/etc, see
-   `security/security.js`) and are rejected outright if they contain
-   `& | ; < >` (no chaining/redirection). `/os/execute` and
-   `/os/agent-shell` are the higher-trust, no-allowlist siblings for the
-   operator and the VP agent respectively.
-4. **Path allowlist** (`POST /api/os/open`) — the resolved launch path must
-   start with one of `ALLOWED_ROOTS` (user home, workspace, Desktop,
-   `C:\Program Files`) or the request is blocked.
-5. **Tamper-evident audit trail** (`writeOSAudit`, also in
-   `security/security.js`) — every shell/exec/open call (including blocked
-   attempts) is appended to a rolling 100-entry `AUDIT_FILE` and, when
-   Supabase is configured, mirrored to the `aeon_audit_log` table. Query it
-   via `GET /api/sdi/violations` for SDI-specific entries or read
-   `AUDIT_FILE` directly for the full shell audit log.
-6. **`/os/shell`** (the Terminal 2.0 `>` verb) is the one shell route that
-   trusts bare localhost without a secret — it's the operator's own
-   terminal, run on their own machine. Anything not from `127.0.0.1`/`::1`
-   still needs the `AEON_MOBILE_SECRET` bearer token.
+`POST /api/system/restart` exits the process only after proving a relauncher:
+`scripts/restart.bat` on Windows (if the file exists — it currently does not
+ship), or a supervisor that restarts AEON on exit (`AEON_SUPERVISED`, pm2's
+`PM2_HOME`, `NODEMON` — the same signals Settings' restart reads). Otherwise it
+answers **501** `{ ok:false, restarting:false, error, remedy }` and stays up.
+`GET /api/system/health` carries the same answer in `restart`, so a screen can
+offer or explain the button without trying it.
 
-`contract.permissions.ai` is `false` — despite the powerful shell/filesystem
-grant, this block makes no LLM calls itself (no `geminiRequest`/
-`groqRequest`/`kernelLLM` usage anywhere in `api/`).
+Launched from `LAUNCH.bat`, `launch.command`, `launch.sh` or `npm start`, AEON has
+no supervisor (`launch.js` exits when its server exits), so on a normal install
+**Restart is unavailable and says so**: stop AEON and start it again with the
+launcher. Until 2026-09-23 this route answered success, ran `cmd.exe` (on every
+platform) against a script that does not exist, and exited — leaving no AEON.
 
-## API routes
+The header's RESTART buttons (`src/components/DesktopLayout.jsx`) still call
+this route without reading the answer and reload the page when `/api/health`
+responds; with the 501 the server stays up, so the page simply reloads. They
+should read the answer and show `error`/`remedy` (kernel-side change, reported).
 
-Every file under `api/` is mounted twice by the block host
-(`src/kernel/blockHost.cjs`): once at `/block/host_os/<path>` and once at
-bare `/api/<path>` (the form used everywhere else in the app and below).
+## Files on this computer (`api/fs.cjs`)
 
-### `api/os.cjs` — shell execution & process launch
-
-| Route | Method | Gate | Notes |
-|---|---|---|---|
-| `/api/os/agent-shell` | POST | `AEON_MOBILE_SECRET` bearer (own check, not `requireShellAuth`) | Trusted, no-allowlist shell for the VP/agent tier. `cwd` shortcuts: `aeon` (repo root), `vault` (`WORKSPACE`), `workshop`. |
-| `/api/os/shell` | POST | localhost trusted; remote needs bearer | Terminal 2.0's `>` verb. Runs via PowerShell on Windows. |
-| `/api/os/execute` | POST | `requireShellAuth` | Raw exec, no allowlist, for the operator. |
-| `/api/exec` | POST | `requireShellAuth` | Allowlisted exec (`SAFE_EXEC_PREFIXES`), rejects shell metacharacters. |
-| `/api/os/open` | POST | `requireShellAuth` | Launches a file/app (`vscode`/`notepad`/`explorer`/`chrome`/default `start`) if the path is under `ALLOWED_ROOTS`. |
-| `/api/os/action` | POST | `requireShellAuth` | The single execution entry point (`execFile`, fixed action table). Safe mode is enforced here, not in the UI. |
-| `/api/host_os/safe-mode` | POST | `requireShellAuth` | Toggles the refusal that guards `/os/action`. Keeps the execution gate deliberately: turning it off is a step toward running something. |
-| `/api/os/actions` | GET | `requireOperator` (BO-D2b) | Lists the action ids this install supports. Names capabilities, runs none of them. |
-| `/api/host_os/audit` | GET | `requireOperator` (BO-D2b) | Reads the audit log. Same kind as the widget BO-C2 moved — and the route an operator most needs when something has gone wrong. |
-| `/api/host_os/widget` | GET | `requireOperator` (BO-C2) | Operator Console widget payload. |
-| `/api/os-bridge` | POST | `requireShellAuth` | Legacy smart command router from Terminal 1.0. Not called by the current frontend (Terminal 2.0 uses `/api/exec` + `/api/commands/dispatch` instead) — kept for any external caller, matches patterns in `INSTANT_PATTERNS`. Its old `research:` keyword branch shelled out to a Python script (`tools/research_agent.py`) that no longer exists in this repo; it now returns a redirect message pointing at the `deep_research` block (`POST /api/research/start`) instead of failing. |
-
-### `api/system.cjs` — SDI, health, restart, scan/sync
-
-| Route | Method | Gate | Notes |
-|---|---|---|---|
-| `/api/sdi/violations` | GET | none | Reads `SDI_VIOLATION_LOG`. |
-| `/api/sdi/validate` | POST | none | Validates a payload against a named SDI schema. |
-| `/api/sdi/schemas` | GET | none | Lists registered SDI schemas. |
-| `/api/gas/status` | GET | none | Stub (`{configured:false}`) so frontend GAS polling doesn't 404. |
-| `/api/health` | GET | none (in the auth allowlist too) | `{status, environment, time, uptime}`. |
-| `/api/desktop-tasks` | GET | none | Drains the in-memory desktop task queue. |
-| `/api/desktop-tasks` | POST | `requireShellAuth` | Enqueues a command for the queue. |
-| `/api/force-sync` | POST | none (no-ops without Supabase/local) | Pushes recent chat + audit logs to Supabase. |
-| `/api/system/restart` | POST | `requireShellAuth` | Spawns `scripts/restart.bat` and exits the process 500ms later. |
-| `/api/system/scan` | POST | `requireOperator` (BO-D2b — sync, not execution) | Pulls Supabase notes/terminal-history down to local files, then (local only) triggers a same-process bulk-push of all blocks to Supabase via `POST /api/sync/bulk-push` (owned by `aeon_matrix`). Second Brain/matrix indexing is **not** done here — see note below. |
-
-Second Brain indexing note: `/system/scan` used to shell out to a
-`tools/index-brain.js` script directly. That script was archived when Second
-Brain ingestion moved into the `aeon_matrix` block
-(`POST /api/crn/second-brain/ingest/scan-docs`, SSE). `server/server.js` now
-runs an incremental Second Brain sync automatically on every boot, so a
-manual full reindex is rarely needed; trigger one via the Neural Terminal's
-`/index-brain` command (owned by `aeon_matrix`) if a hard rescan is ever
-required. `/system/scan` logs an informational line instead of attempting
-the old (broken) subprocess call.
-
-### `api/fs.cjs` — filesystem access
-
-| Route | Method | Gate | Notes |
-|---|---|---|---|
-| `/api/fs/list` | POST | none beyond `isVercel` | Lists a directory (`{dirPath}`, defaults to `WORKSPACE`). |
-| `/api/fs/read` | POST | none beyond `isVercel` | Reads a file as UTF-8 text. |
-| `/api/fs/write` | POST | none beyond `isVercel` | Writes a file, creating parent dirs as needed. |
-| `/api/fs/mkdir` | POST | none beyond `isVercel` | Recursive mkdir. |
-| `/api/fs/delete` | POST | none beyond `isVercel` | Deletes a file or recursively deletes a directory. |
-| `/api/fs/upload` | POST | none beyond `isVercel` | Multer upload (up to 20 files). Does not index; the Vault is indexed on boot, nightly and from Matrix ▸ Index. |
-| `/api/fs/serve` | GET | none | Streams a file back with a guessed `Content-Type` (`?path=`). |
-
-`fs.cjs` routes rely on the global operator auth gate (`authGate.cjs`) plus
-the block permission sandbox (`filesystem: "write"`) rather than
-`requireShellAuth` — they're filesystem operations, not shell execution.
-Callers can read/write/delete anywhere the process's OS user can reach; there
-is no `ALLOWED_ROOTS` check on these routes today (unlike `/api/os/open`).
-Worth knowing if you're reasoning about blast radius: this is direct,
-unscoped host filesystem access gated only by the operator/tunnel auth
-layer above it.
-
-## Terminal commands (`contract.commands`)
-
-| Command | Route | Notes |
+| Route | Method | What |
 |---|---|---|
+| `/api/fs/list` | POST | List a folder (`{dirPath}`); no path = the Vault. Answers `path`, the absolute folder listed. |
+| `/api/fs/read` | POST | A document's text (PDF/HTML/text via the kernel extractor), summarized when a chat model is assigned. |
+| `/api/fs/write` | POST | Write a file. Overwriting an existing file needs the hub unlocked (423). |
+| `/api/fs/mkdir` | POST | Create a folder (allowed while locked — adding is not editing). |
+| `/api/fs/rename` | POST | Rename or move (`{from, to}`); needs unlocked; never overwrites. |
+| `/api/fs/delete` | POST | Delete a file or folder; needs unlocked. |
+| `/api/fs/upload` | POST | Multipart, up to 20 files × 50 MB, into `targetDir` (no folder = the Vault). Replacing an existing file needs unlocked (423). |
+| `/api/fs/serve` | GET | Stream a file (`?path=`, `&download=1`); only known-safe types render inline. |
+| `/api/fs/lock` | GET/POST | The add-only lock (default locked, persisted under the block's data folder). |
 
-## Deployment targets
+**One boundary for all of them** (`safePath`): the path must resolve inside the
+operator's home, the workspace, or the Vault, and no segment may be a credential
+or shell-config location — `.ssh`, `.aws`, `.gnupg`, `.kube`, `.docker`, shell
+profiles and histories, `Library/Keychains`, `Library/LaunchAgents`,
+`Library/LaunchDaemons`, the Windows Start Menu, AEON's own `secrets`, `.env`
+and `.git`. The roots themselves can be listed but not written or removed.
+Uploads go through the same check for the folder **and** each file name (until
+2026-09-23 they used a shared uploader that checked only the roots, so an upload
+could land in `~/.ssh` or replace a file in add-only mode).
 
-`contract.targets`: `local: true`, `vercel: false`, `docker: true`,
-`cloudflare: true`. Local-only for the reasons above; Docker/Cloudflare
-targets assume a persistent container with real shell/filesystem access
-(unlike Vercel's serverless functions), so they're left enabled.
+## Named OS actions and the Operator Console (`api/os.cjs`)
+
+There is no raw shell. `POST /api/os/action` runs one of a fixed table of
+actions (`getStatus` → `uname -a` / `ver`; `runTest` → `npm test`) with a fixed
+executable and an argument array. `POST /api/os/open` opens a path under the
+allowed roots with a fixed launcher. Both need a shell-tier session
+(`requireShellAuth`). **Safe mode** (`POST /api/host_os/safe-mode`, in memory,
+cleared by a restart) refuses every `/api/os/action` while on — it does not
+cover `/api/os/open`. `GET /api/os/actions`, `/api/host_os/widget` (the
+Operator Console widget in Settings) and `/api/host_os/audit` are reads behind
+`requireOperator`.
+
+## System (`api/system.cjs`)
+
+| Route | Method | What |
+|---|---|---|
+| `/api/health` | GET | Liveness ping `{status, environment, time, uptime}` — what the header polls. Meant to be pre-auth; see "Known" below. |
+| `/api/system/health` | GET | The Host screen's data: machine, disk, AEON process, restart capability. |
+| `/api/system/restart` | POST | See Restart above. Shell-tier session. |
+| `/api/system/scan` | POST | Pulls Supabase notes/terminal history to disk (if Supabase is set) and, with "Auto-sync to cloud" on, pushes blocks back. No indexing (the Vault indexes on boot and from Matrix ▸ Index). |
+| `/api/force-sync` | POST | Pushes recent chat and audit logs to Supabase; `{success:false, reason:'ignored'}` without it. |
+| `/api/desktop-tasks` | GET/POST | An in-memory queue (POST needs a shell-tier session). |
+| `/api/sdi/*`, `/api/gas/status` | | SDI schema validation and a GAS polling stub. |
+
+## Known, not fixed here (kernel)
+
+- `/api/health` answers 401 once an account exists: the pre-auth check compares
+  `req.path` (`/health` under the `/api` mount) with `/api/health`, and the
+  generated manifest marks it `auth: true` because `PRE_AUTH_ROUTES` does not
+  list it. The header's restart poll and any uptime monitor are refused.
+- `server/server.js` passes `runReaper` (services/system.js) into this block; no
+  route calls it.

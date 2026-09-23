@@ -4,7 +4,7 @@
   "label": "Host OS",
   "icon": "Monitor",
   "route": "/host",
-  "description": "Kernel-level access to the host file system, terminal operations, processes, and operating system metrics.",
+  "description": "This computer: its health and a truthful Restart (the Host OS screen), the files the Files block browses, named OS actions, and the audit trail of what the machine was asked to do.",
   "category": "System",
   "tier": "core",
   "nav": {
