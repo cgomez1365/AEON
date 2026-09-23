@@ -1,12 +1,26 @@
-// routes/token-analytics.js — Daily activity tracking for GitHub-style heatmap
-// Aggregates audit + chat logs into per-day token/request counts.
+// routes/token-analytics.js — Daily activity for the heatmap, streaks and
+// model breakdown.
+//
+// SOURCE OF TRUTH: the kernel's per-call ledger (<db>/llm_calls.jsonl, written
+// by services/ai.js at the one seam every provider crosses). Counts used to
+// come from activity_heatmap.json while cost came from the ledger — two
+// sources that parted ways whenever the heatmap recorder was not attached
+// (Settings → telemetry off records the ledger only; server.js's direct mount
+// can fail). The heatmap file is still written, and still read for history
+// that predates the ledger (see _ledgerView.mergeDays).
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+const view = require('./_ledgerView.cjs');
+
+// List prices the kernel uses for its own spend derivation (services/ai.js
+// PRICE_PER_TOKEN). Only used when the kernel's getDailyCost is not handed in
+// — server.js's direct mount of this file does not pass it.
+const PRICE_PER_TOKEN = { gemini: 0.00000015, groq: 0.00000060, local: 0 };
 
 module.exports = function createTokenAnalyticsRouter(deps) {
   const router = express.Router();
-  const { getLocalFile, getDataFile, AUDIT_FILE, LOG_FILE, TOKEN_LEDGER_FILE } = deps;
+  const { getDataFile, TOKEN_LEDGER_FILE } = deps;
 
   // Manifest declares filesystem:'none' but this ran an unguarded mkdirSync
   // at module-load time regardless — on Vercel (read-only FS) that throws
@@ -17,6 +31,16 @@ module.exports = function createTokenAnalyticsRouter(deps) {
     : require('path').join(__dirname, '../db/activity_heatmap.json');
   const ACTIVITY_DIR  = require('path').dirname(ACTIVITY_FILE);
   try { if (!fs.existsSync(ACTIVITY_DIR)) fs.mkdirSync(ACTIVITY_DIR, { recursive: true }); } catch {}
+
+  // The ledger sits beside TOKEN_LEDGER_FILE — the exact path services/ai.js
+  // writes (path.join(path.dirname(TOKEN_LEDGER_FILE), 'llm_calls.jsonl')).
+  const ledger = (() => {
+    if (!TOKEN_LEDGER_FILE) return null;
+    try {
+      const { createLedger } = require('../../../kernel/llm-ledger.cjs');
+      return createLedger({ file: path.join(path.dirname(TOKEN_LEDGER_FILE), 'llm_calls.jsonl') });
+    } catch { return null; }
+  })();
 
   function readActivity() {
     if (!fs.existsSync(ACTIVITY_FILE)) return {};
@@ -30,15 +54,16 @@ module.exports = function createTokenAnalyticsRouter(deps) {
     } catch {}
   }
 
-  function getLocalDateString(d = new Date()) {
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${y}-${m}-${day}`;
+  /** Ledger rows + the merged day map every route reads. */
+  function snapshot() {
+    const rows = ledger ? ledger.read() : [];
+    const ledgerDays = ledger ? ledger.byDay(rows) : {};
+    const { days, firstLedgerDay } = view.mergeDays(ledgerDays, readActivity());
+    return { rows, days, firstLedgerDay };
   }
 
   function today() {
-    return getLocalDateString();
+    return view.dayKey(new Date());
   }
 
   // D2g — `meta` carries the outcome. Without it a day of failed calls was
@@ -70,26 +95,19 @@ module.exports = function createTokenAnalyticsRouter(deps) {
     res.json({ ok: true });
   });
 
-  // GET /token-analytics/heatmap — 365-day activity data for heatmap
+  // GET /token-analytics/heatmap — 365 calendar days ending today
   router.get('/token-analytics/heatmap', (req, res) => {
-    const data = readActivity();
-    const end = new Date();
-    const start = new Date(end);
-    start.setDate(start.getDate() - 364);
-
-    const days = [];
-    const cursor = new Date(start);
-    while (cursor <= end) {
-      const key = getLocalDateString(cursor);
-      const entry = data[key] || { requests: 0, tokens: 0 };
-      days.push({
+    const { days: data } = snapshot();
+    const days = view.lastNDayKeys(365).map((key) => {
+      const e = data[key] || {};
+      return {
         date: key,
-        requests: entry.requests,
-        tokens: entry.tokens,
-        weekday: cursor.getDay(),
-      });
-      cursor.setDate(cursor.getDate() + 1);
-    }
+        requests: e.requests || 0,
+        tokens: e.tokens || 0,
+        errors: e.errors || 0,
+        weekday: view.weekdayOf(key),
+      };
+    });
 
     let maxRequests = 0;
     let totalRequests = 0;
@@ -107,117 +125,105 @@ module.exports = function createTokenAnalyticsRouter(deps) {
 
   // GET /token-analytics/summary — aggregate stats
   router.get('/token-analytics/summary', (req, res) => {
-    const data = readActivity();
-    const allDays = Object.keys(data).sort();
+    const { rows, days, firstLedgerDay } = snapshot();
+    const now = new Date();
+    const allDays = Object.keys(days).sort();
 
     let totalRequests = 0;
     let totalTokens = 0;
+    let errors = 0;
     let activeDays = 0;
-    const modelTotals = {};
-    const last30 = {};
-    const last7 = {};
-    const now = new Date();
-
-    for (const [day, entry] of Object.entries(data)) {
-      totalRequests += entry.requests;
-      totalTokens += entry.tokens;
-      if (entry.requests > 0) activeDays++;
-      for (const [model, m] of Object.entries(entry.models || {})) {
-        if (!modelTotals[model]) modelTotals[model] = { requests: 0, tokens: 0 };
-        modelTotals[model].requests += m.requests;
-        modelTotals[model].tokens += m.tokens;
-      }
-      const dayDate = new Date(day + 'T00:00:00');
-      const diffDays = Math.floor((now - dayDate) / (1000 * 60 * 60 * 24));
-      if (diffDays < 30) {
-        last30[day] = entry;
-      }
-      if (diffDays < 7) {
-        last7[day] = entry;
-      }
+    for (const e of Object.values(days)) {
+      totalRequests += e.requests || 0;
+      totalTokens += e.tokens || 0;
+      errors += e.errors || 0;
+      if (e.requests > 0) activeDays++;
     }
 
-    const last7Requests = Object.values(last7).reduce((s, e) => s + e.requests, 0);
-    const last30Requests = Object.values(last30).reduce((s, e) => s + e.requests, 0);
-    const last7Tokens = Object.values(last7).reduce((s, e) => s + e.tokens, 0);
-    const last30Tokens = Object.values(last30).reduce((s, e) => s + e.tokens, 0);
-
-    const modelBreakdown = Object.entries(modelTotals)
-      .map(([name, m]) => ({ name, ...m }))
+    // Per-model: every ledger call, plus the per-day model counts of legacy
+    // days that predate the ledger. Provider, failures and latency are only
+    // known for ledger calls.
+    const models = {};
+    const bump = (name) => (models[name] || (models[name] = { name, provider: null, requests: 0, tokens: 0, errors: 0, latencyMs: 0, timed: 0 }));
+    for (const r of rows) {
+      const m = bump(r.model || 'unknown');
+      m.provider = m.provider || r.provider || null;
+      m.requests++;
+      m.tokens += r.tokens || 0;
+      if (r.success === false) m.errors++;
+      if (r.latencyMs > 0) { m.latencyMs += r.latencyMs; m.timed++; }
+    }
+    for (const [day, e] of Object.entries(days)) {
+      if (firstLedgerDay && day >= firstLedgerDay) continue;
+      for (const [name, v] of Object.entries(e.models || {})) {
+        const m = bump(name);
+        m.requests += v.requests || 0;
+        m.tokens += v.tokens || 0;
+      }
+    }
+    const modelBreakdown = Object.values(models)
+      .map(({ latencyMs, timed, ...m }) => ({ ...m, avgLatency: timed ? Math.round(latencyMs / timed) : null }))
       .sort((a, b) => b.requests - a.requests);
 
-    // Streak calculation
-    let currentStreak = 0;
-    let longestStreak = 0;
-    let streak = 0;
-    const checkDate = new Date(now);
-    for (let i = 0; i < 365; i++) {
-      const key = getLocalDateString(checkDate);
-      if (data[key] && data[key].requests > 0) {
-        streak++;
-        if (i === 0 || streak > 0) currentStreak = streak;
-      } else {
-        if (i === 0) currentStreak = 0;
-        streak = 0;
-      }
-      if (streak > longestStreak) longestStreak = streak;
-      checkDate.setDate(checkDate.getDate() - 1);
-    }
+    const { current: currentStreak, longest: longestStreak } = view.streaks(days, now);
 
-    // Also fold in existing audit/chat logs for a richer first-time experience
-    let auditCount = 0;
-    let chatCount = 0;
+    // Today's spend. The kernel's own derivation when it is handed in — the
+    // same number its cost guard reads — else the same formula over the
+    // same ledger. Providers without a list price (local, custom, openrouter)
+    // count as $0, which the UI must say rather than imply they are free.
+    let dailyCost = 0;
     try {
-      if (AUDIT_FILE && fs.existsSync(AUDIT_FILE)) {
-        auditCount = JSON.parse(fs.readFileSync(AUDIT_FILE, 'utf8')).length;
-      }
-    } catch {}
-    try {
-      if (LOG_FILE && fs.existsSync(LOG_FILE)) {
-        chatCount = JSON.parse(fs.readFileSync(LOG_FILE, 'utf8')).length;
-      }
-    } catch {}
-
-    // D2g — read the per-call ledger, not the {date, cost} file that the
-    // live code paths never created. Cost is derived from the same records
-    // every other aggregate comes from, so the panels cannot disagree.
-    let tokenLedgerCost = 0;
-    try {
-      if (TOKEN_LEDGER_FILE) {
-        const { createLedger } = require('../../../kernel/llm-ledger.cjs');
-        const led = createLedger({ file: path.join(path.dirname(TOKEN_LEDGER_FILE), 'llm_calls.jsonl') });
-        tokenLedgerCost = led.dailyCost({
-          pricePerToken: { gemini: 0.00000015, groq: 0.00000060, local: 0 },
-        });
-      }
+      if (typeof deps.getDailyCost === 'function') dailyCost = Number(deps.getDailyCost()) || 0;
+      else if (ledger) dailyCost = ledger.dailyCost({ pricePerToken: PRICE_PER_TOKEN });
     } catch {}
 
     res.json({
-      totalRequests: totalRequests || chatCount || auditCount,
+      totalRequests,
       totalTokens,
+      errors,
       activeDays,
       currentStreak,
       longestStreak,
-      last7: { requests: last7Requests, tokens: last7Tokens },
-      last30: { requests: last30Requests, tokens: last30Tokens },
+      today: view.windowTotals(days, 1, now),
+      last7: view.windowTotals(days, 7, now),
+      last30: view.windowTotals(days, 30, now),
+      last90: view.windowTotals(days, 90, now),
       modelBreakdown,
-      dailyCost: tokenLedgerCost,
+      dailyCost,
+      pricedProviders: Object.keys(PRICE_PER_TOKEN).filter(p => PRICE_PER_TOKEN[p] > 0),
       firstDay: allDays[0] || today(),
+      source: { ledger: !!ledger, ledgerCalls: rows.length, firstLedgerDay },
     });
   });
 
-  // Internal hook — called directly by server.cjs on every LLM call (not HTTP)
-  router._recordActivity = recordActivity;
+  // GET /token-analytics/calls — the newest ledger records, failures with the
+  // HTTP status and error the kernel kept. `?failed=1` for failures only.
+  router.get('/token-analytics/calls', (req, res) => {
+    const limit = Math.max(1, Math.min(Number(req.query?.limit) || 20, 200));
+    const failedOnly = req.query?.failed === '1' || req.query?.failed === 'true';
+    const rows = ledger ? ledger.read() : [];
+    const out = [];
+    for (let i = rows.length - 1; i >= 0 && out.length < limit; i--) {
+      const r = rows[i];
+      if (failedOnly && r.success !== false) continue;
+      out.push({
+        ts: r.ts, provider: r.provider, model: r.model, tokens: r.tokens || 0,
+        latencyMs: r.latencyMs || 0, success: r.success !== false,
+        status: r.status ?? null, error: r.error ?? null,
+      });
+    }
+    res.json({ calls: out, ledger: !!ledger });
+  });
 
   // GET /token-analytics/daily/:date — detailed breakdown for a single day
   router.get('/token-analytics/daily/:date', (req, res) => {
-    const data = readActivity();
-    const entry = data[req.params.date];
-    if (!entry) return res.json({ date: req.params.date, requests: 0, tokens: 0, models: {} });
-    res.json({ date: req.params.date, ...entry });
+    const { days } = snapshot();
+    const entry = days[req.params.date];
+    if (!entry) return res.json({ date: req.params.date, requests: 0, tokens: 0, errors: 0, models: {} });
+    res.json({ date: req.params.date, errors: 0, ...entry });
   });
 
-  // Expose recordActivity for other routes to call internally
+  // Internal hook — called directly by server.cjs on every LLM call (not HTTP)
   router._recordActivity = recordActivity;
 
   return router;

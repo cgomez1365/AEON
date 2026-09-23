@@ -125,6 +125,11 @@
     },
     {
       "method": "GET",
+      "path": "/api/token-analytics/calls",
+      "auth": true
+    },
+    {
+      "method": "GET",
       "path": "/api/token-analytics/daily/:date",
       "auth": true
     },

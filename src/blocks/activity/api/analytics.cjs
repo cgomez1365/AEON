@@ -157,48 +157,47 @@ module.exports = (deps) => {
     } catch { return res.json({ totalCalls: 0, totalTokens: 0, models: [] }); }
   });
 
+  // GET /api/telemetry — all-time usage per provider, from the call ledger.
+  //
+  // The kernel's live counters (/api/llm-telemetry) are in memory and reset on
+  // restart; TelemetryContext falls back to this route whenever they read
+  // zero, i.e. after every restart. It used to count chat-log MESSAGES —
+  // `Number(msg.tokens) || 150` — so a fresh install with no LLM call at all
+  // reported 1 request / 150 tokens for "aeon_cortex", the seeded
+  // "SYSTEM INITIALIZED" line (measured 2026-09-23).
+  // A trusted meter never fakes data: this reads the per-call ledger every
+  // other surface reads, and a blank ledger is a blank answer.
   router.get('/telemetry', async (req, res) => {
     try {
-      let auditData = [];
-      let chatData = [];
-      let tokenData = { cost: 0 };
-
-      if (isVercel && supabase) {
-        const { data: audit } = await supabase.from('aeon_audit_log').select('*').order('timestamp', { ascending: false }).limit(200);
-        const { data: chat } = await supabase.from('aeon_chat_log').select('*').order('timestamp', { ascending: false }).limit(200);
-        if (audit) auditData = audit;
-        if (chat) chatData = chat;
-      } else {
-        if (fs.existsSync(AUDIT_FILE)) auditData = JSON.parse(fs.readFileSync(AUDIT_FILE, 'utf8'));
-        if (fs.existsSync(LOG_FILE)) chatData = JSON.parse(fs.readFileSync(LOG_FILE, 'utf8'));
-        if (fs.existsSync(TOKEN_LEDGER_FILE)) tokenData = JSON.parse(fs.readFileSync(TOKEN_LEDGER_FILE, 'utf8'));
+      let rows = [];
+      let dailyCost = 0;
+      if (TOKEN_LEDGER_FILE) {
+        const { createLedger } = require('../../../kernel/llm-ledger.cjs');
+        const ledger = createLedger({ file: path.join(path.dirname(TOKEN_LEDGER_FILE), 'llm_calls.jsonl') });
+        rows = ledger.read();
+        dailyCost = typeof deps.getDailyCost === 'function'
+          ? Number(deps.getDailyCost()) || 0
+          : ledger.dailyCost({ pricePerToken: { gemini: GEMINI_PRICE_PER_TOKEN, groq: GROQ_PRICE_PER_TOKEN, local: 0 } });
       }
 
-      // Usage is aggregated from what the log ACTUALLY contains — the model
-      // or provider stamped on each message. No hardcoded roster, and a
-      // blank slate stays blank (the old code injected 12 fake calls here
-      // so the charts "looked alive"; a trusted meter never fakes data).
       const staffUsage = {};
-      chatData.forEach(msg => {
-        const key = (msg.model || msg.provider || msg.engine || msg.name || msg.sender || '')
-          .toString().toLowerCase().trim();
-        if (!key || key === 'user' || key === 'you' || key === 'operator') return;
-        if (!staffUsage[key]) staffUsage[key] = { requests: 0, tokens: 0 };
-        staffUsage[key].requests++;
-        staffUsage[key].tokens += Number(msg.tokens) || 150;
-      });
-
-      let totalTokens = Object.values(staffUsage).reduce((acc, s) => acc + s.tokens, 0);
-      const extraTokens = Math.floor((tokenData.cost || 0) / GEMINI_PRICE_PER_TOKEN);
-      totalTokens += extraTokens;
-
-      const totalRequests = Object.values(staffUsage).reduce((acc, s) => acc + s.requests, 0);
+      let totalTokens = 0;
+      for (const r of rows) {
+        const key = String(r.provider || 'unknown');
+        const s = staffUsage[key] || (staffUsage[key] = { requests: 0, tokens: 0, errors: 0 });
+        s.requests++;
+        s.tokens += Number(r.tokens) || 0;
+        if (r.success === false) s.errors++;
+        totalTokens += Number(r.tokens) || 0;
+      }
 
       res.json({
         totalTokens,
-        totalRequests,
-        totalCost: tokenData.cost || 0,
-        staffUsage
+        totalRequests: rows.length,
+        // Today's spend, derived the kernel's way — not an all-time figure.
+        totalCost: dailyCost,
+        costScope: 'today',
+        staffUsage,
       });
     } catch (error) {
       console.error('Error reading telemetry:', error);

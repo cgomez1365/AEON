@@ -14,8 +14,14 @@ AEON looking at its own activity log, not a user-facing content feature.
 - `index.jsx` — the heatmap UI. Fetches `/api/token-analytics/heatmap` +
   `/api/token-analytics/summary` in parallel on load; clicking a day cell
   fetches `/api/token-analytics/daily/:date` for the detail panel.
-- `api/token-analytics.cjs` — the block's actual API: reads/writes the daily
-  activity ledger and serves the three endpoints above.
+- `api/token-analytics.cjs` — the block's actual API. **Counts come from the
+  kernel's per-call ledger** (`<db>/llm_calls.jsonl`, written by
+  `services/ai.js` for every provider call, failures included, with status and
+  error). `activity_heatmap.json` is still written and is read only for days
+  that predate the ledger. Until 2026-09-23 counts came from the heatmap file
+  and cost from the ledger, so the two could disagree.
+- `api/_ledgerView.cjs` — pure day-wise helpers (calendar walks at local noon,
+  merge, streaks, 1/7/30/90-day windows). `_`-prefixed: never mounted.
 - `api/analytics.cjs` — an older, broader router that predates the
   heatmap-focused rebuild (see *Known limitations*). Not called by this
   block's own UI; it's a legacy grab-bag of kernel-adjacent endpoints
@@ -31,9 +37,10 @@ AEON looking at its own activity log, not a user-facing content feature.
 ### `api/token-analytics.cjs` (mounted at `/api`) — this block's real surface
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/token-analytics/heatmap` | 365-day array of `{date, requests, tokens, weekday}` + `maxRequests`/`totalRequests`/`totalTokens`/`activeDays`. Backs the grid. |
-| GET | `/api/token-analytics/summary` | Aggregate stats: totals, current/longest streak, last-7/last-30, per-model breakdown, `dailyCost` (from the token ledger), `firstDay`. |
-| GET | `/api/token-analytics/daily/:date` | Full detail for one day, including per-model request/token counts. |
+| GET | `/api/token-analytics/heatmap` | 365 calendar days ending **today** of `{date, requests, tokens, errors, weekday}` + `maxRequests`/`totalRequests`/`totalTokens`/`activeDays`. Backs the grid. |
+| GET | `/api/token-analytics/summary` | Totals + `errors`, `today`/`last7`/`last30`/`last90` (calendar days, today included), current streak (run reaching today, or yesterday before today's first call) and longest streak, per-model breakdown with provider/errors/avgLatency, `dailyCost` (the kernel's `getDailyCost()` when injected), `pricedProviders`, `firstDay`, `source`. |
+| GET | `/api/token-analytics/calls` | Newest ledger records; `?failed=1` for failures only, each with the HTTP `status` and `error` the kernel kept. `?limit=` (max 200). |
+| GET | `/api/token-analytics/daily/:date` | Full detail for one day, including per-model request/token counts and `errors`. |
 | POST | `/api/token-analytics/record` | Records one usage event `{tokens, model, engine}` for today. HTTP entry point for external callers. |
 
 Internally, `router._recordActivity` is also exposed as a **plain function**
@@ -47,7 +54,7 @@ round trip.
 |---|---|---|
 | POST | `/api/search` | Second Brain matrix keyword search fallback: Supabase-backed (`aeon_notes`/`documents`/`aeon_blocks`) on Vercel; local filesystem walk + keyword scoring over `Data/Second_Brain/*` (including PDF text via `pdf-parse`) otherwise. |
 | GET | `/api/telemetry/live` | Proxies the kernel's live telemetry (`/api/llm-telemetry`, backed by `src/kernel/routers/telemetry.cjs`). |
-| GET | `/api/telemetry` | Aggregate per-"staff" usage computed from chat/audit logs (legacy persona-name buckets like `phi`/`qwen`/`zenith`/`gemini`, matched by sender name). |
+| GET | `/api/telemetry` | All-time usage per provider from the call ledger (`staffUsage[provider] = {requests, tokens, errors}`), plus today's derived cost (`totalCost`, `costScope: 'today'`). `TelemetryContext` falls back to it after every restart. Until 2026-09-23 it counted chat-log messages at 150 tokens each, so a fresh install showed 1 request / 150 tokens. |
 | GET | `/api/pipeline-metrics` | Reads `clients.json` (BGI Store client pipeline) and buckets dollar value by status into `drafted`/`ready`/`identified`. |
 | GET / POST | `/api/audit` | Read/append the audit log — Supabase-backed with a local-file cache/fallback. |
 
