@@ -87,7 +87,10 @@ module.exports = function createAIRouter(deps) {
         citations: assembled.meta.citations,
       });
     } catch (err) {
-      const status = err.noProviderAvailable ? 503 : 500;
+      // 429 = temporary (a rate limit): the caller should wait, not report a
+      // fault. It was 500, so a block could not tell "wait a minute" from
+      // "something broke" (agent C2, 2026-09-23).
+      const status = err.rateLimited ? 429 : err.noProviderAvailable ? 503 : 500;
       res.status(status).json({
         error: err.message,
         noProviderAvailable: !!err.noProviderAvailable,
@@ -111,10 +114,14 @@ module.exports = function createAIRouter(deps) {
       // error. 500 stays for real faults. The 409 "local needs confirming"
       // branch is gone with the gate it served (BO-H1c): nothing has set
       // needsLocalConfirm since BO-2 removed it.
-      const status = err.noProviderAvailable ? 503 : 500;
+      // 429 = temporary (a rate limit): the caller should wait, not report a
+      // fault. It was 500, so a block could not tell "wait a minute" from
+      // "something broke" (agent C2, 2026-09-23).
+      const status = err.rateLimited ? 429 : err.noProviderAvailable ? 503 : 500;
       res.status(status).json({
         error: err.message,
         noProviderAvailable: !!err.noProviderAvailable,
+        ...(err.rateLimited ? { retryable: true, provider: err.provider || null } : {}),
       });
     }
   });

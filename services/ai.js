@@ -1679,7 +1679,9 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       const err = new Error(
         `${throttled.provider} is rate-limited right now (HTTP 429). This is temporary — `
         + `retry in a few seconds. Other providers in the chain could not serve either: `
-        + attempts.filter((a) => a !== throttled).map((a) => a.provider).join(', ') || 'none configured'
+        // Parenthesised: the || used to bind to the whole (never-empty) string,
+        // so the message ended on "either: " (agent C2, 2026-09-23).
+        + (attempts.filter((a) => a !== throttled).map((a) => a.provider).join(', ') || 'none configured')
       );
       err.rateLimited = true;
       err.provider = throttled.provider;
@@ -1717,7 +1719,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     GEMINI_KEY_POOL, _trackLLM, _llmTelemetry, setActivityRecorder,
     getDailyCost, addRunCost,
     KILL_SWITCH_THRESHOLD, GEMINI_PRICE_PER_TOKEN, GROQ_PRICE_PER_TOKEN,
-    getProviderHealth, _resetProviderHealth, getKeyPoolInfo, dehydrateProvider, hydrateEnvFromVault,
+    getProviderHealth, _resetProviderHealth, _chainExhaustedError, getKeyPoolInfo, dehydrateProvider, hydrateEnvFromVault,
     defaultLocalModel, localRuntimePresent,
     envHydrated,
   };

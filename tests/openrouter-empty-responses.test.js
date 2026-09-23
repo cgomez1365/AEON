@@ -265,6 +265,15 @@ describe('the non-streaming path keeps the registry provider\'s failure', () => 
     const err = await ai.kernelLLM('hello', { role: 'chat' }).catch((e) => e);
     expect(err.message).toMatch(/429|rate/i);
     expect(err.message).not.toMatch(/no cloud provider is configured|check API keys in Settings/i);
+    expect(err.message).toMatch(/could not serve either: \S/);
+  });
+
+  it('a throttled sole provider says "none configured", not a dangling "either: "', () => {
+    // The || bound to the whole (never-empty) string, so with nothing else in
+    // the chain the message ended on "either: " (agent C2, 2026-09-23).
+    const err = ai._chainExhaustedError([{ provider: 'custom', status: 429, configured: true }], null);
+    expect(err.rateLimited).toBe(true);
+    expect(err.message).toMatch(/could not serve either: none configured$/);
   });
 });
 
