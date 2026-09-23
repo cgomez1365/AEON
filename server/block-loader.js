@@ -9,6 +9,9 @@
 const fs = require('fs');
 const path = require('path');
 const { createBlockStorage } = require('../src/kernel/blockStorage.cjs');
+// One blocks root (BO-J1): this host mounted src/blocks while the registry,
+// readiness and lifecycle routes followed AEON_BLOCKS_DIR.
+const { BLOCKS_DIR } = require('../src/kernel/blocksDir.cjs');
 
 module.exports = ({ app, ROOT, isVercel, loadSettings, baseDeps }) => {
 
@@ -143,7 +146,7 @@ module.exports = ({ app, ROOT, isVercel, loadSettings, baseDeps }) => {
         let manifest = null;
         try {
           manifest = JSON.parse(fs.readFileSync(
-            path.join(ROOT, 'src', 'blocks', blockId, 'block.manifest.json'), 'utf8'));
+            path.join(BLOCKS_DIR, blockId, 'block.manifest.json'), 'utf8'));
         } catch { manifest = null; }
         manifestCache.set(blockId, createScopedDeps({ ...baseDeps, path, fs }, manifest, blockId));
       }
@@ -151,7 +154,7 @@ module.exports = ({ app, ROOT, isVercel, loadSettings, baseDeps }) => {
     };
     global.mountStaticBlocks(app, { ...baseDeps, path, fs }, depsFor);
   } else {
-    const blocksDir = path.join(ROOT, 'src', 'blocks');
+    const blocksDir = BLOCKS_DIR;
     if (!fs.existsSync(blocksDir)) {
       console.warn('[BLOCK ROUTER] src/blocks/ not found.');
     } else {

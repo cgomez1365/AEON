@@ -243,7 +243,7 @@ async function getCommands() {
 }
 
 function scanManifests() {
-  const blocksDir = path.join(ROOT, 'src', 'blocks');
+  const blocksDir = require('../../src/kernel/blocksDir.cjs').BLOCKS_DIR;
   const out = [];
   let folders = [];
   try { folders = fs.readdirSync(blocksDir); } catch { return out; }
