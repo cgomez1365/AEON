@@ -54,7 +54,17 @@ function createBlockStorage({ blockId, contract = {}, getBlockDataFile, getBlock
     requireWrite('writeData');
     const file = dataFile(relPath);
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, content, 'utf8');
+    // Write beside, then rename over: a crash or a full disk mid-write leaves
+    // the previous file whole instead of a truncated one (store builder B1,
+    // 2026-09-23). Same-directory rename is atomic on APFS, ext4, NTFS, exFAT.
+    const tmp = `${file}.tmp-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
+    try {
+      fs.writeFileSync(tmp, content, 'utf8');
+      fs.renameSync(tmp, file);
+    } catch (e) {
+      try { fs.rmSync(tmp, { force: true }); } catch { /* nothing to clean */ }
+      throw e;
+    }
     return file;
   }
 
@@ -129,8 +139,27 @@ function createBlockStorage({ blockId, contract = {}, getBlockDataFile, getBlock
   });
 
   // Convenience for the commonest shape in block code: read-or-default JSON.
+  //
+  // A file that EXISTS but will not parse used to read as the fallback, and the
+  // block's next write replaced it — the operator's data gone without a word
+  // (store builder B1, 2026-09-23). It is now moved aside first, named, and
+  // said out loud; the block carries on from the fallback and nothing is lost.
   function readJSON(relPath, fallback = null) {
-    try { return JSON.parse(fs.readFileSync(dataFile(relPath), 'utf8')); } catch { return fallback; }
+    const file = dataFile(relPath);
+    let text;
+    try { text = fs.readFileSync(file, 'utf8'); } catch { return fallback; }
+    try { return JSON.parse(text); } catch (e) {
+      // A read-only block cannot overwrite it, so it is left where it is.
+      if (!canWrite) return fallback;
+      const aside = `${file}.unreadable-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+      try {
+        fs.renameSync(file, aside);
+        console.warn(`[BLOCK STORAGE] ${blockId}: ${relPath} could not be read (${e.message}); kept as ${path.basename(aside)} and started from empty.`);
+      } catch (moveErr) {
+        console.warn(`[BLOCK STORAGE] ${blockId}: ${relPath} could not be read (${e.message}) and could not be moved aside (${moveErr.message}).`);
+      }
+      return fallback;
+    }
   }
   function writeJSON(relPath, value) {
     return writeData(relPath, JSON.stringify(value, null, 2));
