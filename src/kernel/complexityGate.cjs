@@ -59,7 +59,12 @@ function gate(envelope, { vaultSecrets = [] } = {}) {
   // even if declared (zero trust bonus): declared shell still needs the human
   // HIGH review to see it, so leave it flagged for untrusted sources.
   const declaredShell = perms.shell === true && envelope.trust !== 'untrusted';
-  const findings = scanSources(envelope.files || [], { declaredShell });
+  // Code only — the same file set lint scans. The envelope carries README.md,
+  // and resume_grader's README line "`process.env.VERCEL` unset" matched the
+  // .env rule: the same block scored LOW in `aeon lint` and HIGH here, straight
+  // to the approval queue (measured 2026-09-23). Prose is not executed.
+  const code = (envelope.files || []).filter((f) => /\.(cjs|js|jsx|mjs|ts|tsx)$/i.test(String(f.path || '')));
+  const findings = scanSources(code, { declaredShell });
   for (const f of findings) {
     if (f.sev === 'HIGH') reasons.push({ sev: 'HIGH', rule: f.check, why: `${f.file}: ${f.why}` });
     else if (f.sev === 'MEDIUM') reasons.push({ sev: 'MEDIUM', rule: f.check, why: `${f.file}: ${f.why}` });

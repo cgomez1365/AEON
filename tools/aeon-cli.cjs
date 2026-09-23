@@ -94,7 +94,11 @@ const commands = {
   lint() {
     const dir = resolveBlockDir(arg);
     if (!dir) { console.error(`block not found: ${arg} (looked in staging/, src/blocks/, and as a path)`); process.exit(1); }
-    const result = lintBlock(dir);
+    // A block already in the blocks dir is live: lint it by the rules for a
+    // live block (grandfathered storage allowed). `aeon pack` keeps the rules
+    // for a NEW block, because a cartridge is a new install wherever it lands.
+    const existing = path.resolve(dir).startsWith(path.resolve(BLOCKS_DIR) + path.sep);
+    const result = lintBlock(dir, { existing });
     printLint(result, dir);
     process.exit(result.errors.length || result.findings.some(f => f.sev === 'HIGH') ? 1 : 0);
   },

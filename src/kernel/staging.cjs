@@ -92,8 +92,14 @@ function scanSources(sources, { declaredShell = false } = {}) {
   const findings = [];
   for (const { path: rel, content } of sources) {
     // Importing kernel modules is the sanctioned block API — don't count those
-    // relative paths as traversal. Everything else with ../.. still flags.
-    const src = content.replace(/require\(\s*['"`][./\\]+kernel\/[^'"`]+['"`]\s*\)/g, 'require("aeon-kernel")');
+    // relative paths as traversal, in either module syntax: `require('…/kernel/x')`,
+    // `import … from '…/kernel/x'`, `import('…/kernel/x')`. Only require() was
+    // recognised, so every block UI that imports '../../kernel/auth' flagged HIGH
+    // (measured 2026-09-23). Everything else with ../.. still flags.
+    const src = content
+      .replace(/require\(\s*['"`][./\\]+kernel\/[^'"`]+['"`]\s*\)/g, 'require("aeon-kernel")')
+      .replace(/\bfrom\s+['"`][./\\]+kernel\/[^'"`]+['"`]/g, 'from "aeon-kernel"')
+      .replace(/\bimport\(\s*['"`][./\\]+kernel\/[^'"`]+['"`]\s*\)/g, 'import("aeon-kernel")');
     for (const check of CODE_CHECKS) {
       if (check.re.test(src)) {
         const excused = check.id === 'child-process' && declaredShell;
@@ -177,7 +183,12 @@ function walkFiles(dir, exts = /\.(cjs|js|jsx|mjs)$/) {
  * findings = code check hits; HIGH findings that aren't declared in the
  * manifest's permissions also block promotion.
  */
-function lintBlock(blockDir) {
+/**
+ * `existing`: the block is already live (it sits in the blocks dir). The
+ * grandfathered storage mode is valid only then — and lint never said so, so
+ * `aeon lint` failed all 17 shipped blocks on storage.access (2026-09-23).
+ */
+function lintBlock(blockDir, { existing = false } = {}) {
   const errors = [];
   const findings = [];
 
@@ -187,7 +198,7 @@ function lintBlock(blockDir) {
   try { manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')); }
   catch (e) { return { score: 'HIGH', errors: [`manifest is not valid JSON: ${e.message}`], findings }; }
 
-  errors.push(...validateManifest(manifest));
+  errors.push(...validateManifest(manifest, { existing }));
   const folderName = path.basename(blockDir);
   if (manifest.id && manifest.id !== folderName) errors.push(`manifest id "${manifest.id}" != folder name "${folderName}"`);
   if (!fs.existsSync(path.join(blockDir, 'index.jsx'))) errors.push('missing index.jsx');
