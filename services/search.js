@@ -14,9 +14,46 @@ const clampCount = (n) => {
   return Number.isFinite(v) && v > 0 ? Math.min(v, MAX_COUNT) : DEFAULT_COUNT;
 };
 
+// DuckDuckGo Lite's result page → [{ title, url, snippet }], or null when the
+// page carries no results (a block page, a layout change, an empty answer).
+function parseDuckDuckGoLite(html, count = DEFAULT_COUNT) {
+  const linkRegex = /<a rel="nofollow" href="([^"]+)" class='result-link'>([\s\S]*?)<\/a>/g;
+  const snippetRegex = /<td class='result-snippet'>([\s\S]*?)<\/td>/g;
+
+  const links = [];
+  let match;
+  while ((match = linkRegex.exec(html)) !== null) {
+    links.push({ url: match[1], title: match[2].replace(/<[^>]*>?/gm, '').trim() });
+  }
+  const snippets = [];
+  while ((match = snippetRegex.exec(html)) !== null) {
+    snippets.push(match[1].replace(/<[^>]*>?/gm, '').trim());
+  }
+  if (links.length === 0) return null;
+
+  const hits = [];
+  for (let i = 0; i < Math.min(count, links.length, snippets.length); i++) {
+    let actualUrl = links[i].url;
+    if (actualUrl.includes('uddg=')) {
+      const params = new URLSearchParams(actualUrl.split('?')[1]);
+      if (params.has('uddg')) actualUrl = decodeURIComponent(params.get('uddg'));
+    } else if (actualUrl.startsWith('//')) {
+      actualUrl = 'https:' + actualUrl;
+    }
+    hits.push({ title: links[i].title, url: actualUrl, snippet: snippets[i] });
+  }
+  return hits;
+}
+
+const formatHit = (h) => `- **${h.title}**\n  ${h.snippet}\n  Source: [${h.url}](${h.url})`;
+
 module.exports = ({ writeOSAudit, kernelLLM }) => {
 
-  const fetchDuckDuckGo = (query, correlationId, count = DEFAULT_COUNT) => {
+  // The hits themselves, [{ title, url, snippet }] or null. The citation gate
+  // needs these; it was handed the markdown string below, read it as "no
+  // results", and so Class 4 refused every question even when online
+  // (reported by agent C2, 2026-09-23). One parse feeds both.
+  const fetchDuckDuckGoHits = (query, correlationId, count = DEFAULT_COUNT) => {
     return new Promise((resolve) => {
       const url = 'https://lite.duckduckgo.com/lite/';
       const options = {
@@ -31,37 +68,13 @@ module.exports = ({ writeOSAudit, kernelLLM }) => {
         let html = '';
         res.on('data', (c) => html += c);
         res.on('end', () => {
-          const linkRegex = /<a rel="nofollow" href="([^"]+)" class='result-link'>([\s\S]*?)<\/a>/g;
-          const snippetRegex = /<td class='result-snippet'>([\s\S]*?)<\/td>/g;
-
-          const links = [];
-          let match;
-          while ((match = linkRegex.exec(html)) !== null) {
-            links.push({ url: match[1], title: match[2].replace(/<[^>]*>?/gm, '').trim() });
-          }
-          const snippets = [];
-          while ((match = snippetRegex.exec(html)) !== null) {
-            snippets.push(match[1].replace(/<[^>]*>?/gm, '').trim());
-          }
-
-          if (links.length === 0) {
+          const hits = parseDuckDuckGoLite(html, count);
+          if (!hits) {
             writeOSAudit('SEARCH_PARSE_ERROR', 'DDG regex yielded 0 results', 500, 0, correlationId);
             return resolve(null);
           }
-
-          const results = [];
-          for (let i = 0; i < Math.min(count, links.length, snippets.length); i++) {
-            let actualUrl = links[i].url;
-            if (actualUrl.includes('uddg=')) {
-              const params = new URLSearchParams(actualUrl.split('?')[1]);
-              if (params.has('uddg')) actualUrl = decodeURIComponent(params.get('uddg'));
-            } else if (actualUrl.startsWith('//')) {
-              actualUrl = 'https:' + actualUrl;
-            }
-            results.push(`- **${links[i].title}**\n  ${snippets[i]}\n  Source: [${actualUrl}](${actualUrl})`);
-          }
-          writeOSAudit('DDG_SEARCH_SUCCESS', `Query: ${query}`, 200, results.length, correlationId);
-          resolve(results.join('\n\n'));
+          writeOSAudit('DDG_SEARCH_SUCCESS', `Query: ${query}`, 200, hits.length, correlationId);
+          resolve(hits);
         });
       });
 
@@ -79,6 +92,12 @@ module.exports = ({ writeOSAudit, kernelLLM }) => {
       req.write(`q=${encodeURIComponent(query)}`);
       req.end();
     });
+  };
+
+  // The chat and Deep Research read results as markdown.
+  const fetchDuckDuckGo = async (query, correlationId, count = DEFAULT_COUNT) => {
+    const hits = await fetchDuckDuckGoHits(query, correlationId, count);
+    return hits ? hits.map(formatHit).join('\n\n') : null;
   };
 
   // ── Brave Search API ────────────────────────────────────────────────────
@@ -244,5 +263,5 @@ module.exports = ({ writeOSAudit, kernelLLM }) => {
     }
   });
 
-  return { fetchDuckDuckGo, fetchBraveSearch, fetchSerperSearch, fetchTavilySearch, fetchWebSearch, router, clampCount, DEFAULT_COUNT, MAX_COUNT };
+  return { fetchDuckDuckGo, fetchDuckDuckGoHits, parseDuckDuckGoLite, fetchBraveSearch, fetchSerperSearch, fetchTavilySearch, fetchWebSearch, router, clampCount, DEFAULT_COUNT, MAX_COUNT };
 };

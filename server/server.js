@@ -378,7 +378,7 @@ try {
 
 // Scoped retrieval + citation gate
 try {
-  const retrievalRouter = require('../src/kernel/routers/retrieval.cjs')({ kernelLLM: ai.kernelLLM, fetchDuckDuckGo: search.fetchDuckDuckGo });
+  const retrievalRouter = require('../src/kernel/routers/retrieval.cjs')({ kernelLLM: ai.kernelLLM, fetchSearchHits: search.fetchDuckDuckGoHits });
   app.use('/api/retrieval', retrievalRouter);
   console.log('[RETRIEVAL] /api/retrieval mounted — scoped indexes + citation gate (classes 1-4)');
 } catch (e) { console.error('[RETRIEVAL] mount failed:', e.message); }

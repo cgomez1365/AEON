@@ -30,7 +30,7 @@ async function embedLocal(text) {
 
 module.exports = function createRetrievalRouter(deps) {
   const router = express.Router();
-  const { kernelLLM, fetchDuckDuckGo } = deps;
+  const { kernelLLM, fetchSearchHits } = deps;
   const caller = (req) => req.headers['x-aeon-block'] || 'operator';
 
   router.get('/scopes', (_req, res) => res.json({ scopes: retrieval.listScopes() }));
@@ -70,8 +70,11 @@ module.exports = function createRetrievalRouter(deps) {
       caller: caller(req),
       llm: kernelLLM ? (p) => kernelLLM(p, { role: 'research' }) : null,
       embed: embedLocal,
-      scrape: fetchDuckDuckGo ? async (q) => {
-        const hits = await fetchDuckDuckGo(q, 'citation-gate');
+      // fetchSearchHits returns the hits as data. It was fed fetchDuckDuckGo,
+      // which returns markdown text, so Array.isArray was always false and
+      // Class 4 refused every question, online or not (agent C2, 2026-09-23).
+      scrape: fetchSearchHits ? async (q) => {
+        const hits = await fetchSearchHits(q, 'citation-gate');
         return (Array.isArray(hits) ? hits : []).map(h => ({ title: h.title || h.url, url: h.url, snippet: h.snippet || h.title || '' }));
       } : null,
     });
