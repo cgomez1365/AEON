@@ -92,7 +92,10 @@ if (!isVercel && !process.env.AEON_VAULT_MASTER_KEY) {
       } else {
         env += `${env.endsWith('\n') || !env ? '' : '\n'}AEON_VAULT_MASTER_KEY=${key}\n`;
       }
-      fs.writeFileSync(envFile, env);
+      // Owner-only, like launch.js (9b3346d): this file holds the vault's
+      // master key, and `npm run server` reaches here without the launcher.
+      fs.writeFileSync(envFile, env, { mode: 0o600 });
+      try { fs.chmodSync(envFile, 0o600); } catch { /* Windows: no POSIX modes */ }
       process.env.AEON_VAULT_MASTER_KEY = key;
       console.log(`[FIRST RUN] Vault master key generated and saved to ${envFile}`);
     } catch (e) { console.warn('[FIRST RUN] vault key guard failed:', e.message); }

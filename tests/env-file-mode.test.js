@@ -99,3 +99,14 @@ describe('the launcher uses them on every path that writes .env', () => {
     expect(src).toMatch(/secureEnvFile\(\s*ENV_PATH\s*\)/);
   });
 });
+
+describe('the server writes .env owner-only too (npm run server skips the launcher)', () => {
+  it('the first-run vault key write in server.js sets mode 0600', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'server.js'), 'utf8');
+    const at = src.indexOf('console.log(`[FIRST RUN] Vault master key generated');
+    expect(at).toBeGreaterThan(-1);
+    const write = src.slice(src.lastIndexOf('fs.writeFileSync(envFile', at), at);
+    expect(write).toMatch(/fs\.writeFileSync\(envFile, env, \{ mode: 0o600 \}\)/);
+    expect(write).toMatch(/chmodSync\(envFile, 0o600\)/);
+  });
+});
