@@ -28,6 +28,9 @@ const keyPool = require('./keyPool.cjs');
 const { MAX_MODELS, isFreeModelRow, freeFirst } = require('./modelCatalogue.cjs');
 
 const isVercel = require('./runtime.cjs').isCloud();
+// Which side of reachable_from this process is on. One test, read by every
+// resolver (three had each repeated it).
+const RUNTIME = isVercel ? 'cloud' : 'local';
 const APP_ROOT = path.join(__dirname, '..', '..');
 // Honors AEON_SECRETS_DIR, same as vault.cjs:22. Without this the endpoint
 // registry stays pinned to the install dir while the vault follows the env —
@@ -573,7 +576,7 @@ function pickChatModel(models) {
  * 'direct' or 'relay' (local-only model requested from cloud → needs desktop).
  */
 async function resolveForRole(role, supabase) {
-  const runtime = isVercel ? 'cloud' : 'local';
+  const runtime = RUNTIME;
 
   // Portable/USB mode: every role resolves to the native local runtime, before the
   // registry is even consulted. A USB install has no cloud keys by design.
@@ -721,7 +724,7 @@ async function resolveForRole(role, supabase) {
  */
 async function resolveForProvider(provider, model, supabase) {
   if (!provider) return { ok: false, error: 'provider required' };
-  const runtime = isVercel ? 'cloud' : 'local';
+  const runtime = RUNTIME;
   const reg = await load(supabase);
   const eps = reg.endpoints.filter(e => e.provider === provider && (e.reachable_from || []).includes(runtime));
   if (!eps.length) return { ok: false, error: `No "${provider}" connection is configured — add one in Settings → Connections.` };
@@ -838,7 +841,7 @@ function describeRoleLocal(role) {
     return env || { ok: false, reason: 'no_providers_configured' };
   }
 
-  const runtime = isVercel ? 'cloud' : 'local';
+  const runtime = RUNTIME;
   // Mirrors resolveForRole exactly: `embed` never borrows the chat mapping.
   let mapping = role === EMBED_ROLE
     ? ((reg.roles || {})[EMBED_ROLE] || null)
