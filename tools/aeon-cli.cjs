@@ -159,6 +159,12 @@ const commands = {
     // cannot go stale; a hand-stamped guess starts wrong and stays wrong.
     m.routes = [];
     m.description = '';
+    // The template declares api_routes but ships only api/README.md, so every
+    // UI-only block scaffolded here failed its boot proof: "api_routes is
+    // declared but no API module mounted" (2026-09-23). True only once a real
+    // module exists — set it when you add api/<id>.cjs.
+    const apiDir = path.join(dst, 'api');
+    m.api_routes = fs.existsSync(apiDir) && fs.readdirSync(apiDir).some((f) => /\.(cjs|js|mjs)$/.test(f));
     fs.writeFileSync(mPath, JSON.stringify(m, null, 2));
     console.log(`✓ staging/${arg} created from _template. Edit it, then: aeon lint ${arg} && aeon promote ${arg}`);
   },

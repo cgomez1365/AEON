@@ -1,22 +1,21 @@
 /**
- * The scaffolds are skipped by TWO mechanisms that key off DIFFERENT fields.
+ * The scaffolds are skipped by ONE rule: a block folder starting with '_'.
  *
- *   runtime  — blockHost.cjs, blockRegistry.js, blockStandard.cjs all skip a
- *              block whose FOLDER starts with '_' (K2).
- *   build    — scripts/gen-block-routes.cjs and block-manifest-routes.test.js
- *              skip a block whose manifest ID is in SKIP: {__BLANK__, _template}.
+ * This gate used to say two mechanisms keyed off different fields — the
+ * runtime by folder prefix, the build (scripts/gen-block-routes.cjs and
+ * block-manifest-routes.test.js) by manifest ID in SKIP {__BLANK__, _template}
+ * — and that they agreed only because `_blank`'s id is `__BLANK__`. The second
+ * half was never true. Both build sites iterate `fs.readdirSync(blocksDir)`, so
+ * they compared FOLDER names against a set holding a manifest id: `_template`
+ * matched, `_blank` never did, and the route generator validated (and in write
+ * mode rewrote) the `_blank` scaffold like a real block. The gate passed
+ * because it mapped each folder to its manifest id before checking SKIP —
+ * testing the code it described, not the code that ran (found 2026-09-23 by the
+ * removability run; §08).
  *
- * Both are correct today only because `_blank`'s id happens to be `__BLANK__`.
- * Rename that id and the folder still never mounts, while the route generator
- * silently starts emitting scaffold routes into the declared surface — a
- * divergence with no symptom until someone counts routes and gets a number
- * nobody can explain. That is the origin of the recurring "19 folders vs 17
- * blocks" question.
- *
- * This gate pins the invariant: the two mechanisms must select the SAME set.
- *
- * It also states the counts out loud, because both are true and they answer
- * different questions (§08): 19 folders on disk, 17 that mount.
+ * Now every site, runtime and build, keys off the folder prefix. This gate pins
+ * that, and still states the counts out loud (§08): 19 folders on disk, 17 that
+ * mount.
  */
 import { describe, it, expect } from 'vitest';
 import fs from 'fs';
@@ -37,54 +36,31 @@ const manifestId = (folder) => {
   return JSON.parse(fs.readFileSync(p, 'utf8')).id;
 };
 
-/** The build-time SKIP set, read from the generator itself rather than copied. */
-function generatorSkipSet() {
-  const src = fs.readFileSync(path.join(ROOT, 'scripts', 'gen-block-routes.cjs'), 'utf8');
-  const m = src.match(/const SKIP = new Set\(\[([^\]]*)\]\)/);
-  expect(m, 'gen-block-routes.cjs no longer declares SKIP as a literal Set — update this gate').not.toBeNull();
-  return new Set([...m[1].matchAll(/['"]([^'"]+)['"]/g)].map((x) => x[1]));
-}
+describe('the scaffold skip rule is one rule', () => {
+  // Each site with the pattern that proves it applies the prefix to the FOLDER
+  // it iterates. A bare startsWith('_') anywhere in a file proves nothing: the
+  // old generator had one for underscore-prefixed API files and still processed
+  // the `_blank` folder.
+  const PREFIX = String.raw`startsWith\(['"]_['"]\)`;
+  const SITES = [
+    [['src', 'kernel', 'blockHost.cjs'], new RegExp(PREFIX)],
+    [['src', 'kernel', 'blockRegistry.js'], new RegExp(PREFIX)],
+    [['src', 'kernel', 'blockStandard.cjs'], new RegExp(PREFIX)],
+    [['scripts', 'gen-block-routes.cjs'], /const isScaffold = \(name\) => name\.startsWith\('_'\)[\s\S]*if \(isScaffold\(id\)\) continue;/],
+    [['tests', 'block-manifest-routes.test.js'], /\.filter\(id => !id\.startsWith\('_'\)/],
+  ];
 
-describe('the scaffold skip rule is one rule, not two that happen to agree', () => {
-  const scaffoldFolders = folders.filter((f) => f.startsWith('_'));
-  const realFolders = folders.filter((f) => !f.startsWith('_'));
-
-  it('every scaffold folder has an id the route generator also skips', () => {
-    const SKIP = generatorSkipSet();
-    const leaking = scaffoldFolders
-      .map((f) => ({ folder: f, id: manifestId(f) }))
-      .filter((x) => x.id !== null && !SKIP.has(x.id));
-
-    expect(leaking,
-      `these folders never mount but their routes WOULD be generated: ` +
-      leaking.map((x) => `${x.folder} (id ${x.id})`).join(', ')).toEqual([]);
-  });
-
-  it('the generator skips nothing that actually mounts', () => {
-    // The inverse. An over-broad SKIP would silently drop a real block's
-    // routes from the declared surface, which is the same defect pointed the
-    // other way.
-    const SKIP = generatorSkipSet();
-    const dropped = realFolders
-      .map((f) => ({ folder: f, id: manifestId(f) }))
-      .filter((x) => x.id !== null && SKIP.has(x.id));
-
-    expect(dropped,
-      `these blocks mount but their routes would be skipped: ` +
-      dropped.map((x) => x.folder).join(', ')).toEqual([]);
-  });
-
-  it('all three runtime skip sites still key off the folder prefix', () => {
-    // If one of these is rewritten to match on id, or on a hardcoded list, the
-    // invariant above stops being enforceable.
-    for (const rel of [
-      ['src', 'kernel', 'blockHost.cjs'],
-      ['src', 'kernel', 'blockRegistry.js'],
-      ['src', 'kernel', 'blockStandard.cjs'],
-    ]) {
+  it('every skip site, runtime and build, keys off the folder prefix', () => {
+    for (const [rel, re] of SITES) {
       const src = fs.readFileSync(path.join(ROOT, ...rel), 'utf8');
-      expect(/startsWith\(['"]_['"]\)/.test(src),
-        `${rel.join('/')} no longer skips scaffolds by folder prefix`).toBe(true);
+      expect(re.test(src), `${rel.join('/')} no longer skips scaffold folders by prefix`).toBe(true);
+    }
+  });
+
+  it('no site keeps an id-keyed skip set that could drift from the folders', () => {
+    for (const [rel] of SITES) {
+      const src = fs.readFileSync(path.join(ROOT, ...rel), 'utf8');
+      expect(/const SKIP = new Set\(/.test(src), `${rel.join('/')} declares a SKIP set again`).toBe(false);
     }
   });
 });

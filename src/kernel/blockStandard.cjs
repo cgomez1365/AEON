@@ -257,9 +257,17 @@ function normalizeManifest(folder) {
     description: m.description || '',
     category: m.category || (nav && nav.group) || 'system',
     tier: m.tier || (['dashboard','fleet_control','settings','activity','master'].includes(folder) ? 'core' : 'plugin'),
+    // A block the kernel's NAV map does not know kept NO say in where it sits:
+    // every one was forced to SYSTEM/99 (measured 2026-09-23 — `aeon new` with
+    // nav.group "tools" landed in SYSTEM). Its own group is honoured when it is
+    // a real group; otherwise SYSTEM, as before.
     nav: nav
       ? { group: nav.group, order: nav.order, label: labelFromFolder(folder), icon, iconAsset, iconAssetPng, hidden: false }
-      : { group: 'system', order: 99, label: labelFromFolder(folder), icon, iconAsset, iconAssetPng, hidden: m.nav?.hidden === true },
+      : {
+          group: GROUP_META[m.nav?.group] ? m.nav.group : 'system',
+          order: Number.isFinite(m.nav?.order) ? m.nav.order : 99,
+          label: labelFromFolder(folder), icon, iconAsset, iconAssetPng, hidden: m.nav?.hidden === true,
+        },
     // Widget contract — quick-view the dashboard can render (weather-widget model)
     widget: m.widget || null,
     requires: {

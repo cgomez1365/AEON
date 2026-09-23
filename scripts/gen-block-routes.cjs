@@ -30,7 +30,10 @@ const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
 const blocksDir = path.join(ROOT, 'src', 'blocks');
-const SKIP = new Set(['__BLANK__', '_template']);
+// Any folder starting with '_' is a scaffold and never registers — the kernel's
+// rule (blockHost). The old skip set named __BLANK__, but the folder is `_blank`, so
+// the scaffold was validated like a real block (found 2026-09-23).
+const isScaffold = (name) => name.startsWith('_');
 
 const { PRE_AUTH_ROUTES } = require(
   path.join(ROOT, 'src', 'kernel', 'server-utils', 'sessionValidator.cjs')
@@ -135,7 +138,7 @@ const stale = [];
 let changed = 0;
 
 for (const id of fs.readdirSync(blocksDir)) {
-  if (SKIP.has(id)) continue;
+  if (isScaffold(id)) continue;
   const mPath = path.join(blocksDir, id, 'block.manifest.json');
   if (!fs.existsSync(mPath)) continue;
 

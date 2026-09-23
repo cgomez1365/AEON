@@ -22,10 +22,11 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const blocksDir = path.join(ROOT, 'src', 'blocks');
-const SKIP = new Set(['__BLANK__', '_template']);
+// Scaffolds: any folder starting with '_' — the one rule every skip site uses
+// (tests/scaffold-invariant.test.js).
 
 const blockIds = fs.readdirSync(blocksDir)
-  .filter(id => !SKIP.has(id) && fs.existsSync(path.join(blocksDir, id, 'block.manifest.json')));
+  .filter(id => !id.startsWith('_') && fs.existsSync(path.join(blocksDir, id, 'block.manifest.json')));
 
 const manifestOf = (id) => require(path.join(blocksDir, id, 'block.manifest.json'));
 

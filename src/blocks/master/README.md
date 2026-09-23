@@ -35,8 +35,11 @@ it at request time.
    accessibility patterns demonstrated below).
 4. If you need a backend, rename `api/master.cjs` → `api/<your_block_name>.cjs`
    and change the routes inside it; the kernel auto-mounts anything in `api/`.
-5. Restart the server. The block appears in nav, in `/blocks/registry`, and
-   (if it declares AI usage) in Settings' AI Model Assignments panel.
+5. Run `npm run build` — the screen is discovered at build time, so a running
+   build cannot see a new folder — then restart the server, or
+   `POST /api/build/rescan`, to mount `api/`. Reload the tab. The block appears
+   in nav, in `/blocks/registry`, and (if it declares AI usage) in Settings' AI
+   Model Assignments panel.
 6. Before shipping: run `node tools/aeon-cli.cjs lint <your_block_name>` and
    fix everything it flags. See "Self-test before you ship" below.
 
