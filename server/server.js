@@ -16,6 +16,18 @@ const { envFilePath } = require('../src/kernel/envFile.cjs');
 
 const ROOT = path.join(__dirname, '..');
 
+// ── A console that goes away must not take the server with it ────────────
+// Installed before the first log line. See src/kernel/processGuards.cjs for
+// the 20 GB loop this closes. `storage` is read only when a report is written;
+// before it exists (the first ms of boot) the report is dropped, the guard not.
+const { installStreamGuards, appendCrashLog } = require('../src/kernel/processGuards.cjs');
+const crashLog = (line) => {
+  try { appendCrashLog(path.join(storage.DATA_ROOT, 'logs', 'uncaught.log'), line); } catch { /* storage not up yet */ }
+};
+installStreamGuards(process, {
+  onLost: (stream, code) => crashLog(`[${new Date().toISOString()}] CONSOLE ${stream} unavailable (${code}) — console output is discarded from here on; the server keeps running.`),
+});
+
 // ── The AEON home — before ANY root is read ──────────────────────────────
 // Every writable root now defaults to ~/AEON (src/kernel/aeonHome.cjs), and an
 // install from before that has its data inside the install directory. The
@@ -636,15 +648,9 @@ process.on('uncaughtException', (err) => {
     global.broadcastTerminalEvent('CRIT', `Uncaught exception${fatal ? '' : ' (survived)'}: ${err.message}`);
   }
   // R-05 — never silent. A survived crash is still a defect and must be
-  // findable afterwards, not just a log line that scrolls away.
-  try {
-    const logDir = path.join(storage.DATA_ROOT, 'logs');
-    fs.mkdirSync(logDir, { recursive: true });
-    fs.appendFileSync(
-      path.join(logDir, 'uncaught.log'),
-      `[${new Date().toISOString()}] ${fatal ? 'FATAL' : 'SURVIVED'} ${err?.stack || err}\n`
-    );
-  } catch {}
+  // findable afterwards, not just a log line that scrolls away. The log is
+  // capped (processGuards.cjs): a fault that repeats forever cannot fill a disk.
+  crashLog(`[${new Date().toISOString()}] ${fatal ? 'FATAL' : 'SURVIVED'} ${err?.stack || err}`);
   if (fatal) process.exit(1);
 });
 
