@@ -103,29 +103,44 @@ async function ocrImageBuffer(buf) {
   return (data.text || '').trim();
 }
 
-// Rasterize PDF pages and OCR each one — for scanned PDFs with no text layer.
-async function ocrPdf(buf, onProgress) {
+// Rasterize PDF pages to PNG buffers (split out of ocrPdf so it is testable
+// without OCR). `onPage(i, pages, png)` runs per page, in order.
+async function renderPdfPages(buf, { scale = OCR_SCALE, maxPages = MAX_OCR_PAGES, onPage } = {}) {
   const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
-  const { createCanvas } = require('@napi-rs/canvas');
   const loadingTask = getDocument({ data: new Uint8Array(buf), disableFontFace: true, verbosity: 0 });
   const doc = await loadingTask.promise;
-  const pages = Math.min(doc.numPages, MAX_OCR_PAGES);
-  const out = [];
-  for (let i = 1; i <= pages; i++) {
-    if (onProgress) onProgress(i, pages);
-    const page = await doc.getPage(i);
-    const viewport = page.getViewport({ scale: OCR_SCALE });
-    const canvas = createCanvas(viewport.width, viewport.height);
-    const ctx = canvas.getContext('2d');
-    await page.render({ canvasContext: ctx, viewport, canvas }).promise;
-    const png = canvas.toBuffer('image/png');
-    const text = await ocrImageBuffer(png);
-    out.push(`--- Page ${i} ---\n${text}`);
-    page.cleanup();
+  const pages = Math.min(doc.numPages, maxPages);
+  const pngs = [];
+  try {
+    for (let i = 1; i <= pages; i++) {
+      const page = await doc.getPage(i);
+      const viewport = page.getViewport({ scale });
+      // pdf.js's own canvas. pdfjs-dist ships its own @napi-rs/canvas; drawing
+      // its paths/text on AEON's copy throws "Value is none of these types
+      // String, Path" on any page with text (store builder B2, 2026-09-23).
+      const { canvas, context } = doc.canvasFactory.create(Math.ceil(viewport.width), Math.ceil(viewport.height));
+      await page.render({ canvasContext: context, viewport, canvas }).promise;
+      const png = canvas.toBuffer('image/png');
+      page.cleanup();
+      pngs.push(png);
+      if (onPage) await onPage(i, pages, png);
+    }
+  } finally {
+    try { await loadingTask.destroy(); } catch {}
   }
-  const numPages = doc.numPages;
-  try { await loadingTask.destroy(); } catch {}
-  return { text: out.join('\n\n'), pages: numPages, ocrPages: pages, truncated: numPages > MAX_OCR_PAGES };
+  return { pngs, numPages: doc.numPages, renderedPages: pages };
+}
+
+// Rasterize PDF pages and OCR each one — for scanned PDFs with no text layer.
+async function ocrPdf(buf, onProgress) {
+  const out = [];
+  const r = await renderPdfPages(buf, {
+    onPage: async (i, pages, png) => {
+      if (onProgress) onProgress(i, pages);
+      out.push(`--- Page ${i} ---\n${await ocrImageBuffer(png)}`);
+    },
+  });
+  return { text: out.join('\n\n'), pages: r.numPages, ocrPages: r.renderedPages, truncated: r.numPages > MAX_OCR_PAGES };
 }
 
 /**
@@ -202,4 +217,4 @@ async function extractText(resolved) {
   return result;
 }
 
-module.exports = { extractText, setCacheDir, TEXT_EXTS, IMAGE_EXTS };
+module.exports = { extractText, renderPdfPages, setCacheDir, TEXT_EXTS, IMAGE_EXTS };
