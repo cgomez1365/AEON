@@ -42,6 +42,7 @@ const os = require('os');
 const path = require('path');
 
 const { createBlockHost } = require('./blockHost.cjs');
+const { createRootedStorage } = require('./blockStorage.cjs');
 const { validateManifest } = require('./staging.cjs');
 const { isHidden } = require('./osJunk.cjs');
 
@@ -139,8 +140,16 @@ async function bootProof(stagingDir, blockId, { liveRoutes = [], timeoutMs = DEF
       blocksDir: stagingDir,
       baseDeps,
       // Scoping is exercised by the real loader; here the point is whether the
-      // module mounts at all, so deps pass through unchanged.
-      createScopedDeps: (base) => ({ ...base }),
+      // module mounts and answers, so deps pass through — plus the one thing
+      // every real block receives: its own storage, rooted in the proof's temp
+      // data dir. Without it a block that writes passed the proof and failed
+      // its first real write (store builder B3, 2026-09-23).
+      createScopedDeps: (base, _manifest, blockId) => ({
+        ...base, blockStorage: createRootedStorage(path.join(base.getDataFile(), String(blockId || 'block'))),
+      }),
+      // The proof calls the handlers. The operator's route guard would answer
+      // every probe 401 once an account exists, proving only that auth works.
+      enforceRouteAuth: false,
       registry: [],
       readiness: {},
       getSyncCtx: () => ({ apiBase: '/api', runtime: 'local', models: {}, writeRuntime: false }),

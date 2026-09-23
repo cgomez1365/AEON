@@ -31,7 +31,7 @@ const path = require('path');
 const fs = require('fs');
 const { isHidden } = require('./osJunk.cjs');
 
-function createBlockHost({ blocksDir, baseDeps, createScopedDeps, registry, readiness, getSyncCtx, log = console }) {
+function createBlockHost({ blocksDir, baseDeps, createScopedDeps, registry, readiness, getSyncCtx, log = console, enforceRouteAuth = true }) {
   let inner = express.Router();     // replaced wholesale on every rescan
   let generation = 0;               // bumps per rescan — UI remount signal (#3)
   let lastSkipped = [];             // API modules the last rescan could not mount
@@ -78,12 +78,19 @@ function createBlockHost({ blocksDir, baseDeps, createScopedDeps, registry, read
 
   // BO-SHIP P2.1 — manifest route auth. Same optional-require shape as
   // runState above: injectable for tests, absent-tolerant at boot.
+  //
+  // enforceRouteAuth:false is for the install boot proof only — a private host
+  // on an ephemeral loopback port that exists to call the block's handlers.
+  // With the operator's account present, every probe there answered 401 and
+  // "passed" without a handler running (store builders B1/B3, 2026-09-23).
   let manifestAuth = null;
   let sessions = null;
-  try {
-    manifestAuth = require('./manifestRouteAuth.cjs');
-    sessions = require('./server-utils/sessionValidator.cjs');
-  } catch { /* enforcement is skipped and said out loud in mountBlock */ }
+  if (enforceRouteAuth) {
+    try {
+      manifestAuth = require('./manifestRouteAuth.cjs');
+      sessions = require('./server-utils/sessionValidator.cjs');
+    } catch { /* enforcement is skipped and said out loud in mountBlock */ }
+  }
 
   // Would this router handle the request? Regexp-match only — no handler runs,
   // so a stopped block can't cause side effects during the probe. Needed because
@@ -144,7 +151,7 @@ function createBlockHost({ blocksDir, baseDeps, createScopedDeps, registry, read
     const authMw = (manifestAuth && sessions)
       ? manifestAuth.manifestAuthGuard(manifest, sessions)
       : null;
-    if (!authMw && Array.isArray(manifest?.routes) && manifest.routes.some((r) => r?.auth === true)) {
+    if (!authMw && enforceRouteAuth && Array.isArray(manifest?.routes) && manifest.routes.some((r) => r?.auth === true)) {
       // R-05: declared protection that is not being applied must be audible.
       log.error(`[BLOCK HOST] ${folder}: manifest declares auth but the guard is unavailable — routes are NOT protected`);
     }
