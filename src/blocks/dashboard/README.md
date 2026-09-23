@@ -43,16 +43,14 @@ below.
   in-flight stream and asks the kernel (`kernelLLM.cancelAll`) to reclaim
   local generations. Also fires a non-blocking auto-memory-extraction call
   after each turn when `brain_settings.auto_memory` is on.
-- `api/audit.js` — `GET/POST/PUT/DELETE/OPTIONS /api/audit`: Supabase-backed
-  audit log (`aeon_audit_log` table), used by the live activity feed here
-  and by other blocks that write audit entries.
-- `api/health.js` — `GET/POST/PUT/DELETE/OPTIONS /api/health`: pure
-  liveness check, no auth, no dependencies.
-- `api/pipeline-metrics.js` — `GET/POST/PUT/DELETE/OPTIONS /api/pipeline-metrics`:
-  reads `clients.json` and buckets pipeline dollar value by status
-  (`drafted`/`ready`/`identified`). **Not called by this block's own UI or
-  by any other `.jsx` in the app** — see *Known limitations* below; almost
-  certainly a leftover from the treasury/deficit panel that was removed.
+- `api/audit.js`, `api/health.js`, `api/pipeline-metrics.js` — **retired
+  2026-09-23** (Bible §21). Each registered `ALL` on a path another block
+  already owned, so it only ever answered the methods the owner did not:
+  `/api/audit` is activity's (dashboard's Supabase-only copy hung PUT/DELETE
+  forever, and hung GET on every UI load once activity was removed);
+  `/api/health` is host_os's (dashboard's mounted first and shadowed it);
+  `/api/pipeline-metrics` had no caller and its POST seeded "$2,500/mo".
+  `tests/route-collisions.test.js` ("an ALL route collides…") keeps them out.
 - `components/MobileCommandDashboard.jsx` — **removed 2026-09-14** with its
   duplicate `src/components/MobileCommandDashboard.jsx`. Neither was imported;
   the mobile shell (`MobileLayout.jsx`) renders this block's `index.jsx` for
@@ -71,25 +69,23 @@ below.
 | GET/POST | `/api/terminal-history` | `api/chat.cjs` | Read/save Neural Terminal conversation history. |
 | POST | `/api/chat/stream` | `api/chat-stream.cjs` | SSE token-by-token chat completion with provider fallback. |
 | POST | `/api/chat/stop` | `api/chat-stream.cjs` | Cancels a generation server-side. `{streamId}` stops that stream; no body stops every stream this process is running. Aborts the upstream request, so llama-server actually stops generating. |
-| GET/POST | `/api/audit` | `api/audit.js` | Read/append the Supabase-backed audit log. |
-| GET | `/api/health` | `api/health.js` | Liveness probe. |
-| GET | `/api/pipeline-metrics` | `api/pipeline-metrics.js` | Client pipeline $ by status — **orphaned, no frontend caller** (see below). |
 
-The frontend (`index.jsx`) additionally reads three routes owned by other
+The frontend (`index.jsx`) additionally reads routes owned by other
 blocks — all legitimate kernel/block aliases, not dead calls:
 `/api/llm-telemetry` and `/api/autopilot/status` (kernel telemetry +
 `tools/autopilot-daemon.cjs`), and `/api/token-analytics/heatmap` +
-`/api/token-analytics/summary` (the `activity` block).
+`/api/token-analytics/summary` (the `activity` block). The live feed's
+`auditLogs` prop comes from `GET /api/audit`, fetched by `src/App.jsx` and
+served by the `activity` block.
 
 `chat.cjs`/`chat-stream.cjs` are router-pattern files, so they're
-dual-mounted at `/block/dashboard/*` as well as `/api`; `audit.js`,
-`health.js`, and `pipeline-metrics.js` use the plugin pattern and register
-directly on `/api` only (see `src/kernel/blockHost.cjs`).
+dual-mounted at `/block/dashboard/*` as well as `/api` (see
+`src/kernel/blockHost.cjs`).
 
 ## Config / settings / env keys
 - `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (or the `VITE_`/anon-key
-  fallbacks) — used by `api/audit.js` and `api/chat.cjs` for the
-  Supabase-backed chat log / audit log / terminal history, with local-file
+  fallbacks) — used by `api/chat.cjs` for the
+  Supabase-backed chat log / terminal history, with local-file
   fallback when Supabase is unset.
 - `AEON_KERNEL_URL` / `PORT` — used to build the base URL for in-process
   kernel loopback calls (`/api/orion-scrape`, `/api/crn/second-brain/retrieve`,
@@ -147,13 +143,8 @@ directly on `/api` only (see `src/kernel/blockHost.cjs`).
   text inputs exist in `index.jsx`, and no `outline: none` was found.
 
 ## Known limitations (judgment calls, not fixed here — flagged for the operator)
-- **`api/pipeline-metrics.js` is dead API surface.** It's mounted by the
-  block host like every other file in `api/` and responds correctly, but
-  grepping every `.jsx` file in the repo turns up zero callers. The retired hand-written block matrix (replaced by the generated
-  `docs/BLOCKS.md`, 2026-09-14) listed Dashboard as a reader of
-  `/api/pipeline-metrics` — that was stale; the caller was almost certainly the treasury/deficit panel this
-  block had stripped out. Recommend either wiring it into a real UI panel
-  or deleting the file.
+- **Closed 2026-09-23: `api/pipeline-metrics.js` was deleted** (no caller;
+  its non-GET methods answered invented dollar figures). See *Files*.
 - **Closed 2026-09-14: `components/MobileCommandDashboard.jsx` and its
   duplicate `src/components/MobileCommandDashboard.jsx` were removed** in the
   stale-file sweep, together — the two-copies concern above was the reason an

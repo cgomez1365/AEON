@@ -65,10 +65,11 @@ and `/api/*` unless noted otherwise.
   ready model are available. (An earlier status probe for a system-wide model
   daemon was deleted with that dependency, but this file kept documenting it —
   docs/ sat outside every scanner until 2026-08-01.)
-- **`api/telemetry.js`** — plugin pattern, same as above. `GET/POST/PUT/
-  DELETE/OPTIONS /api/telemetry` — fetches aggregate usage stats from the GAS
-  Hub (`VITE_GAS_URL`) when configured, otherwise returns small placeholder
-  numbers so the UI never crashes on an empty response.
+- **`api/telemetry.js`** — **retired 2026-09-23** (Bible §21). It registered
+  `ALL /api/telemetry`, a path the `activity` block owns for GET, so it only
+  ever answered POST/PUT/DELETE — with a zeroed placeholder roster
+  (`qwen`/`zenith`/…) fetched from a GAS Hub nothing configures. Nothing
+  called those methods. `tests/route-collisions.test.js` keeps it out.
 
 ### Mounting note
 
@@ -84,8 +85,9 @@ the plugin-registration path).
 
 - `filesystem: "read"` — `api/missions.cjs` reads Vault mission files only,
   never writes.
-- `network: "external"` — `api/telemetry.js` makes outbound `fetch()` calls
-  (GAS Hub).
+- `network: "external"` — no file in this block makes an outbound call since
+  `api/telemetry.js` (GAS Hub) was retired; kept until the manifest pass
+  re-derives it.
 - `shell: true` — `api/hwfit.cjs` runs `nvidia-smi` via `execFile` with an
   argument array for GPU detection.
 - `ai: false` — no file in this block calls `kernelLLM`/`geminiRequest`/
@@ -96,9 +98,8 @@ This block does **not** use Supabase — mission history is read from the
 Vault filesystem, not a database. `contract.requires.apis`/`env` were
 previously left over from an older Supabase-backed design and made the
 block report `ready: false` for a dependency it never actually calls; both
-are now empty. The env vars actually referenced by this block's code
-(`VITE_GAS_URL`) are all optional — every one of them has a safe in-code fallback, so none of them
-gate readiness.
+are now empty. No env var is read by this block's code since `api/telemetry.js` (the only
+reader of `VITE_GAS_URL`) was retired.
 
 ## Files
 
@@ -106,7 +107,6 @@ gate readiness.
 - `api/missions.cjs` — VP mission history reader (Vault-backed)
 - `api/hwfit.cjs` — hardware detection + model fit ranking (not yet wired into the UI)
 - `api/local-status.js` — local runtime readiness probe
-- `api/telemetry.js` — GAS Hub usage telemetry (Vercel-side fallback)
 - `block.manifest.json` — kernel metadata, auto-normalized on every boot
 
 ## Activation

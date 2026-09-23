@@ -52,7 +52,7 @@ receives only what it declares.
 - **Targets:** desktop + cloud
 - **Memory mode:** `none`
 - **Declared capabilities:** `ai`, `filesystem:write`, `network:external`, `secrets`
-- **API files:** `audit.js`, `chat-stream.cjs`, `chat.cjs`, `health.js`, `pipeline-metrics.js`
+- **API files:** `chat-stream.cjs`, `chat.cjs`
 
 ### Deep Research
 
@@ -79,7 +79,7 @@ receives only what it declares.
 - **Targets:** desktop + cloud
 - **Memory mode:** `none`
 - **Declared capabilities:** `filesystem:read`, `network:external`, `secrets`, `shell`
-- **API files:** `hwfit.cjs`, `local-status.js`, `missions.cjs`, `telemetry.js`
+- **API files:** `hwfit.cjs`, `local-status.js`, `missions.cjs`
 
 ### Host OS
 

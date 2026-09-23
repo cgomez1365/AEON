@@ -117,11 +117,6 @@
       "method": "GET",
       "path": "/api/local-status",
       "auth": true
-    },
-    {
-      "method": "ALL",
-      "path": "/api/telemetry",
-      "auth": true
     }
   ],
   "env": [

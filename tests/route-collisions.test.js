@@ -133,6 +133,52 @@ describe('no two handlers claim the same route', () => {
     ).toEqual([]);
   });
 
+  /**
+   * `ALL` answers every method, so it collides with ANY method on the same
+   * path — the key above (`METHOD path`) never compared `ALL /x` with `GET /x`.
+   *
+   * Measured 2026-09-23 on a live install (agent C3, :3140): dashboard declared
+   * `ALL /api/audit`, activity `GET /api/audit`. Mount order (readdir) let
+   * activity win GET, so dashboard's Supabase-only copy only ever answered
+   * PUT/DELETE — and those hung until the client gave up (curl -m 6 → 000),
+   * because createClient() threw "supabaseUrl is required" inside an async
+   * handler. With activity removed, GET /api/audit — called by App.jsx on every
+   * load — hung the same way. The same shape hid three more duplicates:
+   * /api/health (dashboard vs host_os — dashboard won, host_os's was dead),
+   * /api/pipeline-metrics (dashboard's POST seeded "$2,500/mo"), and
+   * /api/telemetry (fleet_control's POST answered a zeroed fake roster).
+   */
+  it('an ALL route collides with every method on the same path', () => {
+    const blocksDir = path.join(ROOT, 'src', 'blocks');
+    const byPath = new Map(); // path → [{ method, id }]
+
+    for (const id of fs.readdirSync(blocksDir)) {
+      if (id.startsWith('_')) continue;
+      const mPath = path.join(blocksDir, id, 'block.manifest.json');
+      if (!fs.existsSync(mPath)) continue;
+      const manifest = JSON.parse(fs.readFileSync(mPath, 'utf8'));
+      for (const r of manifest.routes || []) {
+        if (!byPath.has(r.path)) byPath.set(r.path, []);
+        byPath.get(r.path).push({ method: String(r.method).toUpperCase(), id });
+      }
+    }
+
+    const collisions = [];
+    for (const [p, claims] of byPath) {
+      for (const a of claims.filter(c => c.method === 'ALL')) {
+        const others = claims.filter(c => c.id !== a.id);
+        if (others.length) {
+          collisions.push(`ALL ${p} (${a.id}) vs ${others.map(o => `${o.method} (${o.id})`).join(', ')}`);
+        }
+      }
+    }
+
+    expect(
+      [...new Set(collisions)],
+      `an ALL route shadows or is shadowed by another block's route:\n${collisions.join('\n')}`,
+    ).toEqual([]);
+  });
+
   it('filesystem access is owned by exactly one block (host_os)', () => {
     // The ownership decision from BO-A2d, pinned so it cannot silently revert.
     // host_os is the block whose declared purpose is host access and which

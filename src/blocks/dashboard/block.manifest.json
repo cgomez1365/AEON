@@ -95,11 +95,6 @@
   },
   "routes": [
     {
-      "method": "ALL",
-      "path": "/api/audit",
-      "auth": true
-    },
-    {
       "method": "DELETE",
       "path": "/api/chat",
       "auth": true
@@ -122,16 +117,6 @@
     {
       "method": "POST",
       "path": "/api/chat/stream",
-      "auth": true
-    },
-    {
-      "method": "ALL",
-      "path": "/api/health",
-      "auth": true
-    },
-    {
-      "method": "ALL",
-      "path": "/api/pipeline-metrics",
       "auth": true
     },
     {
