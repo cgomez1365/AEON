@@ -5,6 +5,7 @@ import { matchesModelQuery } from '../../kernel/modelQuery';
 import { BLOCKS as INSTALLED_BLOCKS } from '../../kernel/blockRegistry';
 import { BlockIcon } from '../../components/BlockIcon';
 import { applyAppearance, applyThemeBuilder } from '../../kernel/appearance';
+import { createLifecycleClient, runLabel, UI_NOTE as LIFECYCLE_UI_NOTE } from './blockLifecycle';
 
 // Derive provider registry from nervous system — no mutable module state.
 function getProviderRegistry(ns) {
@@ -2555,6 +2556,124 @@ function BlockWidget({ w }) {
   );
 }
 
+// ── Block lifecycle (Stop / Start / Remove / Restore) ────────────────
+// Wired to the kernel's own routes via ./blockLifecycle.js (tested there
+// without a DOM). The kernel is the authority: its refusals — Security can be
+// neither stopped nor removed — are shown in its own words, inline. Remove is
+// a MOVE aside to <data>/removed-blocks, never a delete; Restore moves it back.
+function BlockLifecyclePanel({ blocks }) {
+  const client = useMemo(() => createLifecycleClient(), []);
+  const [states, setStates] = useState({});      // id -> { label } | { error }
+  const [removed, setRemoved] = useState([]);
+  const [removedError, setRemovedError] = useState(null);
+  const [removedNow, setRemovedNow] = useState([]); // removed this visit; the list below is from the bundle-time fetch
+  const [busy, setBusy] = useState(null);
+  const [notes, setNotes] = useState({});        // id -> { ok, text }
+
+  const ids = useMemo(() => (blocks || []).map(b => b.id).filter(id => id && !String(id).startsWith('_')), [blocks]);
+
+  const loadStates = useCallback(async () => {
+    const entries = await Promise.all(ids.map(async (id) => {
+      const r = await client.state(id);
+      return [id, r.ok ? { label: runLabel(r.data), mode: r.data.mode } : { error: r.error }];
+    }));
+    setStates(Object.fromEntries(entries));
+  }, [ids, client]);
+
+  const loadRemoved = useCallback(async () => {
+    const r = await client.removed();
+    if (r.ok) { setRemoved(r.data.removed || []); setRemovedError(null); }
+    else setRemovedError(r.error);
+  }, [client]);
+
+  useEffect(() => { loadStates(); loadRemoved(); }, [loadStates, loadRemoved]);
+
+  const act = async (id, action) => {
+    if (action === 'remove' && !window.confirm(
+      `Remove "${id}"?\n\nIt is moved aside, NOT deleted: the block's folder moves to removed-blocks in your AEON data folder, and "Removed blocks" below can restore it.\n\nAny blocks that depend on it are named after the move.`)) return;
+    setBusy(`${id}:${action}`);
+    const r = await client[action](id);
+    setNotes(n => ({ ...n, [id]: { ok: r.ok, text: r.ok ? r.message : r.error } }));
+    if (r.ok && action === 'remove') setRemovedNow(x => [...x, id]);
+    if (r.ok && action === 'restore') setRemovedNow(x => x.filter(y => y !== id));
+    setBusy(null);
+    loadStates();
+    loadRemoved();
+  };
+
+  const note = (id) => notes[id] && (
+    <div role={notes[id].ok ? 'status' : 'alert'}
+      style={{ fontSize: 11, marginTop: 4, lineHeight: 1.45, color: notes[id].ok ? 'var(--text-dim, #94a3b8)' : '#f87171' }}>
+      {notes[id].text}
+    </div>
+  );
+
+  return (
+    <div className="admin-card">
+      <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, color: 'var(--text-dim)', marginBottom: 4 }}>RUN, STOP, REMOVE</div>
+      <div className="agent-tools-desc" style={{ marginBottom: 10 }}>
+        Stop takes a block out of service (its routes answer 503) until you start it again. Remove moves the block aside — nothing is deleted — and it can be restored below.
+        {' '}Changes reach the kernel at once. {LIFECYCLE_UI_NOTE}
+      </div>
+      {ids.map((id) => {
+        const st = states[id];
+        const gone = removedNow.includes(id);
+        const running = st?.label === 'Running';
+        const label = (blocks.find(b => b.id === id) || {}).label || id;
+        return (
+          <div key={id} style={{ borderTop: '1px solid var(--border, #1f2937)', padding: '8px 0' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 12 }}>
+              <b>{label}</b>
+              <span style={{ color: 'var(--text-dim)', fontSize: 11 }}>{id}</span>
+              <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 10,
+                background: gone ? 'rgba(148,163,184,.15)' : running ? 'rgba(16,185,129,.15)' : st?.error ? 'rgba(239,68,68,.15)' : 'rgba(245,158,11,.15)',
+                color: gone ? '#94a3b8' : running ? '#10b981' : st?.error ? '#f87171' : '#fbbf24' }}>
+                {gone ? 'Removed (moved aside)' : st ? (st.error ? 'State unknown' : st.label) : '…'}
+              </span>
+              <span style={{ flex: 1 }} />
+              {!gone && (
+                <>
+                  <button type="button" className="settings-btn settings-btn--secondary" style={{ fontSize: 11 }}
+                    disabled={!!busy || !st || !!st.error}
+                    onClick={() => act(id, running ? 'stop' : 'start')}>
+                    {busy === `${id}:stop` ? 'Stopping…' : busy === `${id}:start` ? 'Starting…' : running ? 'Stop' : 'Start'}
+                  </button>
+                  <button type="button" className="settings-btn settings-btn--secondary" style={{ fontSize: 11, color: '#f87171' }}
+                    disabled={!!busy} onClick={() => act(id, 'remove')}>
+                    {busy === `${id}:remove` ? 'Removing…' : 'Remove'}
+                  </button>
+                </>
+              )}
+            </div>
+            {st?.error && <div role="alert" style={{ fontSize: 11, color: '#f87171', marginTop: 4 }}>{st.error}</div>}
+            {note(id)}
+          </div>
+        );
+      })}
+
+      <div style={{ marginTop: 14, borderTop: '1px solid var(--border, #1f2937)', paddingTop: 10 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, color: 'var(--text-dim)', marginBottom: 6 }}>REMOVED BLOCKS</div>
+        {removedError && <div role="alert" style={{ fontSize: 11, color: '#f87171' }}>{removedError}</div>}
+        {!removedError && removed.length === 0 && <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>Nothing removed. Removed blocks wait here until you restore them.</div>}
+        {removed.map((c) => (
+          <div key={c.path} style={{ padding: '6px 0' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 12 }}>
+              <b>{c.blockId}</b>
+              <span style={{ color: 'var(--text-dim)', fontSize: 11, wordBreak: 'break-all' }}>{c.path}</span>
+              <span style={{ flex: 1 }} />
+              <button type="button" className="settings-btn" style={{ fontSize: 11 }} disabled={!!busy}
+                onClick={() => act(c.blockId, 'restore')}>
+                {busy === `${c.blockId}:restore` ? 'Restoring…' : 'Restore'}
+              </button>
+            </div>
+            {!ids.includes(c.blockId) && note(c.blockId)}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function BlockWidgetsPanel() {
   const [cat, setCat] = useState(null);
 
@@ -3248,6 +3367,7 @@ export default function SystemSettings() {
               })}
             </div>
           </div>
+          <BlockLifecyclePanel blocks={blocks} />
           <BlockWidgetsPanel />
           <BlockSettingsPanel blockSettings={settings.blockSettings} onChange={updateBlockSetting} />
         </>
