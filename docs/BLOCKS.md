@@ -133,7 +133,7 @@ receives only what it declares.
 - **Targets:** desktop + cloud
 - **Memory mode:** `none`
 - **Declared capabilities:** `ai`, `network:external`, `secrets`
-- **API files:** `grade-resume.js`
+- **API files:** `extract-resume.js`, `grade-resume.js`
 
 ### Security
 
