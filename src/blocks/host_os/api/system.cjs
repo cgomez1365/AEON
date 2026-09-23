@@ -178,6 +178,7 @@ module.exports = function createSystemRouter(deps) {
         uptimeSec: Math.round(os.uptime()),
         totalMemGb: gb(os.totalmem()),
         freeMemGb: gb(os.freemem()),
+        freeMemMb: mb(os.freemem()),
         ...(process.platform === 'darwin' ? { freeMemNote: 'macOS keeps unused memory as cache and counts it as used, so "free" reads far lower than what applications can actually get. Low free memory here is normal.' } : {}),
       },
       disk,

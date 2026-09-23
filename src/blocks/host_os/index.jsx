@@ -131,7 +131,7 @@ export default function HostOS() {
             <Row label="System" value={m ? `${m.platform} ${m.osRelease} (${m.arch})` : '—'} />
             <Row label="Processor" value={m ? `${m.cpuModel || 'unknown'} · ${m.cpuThreads} threads` : '—'} />
             <Row label="Load (1/5/15 min)" value={m ? (m.loadAvg ? m.loadAvg.join(' / ') : 'not reported on Windows') : '—'} />
-            <Row label="Memory" value={m ? `${m.freeMemGb} GB free of ${m.totalMemGb} GB` : '—'} note={m?.freeMemNote} />
+            <Row label="Memory" value={m ? `${m.freeMemGb >= 1 || m.freeMemMb == null ? `${m.freeMemGb} GB` : `${m.freeMemMb} MB`} free of ${m.totalMemGb} GB` : '—'} note={m?.freeMemNote} />
             <Row label="Disk" value={d ? (d.error ? `unreadable: ${d.error}` : `${d.freeGb} GB free of ${d.totalGb} GB`) : '—'} note={d?.path ? `the drive holding ${d.path}` : undefined} />
             <Row label="Up for" value={m ? duration(m.uptimeSec) : '—'} />
           </ul>
@@ -147,7 +147,16 @@ export default function HostOS() {
           </ul>
           <div style={{ marginTop: 14 }}>
             <button onClick={doRestart} disabled={!r?.canRestart || restart.phase !== 'idle'}
-              style={{ ...BTN, opacity: r?.canRestart ? 1 : 0.5, cursor: r?.canRestart && restart.phase === 'idle' ? 'pointer' : 'not-allowed', borderColor: r?.canRestart ? 'var(--amber, #f59e0b)' : undefined, color: r?.canRestart ? 'var(--amber, #f59e0b)' : undefined }}
+              style={{
+                ...BTN,
+                cursor: r?.canRestart && restart.phase === 'idle' ? 'pointer' : 'not-allowed',
+                // Explicit colour in BOTH states: a disabled <button> otherwise
+                // falls back to the browser's grey-on-transparent, which is
+                // invisible on this dark theme (seen in the first render).
+                ...(r?.canRestart
+                  ? { borderColor: 'var(--amber, #f59e0b)', color: 'var(--amber, #f59e0b)' }
+                  : { color: 'var(--dim, #9aa3b2)', opacity: 0.7 }),
+              }}
               aria-describedby="host-restart-why">
               <Power size={13} aria-hidden="true" /> Restart AEON
             </button>
