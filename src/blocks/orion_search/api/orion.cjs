@@ -28,10 +28,22 @@ module.exports = function (deps) {
     ...(req.headers?.authorization ? { Authorization: req.headers.authorization } : {}),
   });
 
-  const jfetch = async (url, init = {}, req = null) => {
+  // `owner` names what answers the leg, for the one failure JSON cannot
+  // explain: a route that is not there. With Aeon Matrix not installed the
+  // retrieve route is unmounted, Express answers an HTML 404, and the
+  // operator was told their documents could not be searched because of
+  // "Unexpected token '<', "<!DOCTYPE "… is not valid JSON" (audit 2026-09-23).
+  const jfetch = async (url, init = {}, req = null, owner = 'this lens') => {
     try {
       const headers = { ...(init.headers || {}), ...(req ? sessionHeaders(req) : {}) };
       const r = await fetch(url, { ...init, headers, signal: AbortSignal.timeout(15000) });
+      if (!/json/i.test(r.headers.get('content-type') || '')) {
+        return {
+          error: r.status === 404
+            ? `${owner} is not installed or not answering here (HTTP 404).`
+            : `${owner} answered HTTP ${r.status} without a readable result.`,
+        };
+      }
       return await r.json();
     } catch (e) { return { error: e.message }; }
   };
@@ -56,12 +68,12 @@ module.exports = function (deps) {
       // `count=k` — the depth control (8/16/24) used to stop here: the route
       // was never told, so its provider default (3 on DDG) came back whatever
       // the page said, and the slice below had nothing more to slice.
-      jfetch(`${base}/api/search-web?q=${encodeURIComponent(q)}&synthesize=0&count=${encodeURIComponent(k)}`, {}, req),
+      jfetch(`${base}/api/search-web?q=${encodeURIComponent(q)}&synthesize=0&count=${encodeURIComponent(k)}`, {}, req, 'Web search'),
       // Second Brain: RAG retrieve (returns passages with doc refs)
       jfetch(`${base}/api/crn/second-brain/retrieve`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query: q, k }),
-      }, req),
+      }, req, 'The Second Brain (Aeon Matrix)'),
       // Blocks: match the live registry briefs (local, sync, no fetch)
       //
       // Matched on TERMS, not on the whole query as one substring. The old

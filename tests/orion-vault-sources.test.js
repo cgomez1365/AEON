@@ -66,3 +66,20 @@ describe('/orion — Second Brain sources', () => {
     expect(d.verbatim).toBe(true);
   });
 });
+
+describe('/orion when a lens is not there', () => {
+  it('a missing Second Brain says so, not "Unexpected token <"', async () => {
+    // Orion installed without Aeon Matrix: the retrieve route is not mounted,
+    // Express answers an HTML 404, and the old code reported the JSON parse
+    // error as the reason the operator's documents could not be searched.
+    const bare = express(); bare.use(express.json());
+    bare.get('/api/search-web', (req, res) => res.json({ results: '' }));
+    const b = await listen(bare); servers.push(b.server);
+    process.env.PORT = String(b.port);
+    const d = await search('fuel card dates');
+    expect(d.degraded?.brain).toBeTruthy();
+    expect(d.degraded.brain).not.toMatch(/Unexpected token|not valid JSON/);
+    expect(d.degraded.brain).toMatch(/404/);
+    expect(d.degraded.brain).toMatch(/Aeon Matrix/);
+  });
+});
