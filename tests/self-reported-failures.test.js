@@ -36,8 +36,14 @@ describe('the banner is for defects, not for states a caller explains', () => {
       expect(shouldBannerResponse({ url, ok: false, status, selfReported: true })).toBe(false);
     }
   });
+  it('a self-reporting caller\'s 503 (a stopped block, no model) does not banner', () => {
+    expect(shouldBannerResponse({ url: '/api/clients/list', ok: false, status: 503, selfReported: true })).toBe(false);
+    expect(shouldBannerResponse({ url: '/api/clients/list', ok: false, status: 503, selfReported: false })).toBe(true);
+  });
+
   it('its 5xx still does, and an ordinary caller\'s 4xx still does', () => {
     expect(shouldBannerResponse({ url, ok: false, status: 500, selfReported: true })).toBe(true);
+    expect(shouldBannerResponse({ url, ok: false, status: 502, selfReported: true })).toBe(true);
     expect(shouldBannerResponse({ url, ok: false, status: 404, selfReported: false })).toBe(true);
   });
 });
