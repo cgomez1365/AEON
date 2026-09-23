@@ -101,6 +101,18 @@ to ask for the home directory); `services/storage.js` exposes the Vault and Data
 `src/kernel/envFile.cjs` the `.env` path — nothing else computes them. A portable install
 (`AEON_PORTABLE=true`) keeps every default inside the install: the drive is the home.
 
+A **carried** install is the operator's own AEON on a drive, built by
+`node scripts/build-usb.js --target <drive> --carry-home` (`scripts/build-usb-carry.cjs`):
+`<drive>/AEON` beside `<drive>/AEON-Data`, whose `home.json` says
+`{ "layout": "carried", "appFolder": "AEON" }`. An install that finds that marker beside
+itself uses `AEON-Data` as its home however it is started — no environment needed — and
+never puts an icon on the host's Desktop. Unlike portable mode it keeps cloud AI on: the
+drive carries the operator's keys on purpose. Explicit settings still win (`AEON_PORTABLE`,
+then `AEON_HOME`). Launchers for macOS, Windows and Linux pick a free port, because the
+host may already run its own AEON on 3001; the kernel never signals another process
+(`src/kernel/portConflict.cjs`). Audit a drive with
+`node scripts/verify-usb.js --target <drive> --carry-home`.
+
 An install from before the home existed has its data inside the install directory.
 `src/kernel/homeMigration.cjs` moves it on the next launch — once, root by root, refusing a
 populated target rather than merging, and recording progress in `home.json` inside `~/AEON` so an

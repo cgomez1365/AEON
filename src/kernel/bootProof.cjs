@@ -43,6 +43,7 @@ const path = require('path');
 
 const { createBlockHost } = require('./blockHost.cjs');
 const { validateManifest } = require('./staging.cjs');
+const { isHidden } = require('./osJunk.cjs');
 
 const DEFAULT_TIMEOUT_MS = 5000;
 
@@ -155,7 +156,7 @@ async function bootProof(stagingDir, blockId, { liveRoutes = [], timeoutMs = DEF
     // this gate passed a block whose api threw at require time.
     const apiDir = path.join(blockDir, 'api');
     const apiFiles = fs.existsSync(apiDir)
-      ? fs.readdirSync(apiDir).filter((f) => (f.endsWith('.js') || f.endsWith('.cjs')) && !f.startsWith('_'))
+      ? fs.readdirSync(apiDir).filter((f) => (f.endsWith('.js') || f.endsWith('.cjs')) && !f.startsWith('_') && !isHidden(f))
       : [];
     result.mounted = Math.max(0, apiFiles.length - result.skipped.length);
 

@@ -174,7 +174,7 @@ module.exports = function createCompareRouter(deps) {
   router.get('/council/debates', (_req, res) => {
     let files = [];
     try {
-      files = fs.readdirSync(DEBATES_DIR).filter(f => f.endsWith('.md'))
+      files = fs.readdirSync(DEBATES_DIR).filter(f => f.endsWith('.md') && !f.startsWith('.'))
         .map(f => ({ f, mtime: fs.statSync(path.join(DEBATES_DIR, f)).mtimeMs }))
         .sort((a, b) => b.mtime - a.mtime).slice(0, 50);
     } catch {}

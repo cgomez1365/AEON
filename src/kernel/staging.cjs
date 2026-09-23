@@ -158,6 +158,9 @@ function walkFiles(dir, exts = /\.(cjs|js|jsx|mjs)$/) {
   const out = [];
   if (!fs.existsSync(dir)) return out;
   for (const name of fs.readdirSync(dir)) {
+    // A "._index.jsx" AppleDouble sidecar is binary metadata, not source —
+    // scanning it can only produce false findings (src/kernel/osJunk.cjs).
+    if (name.startsWith('.')) continue;
     const full = path.join(dir, name);
     if (fs.statSync(full).isDirectory()) {
       if (name === 'node_modules' || name === 'data') continue;

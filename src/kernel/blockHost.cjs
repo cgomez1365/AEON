@@ -29,6 +29,7 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
+const { isHidden } = require('./osJunk.cjs');
 
 function createBlockHost({ blocksDir, baseDeps, createScopedDeps, registry, readiness, getSyncCtx, log = console }) {
   let inner = express.Router();     // replaced wholesale on every rescan
@@ -163,7 +164,9 @@ function createBlockHost({ blocksDir, baseDeps, createScopedDeps, registry, read
       log.error(`[BLOCK HOST] NOT MOUNTED: ${folder}/${file} — ${why}`);
     };
 
-    const apiFiles = fs.readdirSync(apiDir).filter(f => (f.endsWith('.js') || f.endsWith('.cjs')) && !f.startsWith('_'));
+    // Hidden names are never modules: macOS writes "._chat.cjs" sidecars beside
+    // every file on exFAT/FAT volumes (see src/kernel/osJunk.cjs).
+    const apiFiles = fs.readdirSync(apiDir).filter(f => (f.endsWith('.js') || f.endsWith('.cjs')) && !f.startsWith('_') && !isHidden(f));
     for (const file of apiFiles) {
       try {
         const dynamicRequire = eval('require');

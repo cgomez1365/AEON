@@ -42,6 +42,17 @@
  *      equal the install — the exact situation this module ends. That case
  *      falls back to `~/AEON Data` and says so.
  *
+ *   5. A carried home: an install that sits beside a folder named AEON-Data
+ *      whose home.json declares { layout: "carried", appFolder: <this
+ *      install's folder name> } uses that folder as its home. That is the
+ *      drive layout `scripts/build-usb.js --carry-home` writes, and it makes
+ *      the drive one app: however the install is started — the drive's own
+ *      launcher, the install's launch.command, `npm start` — it finds its data
+ *      beside itself instead of reaching for the host's ~/AEON. Only the
+ *      builder writes the marker, and the marker names the install, so a
+ *      stray folder is never picked up by accident. AEON_PORTABLE and
+ *      AEON_HOME, being explicit, still win.
+ *
  * This is the ONLY reader of os.homedir() outside services/local-runtime/
  * paths.cjs. tools/scan/path-authority.cjs allows it by name; nothing else may
  * reach for a home directory.
@@ -57,6 +68,8 @@ const path = require('path');
 const HOME_DIR_NAME = 'AEON';
 const COLLISION_DIR_NAME = 'AEON Data';
 const HOME_MANIFEST = 'home.json';
+const CARRIED_DIR_NAME = 'AEON-Data';
+const CARRIED_LAYOUT = 'carried';
 const HOME_SCHEMA = 1;
 
 /** Legacy (in-install) location of every root, relative to the install. */
@@ -121,6 +134,11 @@ function resolveHome(ctx = {}) {
   if (isPortable(env)) return appRoot;
 
   const override = nonBlank(env.AEON_HOME);
+  // Rule 5 — a carried home beside the install (the drive layout).
+  if (!override) {
+    const carried = carriedHomeFor(appRoot);
+    if (carried) return carried;
+  }
   let home = override ? against(appRoot, override) : path.join(homedir(), HOME_DIR_NAME);
 
   if (realOrSelf(home) === realOrSelf(appRoot)) {
@@ -129,6 +147,26 @@ function resolveHome(ctx = {}) {
     home = fallback;
   }
   return home;
+}
+
+/**
+ * The carried home beside this install, or null. See rule 5.
+ * @param {string} appRoot absolute path of the install
+ */
+function carriedHomeFor(appRoot) {
+  const candidate = path.join(path.dirname(appRoot), CARRIED_DIR_NAME);
+  const m = readJson(path.join(candidate, HOME_MANIFEST));
+  if (!m || typeof m !== 'object' || m.layout !== CARRIED_LAYOUT) return null;
+  if (m.appFolder !== path.basename(appRoot)) return null;
+  return candidate;
+}
+
+/** True when this install resolves its home to a carried drive home (rule 5). */
+function isCarried(ctx = {}) {
+  assertAppRoot(ctx.appRoot);
+  const env = ctx.env || process.env;
+  const carried = carriedHomeFor(ctx.appRoot);
+  return !!carried && resolveHome({ ...ctx, env }) === carried;
 }
 
 /**
@@ -252,6 +290,10 @@ function ensureHome(r, ctx = {}) {
 module.exports = {
   resolveHome,
   roots,
+  isCarried,
+  carriedHomeFor,
+  CARRIED_DIR_NAME,
+  CARRIED_LAYOUT,
   ensureHome,
   isOverridden,
   readManifest,

@@ -669,7 +669,7 @@ Structure: # Title, ## Abstract, ## Findings (thematic, cited), ## Conclusion. D
 
       // vault sync — fire-and-forget
       try {
-        const _rdFiles = fs.readdirSync('').filter(f => f.endsWith('.json') && !f.startsWith('_'));
+        const _rdFiles = fs.readdirSync('').filter(f => f.endsWith('.json') && !f.startsWith('_') && !f.startsWith('.'));
         vaultSync('research', { reports: { value: _rdFiles.length, unit: 'count', context: 'completed research reports on disk' }, last_report: { value: query, unit: 'text', context: 'last research query completed' }, status: { value: 'completed', unit: 'text', context: 'latest research status' }, _summary: `Research completed: "${query}" — ${allSources.length} sources` });
       } catch(e) { /* non-critical */ }
 

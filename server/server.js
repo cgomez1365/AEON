@@ -213,7 +213,7 @@ storage.cleanupOrphans();
 // ── Legacy modules/ plugin auto-discovery ──
 const modulesPath = path.join(ROOT, 'modules');
 if (fs.existsSync(modulesPath)) {
-  const pluginFiles = fs.readdirSync(modulesPath).filter(file => file.endsWith('.js'));
+  const pluginFiles = fs.readdirSync(modulesPath).filter(file => file.endsWith('.js') && !file.startsWith('.'));
   pluginFiles.forEach(file => {
     try {
       const dynamicRequire = eval('require');
@@ -544,6 +544,9 @@ const PORT = Number(process.env.PORT) || 3001;
 // install). AEON_BIND is the deliberate opt-out for serving a LAN.
 const BIND = bind.resolveBind();
 
+const portConflict = require('../src/kernel/portConflict.cjs');
+let _addrInUseAttempts = 0;
+
 const startServer = () => {
   const httpServer = app.listen(PORT, BIND, () => {
     console.log(`\n====================================`);
@@ -582,14 +585,16 @@ const startServer = () => {
     // Phase 7: daemon auto-start removed. Native runtime starts on first infer().
   }).on('error', (err) => {
     if (err.code === 'EADDRINUSE') {
-      console.log(`Port ${PORT} in use. Killing zombie and retrying...`);
-      try {
-        require('child_process').execSync(
-          `for /f "tokens=5" %a in ('netstat -ano ^| findstr :${PORT} ^| findstr LISTENING') do taskkill /F /PID %a`,
-          { shell: 'cmd.exe', stdio: 'ignore' }
-        );
-      } catch (e) { /* port already free */ }
-      setTimeout(startServer, 1000);
+      // Never signal another process — see src/kernel/portConflict.cjs for
+      // what the old handler did to a host's own AEON.
+      const next = portConflict.onAddrInUse({ port: PORT, attempt: ++_addrInUseAttempts });
+      if (next.retry) {
+        console.log(next.message);
+        setTimeout(startServer, next.delayMs);
+      } else {
+        console.error(next.message);
+        process.exit(next.exitCode);
+      }
     } else {
       console.error('Server error:', err);
     }

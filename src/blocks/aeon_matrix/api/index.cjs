@@ -97,7 +97,8 @@ module.exports = function secondBrainFactory(deps) {
     const walk = (dir, depth = 0, maxDepth = 3) => {
       if (depth > maxDepth) return [];
       try {
-        return fs.readdirSync(dir).map(name => {
+        // Hidden names (".DS_Store", "._note.md" sidecars) are never shown as Vault content.
+        return fs.readdirSync(dir).filter(name => !name.startsWith('.')).map(name => {
           const full = path.join(dir, name);
           const stat = fs.statSync(full);
           if (stat.isDirectory()) {
@@ -122,6 +123,7 @@ module.exports = function secondBrainFactory(deps) {
       if (!fs.existsSync(dir)) return;
       try {
         for (const name of fs.readdirSync(dir)) {
+          if (name.startsWith('.')) continue;
           if (isRoot && dir === BRAIN_DIR && NESTED_SECTION_NAMES.has(name)) continue;
           const full = path.join(dir, name);
           const stat = fs.statSync(full);

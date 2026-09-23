@@ -67,7 +67,7 @@ module.exports = (deps) => {
       for (const dir of searchDirs) {
         if (!fs.existsSync(dir)) continue;
         const walkSync = function(dir, filelist) {
-          const files = fs.readdirSync(dir);
+          const files = fs.readdirSync(dir).filter((f) => !f.startsWith('.'));
           filelist = filelist || [];
           files.forEach(function(file) {
             if (fs.statSync(path.join(dir, file)).isDirectory()) {

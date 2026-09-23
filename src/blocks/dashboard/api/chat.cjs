@@ -87,7 +87,7 @@ module.exports = function createChatRouter(deps) {
     try {
       ensureSessionsDir();
       const files = fs.readdirSync(SESSIONS_DIR)
-        .filter(f => f.endsWith('.json'))
+        .filter(f => f.endsWith('.json') && !f.startsWith('.'))
         .map(f => {
           try {
             const raw = JSON.parse(fs.readFileSync(path.join(SESSIONS_DIR, f), 'utf8'));

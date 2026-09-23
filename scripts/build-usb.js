@@ -25,6 +25,10 @@
  *   --skip-runtime     don't download the portable Node (source-only bundle)
  *   --dry-run          print the plan, touch nothing
  *   --force            overwrite a non-empty target
+ *   --carry-home       carry THIS install and its home (Vault, settings, key
+ *                      vault) instead of a blank bundle — see build-usb-carry.cjs
+ *   --replace-data     with --carry-home: overwrite AEON-Data already on the
+ *                      drive (the old copy is moved aside, never deleted)
  */
 'use strict';
 
@@ -59,6 +63,8 @@ function parseArgs(argv) {
       case '--skip-runtime': out.skipRuntime = true; break;
       case '--dry-run':      out.dryRun = true; break;
       case '--force':        out.force = true; break;
+      case '--carry-home':   out.carryHome = true; break;
+      case '--replace-data': out.replaceData = true; break;
       case '-h': case '--help': out.help = true; break;
       default: fail(`unknown flag: ${a}`);
     }
@@ -178,11 +184,31 @@ function download(url, dest, redirects = 0) {
   });
 }
 
+// macOS ships BOTH architectures. An arm64-only runtime (as this was until
+// 2026-09-22) can never start on an Intel Mac: Rosetta translates Intel code
+// for Apple Silicon, never the reverse. The launcher picks by `uname -m`.
 const NODE_ASSET = {
-  win:   { file: `node-${NODE_VERSION}-win-x64.zip`,        bin: 'node.exe' },
-  mac:   { file: `node-${NODE_VERSION}-darwin-arm64.tar.gz`, bin: 'node' },
-  linux: { file: `node-${NODE_VERSION}-linux-x64.tar.xz`,    bin: 'node' },
+  win:   { files: [`node-${NODE_VERSION}-win-x64.zip`],        bin: 'node.exe' },
+  mac:   { files: [`node-${NODE_VERSION}-darwin-x64.tar.gz`, `node-${NODE_VERSION}-darwin-arm64.tar.gz`], bin: 'node' },
+  linux: { files: [`node-${NODE_VERSION}-linux-x64.tar.xz`],    bin: 'node' },
 };
+for (const a of Object.values(NODE_ASSET)) a.file = a.files[0]; // older callers read .file
+
+/**
+ * Seed <aeonDir>/Vault from the install's starter library, or create it empty.
+ * .env.usb points VAULT_PATH there, so the folder must exist either way: with
+ * no starter library (every install since the Vault moved to the AEON home)
+ * the builder used to create nothing, and verify-usb failed the bundle it had
+ * just built ("VAULT_PATH points at a directory that does not exist").
+ */
+function seedVault(root, aeonDir) {
+  const src = path.join(root, 'src', 'blocks', 'aeon_matrix', 'data', 'Vault');
+  const dst = path.join(aeonDir, 'Vault');
+  let r = { seeded: false, files: 0, bytes: 0 };
+  if (fs.existsSync(src)) r = { seeded: true, ...copyTree(src, dst) };
+  fs.mkdirSync(path.join(dst, 'blocks'), { recursive: true });
+  return r;
+}
 
 // ── main ────────────────────────────────────────────────────────────────────
 async function main() {
@@ -203,8 +229,16 @@ ${C.bold('aeon build-usb')} — assemble a portable AEON drive
   --skip-runtime     no portable Node download
   --dry-run          print the plan only
   --force            overwrite a non-empty target
+  --carry-home       carry THIS install and its home (your Vault and keys)
+  --replace-data     with --carry-home: replace AEON-Data already on the drive
 `);
     process.exit(args.help ? 0 : 1);
+  }
+
+  if (args.carryHome) {
+    const { buildCarried } = require('./build-usb-carry.cjs');
+    try { await buildCarried(args, { download }); } catch (e) { fail(e.message); }
+    return;
   }
 
   const platforms = args.platform === 'all' ? ['win', 'mac', 'linux'] : [args.platform || hostPlatform()];
@@ -279,18 +313,12 @@ ${C.bold('aeon build-usb')} — assemble a portable AEON drive
   // anticipates for a portable install — but the seed content ships at its
   // current physical home under aeon_matrix. Without this copy the drive boots
   // with an empty vault and silently loses the starter library.
-  const vaultSeedSrc = path.join(ROOT, 'src', 'blocks', 'aeon_matrix', 'data', 'Vault');
-  const vaultSeedDst = path.join(AEON_DIR, 'Vault');
-  if (fs.existsSync(vaultSeedSrc)) {
-    if (args.dryRun) {
-      log(C.dim(`  would seed Vault/ from aeon_matrix (${human(dirSize(vaultSeedSrc))})`));
-    } else {
-      const vs = copyTree(vaultSeedSrc, vaultSeedDst);
-      fs.mkdirSync(path.join(vaultSeedDst, 'blocks'), { recursive: true });
-      log(C.ok(`  ✓ Vault seeded — ${vs.files} files, ${human(vs.bytes)}`));
-    }
+  if (args.dryRun) {
+    log(C.dim('  would seed Vault/ from aeon_matrix, or create it empty'));
   } else {
-    log(C.warn('  ! no Vault seed found — drive will boot with an empty vault'));
+    const vs = seedVault(ROOT, AEON_DIR);
+    if (vs.seeded) log(C.ok(`  ✓ Vault seeded — ${vs.files} files, ${human(vs.bytes)}`));
+    else log(C.warn('  ! no starter library in this install — the drive boots with an empty Vault'));
   }
 
   // ── 3. dependencies ──
@@ -332,17 +360,18 @@ ${C.bold('aeon build-usb')} — assemble a portable AEON drive
     const cache = path.join(os.tmpdir(), 'aeon-usb-cache');
     fs.mkdirSync(cache, { recursive: true });
     for (const p of platforms) {
-      const asset = NODE_ASSET[p];
-      const nodeUrl = `https://nodejs.org/dist/${NODE_VERSION}/${asset.file}`;
-      const nodeArc = path.join(cache, asset.file);
-      log(`  node (${p}) ${C.dim(asset.file)}`);
+      for (const file of NODE_ASSET[p].files) {
+      const nodeUrl = `https://nodejs.org/dist/${NODE_VERSION}/${file}`;
+      const nodeArc = path.join(cache, file);
+      log(`  node (${p}) ${C.dim(file)}`);
       try {
         if (!fs.existsSync(nodeArc)) await download(nodeUrl, nodeArc);
         else log(C.dim('      cached'));
         fs.mkdirSync(path.join(TARGET, 'runtime', 'node', p), { recursive: true });
-        fs.copyFileSync(nodeArc, path.join(TARGET, 'runtime', 'node', p, asset.file));
+        fs.copyFileSync(nodeArc, path.join(TARGET, 'runtime', 'node', p, file));
         log(C.ok('      ✓'));
       } catch (e) { log(C.err(`      ✗ ${e.message}`)); }
+      }
 
       // No system-wide model daemon. AEON runs local models through its own bundled
       // llama.cpp worker (services/local-runtime), installed into
@@ -405,6 +434,14 @@ ${C.bold('aeon build-usb')} — assemble a portable AEON drive
     writeLaunchers(TARGET, NODE_VERSION);
     writeReadme(TARGET, args, NODE_VERSION);
     log(C.ok('  ✓ .env.usb, LAUNCH.bat, launch.command, launch.sh, README_USB.txt'));
+  }
+
+  // macOS writes an AppleDouble "._" sidecar for every copied file on an
+  // exFAT/FAT drive — the very filesystems a portable bundle is built for.
+  if (!args.dryRun) {
+    const { sweepOsJunk } = require('./build-usb-carry.cjs');
+    const swept = sweepOsJunk(AEON_DIR) + sweepOsJunk(path.join(TARGET, 'runtime'));
+    if (swept) log(C.dim(`  swept ${swept} OS junk file(s)`));
   }
 
   // ── done ──
@@ -568,6 +605,15 @@ node server.cjs
 
   const command = sh
     .replace('# AEON — portable launcher (Linux)', '# AEON — portable launcher (macOS)')
+    // Both Mac archives ship; expand the one for this CPU into its own folder.
+    .replace('NODE_DIR="$USB_ROOT/runtime/node/linux"',
+             'case "$(uname -m)" in arm64) ARCH=arm64 ;; *) ARCH=x64 ;; esac\n'
+             + 'ARC_DIR="$USB_ROOT/runtime/node/mac"\n'
+             + 'NODE_DIR="$ARC_DIR/$ARCH"')
+    .replace('arc=$(ls "$NODE_DIR"/node-*.tar.* 2>/dev/null | head -1 || true)',
+             'arc=$(ls "$ARC_DIR"/node-*-darwin-$ARCH.tar.* 2>/dev/null | head -1 || true)')
+    .replace('if [ -d "$NODE_DIR" ] && [ ! -x "$NODE_DIR/bin/node" ]; then',
+             'mkdir -p "$NODE_DIR"\nif [ ! -x "$NODE_DIR/bin/node" ]; then')
     .replace(/runtime\/node\/linux/g, 'runtime/node/mac')
     .replace('xdg-open http://localhost:3000 >/dev/null 2>&1 || true',
              'open http://localhost:3000 >/dev/null 2>&1 || true');
@@ -659,7 +705,7 @@ if (require.main === module) {
 }
 
 module.exports = {
-  main, writeEnvUsb, writeLaunchers, writeReadme,
+  main, writeEnvUsb, writeLaunchers, writeReadme, seedVault,
   shouldExclude, EXCLUDE, copyTree, dirSize, human,
   NODE_VERSION, NODE_ASSET,
 };

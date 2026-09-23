@@ -114,7 +114,10 @@ const commands = {
     fs.mkdirSync(outDir, { recursive: true });
     const outFile = path.join(outDir, `${m.id}-${m.version || '0.0.0'}.aeon`);
     const zip = new AdmZip();
-    zip.addLocalFolder(dir, m.id, (p) => !/(^|[\/\\])(data|node_modules|\.aeon\.runtime\.json)([\/\\]|$)/.test(p));
+    // OS droppings ("._index.jsx", ".DS_Store", "__MACOSX") never ship in a cartridge.
+    const { isOsJunk } = require(path.join(ROOT, 'src', 'kernel', 'osJunk.cjs'));
+    zip.addLocalFolder(dir, m.id, (p) => !/(^|[\/\\])(data|node_modules|\.aeon\.runtime\.json)([\/\\]|$)/.test(p)
+      && !String(p).split(/[\/\\]/).some(isOsJunk));
     zip.writeZip(outFile);
     console.log(`✓ packed ${outFile} (score ${result.score})`);
   },
@@ -169,7 +172,7 @@ const commands = {
       mounted = [];
       const apiDir = path.join(dir, 'api');
       if (fs.existsSync(apiDir)) {
-        for (const f of fs.readdirSync(apiDir).filter(f => /\.(cjs|js)$/.test(f) && !f.startsWith('_'))) {
+        for (const f of fs.readdirSync(apiDir).filter(f => /\.(cjs|js)$/.test(f) && !f.startsWith('_') && !f.startsWith('.'))) {
           const full = path.join(apiDir, f);
           delete require.cache[require.resolve(full)]; // hot-remount = full module cache purge (B6)
           try {

@@ -95,6 +95,32 @@ function fileHash(stat) {
   return `${stat.size}-${Math.floor(stat.mtimeMs)}`;
 }
 
+// Timestamp resolution of the filesystems a Vault gets copied onto: exFAT
+// 10 ms, HFS+ 1 s, FAT 2 s. A plain copy onto the drive truncated every mtime
+// (measured 2026-09-22: APFS …852778.44 → exFAT …852770), every hash changed,
+// and the whole Vault re-indexed on first boot.
+const MTIME_GRANULARITY_MS = [10, 1000, 2000];
+
+/**
+ * Is `stat` the file `storedHash` describes? Exact match, or the same size
+ * with a timestamp that only LOST precision: the new mtime sits on a coarser
+ * filesystem's grid and within one step of the stored one. A real edit —
+ * even same-size — moves mtime by far more than one step, so it still counts.
+ * Returns 'same' | 'rounded' (same file, rebase the stored hash) | 'changed'.
+ */
+function compareFile(storedHash, stat) {
+  const now = fileHash(stat);
+  if (storedHash === now) return 'same';
+  const m = /^(\d+)-(\d+)$/.exec(String(storedHash || ''));
+  if (!m || Number(m[1]) !== stat.size) return 'changed';
+  const was = Number(m[2]);
+  const nowMs = Math.round(stat.mtimeMs);
+  for (const g of MTIME_GRANULARITY_MS) {
+    if (nowMs % g === 0 && Math.abs(was - nowMs) < g) return 'rounded';
+  }
+  return 'changed';
+}
+
 function deriveTitle(fullPath, text) {
   const heading = text.match(/^#\s+(.+)$/m);
   if (heading) return heading[1].trim().slice(0, 120);
@@ -177,6 +203,17 @@ module.exports = function ingestFactory(deps) {
     if (!fs.existsSync(MANIFEST_FILE)) m = {};
     else { try { m = JSON.parse(fs.readFileSync(MANIFEST_FILE, 'utf8')); } catch { m = {}; } }
     if (!m || typeof m !== 'object') m = {};
+    // Keys are Vault-relative POSIX paths on every OS — the same form the index
+    // uses. Windows wrote "a\\b.md" (path.relative), so on the next machine
+    // every lookup missed and every document was rebuilt; on a host with no
+    // embedder the rebuild replaced each vector with none. Fold any such key
+    // into its POSIX form, keeping the more recently indexed entry.
+    for (const k of Object.keys(m)) {
+      if (!k.includes('\\')) continue;
+      const posix = k.replace(/\\/g, '/');
+      if (!m[posix] || (m[k]?.indexedAt || 0) > (m[posix]?.indexedAt || 0)) m[posix] = m[k];
+      delete m[k];
+    }
     shared.manifest = m;
     return shared.manifest;
   }
@@ -314,6 +351,11 @@ module.exports = function ingestFactory(deps) {
       if (!fs.existsSync(dir)) return [];
       const files = [];
       for (const name of fs.readdirSync(dir)) {
+        // Hidden names are never documents: macOS writes a binary "._note.md"
+        // sidecar beside every file on exFAT/FAT volumes, and apps keep their
+        // own state in hidden folders (.obsidian, .trash, .git). Indexed, the
+        // sidecar became a document made of attribute metadata.
+        if (name.startsWith('.')) continue;
         const full = path.join(dir, name);
         const relPosix = vaultRelative(full).replace(/\\/g, '/');
         if (NON_INDEXED_VAULT_PATHS.has(relPosix)) continue;
@@ -348,13 +390,14 @@ module.exports = function ingestFactory(deps) {
     };
 
     for (const full of files) {
-      const rel = path.relative(BRAIN_DIR, full);
-      const relPosix = rel.replace(/\\/g, '/');
-      seen.add(rel);
+      const relPosix = vaultRelative(full);
+      seen.add(relPosix);
       try {
         const stat = fs.statSync(full);
         const hash = fileHash(stat);
-        if (manifest[rel] && manifest[rel].hash === hash) {
+        const known = manifest[relPosix] ? compareFile(manifest[relPosix].hash, stat) : 'changed';
+        if (known === 'rounded') manifest[relPosix].hash = hash; // same file, coarser clock — rebase
+        if (known !== 'changed') {
           // Backfill: docs ingested while no embedder was available have no
           // vector — give them one now, via whatever serves the embed role, without
           // re-extracting the file.
@@ -431,7 +474,7 @@ module.exports = function ingestFactory(deps) {
 
         const entry = await buildEntry(full, relPosix, text, stat);
         index.documents[relPosix] = entry;
-        manifest[rel] = { hash, indexedAt: Date.now() };
+        manifest[relPosix] = { hash, indexedAt: Date.now() };
         results.ingested++;
         // buildEntry embeds when it can and swallows the failure when it cannot,
         // so the event must say which. A bare { file } read as "indexed, not
@@ -647,7 +690,7 @@ module.exports = function ingestFactory(deps) {
       index.documents[relPosix] = await buildEntry(dest, relPosix, text, stat);
       writeIndex(index);
       const manifest = readManifest();
-      manifest[path.relative(BRAIN_DIR, dest)] = { hash: fileHash(stat), indexedAt: Date.now() };
+      manifest[vaultRelative(dest)] = { hash: fileHash(stat), indexedAt: Date.now() };
       writeManifest(manifest);
 
       let summary = null;
@@ -694,7 +737,7 @@ module.exports = function ingestFactory(deps) {
       writeIndex(index);
 
       const manifest = readManifest();
-      manifest[path.relative(BRAIN_DIR, resolved)] = { hash: fileHash(stat), indexedAt: Date.now() };
+      manifest[vaultRelative(resolved)] = { hash: fileHash(stat), indexedAt: Date.now() };
       writeManifest(manifest);
 
       res.json({ ok: true, ingested: 1, file: relPosix });
@@ -732,7 +775,7 @@ module.exports = function ingestFactory(deps) {
         writeIndex(index);
 
         const manifest = readManifest();
-        manifest[path.relative(BRAIN_DIR, resolved)] = { hash: fileHash(stat), indexedAt: Date.now() };
+        manifest[vaultRelative(resolved)] = { hash: fileHash(stat), indexedAt: Date.now() };
         writeManifest(manifest);
       }
 
@@ -754,7 +797,8 @@ module.exports = function ingestFactory(deps) {
       writeIndex(index);
 
       const manifest = readManifest();
-      delete manifest[file_path.replace(/\//g, path.sep)];
+      delete manifest[String(file_path).replace(/\\/g, '/')];
+      delete manifest[String(file_path).replace(/\//g, path.sep)]; // an entry written before keys were POSIX
       writeManifest(manifest);
 
       res.json({ ok: true, deleted: file_path });

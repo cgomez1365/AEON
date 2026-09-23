@@ -29,7 +29,7 @@ function getIconLibrary() {
   if (_iconCache) return _iconCache;
   try {
     _iconCache = fs.readdirSync(ICON_DIR)
-      .filter(f => f.endsWith('.svg') && !f.startsWith('_'))
+      .filter(f => f.endsWith('.svg') && !f.startsWith('_') && !f.startsWith('.'))
       .map(f => {
         const id = f.replace('.svg', '');
         const label = id.split(/[_-]+/).filter(Boolean)

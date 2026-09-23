@@ -18,7 +18,7 @@ module.exports = (deps) => {
     try {
       const limit = Math.min(Number(req.query.limit) || 20, 100);
       const files = fs.readdirSync(MISSIONS_DIR)
-        .filter(f => f.endsWith('.md'))
+        .filter(f => f.endsWith('.md') && !f.startsWith('.'))
         .map(f => {
           const full = path.join(MISSIONS_DIR, f);
           const stat = fs.statSync(full);

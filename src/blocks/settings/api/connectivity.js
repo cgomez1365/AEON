@@ -58,7 +58,10 @@ function cloudflaredTarget(plat = os.platform(), arch = os.arch()) {
 const CLOUDFLARED_TARGET = cloudflaredTarget();
 // The binary spawn() actually runs, whatever it took to get there.
 const CLOUDFLARED = CLOUDFLARED_TARGET ? path.join(BIN_DIR, os.platform() === 'win32' ? CLOUDFLARED_TARGET.filename : 'cloudflared') : null;
-const PORT = 3001;
+// The kernel's actual port. A literal 3001 pointed the tunnel at whatever else
+// held 3001 whenever this AEON ran elsewhere — beside a host's own AEON, that
+// meant exposing the host's AEON.
+const PORT = Number(process.env.PORT) || 3001;
 
 const _tunnel = { proc: null, url: null, startedAt: null };
 
@@ -403,7 +406,7 @@ module.exports = (app, deps) => {
       const dbDir = require('../../../kernel/aeonHome.cjs').roots({ appRoot: ROOT }).db;
 
       const jsonFiles = fs.existsSync(dbDir)
-        ? fs.readdirSync(dbDir).filter(f => f.endsWith('.json') && !f.startsWith('block.schema'))
+        ? fs.readdirSync(dbDir).filter(f => f.endsWith('.json') && !f.startsWith('block.schema') && !f.startsWith('.'))
         : [];
 
       let synced = 0;

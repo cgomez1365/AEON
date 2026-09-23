@@ -164,7 +164,9 @@ OUTPUT FORMAT — the document is HTML. Return valid HTML using only these tags:
           const vDir = path.posix.join('versions', docId);
           fs.mkdirSync(vDir);
           fs.writeFileSync(path.posix.join(vDir, `${now}.md`), prev);
-          const versions = fs.readdirSync(vDir).filter(f => f.endsWith('.md')).sort();
+          // Only <epoch-ms>.md snapshots count toward the 25 kept — a "._" sidecar
+          // (exFAT/FAT under macOS) must not push a real version out.
+          const versions = fs.readdirSync(vDir).filter(f => /^\d+\.md$/.test(f)).sort();
           while (versions.length > 25) fs.unlinkSync(path.posix.join(vDir, versions.shift()));
         }
       }

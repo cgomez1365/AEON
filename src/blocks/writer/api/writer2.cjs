@@ -106,7 +106,10 @@ module.exports = (app, deps) => {
     const dir = vDir(req.params.id);
     let list = [];
     try {
-      list = fs.readdirSync(dir).filter(f => f.endsWith('.md')).map(f => {
+      // Versions are named <epoch-ms>.md. Anything else — a "._1789….md"
+      // sidecar macOS drops on exFAT — made `new Date(NaN).toISOString()`
+      // throw, the catch below swallowed it, and the WHOLE history read empty.
+      list = fs.readdirSync(dir).filter(f => /^\d+\.md$/.test(f)).map(f => {
         const ts = Number(f.replace('.md', ''));
         const st = fs.statSync(path.posix.join(dir, f));
         return { ts, when: new Date(ts).toISOString(), size: st.size };

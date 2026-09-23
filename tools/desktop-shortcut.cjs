@@ -249,6 +249,14 @@ function ensureDesktopShortcut(opts = {}) {
   const dataRoot = opts.dataRoot || path.join(root, 'data');
 
   if (env.AEON_PORTABLE === 'true') return { status: 'skipped', reason: 'portable' };
+  // An install carried on a drive (src/kernel/aeonHome.cjs rule 5) must not leave
+  // an icon on every machine it visits — one that points at a drive letter or
+  // /Volumes path that is gone the moment the drive is unplugged.
+  try {
+    if (require('../src/kernel/aeonHome.cjs').isCarried({ appRoot: root, env })) {
+      return { status: 'skipped', reason: 'carried-drive' };
+    }
+  } catch { /* no aeonHome — an old tree; fall through to the normal rules */ }
   if (env.AEON_NO_DESKTOP_ICON === '1' || env.AEON_NO_DESKTOP_ICON === 'true') return { status: 'skipped', reason: 'opted-out' };
   if (platform !== 'darwin' && platform !== 'win32') return { status: 'skipped', reason: 'unsupported-platform' };
 

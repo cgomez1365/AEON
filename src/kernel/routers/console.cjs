@@ -18,6 +18,7 @@
  * All routes are localhost-desktop only — never mounted on Vercel.
  */
 const express = require('express');
+const { isOsJunk } = require('../osJunk.cjs');
 const fs = require('fs');
 const path = require('path');
 // BO-SHIP P8g — this require lived on line 2, INSIDE the opening `/**` of the
@@ -117,7 +118,7 @@ module.exports = function ({ storage, kernelLLM, _blockRegistry, _blockReadiness
     const walk = (dir, base, depth) => {
       if (depth > 2) return;
       let entries = [];
-      try { entries = fs.readdirSync(dir); } catch { return; }
+      try { entries = fs.readdirSync(dir).filter((f) => !isOsJunk(f)); } catch { return; }
       for (const f of entries) {
         const full = path.join(dir, f);
         let st; try { st = fs.statSync(full); } catch { continue; }
@@ -166,7 +167,7 @@ module.exports = function ({ storage, kernelLLM, _blockRegistry, _blockReadiness
     const walk = (dir, rel, depth) => {
       if (depth > 1) return;
       let entries = [];
-      try { entries = fs.readdirSync(dir); } catch { return; }
+      try { entries = fs.readdirSync(dir).filter((f) => !isOsJunk(f)); } catch { return; }
       for (const f of entries) {
         const full = path.join(dir, f);
         try {

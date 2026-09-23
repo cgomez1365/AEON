@@ -26,6 +26,8 @@
 
 **After the first launch, AEON puts its own icon on your Desktop** (`AEON.app` on macOS, an `AEON` shortcut on Windows). Open AEON from there from then on — every open also picks up any new files in your Vault. Don't want the icon? Delete it and it stays gone (`node launch.js --desktop-icon` brings it back), or set `AEON_NO_DESKTOP_ICON=1`. USB/portable installs never create one.
 
+**Carry it with you:** `node scripts/build-usb.js --target <drive> --carry-home` puts this AEON — app, Vault, settings and key vault — on an exFAT drive with launchers for macOS, Windows and Linux. Plug it in anywhere and double-click the launcher for that OS; your data stays on the drive. It carries your keys, so treat the drive like a key, and eject it before unplugging.
+
 **Where your data lives:** everything AEON keeps for you — your Vault, downloaded models, API keys, settings and logs — goes into one folder in your home directory, `~/AEON` (`C:\Users\<you>\AEON` on Windows), never into the AEON folder itself. Reinstalling or updating AEON is therefore safe: delete the AEON folder, unzip a new one (or `git pull`), launch, and everything is still there. An install from before this change moves its data into `~/AEON` on the next launch, once, and tells you what it moved. To put the home somewhere else, set `AEON_HOME` in your environment before launching.
 
 The launcher checks your computer, walks you through setup, and opens AEON in your browser. **Every setup question in the launcher can be skipped by pressing Enter** — you can finish everything later inside AEON under **Settings**. The one exception is before the launcher: if Node.js is missing, the wrapper asks to install it, and Enter means No and exits so you can install it yourself.

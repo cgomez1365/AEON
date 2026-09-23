@@ -15,6 +15,7 @@
 const path = require('path');
 const fs = require('fs');
 const AdmZip = require('adm-zip');
+const { isOsJunk, isHidden } = require('./osJunk.cjs');
 
 const ROOT = path.join(__dirname, '..', '..');
 const DIST_DIR = path.join(ROOT, 'dist-blocks');
@@ -22,7 +23,11 @@ const DIST_DIR = path.join(ROOT, 'dist-blocks');
 // ── Cartridge reader (zip-slip safe) ────────────────────────────────────────
 function readCartridgeBuffer(buf) {
   const zip = new AdmZip(buf);
-  const entries = zip.getEntries().filter(e => !e.isDirectory);
+  // A zip made by Finder's "Compress" carries a "__MACOSX/" folder and "._"
+  // sidecars; counted as content, __MACOSX read as a second top-level block
+  // and every such cartridge was refused. OS droppings are not the block.
+  const entries = zip.getEntries().filter(e => !e.isDirectory
+    && !e.entryName.replace(/\\/g, '/').split('/').some(isOsJunk));
   if (!entries.length) throw new Error('cartridge is empty');
 
   const tops = new Set(entries.map(e => e.entryName.replace(/\\/g, '/').split('/')[0]));
@@ -89,7 +94,7 @@ function purchaseSummary(manifest) {
 function listCatalog() {
   if (!fs.existsSync(DIST_DIR)) return [];
   const out = [];
-  for (const f of fs.readdirSync(DIST_DIR).filter(f => f.endsWith('.aeon'))) {
+  for (const f of fs.readdirSync(DIST_DIR).filter(f => f.endsWith('.aeon') && !isHidden(f))) {
     try {
       const { manifest } = readCartridgeBuffer(fs.readFileSync(path.join(DIST_DIR, f)));
       out.push({ file: f, ...purchaseSummary(manifest) });
@@ -102,7 +107,7 @@ function listCatalog() {
 
 function findCartridgeFile(idOrFile) {
   if (!fs.existsSync(DIST_DIR)) return null;
-  const names = fs.readdirSync(DIST_DIR).filter(f => f.endsWith('.aeon'));
+  const names = fs.readdirSync(DIST_DIR).filter(f => f.endsWith('.aeon') && !isHidden(f));
   const exact = names.find(f => f === idOrFile);
   if (exact) return path.join(DIST_DIR, exact);
   // latest version for a bare id: lexicographic on the version suffix
