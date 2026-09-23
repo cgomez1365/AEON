@@ -160,7 +160,14 @@ function detectCircularImports(sources) {
   return cycles;
 }
 
-function walkFiles(dir, exts = /\.(cjs|js|jsx|mjs)$/) {
+// What counts as code for every scan — lint, the install gate and the
+// pipeline's check. Three places kept three lists; validateBuild kept none and
+// scanned READMEs, so a pack whose README says "add AEON_STORE to ~/AEON/.env"
+// was HIGH in the check and LOW in the real install (2026-09-23).
+const CODE_FILE_RE = /\.(cjs|js|jsx|mjs|ts|tsx)$/i;
+const isCodeFile = (p) => CODE_FILE_RE.test(String(p || ''));
+
+function walkFiles(dir, exts = CODE_FILE_RE) {
   const out = [];
   if (!fs.existsSync(dir)) return out;
   for (const name of fs.readdirSync(dir)) {
@@ -240,4 +247,4 @@ function promoteBlock(id) {
 
 function ensureStagingDir() { fs.mkdirSync(STAGING_DIR, { recursive: true }); return STAGING_DIR; }
 
-module.exports = { lintBlock, promoteBlock, ensureStagingDir, validateManifest, scanSources, detectCircularImports, CODE_CHECKS, BLOCKS_DIR, STAGING_DIR };
+module.exports = { isCodeFile, lintBlock, promoteBlock, ensureStagingDir, validateManifest, scanSources, detectCircularImports, CODE_CHECKS, BLOCKS_DIR, STAGING_DIR };

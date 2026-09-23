@@ -21,7 +21,7 @@ const fs = require('fs');
 const { normalize } = require('./buildEnvelope.cjs');
 const { gate } = require('./complexityGate.cjs');
 const { bootProof } = require('./bootProof.cjs');
-const { lintBlock, promoteBlock, ensureStagingDir, validateManifest, scanSources, detectCircularImports, STAGING_DIR, BLOCKS_DIR } = require('./staging.cjs');
+const { lintBlock, promoteBlock, ensureStagingDir, validateManifest, scanSources, detectCircularImports, isCodeFile, STAGING_DIR, BLOCKS_DIR } = require('./staging.cjs');
 const approvals = require('./approvals.cjs');
 const ideMode = require('./ideMode.cjs');
 const runState = require('./runState.cjs');
@@ -85,7 +85,8 @@ function createBuildPipeline({
     }
 
     const declaredShell = manifest.contract?.permissions?.shell === true;
-    const findings = [...scanSources(envelope.files, { declaredShell })];
+    // Code only — the same set lint and the install gate scan (isCodeFile).
+    const findings = [...scanSources(envelope.files.filter((f) => isCodeFile(f.path)), { declaredShell })];
     for (const cycle of detectCircularImports(envelope.files)) {
       findings.push({ check: 'circular-import', sev: 'HIGH', file: cycle.split(' → ')[0], why: `circular import: ${cycle}` });
     }
