@@ -53,7 +53,7 @@
     "@napi-rs/canvas": "^1.0.9",
     "@supabase/supabase-js": "^2.105.4",
     "@vitejs/plugin-react-swc": "^3.11.0",
-    "adm-zip": "^0.6.0",
+    "adm-zip": "^0.6.1",
     "cors": "^2.8.5",
     "dotenv": "^17.4.2",
     "express": "^4.21.2",
