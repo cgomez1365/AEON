@@ -363,6 +363,12 @@ module.exports = function ingestFactory(deps) {
   async function runScan(onEvent = () => {}) {
     if (shared.inFlight) {
       onEvent({ joined: true, message: 'a scan is already running — waiting for it to finish' });
+      // The joiner gets the run's result too. Only the first caller's onEvent
+      // ever saw {done}, so Matrix ▸ Index, opened while the boot sync or a
+      // terminal /scan was running, ended its stream with no counts at all.
+      // Registered before this function returns, so it fires before the
+      // caller's own await resumes (and before an SSE handler ends its stream).
+      shared.inFlight.then((r) => { try { onEvent({ done: true, joined: true, ...r }); } catch { /* caller gone */ } }, () => {});
       return shared.inFlight;
     }
     shared.inFlight = _runScan(onEvent).finally(() => { shared.inFlight = null; });

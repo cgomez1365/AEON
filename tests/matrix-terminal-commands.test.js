@@ -468,3 +468,37 @@ describe('Matrix search says when it stopped counting', () => {
     expect(body.truncated).toBe(true);
   });
 });
+
+describe('two scans at once, and a very large document', () => {
+  it('an Index-panel run that joins a scan in flight still receives the result', async () => {
+    // runScan hands a second caller the run in flight, but only the FIRST
+    // caller's onEvent ever saw {done}. The panel that joined got "a scan is
+    // already running" and then a stream that ended with no counts.
+    ingestMod._resetStores();
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    const slowEmbed = async (t, o) => { await gate; return bow(t, o); };
+    const app = express(); app.use(express.json());
+    app.use('/api', ingestMod({ isVercel: false, VAULT_ROOT: vault, DATA_ROOT: path.join(root, 'data3'), embed: slowEmbed }));
+    const h = await listen(app); servers.push(h.server);
+    const url = `http://127.0.0.1:${h.port}/api/crn/second-brain/ingest/scan-docs`;
+    const first = fetch(url, { method: 'POST' }).then((r) => r.text());
+    await new Promise((r) => setTimeout(r, 50));
+    const second = fetch(url, { method: 'POST' }).then((r) => r.text());
+    await new Promise((r) => setTimeout(r, 50));
+    release();
+    const [, joined] = await Promise.all([first, second]);
+    expect(joined).toMatch(/"joined":true/);
+    expect(joined).toMatch(/"done":true/);
+  });
+
+  it('/doc on a very large document sends the chip what it shows, not the whole file', async () => {
+    write('Reading_Library/big-manual.md', `# Big manual\n\n${'Forklift inspection step. '.repeat(8000)}`);
+    const r = await dispatch('/doc', 'big-manual.md');
+    expect(r.outcome.chipStatus).toBe(CHIP_STATUS.OK);
+    expect(r.chip).toMatch(/showing the first 20,000 of [\d,]+ characters/);
+    expect(r.body.data.content.length).toBeLessThanOrEqual(20000);
+    expect(r.body.data.chars).toBeGreaterThan(190000);
+    expect(r.body.data.truncated).toBe(true);
+  });
+});

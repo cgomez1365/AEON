@@ -295,8 +295,14 @@ module.exports = function secondBrainFactory(deps) {
       const clipped = body.length > TERMINAL_TEXT_CHARS
         ? `${body.slice(0, TERMINAL_TEXT_CHARS)}\n\n… showing the first ${TERMINAL_TEXT_CHARS.toLocaleString()} of ${body.length.toLocaleString()} characters. Ask about the rest with /ask-doc ${argFor(rel)} <question>, or open it in Aeon Matrix.`
         : (body || '(this file has no readable text)');
+      // `content` carries what the chip shows, not the whole file: a 46 MB
+      // textbook is ~2M characters, and all of it rode in the envelope to the
+      // browser and back out to the narrator. `chars` says how much there is.
+      const truncated = body.length > TERMINAL_TEXT_CHARS;
       res.json({
-        ok: true, found: true, path: `Vault/${rel}`, matchedBy: by, content: body, ...meta,
+        ok: true, found: true, path: `Vault/${rel}`, matchedBy: by, ...meta,
+        content: truncated ? body.slice(0, TERMINAL_TEXT_CHARS) : body,
+        chars: body.length, ...(truncated ? { truncated: true } : {}),
         text: `${rel}${how}\n\n${clipped}`,
         // The terminal's narrator relays a `verbatim` result as written (up to
         // 8,000 chars) instead of asking a model to paraphrase it. Opening a
