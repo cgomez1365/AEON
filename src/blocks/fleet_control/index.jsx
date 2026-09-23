@@ -1,10 +1,15 @@
 /**
  * Fleet Control — live ops for everything that runs: LLM engines, provider
- * health, key pools, autopilot, and VP mission history (read from the Vault).
+ * health, key pools, the video autopilot, this machine's hardware fit, and VP
+ * mission history (read from the Vault).
  * Read-only by design: it reports what exists and never calls what doesn't.
  */
 import React, { useState, useEffect, useCallback } from 'react';
-import { Activity, Radio, RefreshCw, Server, BarChart3, Wifi, WifiOff, KeyRound, HeartPulse, Rocket, ChevronDown } from 'lucide-react';
+import { Activity, Radio, RefreshCw, Server, BarChart3, Wifi, WifiOff, KeyRound, HeartPulse, Rocket, ChevronDown, Cpu } from 'lucide-react';
+import { serverStatus, providerRows, providerCard, hardwareSummary } from './health.js';
+
+const TONE = { ok: '#00ff40', warn: '#ff9800', idle: '#888' };
+const DOT = { healthy: '#00ff40', cooling: '#f44336', unconfigured: 'rgba(255,255,255,0.2)' };
 
 export default function FleetControl() {
   const [llm, setLlm] = useState(null);
@@ -12,30 +17,52 @@ export default function FleetControl() {
   const [health, setHealth] = useState(null);
   const [missions, setMissions] = useState([]);
   const [openMission, setOpenMission] = useState(null); // { id, content }
-  const [serverUp, setServerUp] = useState(false);
+  const [probe, setProbe] = useState(null); // { ok, status, uptime }
+  const [hardware, setHardware] = useState(null);
+  const [hardwareError, setHardwareError] = useState(null);
+  // The connection registry (Settings block). Optional: it only adds
+  // configured providers the kernel's health map has not seen fail yet.
+  const [endpoints, setEndpoints] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [now, setNow] = useState(Date.now());
 
   const refresh = useCallback(async () => {
     try {
       const r = await fetch('/api/llm-telemetry');
-      if (r.ok) { setLlm(await r.json()); setServerUp(true); } else throw '';
-    } catch { setServerUp(false); }
+      if (r.ok) { const d = await r.json(); setLlm(d); setProbe({ ok: true, status: r.status, uptime: d.uptime }); }
+      else setProbe({ ok: false, status: r.status });
+    } catch { setProbe({ ok: false, status: 0 }); }
     try {
       const r = await fetch('/core/provider-health');
       if (r.ok) setHealth(await r.json());
     } catch {}
     try {
-      const r = await fetch('/api/autopilot/status');
-      if (r.ok) setAutopilot(await r.json());
+      const r = await fetch('/api/connections', { headers: { 'x-aeon-self-reported': '1' } });
+      if (r.ok) { const d = await r.json(); setEndpoints(Array.isArray(d.endpoints) ? d.endpoints : []); }
     } catch {}
+    try {
+      const r = await fetch('/api/autopilot/status');
+      setAutopilot(r.ok ? await r.json() : null);
+    } catch { setAutopilot(null); }
     try {
       const r = await fetch('/api/fleet/missions?limit=12');
       if (r.ok) { const d = await r.json(); setMissions(d.missions || []); }
     } catch {}
+    setNow(Date.now());
     setLoading(false);
   }, []);
 
-  useEffect(() => { refresh(); const i = setInterval(refresh, 8000); return () => clearInterval(i); }, [refresh]);
+  // Hardware changes rarely; read it once per visit (and on the refresh button).
+  const loadHardware = useCallback(async () => {
+    try {
+      const r = await fetch('/api/hwfit/models?limit=60', { headers: { 'x-aeon-self-reported': '1' } });
+      if (!r.ok) { setHardwareError(`Hardware fit did not load (HTTP ${r.status})`); return; }
+      setHardware(await r.json());
+      setHardwareError(null);
+    } catch { setHardwareError('The AEON server is not answering.'); }
+  }, []);
+
+  useEffect(() => { refresh(); loadHardware(); const i = setInterval(refresh, 8000); return () => clearInterval(i); }, [refresh, loadHardware]);
 
   const toggleMission = async (id) => {
     if (openMission?.id === id) { setOpenMission(null); return; }
@@ -49,9 +76,12 @@ export default function FleetControl() {
   const models = llm?.models || [];
   const totalCalls = llm?.totalCalls || 0;
   const totalTokens = llm?.totalTokens || 0;
-  const providers = health?.providers || {};
-  const keyPools = health?.keyPools || {};
-  const healthyCount = Object.values(providers).filter(p => p.healthy).length;
+  const totalErrors = models.reduce((n, m) => n + (m.errors || 0), 0);
+  const rows = providerRows(health, now, endpoints);
+  const provCard = providerCard(rows);
+  const server = serverStatus(probe);
+  const serverUp = !!probe?.ok;
+  const hw = hardwareSummary(hardware);
 
   return (
     <div style={{ padding: '24px', height: '100%', overflowY: 'auto' }}>
@@ -61,52 +91,47 @@ export default function FleetControl() {
         <span style={{ fontSize: '10px', opacity: 0.5, fontFamily: 'var(--font-mono)', border: '1px solid var(--border)', padding: '2px 8px', borderRadius: '4px' }}>
           Live System Telemetry
         </span>
-        <button onClick={refresh} style={tinyBtn} aria-label="Refresh fleet telemetry"><RefreshCw size={12} aria-hidden="true" /></button>
+        <button onClick={() => { refresh(); loadHardware(); }} style={tinyBtn} aria-label="Refresh fleet telemetry"><RefreshCw size={12} aria-hidden="true" /></button>
       </div>
       <p style={{ fontSize: '12px', color: 'var(--text-dim)', margin: '0 0 20px 0' }}>
-        Engines, providers, key pools, autopilot, and VP missions — the ops view of everything that runs
+        Engines, providers, key pools, the video autopilot, hardware fit and VP missions — read-only; nothing here starts or stops anything
       </p>
 
       {/* Status Cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '10px', marginBottom: '20px' }}>
-        <StatusCard icon={serverUp ? Wifi : WifiOff} label="AEON Server" value={serverUp ? 'ONLINE' : 'CLOUD MODE'} color={serverUp ? '#00ff40' : '#ff9800'} sub={serverUp ? `Uptime: ${llm?.uptime ? Math.floor(llm.uptime / 60) + 'm' : '?'}` : 'Supabase relay'} />
-        <StatusCard icon={Activity} label="LLM Calls" value={totalCalls.toLocaleString()} color="var(--accent)" sub={`${(totalTokens / 1000).toFixed(1)}K tokens`} />
-        <StatusCard icon={HeartPulse} label="Providers" value={`${healthyCount}/${Object.keys(providers).length || '?'}`} color={healthyCount === Object.keys(providers).length ? '#00ff40' : '#ff9800'} sub="healthy engines" />
-        <StatusCard icon={Server} label="Autopilot" value={autopilot?.status || 'UNKNOWN'} color={autopilot?.producerRunning ? '#00ff40' : '#888'} sub={autopilot?.totalProduced ? `${autopilot.totalProduced} produced` : 'Idle'} />
+        <StatusCard icon={serverUp ? Wifi : WifiOff} label="AEON Server" value={server.value} color={TONE[server.tone]} sub={server.sub} />
+        <StatusCard icon={Activity} label="LLM Calls · since start" value={totalCalls.toLocaleString()} color="var(--accent)" sub={`${(totalTokens / 1000).toFixed(1)}K tokens${totalErrors ? ` · ${totalErrors} failed` : ''}`} />
+        <StatusCard icon={HeartPulse} label="Providers" value={health ? provCard.value : '?'} color={TONE[health ? provCard.tone : 'idle']} sub={health ? provCard.sub : 'Provider health unavailable'} />
+        <StatusCard icon={Server} label="Video Autopilot" value={autopilot?.status || '—'} color={autopilot?.producerRunning ? '#00ff40' : String(autopilot?.status || '').startsWith('ERROR') ? '#f44336' : '#888'} sub={autopilot ? `${autopilot.totalProduced || 0} produced · ${autopilot.totalUploaded || 0} uploaded` : 'Not answering'} />
       </div>
 
       {/* Provider Health + Key Pools */}
       <div style={cardStyle}>
         <div style={sectionTitle}><KeyRound size={14} style={{ color: 'var(--amber)' }} /> PROVIDER HEALTH & KEY POOLS</div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '8px' }}>
-          {Object.entries(providers).map(([id, p]) => {
-            const pool = keyPools[id];
-            const healthLabel = p.healthy ? 'Healthy' : 'Unhealthy — cooling down';
-            return (
-              <div key={id} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 12px', borderRadius: '8px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-mute)' }}>
-                <div role="img" aria-label={healthLabel} title={healthLabel} style={{ width: '8px', height: '8px', borderRadius: '50%', background: p.healthy ? '#00ff40' : '#f44336', boxShadow: p.healthy ? '0 0 6px #00ff40' : 'none', flexShrink: 0 }} />
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: '12px', fontWeight: 600, textTransform: 'capitalize' }}>{id}</div>
-                  <div style={{ fontSize: '9px', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>
-                    {healthLabel}{pool ? ` · ${pool.count} key${pool.count === 1 ? '' : 's'} · slot ${pool.activeIndex}` : ''}
-                  </div>
+          {rows.map((p) => (
+              <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 12px', borderRadius: '8px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-mute)', opacity: p.state === 'unconfigured' ? 0.6 : 1 }}>
+                <div role="img" aria-label={p.label} title={p.label} style={{ width: '8px', height: '8px', borderRadius: '50%', background: DOT[p.state], boxShadow: p.state === 'healthy' ? '0 0 6px #00ff40' : 'none', flexShrink: 0 }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: '12px', fontWeight: 600, textTransform: 'capitalize' }}>{p.id}</div>
+                  <div style={{ fontSize: '9px', color: p.state === 'cooling' ? '#f44336' : 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>{p.label}</div>
+                  {p.detail && <div title={p.detail} style={{ fontSize: '9px', color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.detail}</div>}
                 </div>
               </div>
-            );
-          })}
-          {Object.keys(providers).length === 0 && <div style={{ fontSize: 11, color: 'var(--text-dim)', padding: 8 }}>{loading ? 'Loading…' : 'Provider health unavailable'}</div>}
+          ))}
+          {rows.length === 0 && <div style={{ fontSize: 11, color: 'var(--text-dim)', padding: 8 }}>{loading ? 'Loading…' : 'Provider health unavailable'}</div>}
         </div>
       </div>
 
       {/* LLM Engine Breakdown */}
       <div style={{ ...cardStyle, marginTop: '12px' }}>
         <div style={sectionTitle}>
-          <BarChart3 size={14} style={{ color: '#8b5cf6' }} /> LLM ENGINE TELEMETRY
+          <BarChart3 size={14} style={{ color: '#8b5cf6' }} /> LLM ENGINES — SINCE SERVER START
           {totalCalls > 0 && <span style={{ fontSize: '10px', color: '#00ff40', marginLeft: 'auto' }}>LIVE</span>}
         </div>
         {models.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '18px', color: 'var(--text-dim)', fontSize: '12px' }}>
-            {loading ? 'Loading telemetry...' : 'No LLM calls recorded this session. Run a mission or use the terminal.'}
+            {loading ? 'Loading telemetry...' : serverUp ? 'No LLM calls since the server started. Ask something in the terminal.' : server.sub}
           </div>
         ) : (
           <div style={{ display: 'grid', gap: '8px' }}>
@@ -133,12 +158,29 @@ export default function FleetControl() {
         )}
       </div>
 
+      {/* This machine — what the hardware can run (api/hwfit.cjs; cookbook uses the same routes) */}
+      <div style={{ ...cardStyle, marginTop: '12px' }}>
+        <div style={sectionTitle}><Cpu size={14} style={{ color: 'var(--accent)' }} /> THIS MACHINE — MODEL FIT</div>
+        {hw ? (
+          <div style={{ fontSize: '11px', display: 'grid', gap: '6px' }}>
+            <div><strong>{hw.machine}</strong> · {hw.gpu}</div>
+            <div style={{ color: 'var(--text-dim)' }}>
+              Of {hw.catalog} catalogue models at Q4: {hw.fits.gpu} fit the GPU, {hw.fits.offload} need CPU offload, {hw.fits.cpu} run on CPU/RAM only, {hw.fits.tooLarge} do not fit.
+            </div>
+            {hw.best.length > 0 && <div style={{ color: 'var(--text-dim)' }}>Largest that fit: {hw.best.join(' · ')}</div>}
+          </div>
+        ) : (
+          <div style={{ fontSize: '11px', color: 'var(--text-dim)' }}>{hardwareError || 'Reading hardware…'}</div>
+        )}
+      </div>
+
       {/* VP Missions (from the Vault — survives any block removal) */}
       <div style={{ ...cardStyle, marginTop: '12px', marginBottom: '24px' }}>
         <div style={sectionTitle}><Rocket size={14} style={{ color: 'var(--accent)' }} /> VP MISSIONS — RECENT</div>
         {missions.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '18px', color: 'var(--text-dim)', fontSize: '12px' }}>
-            No mission records in the Vault yet. Run one with /vp in the terminal.
+            No mission records. This panel lists the <code>*.md</code> files in <code>Vault/Agents/Aeon/missions</code>;
+            nothing in this install writes them today (the Mission Runner that did was retired).
           </div>
         ) : missions.map(m => {
           const statusLabel = m.status === 'failed' ? 'Failed' : m.status === 'pending' ? 'Pending' : 'Done';

@@ -1,16 +1,35 @@
 import React, { useState, useEffect } from 'react';
-import { ExternalLink, Plus, Trash2, Link2, X, Search, ChevronDown, ChevronUp, Star } from 'lucide-react';
+import { ExternalLink, Plus, Trash2, Link2, X, Search, ChevronDown, ChevronUp, Pencil, ArrowUp, ArrowDown, Check } from 'lucide-react';
 import { useAeonContext } from '../../kernel/contexts/AeonContext';
+import { safeHref, normalizeUrl, moveLink, editLink, storeProblem } from './linkOps.js';
 
 const DEFAULT_LINKS = [];
+const CATEGORIES = ['General', 'Workspace', 'Dev Ops', 'Database', 'Integrations', 'Personal', 'Active Portals', 'Codebases', 'Client'];
 
 function getDomain(url) {
   try { return new URL(url).hostname.replace('www.', ''); } catch { return url; }
 }
 
 export default function QuickLinks() {
-  const { links, linksError, manageLinks } = useAeonContext();
+  const { links, linksError, manageLinks, updateLinks } = useAeonContext();
   const [showAdd, setShowAdd] = useState(false);
+  const [formError, setFormError] = useState(null);
+  const [editing, setEditing] = useState(null); // { id, name, url, category }
+  const [editError, setEditError] = useState(null);
+  // HTTP status of a direct probe of the links store, taken only when the
+  // context reports a failure — so a missing Aeon Matrix block (404) is named
+  // instead of surfacing as a raw "HTTP 404".
+  const [storeStatus, setStoreStatus] = useState(undefined);
+
+  useEffect(() => {
+    if (!linksError) { setStoreStatus(undefined); return; }
+    let live = true;
+    fetch('/api/sync/quick_links', { headers: { 'x-aeon-self-reported': '1' } })
+      .then(r => { if (live) setStoreStatus(r.status); })
+      .catch(() => { if (live) setStoreStatus(0); });
+    return () => { live = false; };
+  }, [linksError]);
+  const problem = storeProblem(linksError, storeStatus);
   const [search, setSearch] = useState('');
   const [name, setName] = useState('');
   const [url, setUrl] = useState('');
@@ -27,9 +46,27 @@ export default function QuickLinks() {
 
   const handleAdd = (e) => {
     e.preventDefault();
-    if (!name || !url) return;
-    manageLinks({ action: 'add', name, url: url.startsWith('http') ? url : `https://${url}`, category });
+    if (!name.trim() || !url) return;
+    const safe = normalizeUrl(url);
+    if (!safe) { setFormError('Only http:// and https:// addresses can be saved.'); return; }
+    setFormError(null);
+    manageLinks({ action: 'add', name: name.trim(), url: safe, category });
     setName(''); setUrl(''); setCategory('General'); setShowAdd(false);
+  };
+
+  // Edit and reorder persist the whole list through updateLinks — the same
+  // server-backed save (/api/sync/quick_links) add and delete use.
+  const startEdit = (link) => { setEditError(null); setEditing({ id: link.id, name: link.name || link.title || '', url: link.url || '', category: link.category || 'General' }); };
+  const saveEdit = (e) => {
+    e.preventDefault();
+    const r = editLink(allLinks, editing.id, { name: editing.name, url: editing.url, category: editing.category });
+    if (r.error) { setEditError(r.error); return; }
+    updateLinks(r.links);
+    setEditing(null);
+  };
+  const move = (id, delta) => {
+    const next = moveLink(allLinks, id, delta);
+    if (next.some((l, i) => l !== allLinks[i])) updateLinks(next);
   };
 
   const handleDelete = (id) => {
@@ -53,9 +90,9 @@ export default function QuickLinks() {
         Bookmarks, portals, and operational links — organized by category
       </p>
 
-      {linksError && (
+      {problem && (
         <div role="alert" style={{ margin: '0 0 12px 0', padding: '8px 12px', borderRadius: '8px', fontSize: '12px', border: '1px solid #ff5c5c', background: 'rgba(255,92,92,0.08)', color: '#ff8a8a' }}>
-          {linksError}
+          {problem}
         </div>
       )}
 
@@ -85,13 +122,14 @@ export default function QuickLinks() {
           <input type="text" required placeholder="URL" aria-label="URL" value={url} onChange={e => setUrl(e.target.value)}
             style={inputStyle} />
           <select value={category} onChange={e => setCategory(e.target.value)} aria-label="Category" style={inputStyle}>
-            {['General', 'Workspace', 'Dev Ops', 'Database', 'Integrations', 'Personal', 'Active Portals', 'Codebases', 'Client'].map(c =>
+            {CATEGORIES.map(c =>
               <option key={c} value={c}>{c}</option>
             )}
           </select>
           <button type="submit" style={{ padding: '8px', borderRadius: '8px', background: 'var(--color-primary)', color: '#000', border: 'none', fontWeight: 700, fontSize: '12px', cursor: 'pointer' }}>
             Save Link
           </button>
+          {formError && <div role="alert" style={{ gridColumn: '1 / -1', fontSize: '11px', color: '#ff8a8a' }}>{formError}</div>}
         </form>
       )}
 
@@ -114,7 +152,24 @@ export default function QuickLinks() {
 
             {!collapsed && (
               <div style={{ display: 'grid', gap: '2px', marginTop: '4px' }}>
-                {catLinks.map(link => (
+                {catLinks.map((link, idx) => {
+                  const href = safeHref(link.url);
+                  const label = link.name || link.title;
+                  if (editing?.id === link.id) {
+                    return (
+                      <form key={link.id} onSubmit={saveEdit} aria-label={`Edit ${label}`} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 140px auto auto', gap: '6px', padding: '6px 8px', borderRadius: '6px', background: 'rgba(0,242,255,0.04)' }}>
+                        <input value={editing.name} onChange={e => setEditing({ ...editing, name: e.target.value })} aria-label="Link name" style={inputStyle} />
+                        <input value={editing.url} onChange={e => setEditing({ ...editing, url: e.target.value })} aria-label="URL" style={inputStyle} />
+                        <select value={editing.category} onChange={e => setEditing({ ...editing, category: e.target.value })} aria-label="Category" style={inputStyle}>
+                          {[...new Set([...CATEGORIES, editing.category])].map(c => <option key={c} value={c}>{c}</option>)}
+                        </select>
+                        <button type="submit" aria-label="Save changes" style={{ ...iconBtn, opacity: 1, color: "var(--color-primary)" }}><Check size={13} aria-hidden="true" /></button>
+                        <button type="button" aria-label="Cancel editing" onClick={() => setEditing(null)} style={{ ...iconBtn, opacity: 1 }}><X size={13} aria-hidden="true" /></button>
+                        {editError && <div role="alert" style={{ gridColumn: '1 / -1', fontSize: '11px', color: '#ff8a8a' }}>{editError}</div>}
+                      </form>
+                    );
+                  }
+                  return (
                   <div key={link.id} style={{
                     display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 12px',
                     borderRadius: '6px', transition: 'background 0.1s',
@@ -122,34 +177,60 @@ export default function QuickLinks() {
                     onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.03)'}
                     onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
 
-                    <img src={`https://www.google.com/s2/favicons?domain=${getDomain(link.url)}&sz=16`} width="16" height="16"
+                    {href && <img src={`https://www.google.com/s2/favicons?domain=${getDomain(href)}&sz=16`} width="16" height="16"
                       alt="" aria-hidden="true"
-                      style={{ borderRadius: '2px', flexShrink: 0 }} onError={e => e.target.style.display = 'none'} />
+                      style={{ borderRadius: '2px', flexShrink: 0 }} onError={e => e.target.style.display = 'none'} />}
 
-                    <a href={link.url} target="_blank" rel="noopener noreferrer"
-                      style={{ flex: 1, color: 'var(--text)', textDecoration: 'none', fontSize: '13px', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {link.name || link.title}
-                    </a>
+                    {href ? (
+                      <a href={href} target="_blank" rel="noopener noreferrer"
+                        style={{ flex: 1, color: 'var(--text)', textDecoration: 'none', fontSize: '13px', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {label}
+                      </a>
+                    ) : (
+                      <span title="This address is not http(s), so it will not be opened. Edit it to fix." style={{ flex: 1, fontSize: '13px', color: '#ff8a8a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {label} — blocked address
+                      </span>
+                    )}
 
                     <span style={{ fontSize: '9px', color: 'var(--text-dim)', opacity: 0.4, flexShrink: 0 }}>
-                      {getDomain(link.url)}
+                      {href ? getDomain(href) : ''}
                     </span>
 
-                    <button type="button" aria-label={`Open ${link.name || link.title} in a new tab`}
-                      onClick={() => window.open(link.url, '_blank', 'noopener,noreferrer')}
-                      style={{ display: 'flex', background: 'none', border: 'none', color: 'var(--text-dim)', cursor: 'pointer', padding: '2px', opacity: 0.3, flexShrink: 0 }}
+                    {!search && (
+                      <>
+                        <button type="button" aria-label={`Move ${label} up`} disabled={idx === 0} onClick={() => move(link.id, -1)} style={{ ...iconBtn, opacity: idx === 0 ? 0.1 : 0.3 }}>
+                          <ArrowUp size={11} aria-hidden="true" />
+                        </button>
+                        <button type="button" aria-label={`Move ${label} down`} disabled={idx === catLinks.length - 1} onClick={() => move(link.id, +1)} style={{ ...iconBtn, opacity: idx === catLinks.length - 1 ? 0.1 : 0.3 }}>
+                          <ArrowDown size={11} aria-hidden="true" />
+                        </button>
+                      </>
+                    )}
+
+                    <button type="button" aria-label={`Edit ${label}`} onClick={() => startEdit(link)} style={iconBtn}
                       onMouseEnter={e => e.currentTarget.style.opacity = '1'}
                       onMouseLeave={e => e.currentTarget.style.opacity = '0.3'}>
-                      <ExternalLink size={11} aria-hidden="true" />
+                      <Pencil size={11} aria-hidden="true" />
                     </button>
 
-                    <button type="button" aria-label={`Delete ${link.name || link.title}`} onClick={() => handleDelete(link.id)} style={{ background: 'none', border: 'none', color: 'var(--text-dim)', cursor: 'pointer', padding: '2px', opacity: 0.3, flexShrink: 0 }}
+                    {href && (
+                      <button type="button" aria-label={`Open ${label} in a new tab`}
+                        onClick={() => window.open(href, '_blank', 'noopener,noreferrer')}
+                        style={iconBtn}
+                        onMouseEnter={e => e.currentTarget.style.opacity = '1'}
+                        onMouseLeave={e => e.currentTarget.style.opacity = '0.3'}>
+                        <ExternalLink size={11} aria-hidden="true" />
+                      </button>
+                    )}
+
+                    <button type="button" aria-label={`Delete ${label}`} onClick={() => handleDelete(link.id)} style={iconBtn}
                       onMouseEnter={e => e.currentTarget.style.opacity = '1'}
                       onMouseLeave={e => e.currentTarget.style.opacity = '0.3'}>
                       <Trash2 size={12} aria-hidden="true" />
                     </button>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -158,6 +239,11 @@ export default function QuickLinks() {
     </div>
   );
 }
+
+const iconBtn = {
+  display: 'flex', background: 'none', border: 'none', color: 'var(--text-dim)',
+  cursor: 'pointer', padding: '2px', opacity: 0.3, flexShrink: 0,
+};
 
 const inputStyle = {
   padding: '8px 10px', borderRadius: '8px', fontSize: '12px',

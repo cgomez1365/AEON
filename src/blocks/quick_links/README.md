@@ -7,16 +7,21 @@
 
 ## What it does
 
-A compact, categorized bookmark manager. Lets you search, add, and delete
-links (bookmarks, portals, ops URLs) grouped into collapsible categories
+A compact, categorized bookmark manager. Lets you search, add, edit
+(name / address / category), reorder within a category, and delete links
+(bookmarks, portals, ops URLs) grouped into collapsible categories
 (General, Workspace, Dev Ops, Database, Integrations, Personal, Active
 Portals, Codebases, Client). Each entry shows its favicon and domain and
 opens in a new tab.
 
 ## Files
 
-- `index.jsx` — the entire block. No `api/` folder — this block makes no
-  server calls of its own and registers no Express routes.
+- `index.jsx` — the page. No `api/` folder — this block registers no
+  Express routes.
+- `linkOps.js` — pure list operations: `safeHref` (http/https only — links
+  also arrive from the terminal and other clients, and `window.open` is not
+  sanitised by React), `normalizeUrl`, `moveLink` (within the visible
+  category), `editLink`, `storeProblem`.
 - `block.manifest.json` — OS Kernel metadata (auto-loaded by
   `src/kernel/blockStandard.cjs` on boot).
 - `.aeon.runtime.json` — **auto-generated on every boot, do not edit.**
@@ -31,6 +36,12 @@ from the shared `AeonContext` provider
 - `links` — the array of `{ id, name, url, category }` entries.
 - `manageLinks({ action: 'add' | 'delete', ... })` — the mutator the
   add-form and delete button call.
+- `updateLinks(list)` — saves the whole list; edit and reorder use it.
+
+**Requires the `aeon_matrix` block** (`requires.blocks`): it serves
+`/api/sync/quick_links`. Without it the page says so — "Quick Links saves
+through the Aeon Matrix block, which is not installed" — and shows the
+browser's cached copy (measured 2026-09-23 with the folder parked).
 
 `AeonContext` persists links through `src/kernel/contexts/linksStore.js`:
 the source of truth is the server's `GET/POST /api/sync/quick_links`

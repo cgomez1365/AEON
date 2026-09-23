@@ -3,14 +3,17 @@ import { Link } from 'react-router-dom';
 import { StatCard, Card } from '../../components/aurora';
 import { Activity, Zap, Radio, BarChart3, Wifi, WifiOff, Server, Flame, Calendar, LayoutGrid, Plus, Trash2, Pencil } from 'lucide-react';
 import { AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
-import { useTelemetry } from '../../kernel/contexts/TelemetryContext';
 import { getEffectiveBlockGroups } from '../../kernel/blockRegistry.js';
 import { BlockIcon, SectionIcon } from '../../components/BlockIcon.jsx';
 import BlockCustomizeModal from '../../components/BlockCustomizeModal.jsx';
+import { serverCard, spendCard, callsCard, analyticsProblem, failureLine } from './kpis.js';
 
 import { SB_URL, SB_KEY } from '../../config.js';
 const CHART_COLORS = ['#00f2ff', '#f59e0b', '#4caf50', '#8b5cf6', '#ec4899', '#ff6b6b', '#00ff40', '#ff9800'];
 const sbH = { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}` };
+// Analytics refresh — the ledger-derived numbers on this page (spend, calls
+// today, heatmap, models, failures) were loaded once on mount and went stale.
+const ANALYTICS_POLL_MS = 30000;
 
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
@@ -47,12 +50,17 @@ export default function Dashboard({ chatHistory = [], auditLogs = [], blockLayou
   // one place a block's icon can be changed. Saving refreshes the shell's
   // icon map, so the sidebar and every other consumer update at once.
   const [iconTarget, setIconTarget] = useState(null); // the block being edited
-  const { apiUsage } = useTelemetry();
   const [autopilot, setAutopilot] = useState(null);
-  const [serverUp, setServerUp] = useState(false);
+  // { ok, status, uptime } from /api/llm-telemetry; status 0 = no answer.
+  const [probe, setProbe] = useState(null);
+  const serverUp = !!probe?.ok;
   const [llmModels, setLlmModels] = useState([]);
   const [heatmapData, setHeatmapData] = useState(null);
   const [heatmapSummary, setHeatmapSummary] = useState(null);
+  // undefined = loading; a number = the HTTP status that stopped analytics
+  // (0 = no answer). The activity block owns every analytics route.
+  const [analyticsStatus, setAnalyticsStatus] = useState(undefined);
+  const [failures, setFailures] = useState([]);
   const [activityRange, setActivityRange] = useState('heatmap');
   const [activityBarRange, setActivityBarRange] = useState('30d');
   const [blockStates, setBlockStates] = useState({});
@@ -128,61 +136,90 @@ export default function Dashboard({ chatHistory = [], auditLogs = [], blockLayou
 
   // ── Fleet + Heatmap data polling ──
   const loadFleetData = useCallback(async () => {
-    // LLM telemetry
+    // LLM telemetry — the kernel's in-memory counters since server start.
     try {
       const r = await fetch('/api/llm-telemetry');
-      if (r.ok) { const d = await r.json(); setLlmModels(d.models || []); setServerUp(true); }
-      else throw '';
-    } catch { setServerUp(false); }
+      if (r.ok) {
+        const d = await r.json();
+        setLlmModels(d.models || []);
+        setProbe({ ok: true, status: r.status, uptime: d.uptime });
+      } else setProbe({ ok: false, status: r.status });
+    } catch { setProbe({ ok: false, status: 0 }); }
 
-    // Autopilot
+    // Video autopilot (tools/autopilot-daemon.cjs, mounted by the kernel)
     try {
       const r = await fetch('/api/autopilot/status');
-      if (r.ok) setAutopilot(await r.json());
-    } catch {}
+      setAutopilot(r.ok ? await r.json() : null);
+    } catch { setAutopilot(null); }
 
   }, []);
 
+  // Everything below the KPI row that counts calls reads the activity block's
+  // ledger-derived routes, so the cards, heatmap, charts and failure list
+  // agree with each other and with <db>/llm_calls.jsonl.
   const loadHeatmap = useCallback(async () => {
+    let status = 0;
     try {
-      const [hRes, sRes] = await Promise.all([
-        fetch('/api/token-analytics/heatmap'), fetch('/api/token-analytics/summary'),
+      // Self-reported: this page renders its own sentence for every failure
+      // (AnalyticsState / the KPI subs), so the global [API FAILED] banner
+      // would be a second, vaguer copy of it (src/utils/interceptorPolicy.js).
+      const own = { headers: { 'x-aeon-self-reported': '1' } };
+      const [hRes, sRes, fRes] = await Promise.all([
+        fetch('/api/token-analytics/heatmap', own),
+        fetch('/api/token-analytics/summary', own),
+        fetch('/api/token-analytics/calls?failed=1&limit=5', own),
       ]);
-      if (hRes.ok && sRes.ok) { setHeatmapData(await hRes.json()); setHeatmapSummary(await sRes.json()); return; }
-    } catch {}
-    try {
-      const r = await fetch(`${SB_URL}/rest/v1/aeon_blocks?block_tag=eq.activity&select=payload`, { headers: sbH });
-      const rows = await r.json();
-      const data = rows?.[0]?.payload || {};
-      const days = []; const end = new Date(); const start = new Date(end); start.setDate(start.getDate() - 364);
-      const cursor = new Date(start); let maxR = 0, totalR = 0, totalT = 0, active = 0;
-      while (cursor <= end) {
-        const key = cursor.toISOString().slice(0, 10);
-        const e = data[key] || { requests: 0, tokens: 0 };
-        days.push({ date: key, requests: e.requests, tokens: e.tokens, weekday: cursor.getDay() });
-        if (e.requests > maxR) maxR = e.requests; totalR += e.requests; totalT += e.tokens; if (e.requests > 0) active++;
-        cursor.setDate(cursor.getDate() + 1);
+      if (hRes.ok && sRes.ok) {
+        setHeatmapData(await hRes.json());
+        setHeatmapSummary(await sRes.json());
+        if (fRes.ok) { const f = await fRes.json(); setFailures(f.calls || []); }
+        setAnalyticsStatus(200);
+        return;
       }
-      setHeatmapData({ days, maxRequests: maxR, totalRequests: totalR, totalTokens: totalT, activeDays: active });
-      setHeatmapSummary({ totalRequests: totalR, totalTokens: totalT, activeDays: active, currentStreak: 0, longestStreak: 0 });
-    } catch {}
+      status = hRes.ok ? sRes.status : hRes.status;
+    } catch { status = 0; }
+    // Supabase mirror — only when this build is configured for one. It used
+    // to run unconditionally: with no VITE_SUPABASE_URL it fetched
+    // "undefined/rest/v1/…", got the SPA's HTML, threw, and left the heatmap
+    // on "Loading heatmap..." forever.
+    if (SB_URL) {
+      try {
+        const r = await fetch(`${SB_URL}/rest/v1/aeon_blocks?block_tag=eq.activity&select=payload`, { headers: sbH });
+        const rows = await r.json();
+        const data = rows?.[0]?.payload || {};
+        const days = []; const now = new Date(); let maxR = 0, totalR = 0, totalT = 0, active = 0;
+        for (let i = 364; i >= 0; i--) {
+          const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i, 12);
+          const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+          const e = data[key] || { requests: 0, tokens: 0 };
+          days.push({ date: key, requests: e.requests, tokens: e.tokens, weekday: d.getDay() });
+          if (e.requests > maxR) maxR = e.requests; totalR += e.requests; totalT += e.tokens; if (e.requests > 0) active++;
+        }
+        setHeatmapData({ days, maxRequests: maxR, totalRequests: totalR, totalTokens: totalT, activeDays: active });
+        setAnalyticsStatus(200);
+        return;
+      } catch {}
+    }
+    setAnalyticsStatus(status);
   }, []);
 
   useEffect(() => { loadFleetData(); loadHeatmap(); loadBlockStates(); }, []);
   useEffect(() => { const i = setInterval(loadFleetData, 5000); return () => clearInterval(i); }, [loadFleetData]);
+  useEffect(() => { const i = setInterval(loadHeatmap, ANALYTICS_POLL_MS); return () => clearInterval(i); }, [loadHeatmap]);
   useEffect(() => { const i = setInterval(loadBlockStates, 10000); return () => clearInterval(i); }, [loadBlockStates]);
 
-  // Engines reachable right now. Reported as a plain number, including zero.
-  // This was `activeEngines || totalCalls > 0 ? activeEngines : '—'`, which
-  // JS parses as `(activeEngines || totalCalls > 0) ? activeEngines : '—'` —
-  // so with no engines but some historical calls it rendered a literal 0 next
-  // to "1 calls", and with neither it rendered a dash. Two different displays
-  // for the same fact, decided by an unrelated counter. Zero engines is a
-  // true and useful thing to say, so it just says it.
-  const totalCalls = apiUsage?.totalRequests || 0;
-  const totalTokens = apiUsage?.totalTokens || 0;
-  const currentCost = apiUsage?.totalCost || 0;
-  const activeEngines = llmModels.filter(m => m.requests > 0).length;
+  // The kernel's live counters: every engine/model pair called since the
+  // server started (they reset on restart). Labelled as exactly that below —
+  // this used to be commented "engines reachable right now" and shown as the
+  // "LLM Engines" KPI, which it never measured.
+  const sessionCalls = llmModels.reduce((n, m) => n + (m.requests || 0), 0);
+  const analyticsDown = analyticsStatus !== undefined && analyticsStatus !== 200;
+  const spend = spendCard(heatmapSummary, analyticsDown ? analyticsStatus : undefined);
+  const callsToday = callsCard(heatmapSummary, analyticsDown ? analyticsStatus : undefined);
+  const server = serverCard(probe);
+  // All-time model mix from the ledger (the same records as the heatmap).
+  const ledgerModels = (heatmapSummary?.modelBreakdown || []).filter(m => m.requests > 0);
+  const ledgerCalls = ledgerModels.reduce((n, m) => n + m.requests, 0);
 
   // Heatmap weeks
   const weeks = useMemo(() => {
@@ -214,10 +251,10 @@ export default function Dashboard({ chatHistory = [], auditLogs = [], blockLayou
 
       {/* ═══ TOP KPI ROW ═══ */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '10px', marginBottom: '20px' }}>
-        <StatCard label="API Spend" value={`$${(currentCost ?? 0).toFixed(4)}`} accent="amber" sub="$15 daily limit" icon={<Zap size={14} aria-hidden="true" />} />
-        <StatCard label="LLM Engines" value={activeEngines} accent="cyan" sub={`${totalCalls} calls | ${fmt(totalTokens)} tok`} icon={<Activity size={14} aria-hidden="true" />} />
-        <StatCard label="Server" value={serverUp ? 'ONLINE' : 'CLOUD'} accent={serverUp ? 'emerald' : 'amber'} sub={serverUp ? 'Local kernel' : 'Supabase relay'} icon={serverUp ? <Wifi size={14} aria-hidden="true" /> : <WifiOff size={14} aria-hidden="true" />} />
-        <StatCard label="Autopilot" value={autopilot?.status || '—'} accent={autopilot?.producerRunning ? 'emerald' : 'cyan'} sub={autopilot ? `${autopilot.totalProduced || 0} produced` : 'Unknown'} icon={<Server size={14} aria-hidden="true" />} />
+        <StatCard label="Spend today" value={spend.value} accent="amber" sub={spend.sub} icon={<Zap size={14} aria-hidden="true" />} />
+        <StatCard label="LLM calls today" value={callsToday.value} accent={heatmapSummary?.today?.errors ? 'coral' : 'cyan'} sub={callsToday.sub} icon={<Activity size={14} aria-hidden="true" />} />
+        <StatCard label="Server" value={server.value} accent={server.accent} sub={server.sub} icon={serverUp ? <Wifi size={14} aria-hidden="true" /> : <WifiOff size={14} aria-hidden="true" />} />
+        <StatCard label="Video autopilot" value={autopilot?.status || '—'} accent={autopilot?.producerRunning ? 'emerald' : 'cyan'} sub={autopilot ? `${autopilot.totalProduced || 0} produced · ${autopilot.totalUploaded || 0} uploaded` : 'Not answering'} icon={<Server size={14} aria-hidden="true" />} />
       </div>
 
       {/* ═══ INSTALLED BLOCKS — auto-organized from the block registry ═══ */}
@@ -345,23 +382,23 @@ export default function Dashboard({ chatHistory = [], auditLogs = [], blockLayou
       <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '12px', marginBottom: '20px' }}>
         {/* LLM Engines */}
         <Card hover={false}>
-          <PanelHeader icon={<BarChart3 size={14} style={{ color: '#8b5cf6' }} aria-hidden="true" />} title="LLM ENGINE TELEMETRY" live={totalCalls > 0} />
+          <PanelHeader icon={<BarChart3 size={14} style={{ color: '#8b5cf6' }} aria-hidden="true" />} title="LLM ENGINES — SINCE SERVER START" live={sessionCalls > 0} />
           {llmModels.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '20px', color: 'var(--text-dim)', fontSize: '11px' }}>
-              {serverUp ? 'No calls this session' : 'Connect to the local kernel for live data'}
+              {serverUp ? 'No LLM calls since the server started' : server.sub}
             </div>
           ) : (
             <div style={{ display: 'grid', gap: '6px' }}>
               {llmModels.slice(0, 6).map(m => (
                 <div key={m.engine + m.model} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 10px', borderRadius: '6px', background: 'rgba(255,255,255,0.02)' }}>
-                  <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: m.errors > 0 ? '#f44336' : '#00ff40', flexShrink: 0 }} />
+                  <div role="img" aria-label={m.errors > 0 ? `${m.errors} failed` : 'No failures'} style={{ width: '6px', height: '6px', borderRadius: '50%', background: m.errors > 0 ? '#f44336' : '#00ff40', flexShrink: 0 }} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: '11px', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.model}</div>
-                    <div style={{ fontSize: '9px', color: 'var(--text-dim)' }}>{m.engine} · {m.avgLatency}ms</div>
+                    <div style={{ fontSize: '9px', color: 'var(--text-dim)' }}>{m.engine} · {m.avgLatency}ms avg{m.errors > 0 ? ` · ${m.errors} failed` : ''}</div>
                   </div>
                   <div style={{ fontSize: '13px', fontWeight: 700, fontFamily: 'var(--font-mono)' }}>{m.requests}</div>
                   <div style={{ width: '50px', height: '4px', background: 'rgba(255,255,255,0.05)', borderRadius: '2px', overflow: 'hidden' }}>
-                    <div style={{ height: '100%', borderRadius: '2px', background: m.engine === 'groq' ? '#00f2ff' : m.engine === 'gemini' ? '#f59e0b' : '#4caf50', width: `${totalCalls ? Math.round(m.requests / totalCalls * 100) : 0}%` }} />
+                    <div style={{ height: '100%', borderRadius: '2px', background: m.engine === 'groq' ? '#00f2ff' : m.engine === 'gemini' ? '#f59e0b' : '#4caf50', width: `${sessionCalls ? Math.round(m.requests / sessionCalls * 100) : 0}%` }} />
                   </div>
                 </div>
               ))}
@@ -433,16 +470,22 @@ export default function Dashboard({ chatHistory = [], auditLogs = [], blockLayou
                 <span>More</span>
               </div>
             </>
-          ) : <div style={{ textAlign: 'center', padding: '30px', color: 'var(--text-dim)', fontSize: '11px' }}>Loading heatmap...</div>
+          ) : <AnalyticsState status={analyticsStatus} what="heatmap" />
         )}
+
+        {activityRange !== 'heatmap' && !heatmapData?.days && <AnalyticsState status={analyticsStatus} what="analytics" />}
 
         {/* ── TAB: Activity Charts ── */}
         {activityRange === 'activity' && heatmapData?.days && (() => {
           const days = heatmapData.days || [];
           const len = activityBarRange === '7d' ? 7 : activityBarRange === '90d' ? 90 : 30;
+          // The last N calendar days, today included — the heatmap route
+          // always ends today now (it dropped today between 02:00 and 02:59
+          // local after a spring-forward, and this chart sliced the same array).
           const slice = days.slice(-len).map(d => ({ ...d, date: d.date.slice(5), tok: Math.round(d.tokens / 1000) }));
           const totalR = slice.reduce((s, d) => s + d.requests, 0);
           const totalT = slice.reduce((s, d) => s + d.tokens, 0);
+          const totalE = slice.reduce((s, d) => s + (d.errors || 0), 0);
           return (
             <div>
               <div role="group" aria-label="Activity chart range" style={{ display: 'flex', gap: '6px', marginBottom: '10px', alignItems: 'center' }}>
@@ -453,7 +496,7 @@ export default function Dashboard({ chatHistory = [], auditLogs = [], blockLayou
                   }}>{r}</button>
                 ))}
                 <span style={{ fontSize: '11px', marginLeft: '12px' }}>
-                  <strong style={{ color: 'var(--color-primary)' }}>{totalR}</strong> requests · <strong style={{ color: '#8b5cf6' }}>{fmt(totalT)}</strong> tokens · <strong>{slice.filter(d => d.requests > 0).length}</strong> active days
+                  <strong style={{ color: 'var(--color-primary)' }}>{totalR}</strong> requests{totalE ? <> (<strong style={{ color: '#f44336' }}>{totalE}</strong> failed)</> : null} · <strong style={{ color: '#8b5cf6' }}>{fmt(totalT)}</strong> tokens · <strong>{slice.filter(d => d.requests > 0).length}</strong> active days
                 </span>
               </div>
               <ResponsiveContainer width="100%" height={180}>
@@ -481,19 +524,16 @@ export default function Dashboard({ chatHistory = [], auditLogs = [], blockLayou
         })()}
 
         {/* ── TAB: Models (Recharts pie + bar) ── */}
-        {activityRange === 'models' && (() => {
-          const fallbackModels = Object.entries(apiUsage?.staffUsage || {})
-            .filter(([_, v]) => v.requests > 0)
-            .map(([k, v]) => ({
-              model: k,
-              engine: 'historical',
-              requests: v.requests,
-              tokens: v.tokens,
-              avgLatency: 0
-            }))
-            .sort((a, b) => b.requests - a.requests);
-            
-          const displayModels = llmModels.length > 0 ? llmModels : fallbackModels;
+        {activityRange === 'models' && heatmapSummary && (() => {
+          // All-time model mix from the call ledger — the same records as the
+          // heatmap and the cards. This mixed two sources before: the
+          // since-restart counters when they had data, else /api/telemetry's
+          // chat-log guesses (150 tokens per message), with the centre count
+          // taken from a third.
+          const displayModels = ledgerModels.map(m => ({
+            model: m.name, engine: m.provider || 'unknown', requests: m.requests,
+            tokens: m.tokens, errors: m.errors || 0, avgLatency: m.avgLatency,
+          }));
 
           if (displayModels.length === 0) {
             return (
@@ -510,6 +550,7 @@ export default function Dashboard({ chatHistory = [], auditLogs = [], blockLayou
             value: m.requests,
             tokens: m.tokens,
             engine: m.engine,
+            errors: m.errors,
             avgMs: m.avgLatency,
             color: CHART_COLORS[i % CHART_COLORS.length],
           }));
@@ -530,12 +571,12 @@ export default function Dashboard({ chatHistory = [], auditLogs = [], blockLayou
                       {pieData.map((d, i) => <Cell key={i} fill={d.color} />)}
                     </Pie>
                     <Tooltip contentStyle={{ background: '#1a1a1a', border: '1px solid #333', borderRadius: '6px', fontSize: '11px' }}
-                      formatter={(val, name, props) => [`${val} calls · ${fmt(props.payload.tokens)} tok · ${props.payload.avgMs}ms`, props.payload.name]} />
+                      formatter={(val, name, props) => [`${val} calls${props.payload.errors ? ` (${props.payload.errors} failed)` : ''} · ${fmt(props.payload.tokens)} tok${props.payload.avgMs != null ? ` · ${props.payload.avgMs}ms avg` : ''}`, props.payload.name]} />
                   </PieChart>
                 </ResponsiveContainer>
                 <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', textAlign: 'center', pointerEvents: 'none' }}>
-                  <div style={{ fontSize: '22px', fontWeight: 800, fontFamily: 'var(--font-mono)' }}>{totalCalls}</div>
-                  <div style={{ fontSize: '8px', color: 'var(--text-dim)', letterSpacing: '1px' }}>CALLS</div>
+                  <div style={{ fontSize: '22px', fontWeight: 800, fontFamily: 'var(--font-mono)' }}>{ledgerCalls}</div>
+                  <div style={{ fontSize: '8px', color: 'var(--text-dim)', letterSpacing: '1px' }}>CALLS · ALL TIME</div>
                 </div>
               </div>
 
@@ -570,7 +611,27 @@ export default function Dashboard({ chatHistory = [], auditLogs = [], blockLayou
 
       {/* ═══ AUDIT FEED ═══ */}
       <Card hover={false}>
-        <PanelHeader icon={<Radio size={14} style={{ color: '#00ff40' }} aria-hidden="true" />} title="LIVE ACTIVITY FEED" live />
+        <PanelHeader icon={<Radio size={14} style={{ color: '#00ff40' }} aria-hidden="true" />} title="LIVE ACTIVITY FEED" live={!analyticsDown} />
+        {/* Failed calls, with the reason. The audit line for a failure only
+            says "FAILED" (and status 500 whatever the provider answered); the
+            ledger keeps the HTTP status and the error text. */}
+        {failures.length > 0 && (
+          <div style={{ marginBottom: '8px' }}>
+            <div style={{ fontSize: '9px', fontWeight: 700, letterSpacing: '1px', color: '#f44336', marginBottom: '4px' }}>RECENT FAILED CALLS</div>
+            {failures.map((c, i) => {
+              const l = failureLine(c);
+              return (
+                <div key={`${c.ts}-${i}`} style={{ display: 'flex', gap: '8px', padding: '4px 0', borderBottom: '1px solid rgba(255,255,255,0.03)', fontSize: '10px' }}>
+                  <span style={{ color: '#f44336', fontWeight: 700, minWidth: '70px' }}>{l.code}</span>
+                  <span style={{ color: 'var(--text-dim)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={`${l.who}: ${l.why}`}>
+                    <strong style={{ color: 'var(--text)' }}>{l.who}</strong>{l.why ? ` — ${l.why}` : ''}
+                  </span>
+                  <span style={{ color: 'var(--text-dim)', fontSize: '9px', opacity: 0.5 }}>{l.ago}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
         <div style={{ maxHeight: '180px', overflowY: 'auto' }}>
           {auditLogs.slice(-12).reverse().map(log => (
             <div key={log.id} style={{ display: 'flex', gap: '8px', padding: '4px 0', borderBottom: '1px solid rgba(255,255,255,0.03)', fontSize: '10px' }}>
@@ -579,7 +640,13 @@ export default function Dashboard({ chatHistory = [], auditLogs = [], blockLayou
               <span style={{ color: 'var(--text-dim)', fontSize: '9px', opacity: 0.5 }}>{log.timestamp ? new Date(log.timestamp).toLocaleTimeString() : ''}</span>
             </div>
           ))}
-          {auditLogs.length === 0 && <div style={{ color: 'var(--text-dim)', fontSize: '11px', textAlign: 'center', padding: '16px' }}>No activity yet</div>}
+          {auditLogs.length === 0 && (
+            <div style={{ color: 'var(--text-dim)', fontSize: '11px', textAlign: 'center', padding: '16px' }}>
+              {analyticsStatus === 404
+                ? 'The live feed is served by the Activity block, which is not installed.'
+                : 'No activity yet'}
+            </div>
+          )}
         </div>
       </Card>
 
@@ -597,6 +664,17 @@ export default function Dashboard({ chatHistory = [], auditLogs = [], blockLayou
 }
 
 // ── Shared Components ──
+
+// Loading, or the reason analytics did not load — never "Loading…" forever.
+function AnalyticsState({ status, what }) {
+  const loading = status === undefined || status === 200;
+  return (
+    <div role={loading ? 'status' : 'alert'} style={{ textAlign: 'center', padding: '30px', color: 'var(--text-dim)', fontSize: '11px' }}>
+      {loading ? `Loading ${what}...` : analyticsProblem(status)}
+    </div>
+  );
+}
+
 function PanelHeader({ icon, title, live, liveLabel }) {
   return (
     <div style={{ fontSize: '10px', fontWeight: 700, marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--text-dim)', letterSpacing: '0.5px' }}>

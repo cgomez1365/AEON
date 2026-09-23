@@ -13,7 +13,12 @@ AEON looking at its own activity log, not a user-facing content feature.
 ## Files
 - `index.jsx` — the heatmap UI. Fetches `/api/token-analytics/heatmap` +
   `/api/token-analytics/summary` in parallel on load; clicking a day cell
-  fetches `/api/token-analytics/daily/:date` for the detail panel.
+  fetches `/api/token-analytics/daily/:date` for the detail panel. Shows
+  failed calls (card, day detail, per-model), last 7 and 30 days, and names
+  its source ("counted from the call ledger (N recorded calls since …)").
+  A failed load renders the reason (session expired / server not answering /
+  HTTP n) instead of an all-zero year; the Supabase mirror is read only when
+  `VITE_SUPABASE_URL` is set.
 - `api/token-analytics.cjs` — the block's actual API. **Counts come from the
   kernel's per-call ledger** (`<db>/llm_calls.jsonl`, written by
   `services/ai.js` for every provider call, failures included, with status and

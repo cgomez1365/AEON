@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Activity, Flame, Calendar, BarChart3, Zap, Clock, TrendingUp,
-  RefreshCw, ChevronDown, Info,
+  RefreshCw, ChevronDown, Info, AlertTriangle,
 } from 'lucide-react';
 
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -23,40 +23,55 @@ export default function TokenHeatmap() {
   const [dayDetail, setDayDetail] = useState(null);
   const [loading, setLoading] = useState(true);
 
+  // undefined = loaded fine / loading; a number = the HTTP status that
+  // stopped the load (0 = no answer), shown instead of an empty page.
+  const [loadStatus, setLoadStatus] = useState(undefined);
+
   const loadData = useCallback(async () => {
     setLoading(true);
+    let status = 0;
     try {
+      // Self-reported: a failure renders as this page's own alert below.
+      const own = { headers: { 'x-aeon-self-reported': '1' } };
       const [hRes, sRes] = await Promise.all([
-        fetch('/api/token-analytics/heatmap'),
-        fetch('/api/token-analytics/summary'),
+        fetch('/api/token-analytics/heatmap', own),
+        fetch('/api/token-analytics/summary', own),
       ]);
       if (hRes.ok && sRes.ok) {
         setHeatmapData(await hRes.json());
         setSummary(await sRes.json());
+        setLoadStatus(undefined);
         setLoading(false);
         return;
       }
-    } catch {}
-    // Supabase fallback
-    try {
-      const sbUrl = import.meta.env.VITE_SUPABASE_URL;
-      const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-      const r = await fetch(`${sbUrl}/rest/v1/aeon_blocks?block_tag=eq.activity&select=payload`, { headers: { apikey: sbKey, Authorization: `Bearer ${sbKey}` } });
-      const rows = await r.json();
-      const data = rows?.[0]?.payload || {};
-      // Build heatmap from stored daily data
-      const days = []; const end = new Date(); const start = new Date(end); start.setDate(start.getDate() - 364);
-      const cursor = new Date(start); let maxR = 0, totalR = 0, totalT = 0, active = 0;
-      while (cursor <= end) {
-        const key = cursor.toISOString().slice(0, 10);
-        const e = data[key] || { requests: 0, tokens: 0 };
-        days.push({ date: key, requests: e.requests, tokens: e.tokens, weekday: cursor.getDay() });
-        if (e.requests > maxR) maxR = e.requests; totalR += e.requests; totalT += e.tokens; if (e.requests > 0) active++;
-        cursor.setDate(cursor.getDate() + 1);
-      }
-      setHeatmapData({ days, maxRequests: maxR, totalRequests: totalR, totalTokens: totalT, activeDays: active });
-      setSummary({ totalRequests: totalR, totalTokens: totalT, activeDays: active, currentStreak: 0, longestStreak: 0, last7: { requests: 0, tokens: 0 }, last30: { requests: 0, tokens: 0 }, modelBreakdown: [] });
-    } catch {}
+      status = hRes.ok ? sRes.status : hRes.status;
+    } catch { status = 0; }
+    // Supabase mirror — only when this build was configured with one. It ran
+    // unconditionally before; with no VITE_SUPABASE_URL it fetched
+    // "undefined/rest/v1/…" and rendered an all-zero year as if it were data.
+    const sbUrl = import.meta.env.VITE_SUPABASE_URL;
+    const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+    if (sbUrl && sbKey) {
+      try {
+        const r = await fetch(`${sbUrl}/rest/v1/aeon_blocks?block_tag=eq.activity&select=payload`, { headers: { apikey: sbKey, Authorization: `Bearer ${sbKey}` } });
+        const rows = await r.json();
+        const data = rows?.[0]?.payload || {};
+        const days = []; const now = new Date(); let maxR = 0, totalR = 0, totalT = 0, active = 0;
+        for (let i = 364; i >= 0; i--) {
+          const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i, 12);
+          const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+          const e = data[key] || { requests: 0, tokens: 0 };
+          days.push({ date: key, requests: e.requests, tokens: e.tokens, weekday: d.getDay() });
+          if (e.requests > maxR) maxR = e.requests; totalR += e.requests; totalT += e.tokens; if (e.requests > 0) active++;
+        }
+        setHeatmapData({ days, maxRequests: maxR, totalRequests: totalR, totalTokens: totalT, activeDays: active });
+        setSummary(null);
+        setLoadStatus(undefined);
+        setLoading(false);
+        return;
+      } catch {}
+    }
+    setLoadStatus(status);
     setLoading(false);
   }, []);
 
@@ -112,6 +127,17 @@ export default function TokenHeatmap() {
     );
   }
 
+  if (loadStatus !== undefined) {
+    const why = loadStatus === 401 ? 'Your session expired — sign in again.'
+      : loadStatus === 0 ? 'The AEON server is not answering.'
+      : `Activity data did not load (HTTP ${loadStatus}).`;
+    return (
+      <div role="alert" style={{ padding: '24px', maxWidth: '1000px', margin: '0 auto', fontSize: '12px', color: 'var(--text-dim)' }}>
+        {why} <button onClick={loadData} style={{ ...tinyBtn, display: 'inline-flex' }}>Retry</button>
+      </div>
+    );
+  }
+
   const max = heatmapData?.maxRequests || 1;
 
   return (
@@ -135,7 +161,11 @@ export default function TokenHeatmap() {
         }}>Token Analytics & Heatmap</span>
       </div>
       <p style={{ fontSize: '12px', color: 'var(--text-dim, #888)', margin: '0 0 20px 0' }}>
-        {summary?.totalRequests?.toLocaleString() || 0} requests across {summary?.activeDays || 0} active days
+        {(summary?.totalRequests ?? heatmapData?.totalRequests ?? 0).toLocaleString()} LLM calls across {summary?.activeDays ?? heatmapData?.activeDays ?? 0} active days
+        {summary?.source?.ledger && (
+          <span style={{ opacity: 0.7 }}> · counted from the call ledger ({summary.source.ledgerCalls.toLocaleString()} recorded calls{summary.source.firstLedgerDay ? ` since ${summary.source.firstLedgerDay}` : ''})</span>
+        )}
+        {!summary && heatmapData && <span style={{ opacity: 0.7 }}> · from the Supabase mirror (streaks and model breakdown unavailable)</span>}
       </p>
 
       {/* Stats Cards */}
@@ -143,10 +173,13 @@ export default function TokenHeatmap() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '8px', marginBottom: '20px' }}>
           <StatCard icon={Zap} label="Total Requests" value={fmt(summary.totalRequests)} color="#00f2ff" />
           <StatCard icon={BarChart3} label="Total Tokens" value={fmt(summary.totalTokens)} color="#8b5cf6" />
-          <StatCard icon={Flame} label="Current Streak" value={`${summary.currentStreak}d`} color="#f59e0b" />
+          <StatCard icon={Flame} label="Current Streak" value={`${summary.currentStreak}d`} color="#f59e0b"
+            title="Consecutive days with at least one call, through today — or through yesterday if today has none yet" />
           <StatCard icon={TrendingUp} label="Longest Streak" value={`${summary.longestStreak}d`} color="#4caf50" />
           <StatCard icon={Calendar} label="Active Days" value={String(summary.activeDays)} color="#2196f3" />
           <StatCard icon={Clock} label="Last 7 Days" value={fmt(summary.last7?.requests)} sub={`${fmt(summary.last7?.tokens)} tok`} color="#ec4899" />
+          <StatCard icon={Clock} label="Last 30 Days" value={fmt(summary.last30?.requests)} sub={`${fmt(summary.last30?.tokens)} tok`} color="#ec4899" />
+          <StatCard icon={AlertTriangle} label="Failed Calls" value={fmt(summary.errors)} sub={summary.today?.errors ? `${summary.today.errors} today` : 'none today'} color="#f44336" />
         </div>
       )}
 
@@ -203,8 +236,8 @@ export default function TokenHeatmap() {
                         loadDayDetail(d.date);
                       }
                     }}
-                    title={`${d.date}: ${d.requests} requests, ${fmt(d.tokens)} tokens`}
-                    aria-label={`${d.date}: ${d.requests} requests, ${fmt(d.tokens)} tokens`}
+                    title={`${d.date}: ${d.requests} requests${d.errors ? ` (${d.errors} failed)` : ''}, ${fmt(d.tokens)} tokens`}
+                    aria-label={`${d.date}: ${d.requests} requests${d.errors ? ` (${d.errors} failed)` : ''}, ${fmt(d.tokens)} tokens`}
                     aria-pressed={selectedDay === d.date}
                     style={{
                       width: '11px', height: '11px', borderRadius: '2px',
@@ -246,6 +279,7 @@ export default function TokenHeatmap() {
           <div style={{ display: 'flex', gap: '16px', fontSize: '12px', marginBottom: '8px' }}>
             <span><strong>{dayDetail.requests}</strong> requests</span>
             <span><strong>{fmt(dayDetail.tokens)}</strong> tokens</span>
+            {dayDetail.errors > 0 && <span style={{ color: '#f44336' }}><strong>{dayDetail.errors}</strong> failed</span>}
           </div>
           {dayDetail.models && Object.keys(dayDetail.models).length > 0 && (
             <div style={{ display: 'grid', gap: '4px' }}>
@@ -275,7 +309,7 @@ export default function TokenHeatmap() {
               const pct = summary.totalRequests ? Math.round(m.requests / summary.totalRequests * 100) : 0;
               return (
                 <div key={m.name} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '11px' }}>
-                  <span style={{ width: '140px', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <span title={m.provider ? `${m.name} via ${m.provider}` : m.name} style={{ width: '140px', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {m.name}
                   </span>
                   <div style={{ flex: 1, height: '6px', background: 'rgba(255,255,255,0.05)', borderRadius: '3px', overflow: 'hidden' }}>
@@ -284,8 +318,8 @@ export default function TokenHeatmap() {
                       width: `${pct}%`, background: 'var(--color-primary, #00f2ff)',
                     }} />
                   </div>
-                  <span style={{ color: 'var(--text-dim)', width: '80px', textAlign: 'right' }}>
-                    {m.requests} · {pct}%
+                  <span style={{ color: 'var(--text-dim)', width: '120px', textAlign: 'right' }}>
+                    {m.requests} · {pct}%{m.errors ? <span style={{ color: '#f44336' }}> · {m.errors} failed</span> : null}
                   </span>
                 </div>
               );
@@ -298,9 +332,9 @@ export default function TokenHeatmap() {
 }
 
 // ── Stat Card ──
-function StatCard({ icon: Icon, label, value, sub, color }) {
+function StatCard({ icon: Icon, label, value, sub, color, title }) {
   return (
-    <div style={{
+    <div title={title} style={{
       ...cardStyle, padding: '10px 14px',
       borderLeft: `3px solid ${color}`,
     }}>

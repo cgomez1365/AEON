@@ -14,16 +14,23 @@ API calls, nothing autonomous.
 
 The UI (`index.jsx`) polls every 8 seconds and renders four panels:
 
-1. **Status cards** — AEON server reachability (online vs. cloud/relay mode),
-   total LLM calls + tokens this session, provider health ratio, and
-   autopilot status.
-2. **Provider health & key pools** — one row per LLM provider (groq, gemini,
-   local runtime, ...) showing healthy/unhealthy state and, when available, how many
-   API keys are in that provider's rotation pool and which slot is active.
+1. **Status cards** — AEON server (ONLINE / SIGNED OUT / UNREACHABLE — it said
+   "CLOUD MODE · Supabase relay" for every non-200 before 2026-09-23), LLM
+   calls since the server started (with failures), configured providers
+   healthy (unconfigured ones are not counted), and the video autopilot.
+2. **Provider health & key pools** — one row per provider: *Healthy*,
+   *Cooling down — retry in Ns* with the reason, or greyed *Not configured*
+   (unconfigured providers used to be drawn red "cooling down"). Configured
+   endpoints from `/api/connections` that the kernel's health map has not
+   seen fail yet are merged in as healthy (the kernel lists only
+   groq/gemini/local/openrouter plus providers with a failure).
 3. **LLM engine telemetry** — per-model breakdown (engine, requests, tokens,
    average latency, error count) sourced from the kernel's in-memory
    telemetry counters.
-4. **VP missions — recent** — the last N Mission Runner (`/vp`) runs, read
+4. **This machine — model fit** — CPU/RAM/GPU and how many of the hwfit
+   catalogue models fit at Q4 (GPU / offload / CPU / too large), from
+   `/api/hwfit/models` — the same routes Cookbook uses.
+5. **VP missions — recent** — the last N Mission Runner (`/vp`) runs, read
    directly from the Vault filesystem. Click a row (or focus it and press
    Enter/Space) to expand the mission's full markdown log.
 
@@ -33,7 +40,9 @@ The UI (`index.jsx`) polls every 8 seconds and renders four panels:
 |---|---|---|
 | `GET /api/llm-telemetry` | kernel (`src/kernel/routers/telemetry.cjs`, aliased from `/core/telemetry`) | LLM call counts, tokens, per-model stats, server uptime |
 | `GET /core/provider-health` | kernel (`src/kernel/routers/core.cjs`) | per-provider healthy/cooldown state + key pool sizes |
-| `GET /api/autopilot/status` | `tools/autopilot-daemon.cjs` | autopilot producer status |
+| `GET /api/autopilot/status` | `tools/autopilot-daemon.cjs` | video autopilot status (YouTube producer/uploader; start/stop routes exist but no UI calls them) |
+| `GET /api/connections` | `settings` block | configured endpoints, merged into provider rows (optional) |
+| `GET /api/hwfit/models` | this block (`api/hwfit.cjs`) | hardware + model fit for the "This machine" panel |
 | `GET /api/fleet/missions?limit=12` | this block (`api/missions.cjs`) | recent VP mission summaries |
 | `GET /api/fleet/mission/:id` | this block (`api/missions.cjs`) | full markdown for one mission |
 
@@ -59,8 +68,10 @@ and `/api/*` unless noted otherwise.
   and `nvidia-smi` through `child_process`), ranks a built-in model catalog
   against detected VRAM, and computes Quality/Balanced/Speed serve profiles.
   Routes: `GET /hwfit/system`, `GET /hwfit/models`, `GET /hwfit/profiles`,
-  `GET /hwfit/fit` (become `/api/hwfit/*`). Not currently wired into the
-  `index.jsx` UI — available for a future hardware panel.
+  `GET /hwfit/fit` (become `/api/hwfit/*`). Fits are ranked against total
+  RAM (`ranking_basis_gb`); until 2026-09-23 they used os.freemem() whenever
+  it was non-zero, so the verdict flipped minute to minute on macOS.
+  Cookbook declares `requires.blocks: ["fleet_control"]` for these routes.
 - **`api/local-status.js`** — reports whether the bundled local runtime and a
   ready model are available. (An earlier status probe for a system-wide model
   daemon was deleted with that dependency, but this file kept documenting it —
@@ -103,9 +114,10 @@ reader of `VITE_GAS_URL`) was retired.
 
 ## Files
 
-- `index.jsx` — main UI (status cards, provider health, engine telemetry, VP missions)
+- `index.jsx` — main UI (status cards, provider health, engine telemetry, hardware fit, VP missions)
+- `health.js` — pure wording for the server card, provider rows/card and hardware summary
 - `api/missions.cjs` — VP mission history reader (Vault-backed)
-- `api/hwfit.cjs` — hardware detection + model fit ranking (not yet wired into the UI)
+- `api/hwfit.cjs` — hardware detection + model fit ranking
 - `api/local-status.js` — local runtime readiness probe
 - `block.manifest.json` — kernel metadata, auto-normalized on every boot
 

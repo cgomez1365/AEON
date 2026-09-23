@@ -17,13 +17,25 @@ UI only covers telemetry, spend, activity, and the audit feed described
 below.
 
 ## Files
-- `index.jsx` — the main dashboard UI: KPI row (API spend, LLM engines,
-  server status, autopilot), LLM engine telemetry panel, a tabbed
-  Heatmap/Activity/Models analytics card, and the live activity feed.
-  Polls `/api/llm-telemetry` and `/api/autopilot/status` every 5s; loads
-  `/api/token-analytics/heatmap` + `/api/token-analytics/summary` once on
-  mount (falling back to a direct Supabase read of the `aeon_blocks` table
-  if those kernel routes are unreachable).
+- `index.jsx` — the main dashboard UI: KPI row, installed-blocks grid,
+  LLM engines since server start, a tabbed Heatmap/Activity/Models card, and
+  the live feed with recent failed calls.
+  - **Spend today** — the kernel's own `getDailyCost()` over the call ledger
+    (via `/api/token-analytics/summary`), labelled with which providers have a
+    list price (gemini, groq); others count $0 and the card says so.
+  - **LLM calls today** — requests, tokens and failures from the ledger.
+  - **Server** — ONLINE / SIGNED OUT (401) / UNREACHABLE / HTTP n.
+  - **Video autopilot** — `tools/autopilot-daemon.cjs` status (a YouTube
+    video producer mounted by the kernel; nothing here starts it).
+  - Heatmap, 7d/30d/90d chart, Models tab (all-time ledger mix) and the
+    failed-call list all read the activity block's ledger-derived routes, so
+    they agree with each other and with `<db>/llm_calls.jsonl`.
+  Polls `/api/llm-telemetry` + `/api/autopilot/status` every 5 s and the
+  analytics every 30 s. When the activity block is missing, each panel says
+  so instead of "Loading…" (the Supabase fallback only runs when
+  `VITE_SUPABASE_URL` is set).
+- `kpis.js` — the KPI/feed wording as pure functions
+  (`tests/home-blocks-ui-logic.test.js`).
 - `api/chat.cjs` — REST chat: `GET/POST/DELETE /api/chat`, plus
   `/api/terminal-history` (get/save) and the legacy `/api/terminal-stream`
   SSE bridge. Handles in-chat command interception (`/link`, `/scrape`,
@@ -143,6 +155,17 @@ dual-mounted at `/block/dashboard/*` as well as `/api` (see
   text inputs exist in `index.jsx`, and no `outline: none` was found.
 
 ## Known limitations (judgment calls, not fixed here — flagged for the operator)
+- **Removing this block removes the terminal's chat.** `POST /api/chat/stream`,
+  `/api/chat/*` and `/api/terminal/sessions*` live here; with the folder
+  parked they answer 404 (measured 2026-09-23) and `/` renders an empty
+  viewport. The chat backend belongs in the kernel or a `terminal` block.
+- **The `$15` daily kill switch** (`KILL_SWITCH_THRESHOLD`) is enforced only
+  by the legacy `POST /api/chat` in `api/chat.cjs`; the streaming terminal
+  (`chat-stream.cjs`) does not check it. The Spend card no longer claims a
+  limit.
+- **INSTALLED BLOCKS** is the build-time registry (`import.meta.glob`), so a
+  block removed from `src/blocks/` still appears until the UI is rebuilt, and
+  headless blocks (host_os) are not counted.
 - **Closed 2026-09-23: `api/pipeline-metrics.js` was deleted** (no caller;
   its non-GET methods answered invented dollar figures). See *Files*.
 - **Closed 2026-09-14: `components/MobileCommandDashboard.jsx` and its
