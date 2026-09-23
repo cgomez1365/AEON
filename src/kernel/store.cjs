@@ -120,8 +120,10 @@ function findCartridgeFile(idOrFile) {
  * source: { name } (dist-blocks lookup) | { base64 } | { url } (store front).
  * Returns the pipeline result (live-but-STOPPED, queued, or a lint stop).
  */
-async function installCartridge(pipeline, source, { operator = 'operator' } = {}) {
+async function installCartridge(pipeline, source, { operator = 'operator', env = process.env } = {}) {
   let buf;
+  let sha = null;
+  let from = source.name || source.url || 'upload';
   if (source.base64) {
     buf = Buffer.from(source.base64, 'base64');
   } else if (source.url) {
@@ -130,21 +132,34 @@ async function installCartridge(pipeline, source, { operator = 'operator' } = {}
     if (!r.ok) throw new Error(`cartridge download failed: HTTP ${r.status}`);
     buf = Buffer.from(await r.arrayBuffer());
   } else if (source.name) {
+    // This install's own dist-blocks/ first (what `aeon pack` wrote), then the
+    // store AEON_STORE names — verified against its catalog's SHA-256.
     const file = findCartridgeFile(source.name);
-    if (!file) throw new Error(`cartridge not found in dist-blocks: ${source.name}`);
-    buf = fs.readFileSync(file);
+    if (file) {
+      buf = fs.readFileSync(file);
+    } else {
+      const storeSource = require('./storeSource.cjs');
+      const src = storeSource.resolveSource(env);
+      if (!src) throw new Error(`cartridge not found in dist-blocks: ${source.name} — and no store is configured (set AEON_STORE to the store's catalog URL or a local store folder)`);
+      const { items } = await storeSource.loadCatalog(src);
+      const item = storeSource.pickItem(items, source.name);
+      if (!item) throw new Error(`"${source.name}" is not in the store's catalog (${items.length} pack${items.length === 1 ? '' : 's'} listed)`);
+      ({ buf, sha } = await storeSource.fetchCartridge(src, item));
+      from = `store:${item.file}`;
+    }
   } else {
     throw new Error('install requires { name } or { base64 } or { url }');
   }
 
+  if (!sha) sha = require('./storeSource.cjs').sha256(buf);
   const { blockId, manifest, files } = readCartridgeBuffer(buf);
   const summary = purchaseSummary(manifest);
   const result = await pipeline.submitBuild('store', {
     spec: `BGI Store install: ${summary.label} v${summary.version}`,
     manifest, files,
-    meta: { cartridge: source.name || source.url || 'upload', sha: null },
+    meta: { cartridge: from, sha },
   }, { operator });
-  return { ...result, blockId, purchase: summary };
+  return { ...result, blockId, sha, from, purchase: summary };
 }
 
 module.exports = { readCartridgeBuffer, purchaseSummary, listCatalog, findCartridgeFile, installCartridge, DIST_DIR };

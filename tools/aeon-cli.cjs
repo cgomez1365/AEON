@@ -335,10 +335,11 @@ const commands = {
     const render = require('./terminal/renderers.cjs');
     const { c } = client;
     if (!arg) {
-      console.error(`usage: aeon install <https-url | cartridge-name>
+      console.error(`usage: aeon install <id | file.aeon | https-url>
 
-  ${c.dim('aeon install https://store.example.com/my-block-1.0.0.aeon')}
-  ${c.dim('aeon install my-block')}          ${c.dim('# from dist-blocks/')}
+  ${c.dim('aeon install clients')}           ${c.dim('# dist-blocks/, then the store (AEON_STORE), hash-checked')}
+  ${c.dim('aeon install ~/Downloads/clients-1.0.0.aeon')}   ${c.dim('# a cartridge you were sent')}
+  ${c.dim('aeon store')}                     ${c.dim('# what the store offers')}
   ${c.dim('aeon run /catalog')}              ${c.dim('# what is already available locally')}`);
       process.exit(1);
     }
@@ -348,7 +349,14 @@ const commands = {
       console.error(`\n  ${c.red('✗')} cartridge URLs must be https\n`);
       process.exit(1);
     }
-    const source = /^https:\/\//i.test(arg) ? { url: arg } : { name: arg };
+    // A cartridge file you were given (a purchase download) goes up as bytes;
+    // a bare id resolves on the server: dist-blocks/, then the store
+    // (AEON_STORE), SHA-256 checked against the store's catalog.
+    let source;
+    if (/^https:\/\//i.test(arg)) source = { url: arg };
+    else if (/\.aeon$/i.test(arg) && fs.existsSync(arg)) source = { base64: fs.readFileSync(arg).toString('base64') };
+    else if (/\.aeon$/i.test(arg)) { console.error(`\n  ${c.red('✗')} no such cartridge file: ${arg}\n`); process.exit(1); }
+    else source = { name: arg };
     await dispatchAndRender(client, render, 'master.install', '', {
       json: flags.json, yes: flags.yes, body: source, label: 'installing',
     });
@@ -362,6 +370,27 @@ const commands = {
    * refused; nothing is deleted: remove moves the folder to
    * <data>/removed-blocks/, restore brings it back).
    */
+  /**
+   * aeon store — what the configured store (AEON_STORE) offers, and which of
+   * it is installed here. Install one with `aeon install <id>`.
+   */
+  async store() {
+    const client = require('./terminal/client.cjs');
+    const { c } = client;
+    const res = await client.withAuth(() => client.request('GET', '/api/store/source'));
+    if (flags.json) { console.log(JSON.stringify(res.data, null, 2)); if (!res.ok) process.exitCode = 1; return; }
+    const d = res.data || {};
+    if (!res.ok || d.error) { console.error(`\n  ${c.red('✗')} ${d.error || `failed (${res.status})`}\n`); process.exitCode = 1; return; }
+    if (!d.configured) { console.log(`\n  ${c.yellow('!')} ${d.hint}\n`); return; }
+    console.log(`\n  ${c.bold(d.store || 'Store')}  ${c.dim(d.source)}\n`);
+    for (const it of d.items) {
+      const state = it.installedVersion ? c.green(`installed ${it.installedVersion}`) : it.installable ? c.dim('available') : c.yellow('buy on the store page');
+      console.log(`  ${c.bold(String(it.id).padEnd(16))} ${String(it.version).padEnd(8)} ${state}  ${c.dim(it.description || '')}`);
+      for (const w of it.warnings || []) console.log(`  ${' '.repeat(26)}${c.yellow('!')} ${w}`);
+    }
+    console.log(`\n  ${c.dim('install one: aeon install <id>  ·  then: aeon block start <id>, npm run build, reload')}\n`);
+  },
+
   async block() {
     const client = require('./terminal/client.cjs');
     const { c } = client;
@@ -519,7 +548,8 @@ ${c.bold('CONSOLE')} ${c.dim('(operate a running AEON, no browser)')}
   aeon blocks               mounted blocks and readiness
   aeon run ${c.dim('<cmd> [arg…]')}     dispatch one command, no routing
   aeon agent ${c.dim('"<goal>"')}       multi-step: plan → act → read → repeat
-  aeon install ${c.dim('<url|name>')}   install a block cartridge via the airlock
+  aeon install ${c.dim('<id|file|url>')} install a pack via the airlock (store: AEON_STORE)
+  aeon store                store packs, and which are installed
   aeon block ${c.dim('<stop|start|remove|restore> <id>')}   a block's lifecycle; ${c.dim('aeon block removed')} lists copies
   aeon login ${c.dim('|')} logout       manage this terminal's session
 
