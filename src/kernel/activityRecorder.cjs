@@ -13,16 +13,13 @@
  * Now nothing is mounted here. The recorder looks for the block on each call:
  * a removed block stops recording, a restored one records at once.
  */
-const fs = require('fs');
-const path = require('path');
+const { liveBlockModule } = require('./liveBlockModule.cjs');
 
 function createActivityRecorder({ blocksDir, deps }) {
-  const file = path.join(blocksDir, 'activity', 'api', 'token-analytics.cjs');
-  let instance = null;
+  const activity = liveBlockModule({ blocksDir, file: 'activity/api/token-analytics.cjs', deps });
   return function recordActivity(...args) {
-    if (!fs.existsSync(file)) { instance = null; return false; }
-    if (!instance) instance = require(file)(deps);
-    if (typeof instance._recordActivity !== 'function') return false;
+    const instance = activity();
+    if (!instance || typeof instance._recordActivity !== 'function') return false;
     instance._recordActivity(...args);
     return true;
   };

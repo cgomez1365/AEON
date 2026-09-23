@@ -486,27 +486,36 @@ const _sbDeps = {
   supabase, isVercel, geminiRequest: ai.geminiRequest,
   VAULT_ROOT: storage.VAULT_ROOT, DATA_ROOT: storage.DATA_ROOT,
 };
-try {
-  const sbIngest = require('../src/blocks/aeon_matrix/api/ingest.cjs')(_sbDeps);
-  const sbRetrieve = require('../src/blocks/aeon_matrix/api/retrieve.cjs')(_sbDeps);
+// The Matrix is resolved per use (liveBlockModule.cjs): wired once at boot, a
+// Matrix absent at boot and restored later never indexed another block's
+// memory write until a restart (2026-09-23).
+const _matrixIngest = require('../src/kernel/liveBlockModule.cjs').liveBlockModule({
+  blocksDir: require('../src/kernel/blocksDir.cjs').BLOCKS_DIR,
+  file: 'aeon_matrix/api/ingest.cjs', deps: _sbDeps,
+});
+// Coalesce block memory writes into one Matrix refresh instead of a scan per write.
+let matrixIndexTimer = null;
+vaultSync.setIndexScheduler(() => {
+  if (isVercel) return;
+  clearTimeout(matrixIndexTimer);
+  matrixIndexTimer = setTimeout(() => {
+    const sbIngest = _matrixIngest();
+    if (!sbIngest || typeof sbIngest.runSecondBrainScan !== 'function') return;
+    sbIngest.runSecondBrainScan().catch(e => console.error('[SECOND BRAIN] Memory refresh failed:', e.message));
+  }, 500);
+  matrixIndexTimer.unref?.();
+});
+const _sbIngestAtBoot = _matrixIngest();
+if (!_sbIngestAtBoot) console.log('[SECOND BRAIN] Aeon Matrix is not installed — memory writes are indexed once it is restored.');
+if (_sbIngestAtBoot) try {
+  const sbIngest = _sbIngestAtBoot;
   // Locally the block loader already dual-mounts second_brain/api/*.cjs; on
   // Vercel the static mounts list doesn't include it, so mount here for that case.
   if (isVercel) {
-    app.use('/api', sbRetrieve);
+    app.use('/api', require('../src/blocks/aeon_matrix/api/retrieve.cjs')(_sbDeps));
     app.use('/api', sbIngest);
   }
   console.log('[SECOND BRAIN] RAG routes ready: /api/crn/second-brain/retrieve, /api/crn/second-brain/ingest/*');
-
-  // Coalesce block memory writes into one Matrix refresh instead of a scan per write.
-  let matrixIndexTimer = null;
-  vaultSync.setIndexScheduler(() => {
-    if (isVercel || typeof sbIngest.runSecondBrainScan !== 'function') return;
-    clearTimeout(matrixIndexTimer);
-    matrixIndexTimer = setTimeout(() => {
-      sbIngest.runSecondBrainScan().catch(e => console.error('[SECOND BRAIN] Memory refresh failed:', e.message));
-    }, 500);
-    matrixIndexTimer.unref?.();
-  });
 
   // Boot auto-sync (aeon-213 pattern): incremental scan EVERY boot, delayed,
   // background, non-fatal. First boot does the full index; later boots pick
