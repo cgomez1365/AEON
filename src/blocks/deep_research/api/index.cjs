@@ -569,9 +569,13 @@ Write in full prose (not bullet dumps) except where a table or numbered steps ge
           : stoppedEarly === 'time'
             ? 'The time budget ran out before any search returned usable results.'
             : 'No search returned usable results.';
+        // The search service reports a dropped connection and a refused
+        // scrape the same way (an empty result), so both causes are named.
+        // This used to blame DuckDuckGo alone — measured with the network
+        // down (2026-09-23), where the real cause was no internet at all.
         const remedy = availableSearchProviders().length <= 1
-          ? 'This install has no search API key, so it fell back to scraping DuckDuckGo, which blocks repeated automated queries. Add a Brave, Serper, or Tavily key in Settings → Connections for reliable research.'
-          : 'Try again in a moment, or pick a different search provider.';
+          ? 'Either this computer is offline (check the internet connection), or DuckDuckGo refused the automated queries — this install has no search API key, so DuckDuckGo scraping is all it has, and it blocks repeated queries. Add a Brave, Serper, or Tavily key in Settings → Connections for reliable research.'
+          : 'Either this computer is offline (check the internet connection), or the search providers refused the queries. Try again in a moment, or pick a different search provider.';
         throw Object.assign(
           new Error(`No sources could be gathered for "${query}". ${why} ${remedy}`),
           { researchEmpty: true }
@@ -623,6 +627,18 @@ Structure: # Title, ## Abstract, ## Findings (thematic, cited), ## Conclusion. D
           // the library and the UI can say which it is.
           degraded = `The report could not be written (${writeError}). The raw findings are preserved below.`;
         }
+      }
+
+      // A report that stops before its Conclusion was cut off. Both write
+      // prompts require a Conclusion as the last section, and kernelLLM's
+      // blocking call returns the text without finish_reason, so the missing
+      // section is the signal. The write asks for 8192 tokens; a free
+      // OpenRouter model stops at 1024 (services/ai.js clamps it), so on the
+      // free tier this is the common case — and it was filed as "done"
+      // (measured 2026-09-23). The text is kept; the run says what happened.
+      if (!degraded && report && !/^#{1,3}\s*(\d+[.)]\s*)?Conclusions?\b/im.test(report)) {
+        degraded = 'The report stops before its Conclusion — the model most likely hit its output limit (free OpenRouter models stop at 1024 tokens, and reasoning models spend part of that thinking). Everything it wrote is below. For the full report, assign a model with a larger output budget to the Research role in Settings → Model Assignment.';
+        report = `${report.trimEnd()}\n\n> **Report cut off.** ${degraded}`;
       }
 
       // Deterministic, correctly-formatted APA 7 reference list — replaces

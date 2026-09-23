@@ -317,13 +317,34 @@ export default function DeepResearch() {
 
     const jobId = `rp-${Date.now().toString(36)}`;
 
-    // Try local API first
+    // Try local API first.
+    //
+    // The browser pipeline below exists for ONE case: a cloud deployment whose
+    // server refuses to run the multi-round loop (503 "requires the local AEON
+    // server"). It used to run on ANY failure — a locked session (401), a
+    // server error, the block's API not mounted — and then called /api/ai with
+    // hardcoded Groq and Gemini providers, fetched Supabase at an undefined
+    // URL, and filed "Research generation failed — all LLM providers
+    // unreachable" as a DONE report. The server's own error is the true one,
+    // so it is shown instead.
+    let startError = null;
     try {
       const res = await fetch('/api/research/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        const cloudOnly = res.status === 503 && /local AEON server/i.test(d.error || '');
+        if (!cloudOnly) {
+          startError = res.status === 401 || res.status === 403
+            ? 'AEON is locked — unlock it and start the research again.'
+            : res.status === 404
+              ? 'The Deep Research service is not running on this server (its API is not mounted). Restart AEON, or check the Deep Research block is installed.'
+              : (d.error || `Deep Research could not start (HTTP ${res.status}).`);
+        }
+      }
       if (res.ok) {
         const data = await res.json();
         setJobs(prev => [...prev, {
@@ -341,9 +362,21 @@ export default function DeepResearch() {
         setQuery('');
         return;
       }
-    } catch {}
+    } catch (e) {
+      // No answer at all — the fallback below needs the same server for /api/ai.
+      startError = `AEON's server did not answer (${e.message}). Check that AEON is running, then start the research again.`;
+    }
 
-    // Fallback: multi-LLM browser-direct research (Groq + Gemini + DDG proxy)
+    if (startError) {
+      setJobs(prev => [...prev, {
+        id: jobId, query: query.trim(), status: 'error', errorMsg: startError,
+        progress: { phase: 'error' }, startedAt: Date.now(), elapsed: 0,
+        result: null, sources: null, category: category || '', settings: {},
+      }]);
+      return;
+    }
+
+    // Fallback (cloud deployments only, see above): multi-LLM browser-direct research (Groq + Gemini + DDG proxy)
     setJobs(prev => [...prev, {
       id: jobId,
       query: query.trim(),

@@ -18,18 +18,8 @@
   },
   "widget": null,
   "requires": {
-    "apis": [
-      "groq",
-      "gemini",
-      "supabase"
-    ],
-    "env": [
-      "GROQ_API_KEY",
-      "GEMINI_FREE_KEY_1",
-      "GEMINI_PAID_KEY",
-      "SUPABASE_URL",
-      "SUPABASE_SERVICE_ROLE_KEY"
-    ],
+    "apis": [],
+    "env": [],
     "local": [],
     "blocks": []
   },
@@ -72,7 +62,9 @@
       "canGenerate": false,
       "canAnalyze": false,
       "canAutomate": false,
-      "roles": [],
+      "roles": [
+        "research"
+      ],
       "role": "research",
       "blurb": "Runs deep research reports"
     },
@@ -167,13 +159,7 @@
       "auth": true
     }
   ],
-  "env": [
-    "GROQ_API_KEY",
-    "GEMINI_FREE_KEY_1",
-    "GEMINI_PAID_KEY",
-    "SUPABASE_URL",
-    "SUPABASE_SERVICE_ROLE_KEY"
-  ],
+  "env": [],
   "ai": {
     "capabilities": [],
     "canGenerate": false,

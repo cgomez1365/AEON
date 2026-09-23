@@ -84,7 +84,13 @@ describe('the manifests this change actually touches', () => {
         return (m.contract?.ai?.roles || []).length > 0;
       } catch { return false; }
     });
-    expect(declaring.sort()).toEqual(['dashboard', 'memory_core', 'resume_grader', 'writer']);
+    // deep_research added 2026-09-23 (agent C2), verified the same way: it
+    // required groq + gemini + supabase and its server loop calls neither —
+    // every model call is kernelLLM({ role: 'research' }) — so it read
+    // not-ready on an install whose research role was served. See
+    // tests/deep-research-report-integrity.test.js. dashboard added the same
+    // night (agent C3) for its chat role.
+    expect(declaring.sort()).toEqual(['dashboard', 'deep_research', 'memory_core', 'resume_grader', 'writer']);
   });
 
   it('resume_grader declares no API it does not use', () => {

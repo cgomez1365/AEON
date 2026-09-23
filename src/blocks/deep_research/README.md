@@ -48,10 +48,11 @@ intentionally so the popup can render without waiting on the server.
 `POST /api/research/start` returns `503` on Vercel — the multi-round LLM pipeline routinely
 exceeds serverless function timeouts, so a new research run must be started from the local
 AEON server. The frontend has a browser-direct fallback path (`startResearch()` in
-`index.jsx`) that runs a lighter 3-phase Groq+Gemini pipeline straight from the client when
-`/api/research/start` isn't reachable, so research is still possible when only deployed to
-Vercel — it just uses a shorter pipeline and writes its result straight to the Supabase
-`research_library` mirror instead of local disk.
+`index.jsx`) that runs a lighter 3-phase Groq+Gemini pipeline straight from the client — but
+ONLY when the server answers that 503. Any other failure (a locked session, a server error,
+the API not mounted, no answer at all) is shown as the server's own error. Until 2026-09-23
+the fallback ran on every failure, called `/api/ai` with hardcoded Groq/Gemini providers, and
+filed "all LLM providers unreachable" as a *done* report.
 
 Reading is *not* Vercel-blocked: `GET /api/research/library` switches source automatically —
 local JSON files under `WORKSPACE/deep_research/reports/` when running locally, the Supabase
@@ -122,19 +123,26 @@ not a route owned by Deep Research — it's exposed here as a terminal command s
 
 ### Frontend calls into other blocks/kernel routes (not owned by this block)
 
-`index.jsx`'s browser-direct fallback pipeline calls `/api/search-web` (the kernel's search
-router in `services/search.js`), `/api/orion-scrape` (Orion Search block), and
-`/api/ai` (kernel LLM route) — all confirmed live elsewhere in the repo, not orphaned calls.
+`index.jsx`'s browser-direct fallback pipeline (cloud-only, see above) calls `/api/search-web`
+(the kernel's search router in `services/search.js`), `/api/orion/search` (Orion Search block),
+and `/api/ai` (kernel LLM route). That fallback is the ONLY place Deep Research touches Orion
+Search: the server loop searches through the kernel's own `services/search.js`
+(`fetchWebSearch` / `fetchDuckDuckGo` deps), so `requires.blocks` does not list `orion_search`
+— a local install runs Deep Research with Orion Search absent (measured 2026-09-23).
 
 ## Config keys / dependencies
 
 Declared in `block.manifest.json`:
 
-- **APIs**: `groq` (primary research-role LLM, via `kernelLLM({ role: 'research' })`),
-  `gemini` (fallback when `kernelLLM` isn't wired, via `geminiRequest`), `supabase`
-  (Vercel-side library mirror read).
-- **Env vars**: `GROQ_API_KEY`, `GEMINI_FREE_KEY_1`, `GEMINI_PAID_KEY`, `SUPABASE_URL`,
-  `SUPABASE_SERVICE_ROLE_KEY`.
+- **APIs / env vars**: none required. Every model call is `kernelLLM({ role: 'research' })`,
+  so any provider assigned to the **Research** role (Settings → Model Assignment; the chat
+  role's endpoint when Research is unassigned) serves it. `contract.ai.roles: ["research"]`
+  makes readiness report whether that role can serve. (Until 2026-09-23 the manifest
+  required groq + gemini + supabase, which the loop never calls, so the block read
+  not-ready on installs that could run it.)
+- **Truncation**: the report write asks for 8192 tokens; a free OpenRouter model stops at
+  1024. A report that ends before its `## Conclusion` is filed `partial` with a note naming
+  the output limit, never `done`.
 - **Optional search-provider keys** (checked at runtime, not required — DuckDuckGo is the
   free no-key fallback): `BRAVE_API_KEY`, `SERPER_API_KEY`, `TAVILY_API_KEY`.
 
