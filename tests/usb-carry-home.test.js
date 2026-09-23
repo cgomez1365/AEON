@@ -104,6 +104,22 @@ describe('copying for exFAT', () => {
     expect(carry.sweepOsJunk(path.join(tmp, 'a'))).toBe(2);
     expect(fs.existsSync(path.join(tmp, 'a', 'b', 'keep.md'))).toBe(true);
   });
+
+  it('sweeps the drive root\'s own sidecars, and leaves what macOS manages', () => {
+    // macOS writes "._LAUNCH.bat" beside every file it puts on exFAT; on
+    // Windows it shows up next to LAUNCH.bat, inviting a double-click.
+    const d = path.join(tmp, 'root');
+    write(path.join(d, 'LAUNCH.bat'), '@echo off\r\n');
+    write(path.join(d, '._LAUNCH.bat'), 'appledouble');
+    write(path.join(d, '._AEON'), 'appledouble');
+    write(path.join(d, '.DS_Store'), 'x');
+    write(path.join(d, '.Spotlight-V100', 'store'), 'x');
+    write(path.join(d, '.fseventsd', 'log'), 'x');
+    write(path.join(d, 'AEON', '._deep'), 'sweepOsJunk\'s job, not this one');
+    expect(carry.sweepDriveRoot(d)).toBe(3);
+    expect(fs.readdirSync(d).sort()).toEqual(['.Spotlight-V100', '.fseventsd', 'AEON', 'LAUNCH.bat']);
+    expect(fs.existsSync(path.join(d, 'AEON', '._deep'))).toBe(true);
+  });
 });
 
 describe('the carried home', () => {
@@ -134,6 +150,21 @@ describe('the carried home', () => {
     expect(JSON.parse(fs.readFileSync(path.join(data, 'home.json'), 'utf8')).layout).toBe('carried');
     expect(aeonHome.resolveHome({ appRoot: path.join(drive, 'AEON'), env: {}, homedir: () => tmp })).toBe(data);
     expect(carry.unparseableJson(data)).toEqual([]);
+  });
+
+  it('leaves the host\'s crash logs behind — they describe that machine (one was 20 GB)', () => {
+    const h = path.join(tmp, 'host-home');
+    write(path.join(h, 'data', 'vault_index.json'), '{}');
+    write(path.join(h, 'data', 'logs', 'uncaught.log'), 'SURVIVED Error: write EIO\n');
+    write(path.join(h, 'data', 'logs', 'uncaught.log.1'), 'older\n');
+    write(path.join(h, 'data', 'logsbook.json'), '{}'); // merely starts with "logs": travels
+    const drive = path.join(tmp, 'drive');
+    const data = path.join(drive, 'AEON-Data');
+    const src = aeonHome.roots({ appRoot: path.join(tmp, 'install'), env: { AEON_HOME: h } });
+    carry.copyHome(src, carry.driveRoots(path.join(drive, 'AEON'), data));
+    expect(fs.existsSync(path.join(data, 'data', 'vault_index.json'))).toBe(true);
+    expect(fs.existsSync(path.join(data, 'data', 'logsbook.json'))).toBe(true);
+    expect(fs.existsSync(path.join(data, 'data', 'logs'))).toBe(false);
   });
 
   it('never overwrites data already on the drive unless asked, and keeps installed blocks', () => {
@@ -249,6 +280,37 @@ describe('verify-usb --carry-home', () => {
     const out = strip(verify(d).out);
     expect(out).toMatch(/1 OS junk file/);
     expect(out).toMatch(/1 symlink/);
+  });
+
+  it('fails sidecars at the drive root, not only inside its folders', () => {
+    const d = fixtureDrive();
+    write(path.join(d, '._LAUNCH.bat'), 'appledouble');
+    const r = verify(d);
+    expect(r.code).toBe(1);
+    expect(strip(r.out)).toMatch(/1 OS junk file.*\._LAUNCH\.bat/);
+  });
+
+  it('warns — does not fail — about a set-aside copy of AEON-Data', () => {
+    const d = fixtureDrive();
+    write(path.join(d, 'AEON-Data.replaced-2026-09-23T04-55-17-500Z', '.env'), 'OLD=1\n');
+    const r = verify(d);
+    const out = strip(r.out);
+    expect(out).toMatch(/AEON-Data\.replaced-2026-09-23T04-55-17-500Z is still on the drive/);
+    expect(out).toContain('BUNDLE VERIFIED');
+    expect(r.code).toBe(0);
+  });
+
+  // A sparse file: the size is set, no gigabyte is written. NTFS would
+  // allocate it, so Windows skips this one; the check itself is portable.
+  it.skipIf(process.platform === 'win32')('warns about any file in AEON-Data over 1 GB — a copied 19 GB crash log passed unseen', () => {
+    const d = fixtureDrive();
+    const big = path.join(d, 'AEON-Data', 'data', 'logs', 'uncaught.log');
+    write(big, '');
+    fs.truncateSync(big, 1024 ** 3 + 1);
+    const r = verify(d);
+    const out = strip(r.out);
+    expect(out).toMatch(/over 1 GB.*uncaught\.log/);
+    expect(r.code).toBe(0);
   });
 
   it('fails a launcher that forces local-only, and a missing marker', () => {

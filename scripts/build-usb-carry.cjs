@@ -52,6 +52,12 @@ const DATA_FOLDER = aeonHome.CARRIED_DIR_NAME; // 'AEON-Data'
 
 // Never copied from the source home: they describe the host, not the operator.
 const HOME_HOST_ONLY = new Set(['data/desktop-shortcut.json', 'home.json']);
+// Whole folders of the same kind. data/logs holds the host's crash log — the
+// first carried drive took a 19 GB one along (a dead-console loop, since fixed
+// in src/kernel/processGuards.cjs).
+const HOME_HOST_ONLY_DIRS = ['data/logs'];
+const isHostOnly = (rel) => HOME_HOST_ONLY.has(rel)
+  || HOME_HOST_ONLY_DIRS.some((d) => rel === d || rel.startsWith(`${d}/`));
 
 // ── copying ──────────────────────────────────────────────────────────────────
 
@@ -128,6 +134,21 @@ function sweepOsJunk(root) {
   return removed;
 }
 
+/**
+ * The drive root itself: macOS leaves a "._" sidecar for each file and folder
+ * it writes there (._LAUNCH.bat, ._AEON, ...). Top level only, and only those
+ * and .DS_Store — .Spotlight-V100, .fseventsd and .Trashes are the mounted
+ * volume's own and macOS recreates them.
+ */
+function sweepDriveRoot(target) {
+  let removed = 0;
+  for (const name of fs.readdirSync(target)) {
+    if (!name.startsWith('._') && name !== '.DS_Store') continue;
+    try { fs.rmSync(path.join(target, name), { force: true }); removed++; } catch { /* in use: leave it */ }
+  }
+  return removed;
+}
+
 // ── what travels ─────────────────────────────────────────────────────────────
 
 /**
@@ -188,7 +209,7 @@ function copyHome(src, dst, { onProgress } = {}) {
     if (!src[key] || !fs.existsSync(src[key])) { out[key] = 'absent'; continue; }
     const top = path.basename(dst[key]);
     out[key] = copyTreeMaterialized(src[key], dst[key], {
-      filter: (rel) => !HOME_HOST_ONLY.has(`${top}/${rel}`),
+      filter: (rel) => !isHostOnly(`${top}/${rel}`),
       onProgress,
     });
   }
@@ -619,7 +640,7 @@ async function buildCarried(args, { download, log = console.log } = {}) {
     if (plan.dataAction === 'replace') {
       const aside = `${plan.data}.replaced-${new Date().toISOString().replace(/[:.]/g, '-')}`;
       fs.renameSync(plan.data, aside);
-      log(`  ✓ previous AEON-Data moved aside → ${path.basename(aside)} (not deleted)`);
+      log(`  ✓ previous AEON-Data moved aside → ${path.basename(aside)} (not deleted — it holds a copy of your keys; delete it once this drive's AEON works)`);
     }
     const src = aeonHome.roots({ appRoot: ROOT, env: process.env });
     const copied = copyHome(src, driveRoots(plan.app, plan.data));
@@ -635,14 +656,15 @@ async function buildCarried(args, { download, log = console.log } = {}) {
     : await stageRuntimes(target, { version: process.version, download, log });
   writeCarriedLaunchers(target);
   writeDriveReadme(target, { built: new Date().toISOString().slice(0, 10), runtimes });
-  const swept = sweepOsJunk(plan.app) + sweepOsJunk(plan.data) + sweepOsJunk(path.join(target, 'runtime'));
+  const swept = sweepOsJunk(plan.app) + sweepOsJunk(plan.data) + sweepOsJunk(path.join(target, 'runtime'))
+    + sweepDriveRoot(target);
   log(`  ✓ launchers (macOS, Windows, Linux) and README_DRIVE.txt · ${swept} OS junk file(s) swept`);
   log(`\n  done in ${Math.round((Date.now() - t0) / 1000)}s.  Verify: node scripts/verify-usb.js --target ${target} --carry-home\n`);
   return { plan, runtimes };
 }
 
 module.exports = {
-  buildCarried, planCarry, copyFileData, copyTreeMaterialized, sweepOsJunk, installFileList,
+  buildCarried, planCarry, copyFileData, copyTreeMaterialized, sweepOsJunk, sweepDriveRoot, installFileList,
   copyHome, driveRoots, writeCarriedMarker, unparseableJson, isUniversalMachO, parseShasums, stageRuntimes,
   writeCarriedLaunchers, macLauncher, linuxLauncher, windowsLauncher, APP_FOLDER, DATA_FOLDER,
 };

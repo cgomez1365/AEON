@@ -360,6 +360,8 @@ function verifyCarried() {
     })(root);
   };
   for (const r of [A, D, RT]) sweep(r);
+  // The root too, top level only: "._LAUNCH.bat" beside LAUNCH.bat on Windows.
+  for (const name of fs.readdirSync(T)) if (name.startsWith('._') || name === '.DS_Store') junk.push(name);
   junk.length ? FAIL(`${junk.length} OS junk file(s)`, junk.slice(0, 3).join(', ')) : PASS('no AppleDouble / .DS_Store files');
   links.length ? FAIL(`${links.length} symlink(s)`, `Windows and Linux see junk: ${links.slice(0, 3).join(', ')}`) : PASS('no symlinks');
 
@@ -379,16 +381,26 @@ function verifyCarried() {
   fs.existsSync(path.join(RT, 'npm', 'bin', 'npm-cli.js')) ? PASS('npm (for a one-time reinstall on a new CPU)') : WARN('no npm on the drive', 'self-heal needs the host\'s npm');
 
   section('7. Copied data parses');
-  const bad = [];
+  const bad = [], big = [];
   (function w(dir) {
     if (!fs.existsSync(dir)) return;
     for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
       const p = path.join(dir, e.name);
       if (e.isDirectory()) { w(p); continue; }
+      try { const size = fs.statSync(p).size; if (size > 1024 ** 3) big.push(`${path.relative(D, p)} (${human(size)})`); } catch {}
       if (!e.name.endsWith('.json')) continue;
       try { JSON.parse(fs.readFileSync(p, 'utf8')); } catch { bad.push(path.relative(D, p)); }
     }
   })(D);
   bad.length ? bad.slice(0, 8).forEach((b) => FAIL('JSON does not parse', b)) : PASS('every JSON file in AEON-Data parses');
+
+  // Warnings, not failures: both can be deliberate, neither should go unseen.
+  // The first carried drive passed every check above with a 19 GB crash log in
+  // AEON-Data and a set-aside copy of the keys beside it.
+  section('8. Nothing stale rides along');
+  big.length ? big.slice(0, 3).forEach((b) => WARN('a file in AEON-Data is over 1 GB', b)) : PASS('no file in AEON-Data over 1 GB');
+  const aside = fs.readdirSync(T).filter((n) => n.startsWith('AEON-Data.replaced-'));
+  aside.length ? aside.forEach((n) => WARN(`${n} is still on the drive`, 'an older copy of your data and keys, set aside by --replace-data — delete it once this AEON works'))
+               : PASS('no set-aside copy of AEON-Data');
   console.log(C.dim(`\n  app ${human(dirSize(A))} · data ${human(dirSize(D))} · runtimes ${human(dirSize(RT))}`));
 }
