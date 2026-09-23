@@ -113,6 +113,7 @@ const lrStub = {
 let server;
 let ai;
 let keyPool;
+const audits = [];
 
 beforeAll(async () => {
   const port = await new Promise((resolve) => { server = fake.listen(0, '127.0.0.1', () => resolve(server.address().port)); });
@@ -130,7 +131,7 @@ beforeAll(async () => {
   require.cache[LR_PATH] = { id: LR_PATH, filename: LR_PATH, loaded: true, exports: lrStub };
   ai = require(AI_PATH)({
     supabase: null,
-    writeOSAudit: () => {},
+    writeOSAudit: (...a) => audits.push(a),
     TOKEN_LEDGER_FILE: path.join(ledgerDir, 'token_ledger.json'),
     loadSettings: () => ({ models: { chat: { provider: 'custom', model: 'fake-model' } }, prefs: {} }),
     aeonTerminalStream: null,
@@ -264,5 +265,29 @@ describe('the non-streaming path keeps the registry provider\'s failure', () => 
     const err = await ai.kernelLLM('hello', { role: 'chat' }).catch((e) => e);
     expect(err.message).toMatch(/429|rate/i);
     expect(err.message).not.toMatch(/no cloud provider is configured|check API keys in Settings/i);
+  });
+});
+
+describe('what the operator sees about providers is true (reported by agent C3)', () => {
+  it('a provider configured in the registry is listed before its first failure', () => {
+    const h = ai.getProviderHealth();
+    expect(h.custom).toBeTruthy();
+    expect(h.custom.configured).toBe(true);
+  });
+
+  it('a registry call is recorded under its provider, the same name the streaming path uses', async () => {
+    mode = 'ok';
+    await ai.kernelLLM('hello', { role: 'chat' });
+    const row = ledgerRows().reverse().find((r) => r.success === true);
+    expect(row.provider).toBe('custom');
+  });
+
+  it('the audit line of a failed call carries its real status, not a blanket 500', async () => {
+    mode = 'body429';
+    audits.length = 0;
+    await stream().catch(() => {});
+    const failed = audits.find((a) => /FAILED/.test(String(a[1])));
+    expect(failed).toBeTruthy();
+    expect(failed[2]).toBe(429);
   });
 });

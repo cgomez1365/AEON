@@ -41,3 +41,31 @@ describe('requires.blocks is checked', () => {
     expect(r2.missingBlocks).toEqual(['no_such_block']);
   });
 });
+
+describe('the dependencies field mirrors requires.blocks', () => {
+  it('an empty dependencies list no longer hides a declared requires.blocks', () => {
+    // `m.dependencies || m.requires.blocks` let an empty [] win, so cookbook's
+    // declared need for fleet_control never showed in its own manifest
+    // (found 2026-09-23). The field is the union, as the Master README says.
+    const fs = require('fs');
+    const os = require('os');
+    const path = require('path');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aeon-deps-'));
+    const saved = process.env.AEON_BLOCKS_DIR;
+    process.env.AEON_BLOCKS_DIR = dir;
+    for (const m of ['../src/kernel/blocksDir.cjs', '../src/kernel/blockStandard.cjs']) delete require.cache[require.resolve(m)];
+    try {
+      fs.mkdirSync(path.join(dir, 'cookbook'));
+      fs.writeFileSync(path.join(dir, 'cookbook', 'block.manifest.json'), JSON.stringify({
+        id: 'cookbook', name: 'cookbook', version: '1.0.0', route: '/cookbook',
+        dependencies: [], requires: { blocks: ['fleet_control'] },
+      }));
+      const std = require('../src/kernel/blockStandard.cjs');
+      expect(std.normalizeManifest('cookbook').dependencies).toEqual(['fleet_control']);
+    } finally {
+      if (saved === undefined) delete process.env.AEON_BLOCKS_DIR; else process.env.AEON_BLOCKS_DIR = saved;
+      for (const m of ['../src/kernel/blocksDir.cjs', '../src/kernel/blockStandard.cjs']) delete require.cache[require.resolve(m)];
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

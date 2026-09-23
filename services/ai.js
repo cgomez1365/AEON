@@ -150,9 +150,13 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       const configured = isConfigured(p);
       out[p] = { healthy: configured && isHealthy(p), configured, ...(providerHealth[p] || {}) };
     }
-    // A custom or registry provider in cooldown was invisible here.
-    for (const p of Object.keys(providerHealth)) {
-      if (!out[p]) out[p] = { healthy: isHealthy(p), configured: true, ...providerHealth[p] };
+    // A custom or registry provider was invisible here until it first failed —
+    // a working custom endpoint read as "no provider configured" (agent C3,
+    // 2026-09-23). Every provider the endpoint registry holds is listed.
+    let registered = [];
+    try { registered = aeonEndpoints?.configuredProviders?.() || []; } catch { /* registry unreadable */ }
+    for (const p of new Set([...registered, ...Object.keys(providerHealth)])) {
+      if (!out[p]) out[p] = { healthy: isHealthy(p), configured: registered.includes(p), ...(providerHealth[p] || {}) };
     }
     return out;
   };
@@ -277,7 +281,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     // stands between the operator and a surprise bill. Turning off performance
     // stats must not quietly turn off spend tracking.
     if (!_capabilities.enabled('telemetry_enabled')) {
-      writeOSAudit(`LLM_${engine.toUpperCase()}`, `${model} | ${tokens} tok | ${latencyMs}ms${success ? '' : ' | FAILED'}`, success ? 200 : 500, tokens);
+      writeOSAudit(`LLM_${engine.toUpperCase()}`, `${model} | ${tokens} tok | ${latencyMs}ms${success ? '' : ` | FAILED${why.error ? `: ${why.error}` : ''}`}`, success ? 200 : (why.status || 500), tokens);
       try { if (callLedger) callLedger.record({ provider: engine, model, tokens, latencyMs, success, ...why }); } catch {}
       return;
     }
@@ -290,7 +294,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     c.avgLatency = Math.round((c.avgLatency * (c.requests - 1) + latencyMs) / c.requests);
     _llmTelemetry.totalCalls++;
     _llmTelemetry.totalTokens += tokens;
-    writeOSAudit(`LLM_${engine.toUpperCase()}`, `${model} | ${tokens} tok | ${latencyMs}ms${success ? '' : ' | FAILED'}`, success ? 200 : 500, tokens);
+    writeOSAudit(`LLM_${engine.toUpperCase()}`, `${model} | ${tokens} tok | ${latencyMs}ms${success ? '' : ` | FAILED${why.error ? `: ${why.error}` : ''}`}`, success ? 200 : (why.status || 500), tokens);
     try { if (_recordActivity) _recordActivity(tokens, model, engine, { success, latencyMs }); } catch {}
     // D2g — the durable record. Everything above this line is in memory and
     // dies on restart, which is why the panels showed live calls and the
@@ -761,13 +765,13 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     });
     if (!response.ok) {
       const err = await _openAIError(response, model);
-      _trackLLM('openai-compat', model, 0, Date.now() - _t0, false, { status: err.status, error: err.message });
+      _trackLLM(opts.provider || 'openai-compat', model, 0, Date.now() - _t0, false, { status: err.status, error: err.message });
       throw err;
     }
     const data = await response.json().catch(() => null);
     const bodyErr = _bodyError(data);
     if (bodyErr) {
-      _trackLLM('openai-compat', model, 0, Date.now() - _t0, false, { status: bodyErr.status, error: bodyErr.message });
+      _trackLLM(opts.provider || 'openai-compat', model, 0, Date.now() - _t0, false, { status: bodyErr.status, error: bodyErr.message });
       throw bodyErr;
     }
     // An OpenAI-compatible server that is merely *incompatible* answers 200 with
@@ -781,18 +785,18 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     const content = msg?.content || choice?.text || data?.message?.content || '';
     if ((typeof content !== 'string' || content.trim() === '') && choice?.finish_reason === 'length') {
       const err = _reasoningBudgetError(opts.max_tokens || 4096);
-      _trackLLM('openai-compat', model, 0, Date.now() - _t0, false, { error: err.message });
+      _trackLLM(opts.provider || 'openai-compat', model, 0, Date.now() - _t0, false, { error: err.message });
       throw err;
     }
     const text = (typeof content === 'string' && content.trim()) ? content : _reasoningText(msg);
     if (typeof text !== 'string' || text.trim() === '') {
       const err = new Error('The model returned an empty response. If this is a custom endpoint, check the model name is one this service actually serves.');
       err.emptyResponse = true;
-      _trackLLM('openai-compat', model, 0, Date.now() - _t0, false, { error: err.message });
+      _trackLLM(opts.provider || 'openai-compat', model, 0, Date.now() - _t0, false, { error: err.message });
       throw err;
     }
     const tokens = data?.usage?.total_tokens || Math.ceil(text.length / 4);
-    _trackLLM('openai-compat', model, tokens, Date.now() - _t0, true);
+    _trackLLM(opts.provider || 'openai-compat', model, tokens, Date.now() - _t0, true);
     return text;
   };
 

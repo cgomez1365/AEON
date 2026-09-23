@@ -485,6 +485,15 @@ function isProviderConfigured(provider) {
   return reg.endpoints.some(e => e.provider === provider && credentialRefs(e).length > 0);
 }
 
+/** Every provider the local registry holds a credential for. Sync, by the same
+ *  rule as isProviderConfigured, so provider health can list a configured
+ *  custom endpoint before its first call. */
+function configuredProviders() {
+  const reg = readLocal();
+  if (!reg || !Array.isArray(reg.endpoints)) return [];
+  return [...new Set(reg.endpoints.filter(e => e.provider && credentialRefs(e).length > 0).map(e => e.provider))];
+}
+
 // ── Auto-pick: which model on an endpoint can actually hold a conversation ──
 /**
  * BO-A4. The previous rule was an ALLOW-list of model-name fragments:
@@ -948,7 +957,7 @@ module.exports = {
   discoverModels, discoverModelCatalogue, resolveForRole, isVercel,
   lmStudioHost, isPortable, describeRoleLocal, describeRoleFromEnv,
   // Exported so the gate tests the REAL predicate rather than re-implementing it.
-  pickChatModel, NON_CHAT_MODEL_RE, isProviderConfigured,
+  pickChatModel, NON_CHAT_MODEL_RE, isProviderConfigured, configuredProviders,
   // Embedding role — exported so Settings, Cookbook and the gate test share one
   // predicate rather than three drifting copies.
   EMBED_ROLE, isEmbedModelName, pickEmbedModel,

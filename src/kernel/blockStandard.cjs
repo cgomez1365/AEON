@@ -382,7 +382,9 @@ function normalizeManifest(folder) {
       tables: m.storage?.tables || [],
       scope: m.storage?.scope || m.contract?.storage?.scope || 'block',
     },
-    dependencies: m.dependencies || (m.requires?.blocks) || [],
+    // The union, not `m.dependencies || m.requires.blocks`: an empty [] won
+    // that race, so cookbook's declared need for fleet_control never showed.
+    dependencies: [...new Set([...(m.dependencies || []), ...(m.requires?.blocks || [])])],
     deployment: {
       target: typeof m.deployment === 'object' ? m.deployment.target : (m.deployment || 'universal'),
       runtime: m.deployment?.runtime || (m.contract?.targets?.vercel === false ? 'local' : 'any'),
