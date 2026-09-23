@@ -1248,13 +1248,28 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   // The ordered list of {provider, model, base_url?, apiKey?} a streaming call
   // will try: the role's own assignment first (registry, else the settings
   // file), then the fallback chain kernelLLM uses, with local always last.
+  // The providers kernelLLM's legacy chain dispatches by name. Anything else
+  // a caller names is an endpoint in the registry.
+  const LEGACY_CHAIN_PROVIDERS = new Set(['groq', 'gemini', 'openrouter', 'local', 'claude']);
+
   const _STREAM_FALLBACK_MODELS = { groq: 'openai/gpt-oss-120b', gemini: 'gemini-flash-latest', openrouter: 'openai/gpt-4o-mini', local: undefined };
   const _streamCandidates = async (role, opts = {}) => {
     const settings = loadSettings() || {};
     const candidates = [];
     let primary = null;
 
-    if (opts.provider) {
+    if (opts.provider && !LEGACY_CHAIN_PROVIDERS.has(opts.provider) && aeonEndpoints) {
+      // A named custom/lmstudio endpoint carries its own address and key; an
+      // override with neither could only fail (agent C2, 2026-09-23).
+      const r = await aeonEndpoints.resolveForProvider(opts.provider, opts.model, supabase).catch(() => null);
+      primary = r && r.ok
+        ? {
+          provider: r.provider, model: r.model, base_url: r.base_url, apiKey: r.apiKey,
+          rpm_limit: r.rpm_limit, source: 'registry',
+          endpoint_id: r.endpoint_id, credential_ref: r.credential_ref, credential_count: r.credential_count,
+        }
+        : { provider: opts.provider, model: opts.model, source: 'override', error: r?.error };
+    } else if (opts.provider) {
       primary = { provider: opts.provider, model: opts.model, source: 'override' };
     } else if (aeonEndpoints) {
       try {
@@ -1543,10 +1558,22 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     // configured provider that was rate-limited for a minute.
     let registryErr = null;
     let registryAttempt = null;
-    if (aeonEndpoints && !opts.provider && !opts.model) {
+    // A provider the chain below does not carry (custom, lmstudio, openai…) is
+    // resolved from the registry too; the chain skipped it and then reported
+    // "No local model is installed" for a configured endpoint (agent C2).
+    const namedRegistryProvider = opts.provider && !LEGACY_CHAIN_PROVIDERS.has(opts.provider);
+    if (aeonEndpoints && ((!opts.provider && !opts.model) || namedRegistryProvider)) {
       let r = null;
-      try { r = await aeonEndpoints.resolveForRole(role, supabase); }
-      catch (e) { console.warn(`[KERNEL] registry resolve(${role}) fell back:`, e.message); }
+      try {
+        r = namedRegistryProvider
+          ? await aeonEndpoints.resolveForProvider(opts.provider, opts.model, supabase)
+          : await aeonEndpoints.resolveForRole(role, supabase);
+      }
+      catch (e) { console.warn(`[KERNEL] registry resolve(${opts.provider || role}) fell back:`, e.message); }
+      if (namedRegistryProvider && r && !r.ok) {
+        registryErr = new Error(r.error);
+        registryAttempt = { provider: opts.provider, status: null, message: r.error, configured: false };
+      }
       if (r && r.ok) {
         if (r.via === 'relay') {
           throw new Error(`Model "${r.model}" is desktop-only; relay required (desktop must be online).`);

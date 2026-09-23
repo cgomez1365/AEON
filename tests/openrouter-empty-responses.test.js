@@ -300,3 +300,27 @@ describe('what the operator sees about providers is true (reported by agent C3)'
     expect(failed[2]).toBe(429);
   });
 });
+
+describe('a provider the caller names is served from the registry, not skipped (reported by agent C2)', () => {
+  // kernelLLM's chain only dispatches groq/gemini/openrouter/local/claude by
+  // name. A Council seat on a custom endpoint, or POST /api/ai with
+  // {provider:"custom"}, was skipped and answered "No local model is installed".
+  it('kernelLLM with {provider:"custom", model} answers from that endpoint', async () => {
+    const r = await ai.kernelLLM('hello', { provider: 'custom', model: 'fake-model', returnMeta: true });
+    expect(r.text).toBe('answered');
+    expect(r.provider).toBe('custom');
+    expect(hits).toBe(1);
+  });
+
+  it('the stream does the same', async () => {
+    const r = await ai.kernelLLMStream([{ role: 'user', content: 'hello' }], { provider: 'custom', model: 'fake-model', onToken() {} });
+    expect(r.text).toBe('answered');
+    expect(hits).toBe(1);
+  });
+
+  it('a named provider with no connection says so, not "no local model"', async () => {
+    const err = await ai.kernelLLM('hello', { provider: 'lmstudio', model: 'some-model' }).catch((e) => e);
+    expect(err.message).toMatch(/No "lmstudio" connection is configured/);
+    expect(err.message).not.toMatch(/No local model is installed/);
+  });
+});

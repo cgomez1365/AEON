@@ -712,6 +712,36 @@ async function resolveForRole(role, supabase) {
 }
 
 /**
+ * Resolve a provider (and model) the caller named — a Council seat, or
+ * POST /api/ai with {provider, model}. kernelLLM's legacy chain only knows
+ * groq/gemini/openrouter/local/claude, so a named custom or lmstudio endpoint
+ * was skipped and the call answered "No local model is installed" (reported
+ * by agent C2, 2026-09-23). Same shape as resolveForRole, so one dispatcher
+ * serves both.
+ */
+async function resolveForProvider(provider, model, supabase) {
+  if (!provider) return { ok: false, error: 'provider required' };
+  const runtime = isVercel ? 'cloud' : 'local';
+  const reg = await load(supabase);
+  const eps = reg.endpoints.filter(e => e.provider === provider && (e.reachable_from || []).includes(runtime));
+  if (!eps.length) return { ok: false, error: `No "${provider}" connection is configured — add one in Settings → Connections.` };
+  const ep = (model && eps.find(e => (e.models || []).includes(model)))
+    || eps.find(e => credentialRefs(e).length) || eps[0];
+  const useModel = model || pickChatModel(ep.models);
+  if (!useModel) return { ok: false, error: `The "${provider}" connection lists no model to use.` };
+  const refs = credentialRefs(ep);
+  const pick = refs.length ? keyPool.acquire(ep.id, refs) : null;
+  const apiKey = pick ? await vault.getSecret(pick.ref, supabase) : null;
+  return {
+    ok: true, provider: ep.provider, model: useModel, base_url: ep.base_url, apiKey,
+    credential_ref: pick ? pick.ref : null,
+    credential_index: pick ? pick.index : null,
+    credential_count: refs.length,
+    via: 'direct', endpoint_id: ep.id, rpm_limit: ep.rpm_limit ?? null, role: null,
+  };
+}
+
+/**
  * Can this role be served right now? Synchronous, local registry only.
  *
  * resolveForRole() is async because it awaits the Supabase mirror and unwraps
@@ -954,7 +984,7 @@ async function credentialReport(supabase) {
 module.exports = {
   PROVIDER_TRANSPORT, load, save,
   addEndpoint, removeEndpoint, assignRole,
-  discoverModels, discoverModelCatalogue, resolveForRole, isVercel,
+  discoverModels, discoverModelCatalogue, resolveForRole, resolveForProvider, isVercel,
   lmStudioHost, isPortable, describeRoleLocal, describeRoleFromEnv,
   // Exported so the gate tests the REAL predicate rather than re-implementing it.
   pickChatModel, NON_CHAT_MODEL_RE, isProviderConfigured, configuredProviders,
