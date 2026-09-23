@@ -187,7 +187,6 @@ module.exports = function createSystemRouter(deps) {
         node: process.version,
         rssMb: mb(mem.rss),
         heapUsedMb: mb(mem.heapUsed),
-        environment: isVercel ? 'vercel' : 'local',
       },
       restart: restartCapability(),
     });
