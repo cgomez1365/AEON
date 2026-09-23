@@ -47,8 +47,15 @@ function reconcile(data) {
  */
 async function askGrader(prompt) {
   if (typeof _kernelLLM.stream === 'function') {
-    const r = await _kernelLLM.stream([{ role: 'user', content: prompt }], { role: 'grading', onToken: () => {} });
-    return { text: r.text || '', truncated: !!r.truncated };
+    // Streams time out only until headers arrive; keep the blocking call's
+    // 240 s bound so a stalled answer cannot hang the grade forever.
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 240000);
+    try {
+      const r = await _kernelLLM.stream([{ role: 'user', content: prompt }], { role: 'grading', onToken: () => {}, signal: ac.signal });
+      if (r.cancelled && !r.text) throw new Error('The model did not finish within 4 minutes.');
+      return { text: r.text || '', truncated: !!(r.truncated || r.cancelled) };
+    } finally { clearTimeout(timer); }
   }
   const out = await _kernelLLM(prompt, { role: 'grading' });
   return { text: (typeof out === 'string' ? out : out?.text || out?.response || '') + '', truncated: null };

@@ -114,11 +114,24 @@ OUTPUT FORMAT — the document is HTML. Return valid HTML using only these tags:
     }
     let text; let truncated = null;
     if (typeof kernelLLM.stream === 'function') {
-      const r = await kernelLLM.stream(
-        [{ role: 'system', content: WRITER_SYSTEM }, { role: 'user', content: prompt }],
-        { role: 'creative', ...opts, onToken: () => {} },
-      );
-      text = r?.text; truncated = !!r?.truncated;
+      // The stream transport times out only until headers arrive; the blocking
+      // call it replaces gave up at 240 s, so that bound is kept. An answer
+      // stopped by it is cut off, and treated like one.
+      const ac = new AbortController();
+      const timer = setTimeout(() => ac.abort(), 240000);
+      let r;
+      try {
+        r = await kernelLLM.stream(
+          [{ role: 'system', content: WRITER_SYSTEM }, { role: 'user', content: prompt }],
+          { role: 'creative', ...opts, onToken: () => {}, signal: ac.signal },
+        );
+      } finally { clearTimeout(timer); }
+      text = r?.text; truncated = !!(r?.truncated || r?.cancelled);
+      if (r?.cancelled && !(text || '').trim()) {
+        const e = new Error('The model did not finish within 4 minutes. Nothing was changed.');
+        e.aiUnavailable = false;
+        throw e;
+      }
     } else {
       const out = await kernelLLM(prompt, { role: 'creative', ...opts });
       text = typeof out === 'string' ? out : out?.text;

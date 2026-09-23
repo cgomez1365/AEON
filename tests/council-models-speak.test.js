@@ -168,6 +168,23 @@ describe('POST /council/speak', () => {
     expect(r.body.partialText).toBe('half an answer');
   });
 
+  it('bounds the stream in time: a signal is passed, and an answer stopped by it is marked cut off', async () => {
+    streamImpl = async (_m, opts) => ({ text: 'half an answer', cancelled: true, truncated: false, provider: 'custom', model: 'qwen3-8b' });
+    await mount();
+    const r = await api('POST', '/council/speak', { prompt: 'x', provider: 'role:chat' });
+    expect(streamCalls[0].opts.signal).toBeInstanceOf(AbortSignal);
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ text: 'half an answer', truncated: true, truncationReason: 'timeout' });
+  });
+
+  it('a stream stopped by the bound with nothing said is a 504, not an empty answer', async () => {
+    streamImpl = async () => ({ text: '', cancelled: true });
+    await mount();
+    const r = await api('POST', '/council/speak', { prompt: 'x', provider: 'role:chat' });
+    expect(r.status).toBe(504);
+    expect(r.body.error).toMatch(/did not finish/);
+  });
+
   it('without a streaming kernel it still answers, and says truncation is unknown', async () => {
     await mount({ withStream: false });
     const r = await api('POST', '/council/speak', { prompt: 'x', provider: 'role:chat' });

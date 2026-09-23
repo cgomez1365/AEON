@@ -112,6 +112,14 @@ describe('new content and feedback come back flagged, not refused', () => {
     expect(w.body.truncated).toBe(true);
   });
 
+  it('bounds the stream in time, and a rewrite stopped by the bound is refused like a cut-off one', async () => {
+    const { app, calls } = appWith(async () => ({ text: '<p>Half a rewrite', cancelled: true }));
+    const r = await call(app, '/api/writer/improve', { text: DOC, action: 'professional' });
+    expect(calls[0].opts.signal).toBeInstanceOf(AbortSignal);
+    expect(r.status).toBe(502);
+    expect(r.body.truncated).toBe(true);
+  });
+
   it('with no streaming transport it behaves as before (truncation unknown)', async () => {
     const { app, calls } = appWith(WHOLE, { withStream: false });
     const r = await call(app, '/api/writer/improve', { text: DOC, action: 'professional' });

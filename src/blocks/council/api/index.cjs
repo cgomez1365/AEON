@@ -226,6 +226,11 @@ module.exports = function createCompareRouter(deps) {
     if (p.startsWith('role:')) return { role: p.slice(5) || 'chat' };
     return { role: 'chat', provider: p, model: model || undefined };
   };
+  // The stream transport times out only until the response headers arrive;
+  // after that nothing ends a stalled answer. The blocking call it replaces
+  // gave up at 240 s, so the same bound is kept here — and the call stops if
+  // the operator closes the tab.
+  const SPEAK_TIMEOUT_MS = 240000;
   router.post('/council/speak', async (req, res) => {
     const { prompt, provider, model } = req.body || {};
     if (!prompt || typeof prompt !== 'string') return res.status(400).json({ error: 'prompt required' });
@@ -233,10 +238,20 @@ module.exports = function createCompareRouter(deps) {
     const route = routeFor(provider, model);
     try {
       if (typeof kernelLLM.stream === 'function') {
-        const r = await kernelLLM.stream(
-          [{ role: 'system', content: SPEAK_SYSTEM }, { role: 'user', content: prompt }],
-          { ...route, onToken: () => {} },
-        );
+        const ac = new AbortController();
+        const timer = setTimeout(() => ac.abort(), SPEAK_TIMEOUT_MS);
+        res.on('close', () => { if (!res.writableEnded) ac.abort(); });
+        let r;
+        try {
+          r = await kernelLLM.stream(
+            [{ role: 'system', content: SPEAK_SYSTEM }, { role: 'user', content: prompt }],
+            { ...route, onToken: () => {}, signal: ac.signal },
+          );
+        } finally { clearTimeout(timer); }
+        if (r.cancelled) {
+          if (!r.text) return res.status(504).json({ error: `The model did not finish within ${SPEAK_TIMEOUT_MS / 60000} minutes.` });
+          return res.json({ text: r.text, truncated: true, truncationReason: 'timeout', provider: r.provider || null, model: r.model || null, fallback: !!r.fallback });
+        }
         return res.json({
           text: r.text || '', truncated: !!r.truncated, truncationReason: r.truncationReason || null,
           provider: r.provider || null, model: r.model || null, fallback: !!r.fallback,

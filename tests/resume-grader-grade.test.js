@@ -125,6 +125,14 @@ describe('a failed grade says why', () => {
     expect(calls[0].opts.role).toBe('grading');
   });
 
+  it('bounds the stream in time, and says so when the bound stops it', async () => {
+    const { grade, calls } = await mount(async () => ({ text: '', cancelled: true }));
+    const r = await grade(RESUME);
+    expect(calls[0].opts.signal).toBeInstanceOf(AbortSignal);
+    expect(r.status).toBe(502);
+    expect(r.body.error).toMatch(/did not finish within 4 minutes/);
+  });
+
   it('still grades on a kernel with no streaming transport', async () => {
     const { grade, calls } = await mount(async () => json({ score: 70, subscores: { skills: 28, experience: 21, seniority: 11, requirements: 10 } }), { withStream: false });
     const r = await grade(RESUME);
