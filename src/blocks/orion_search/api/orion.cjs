@@ -126,13 +126,22 @@ module.exports = function (deps) {
     // retrieve.cjs returns { documents: [{ id, content, similarity, metadata }] }
     // legacy/other callers may use passages/results — check all three
     const brainDocs = brain?.documents || brain?.passages || brain?.results || [];
+    // The passage retrieval matched — up to ~2,600 characters — is the
+    // evidence. The 300-character excerpt below is for the result list only;
+    // it used to be ALL the model saw of a Vault source, so a fact 400
+    // characters into the matching passage could not be cited, while each web
+    // page got 6,000 (audit 2026-09-23). Kept off `results` so the response
+    // stays small; the model reads it through `sources` below.
+    const brainPassage = new Map();
     for (const p of brainDocs.slice(0, k)) {
+      brainPassage.set(p, String(p.content || p.text || p.summary || ''));
       results.push({
         title: p.metadata?.source || p.title || p.filename || p.docId || p.id || 'Second Brain document',
         url: p.id || p.docId || p.ref || p.path || null,
         excerpt: (p.content || p.text || p.summary || '').slice(0, 300),
         score: p.similarity ?? p.score,
         source: 'brain',
+        passage: p,
       });
     }
 
@@ -192,7 +201,13 @@ module.exports = function (deps) {
     const pages = await Promise.all(webHits.map(h => pageText(h.url)));
     const sources = [];
     webHits.forEach((h, i) => sources.push({ n: sources.length + 1, title: h.title, url: h.url, text: pages[i] || h.excerpt || '', read: !!pages[i], kind: 'web' }));
-    for (const r of results.filter(r => r.source === 'brain').slice(0, 2)) sources.push({ n: sources.length + 1, title: r.title, url: null, text: r.excerpt || '', read: true, kind: 'vault' });
+    const VAULT_SOURCE_CHARS = 2600;   // retrieve.cjs MAX_DOC_CHARS — what it already chose to hand over
+    for (const r of results.filter(r => r.source === 'brain').slice(0, 2)) {
+      const full = brainPassage.get(r.passage) || r.excerpt || '';
+      sources.push({ n: sources.length + 1, title: r.title, url: null, path: r.url || null, text: full.slice(0, VAULT_SOURCE_CHARS), read: true, kind: 'vault' });
+    }
+    // The raw retrieval record was only a key for the passage map above.
+    for (const r of results) delete r.passage;
 
     let answer = null, answerReason = null;
     if (typeof deps.kernelLLM === 'function' && sources.some(s => s.text)) {
@@ -216,7 +231,8 @@ module.exports = function (deps) {
     else lines.push(`No synthesized answer — ${answerReason}.`);
     if (sources.length) {
       lines.push('', '**Sources**');
-      for (const s of sources) lines.push(s.url ? `${s.n}. [${s.title}](${s.url})${s.read ? '' : ' — could not be read; excerpt only'}` : `${s.n}. ${s.title} — Second Brain`);
+      // A Vault source names its path, so /doc or /ask-doc can open it next.
+      for (const s of sources) lines.push(s.url ? `${s.n}. [${s.title}](${s.url})${s.read ? '' : ' — could not be read; excerpt only'}` : `${s.n}. ${s.title} — Second Brain${s.path ? ` (${s.path})` : ''}`);
     }
     const blockHits = results.filter(r => r.source === 'block');
     if (blockHits.length) lines.push('', `Blocks: ${blockHits.map(b => b.title).join(', ')}`);

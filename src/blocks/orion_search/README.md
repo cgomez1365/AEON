@@ -34,7 +34,7 @@ already exist elsewhere in AEON.
 ### This block
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/api/orion/search` | Body `{ query, k? }` (`k` defaults to 5, UI sends 8/16/24). Returns `{ ok, query, counts, results }`. `results[].source` is `"web"`, `"brain"`, or `"block"`. |
+| POST | `/api/orion/search` | Body `{ query, k? }` (`k` defaults to 5, UI sends 8/16/24). Returns `{ ok, query, counts, results, answer, sources, text }`. `results[].source` is `"web"`, `"brain"`, or `"block"`. The model reads each Vault source's matching passage (up to 2,600 chars); `sources[].path` names the Vault file. The page shows `answer` above the result list. |
 
 ### What it calls (not this block's own code — verified live/reachable)
 | Call | Defined in | Notes |

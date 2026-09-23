@@ -152,6 +152,35 @@ export default function OrionSearch() {
               </span>
             </div>
           ))}
+          {/* The answer. /api/orion/search reads the top pages and the
+              matching Vault passages and writes an answer with numbered
+              sources — and this page never showed it: every search spent a
+              model call and three page fetches on text nobody saw (audit
+              2026-09-23). The terminal's /orion has printed it since 09-07. */}
+          {(results.answer || results.answerReason) && (
+            <div role="region" aria-label="Answer" style={{
+              border: '1px solid var(--accent)', borderRadius: 4, padding: '12px 14px', marginBottom: 12,
+              background: 'var(--accent-dim)',
+            }}>
+              <div style={{ fontSize: 9.5, letterSpacing: '0.12em', color: 'var(--accent)', marginBottom: 6 }}>ANSWER</div>
+              {results.answer
+                ? <div style={{ fontSize: 12.5, lineHeight: 1.6, whiteSpace: 'pre-wrap', color: 'var(--text)' }}>{results.answer}</div>
+                : <div style={{ fontSize: 11.5, color: 'var(--text-dim)' }}>No synthesized answer — {results.answerReason}.</div>}
+              {Array.isArray(results.sources) && results.sources.length > 0 && (
+                <ol style={{ margin: '10px 0 0', paddingLeft: 18, fontSize: 11, lineHeight: 1.6, color: 'var(--text-dim)' }}>
+                  {results.sources.map(s => (
+                    <li key={s.n} value={s.n}>
+                      {s.url
+                        ? <a href={s.url} target="_blank" rel="noreferrer" className="orion-focusable" aria-label={`${s.title} (opens in new tab)`} style={{ color: 'var(--text)' }}>{s.title}</a>
+                        : <span style={{ color: 'var(--text)' }}>{s.title}</span>}
+                      {s.kind === 'vault' && <span> — Second Brain{s.path ? ` (${s.path})` : ''}</span>}
+                      {s.url && !s.read && <span> — could not be read; excerpt only</span>}
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </div>
+          )}
           {visible.map((r, i) => {
             const meta = SOURCE_META[r.source] || SOURCE_META.web;
             const Icon = meta.icon;
