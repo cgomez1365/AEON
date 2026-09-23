@@ -63,7 +63,7 @@ describe('importing the kernel is the block API, in either module syntax', () =>
     expect(traversal("const m = await import('../../kernel/contexts/AeonContext');\n")).toEqual([]);
   });
   it('the require form still passes, and a real escape is still caught', () => {
-    expect(traversal("const v = require('../../../kernel/vault.cjs');\n")).toEqual([]);
+    expect(traversal("const p = require('../../../kernel/pacing.cjs');\n")).toEqual([]);
     expect(traversal("import x from '../../../../etc/passwd';\n").length).toBe(1);
     expect(traversal("const p = path.join(__dirname, '..', '..', '..', 'secrets');\n").length).toBe(1);
   });
