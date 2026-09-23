@@ -1,5 +1,11 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import SetupWizard from '../blocks/security/components/SetupWizard.jsx';
+import React, { useState, useEffect, useCallback, lazy, Suspense } from 'react';
+
+// The wizard belongs to the security block. A static import made the whole UI
+// unbuildable without that block (measured 2026-09-23 — the only one of 17 the
+// shell could not live without). import.meta.glob matches nothing when the
+// block is absent instead of failing the build; tests/shell-block-imports.test.js.
+const wizardModule = Object.values(import.meta.glob('../blocks/security/components/SetupWizard.jsx'))[0];
+const SetupWizard = wizardModule ? lazy(wizardModule) : null;
 
 /**
  * CloudSetupGate — shows the cloud setup wizard on a fresh install, before
@@ -44,12 +50,16 @@ export default function CloudSetupGate({ children }) {
   useEffect(() => { check(); }, [check]);
 
   if (!state.ready) return null;
-  if (!state.showWizard) return children;
+  // No security block, no wizard: the app boots rather than waiting on a screen
+  // it cannot show.
+  if (!state.showWizard || !SetupWizard) return children;
 
   return (
-    <SetupWizard
-      onComplete={markComplete}
-      onSkip={markComplete}
-    />
+    <Suspense fallback={null}>
+      <SetupWizard
+        onComplete={markComplete}
+        onSkip={markComplete}
+      />
+    </Suspense>
   );
 }

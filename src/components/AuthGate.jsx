@@ -1,13 +1,18 @@
 import React, { useState, useEffect, useCallback, lazy, Suspense } from 'react';
 import { securityAvailability } from '../kernel/auth';
 
-// Static lazy import — the security block ships with the app now. A variable
-// path with @vite-ignore was never bundled, so production builds 404'd the
-// import and the gate showed "Security block not found" instead of login.
+// Bundled when present, absent without breaking the build. A variable path with
+// @vite-ignore was never bundled (production 404'd the import); a literal
+// import() is resolved at build time and fails the whole build when the block
+// is gone. import.meta.glob matches nothing instead — the same way the registry
+// discovers blocks. tests/shell-block-imports.test.js.
+const SECURITY_MISSING = () => (
+  <div style={{ padding: 40, color: '#ff4466', textAlign: 'center' }}>Security block not found. Reinstall it to enable login.</div>
+);
+const securityModule = Object.values(import.meta.glob('../blocks/security/index.jsx'))[0];
 const Security = lazy(() =>
-  import('../blocks/security/index.jsx').catch(() => ({
-    default: () => <div style={{ padding: 40, color: '#ff4466', textAlign: 'center' }}>Security block not found. Reinstall it to enable login.</div>
-  }))
+  (securityModule ? securityModule() : Promise.reject(new Error('security block absent')))
+    .catch(() => ({ default: SECURITY_MISSING }))
 );
 
 /**
