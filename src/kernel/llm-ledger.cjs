@@ -67,6 +67,12 @@ function createLedger({ file, maxRecords = DEFAULT_MAX_RECORDS } = {}) {
         // indistinguishable from a day nobody worked.
         success: entry.success !== false,
       };
+      // And WHY a call failed: a day of rate limits and a day of empty
+      // answers needed different remedies and looked identical here.
+      if (!row.success) {
+        if (entry.status != null && Number.isInteger(Number(entry.status))) row.status = Number(entry.status);
+        if (entry.error) row.error = String(entry.error).slice(0, 160);
+      }
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.appendFileSync(file, `${JSON.stringify(row)}\n`, 'utf8');
       _pruneIfNeeded();

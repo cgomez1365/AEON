@@ -87,6 +87,32 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     notify(`⏸ ${p} in cooldown ${Math.round(ms / 1000)}s: ${message.slice(0, 120)}`, { provider: p });
   };
 
+  // A provider that fails WITHOUT a 429/402 (an empty body, a budget spent
+  // thinking, a timeout) never tripped the cooldown, so every turn tried it
+  // first again: the 2026-09-23 call log shows one free model failing 11
+  // times in a row. Three consecutive failures before any answer rest it the
+  // way a 429 does; one success clears the count.
+  const FAIL_STREAK_LIMIT = 3;
+  const _failStreak = {};
+  const noteProviderFailure = (p, e) => {
+    const n = (_failStreak[p] || 0) + 1;
+    _failStreak[p] = n;
+    if (n >= FAIL_STREAK_LIMIT) {
+      _failStreak[p] = 0;
+      markUnhealthy(p, 0, `${n} failures in a row (last: ${String(e?.message || 'unknown').slice(0, 100)})`);
+    }
+  };
+  const noteProviderSuccess = (p) => { _failStreak[p] = 0; };
+  // The chain's reading of a failure's status: the structured field, the
+  // "error NNN" text, then a bare 429/402 (kept from the inline version it
+  // replaces). Narrower _statusOf below feeds key rotation and stays as it is.
+  const _failureStatus = (e) => e?.status
+    || Number(/error (\d{3})/i.exec(e?.message || '')?.[1])
+    || (/429/.test(e?.message || '') ? 429 : /402/.test(e?.message || '') ? 402 : null);
+  // Any other configured provider that could take a turn right now.
+  const _anotherCanServe = (p) => ['groq', 'gemini', 'openrouter', 'local']
+    .some((q) => q !== p && isConfigured(q) && isHealthy(q));
+
   // BO-A4a — one truth, two readers collapsed.
   //
   // This used to answer purely from process.env / the module-load key-pool
@@ -124,7 +150,16 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       const configured = isConfigured(p);
       out[p] = { healthy: configured && isHealthy(p), configured, ...(providerHealth[p] || {}) };
     }
+    // A custom or registry provider in cooldown was invisible here.
+    for (const p of Object.keys(providerHealth)) {
+      if (!out[p]) out[p] = { healthy: isHealthy(p), configured: true, ...providerHealth[p] };
+    }
     return out;
+  };
+  // Tests only: forget every cooldown and failure count.
+  const _resetProviderHealth = () => {
+    for (const k of Object.keys(providerHealth)) delete providerHealth[k];
+    for (const k of Object.keys(_failStreak)) delete _failStreak[k];
   };
 
   // ── Local-model confirmation gate ──────────────────────────────────────────
@@ -224,7 +259,14 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   let _recordActivity = null; // token heatmap hook, attached post-mount
   const setActivityRecorder = (fn) => { _recordActivity = fn; };
   const _llmTelemetry = { calls: {}, totalCalls: 0, totalTokens: 0 };
-  function _trackLLM(engine, model, tokens, latencyMs, success) {
+  function _trackLLM(engine, model, tokens, latencyMs, success, info = {}) {
+    // Why a call failed rides into the durable record. The ledger used to say
+    // only success:false, so a rate limit, an empty body and a retired model
+    // were indistinguishable in the 2026-09-23 call log.
+    const why = success ? {} : {
+      status: info.status ?? null,
+      error: info.error ? _redactKeys(String(info.error)).slice(0, 160) : null,
+    };
     // Settings → System → Telemetry. The toggle existed and was read by
     // nothing, so switching it off recorded exactly as much as switching it
     // on. Measurement stops here, at the one place every provider path funnels
@@ -236,7 +278,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     // stats must not quietly turn off spend tracking.
     if (!_capabilities.enabled('telemetry_enabled')) {
       writeOSAudit(`LLM_${engine.toUpperCase()}`, `${model} | ${tokens} tok | ${latencyMs}ms${success ? '' : ' | FAILED'}`, success ? 200 : 500, tokens);
-      try { if (callLedger) callLedger.record({ provider: engine, model, tokens, latencyMs, success }); } catch {}
+      try { if (callLedger) callLedger.record({ provider: engine, model, tokens, latencyMs, success, ...why }); } catch {}
       return;
     }
     const key = `${engine}/${model}`;
@@ -254,7 +296,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     // dies on restart, which is why the panels showed live calls and the
     // persistent surfaces showed nothing. Failures included: a day of failed
     // calls must not look like a day nobody worked.
-    try { if (callLedger) callLedger.record({ provider: engine, model, tokens, latencyMs, success }); } catch {}
+    try { if (callLedger) callLedger.record({ provider: engine, model, tokens, latencyMs, success, ...why }); } catch {}
   }
 
   // ── Normalize input: callers can pass a string OR a messages array ──
@@ -656,6 +698,53 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     return err;
   };
 
+  // OpenRouter reports an upstream provider's failure INSIDE an HTTP 200:
+  // `{"error":{"code":429,...}}` with no choices, or a choice whose
+  // finish_reason is "error" (streaming: a chunk with a top-level `error`).
+  // Read as a body it was "no text" — reported as an empty response with a
+  // remedy about custom endpoints, and a rate limit hidden this way never
+  // reached the cooldown or the key rotation. Found in the 2026-09-23 blind
+  // test; shape per OpenRouter's error docs. Keeps the "Endpoint error <code>"
+  // form every caller already reads a status out of.
+  const _bodyError = (obj) => {
+    const choice = obj?.choices?.[0];
+    const e = obj?.error || choice?.error
+      || (choice?.finish_reason === 'error' ? { message: 'the provider ended the response with an error' } : null);
+    if (!e) return null;
+    const code = Number(e.code);
+    const status = Number.isInteger(code) && code >= 400 && code < 600 ? code : null;
+    const msg = _redactKeys(String(e.message || 'provider error')).slice(0, 200);
+    const err = new Error(`Endpoint error ${status || 'in the response body'}: ${msg}`);
+    err.status = status;
+    err.inBody = true;
+    return err;
+  };
+
+  // Reasoning counts against max_tokens (OpenRouter docs). A model that spends
+  // the whole budget thinking returns empty content with finish_reason
+  // "length": not an empty model, an exhausted budget. Its unfinished thinking
+  // is not an answer and is never shown as one.
+  const _reasoningBudgetError = (maxTokens) => {
+    const err = new Error(
+      `The model used its whole output budget${maxTokens ? ` (${maxTokens} tokens)` : ''} before it answered `
+      + '(finish_reason "length"). Reasoning models spend part of it thinking; free OpenRouter models are capped at 1024.'
+    );
+    err.reasoningExhausted = true;
+    return err;
+  };
+
+  // OpenRouter names a reasoning model's thinking `reasoning` (streaming may
+  // also send `reasoning_details: [{ text }]`); other servers use
+  // `reasoning_content`. Only `reasoning_content` was read, so OpenRouter's
+  // was invisible.
+  const _reasoningText = (m) => {
+    if (!m) return '';
+    if (typeof m.reasoning === 'string' && m.reasoning) return m.reasoning;
+    if (typeof m.reasoning_content === 'string' && m.reasoning_content) return m.reasoning_content;
+    if (Array.isArray(m.reasoning_details)) return m.reasoning_details.map((d) => d?.text || d?.summary || '').join('');
+    return '';
+  };
+
   const genericOpenAIRequest = async (prompt, model, baseUrl, apiKey, opts = {}) => {
     const _t0 = Date.now();
     const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
@@ -671,22 +760,35 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       signal: fetchTimeout(opts),
     });
     if (!response.ok) {
-      _trackLLM('openai-compat', model, 0, Date.now() - _t0, false);
-      throw await _openAIError(response, model);
+      const err = await _openAIError(response, model);
+      _trackLLM('openai-compat', model, 0, Date.now() - _t0, false, { status: err.status, error: err.message });
+      throw err;
     }
     const data = await response.json().catch(() => null);
+    const bodyErr = _bodyError(data);
+    if (bodyErr) {
+      _trackLLM('openai-compat', model, 0, Date.now() - _t0, false, { status: bodyErr.status, error: bodyErr.message });
+      throw bodyErr;
+    }
     // An OpenAI-compatible server that is merely *incompatible* answers 200 with
     // a shape this used to read as an empty string — and returned that empty
     // string as SUCCESS. Callers then wrote it over the user's document. Read
-    // the shapes that actually occur (reasoning models put the text in
-    // reasoning_content and leave content null), and if there is genuinely
+    // the shapes that actually occur (some reasoning models put the text in
+    // their reasoning field and leave content null), and if there is genuinely
     // nothing, fail loudly instead of returning ''.
-    const msg = data?.choices?.[0]?.message;
-    const text = msg?.content || msg?.reasoning_content || data?.choices?.[0]?.text || data?.message?.content || '';
+    const choice = data?.choices?.[0];
+    const msg = choice?.message;
+    const content = msg?.content || choice?.text || data?.message?.content || '';
+    if ((typeof content !== 'string' || content.trim() === '') && choice?.finish_reason === 'length') {
+      const err = _reasoningBudgetError(opts.max_tokens || 4096);
+      _trackLLM('openai-compat', model, 0, Date.now() - _t0, false, { error: err.message });
+      throw err;
+    }
+    const text = (typeof content === 'string' && content.trim()) ? content : _reasoningText(msg);
     if (typeof text !== 'string' || text.trim() === '') {
-      _trackLLM('openai-compat', model, 0, Date.now() - _t0, false);
       const err = new Error('The model returned an empty response. If this is a custom endpoint, check the model name is one this service actually serves.');
       err.emptyResponse = true;
+      _trackLLM('openai-compat', model, 0, Date.now() - _t0, false, { error: err.message });
       throw err;
     }
     const tokens = data?.usage?.total_tokens || Math.ceil(text.length / 4);
@@ -876,34 +978,50 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       });
     } finally { connected(); }
     if (!response.ok) {
-      _trackLLM(provider, model, 0, Date.now() - _t0, false);
+      const err = await _openAIError(response, model);
+      _trackLLM(provider, model, 0, Date.now() - _t0, false, { status: err.status, error: err.message });
       if (response.status === 429 || response.status === 402) rotateKeyPool(provider);
-      throw await _openAIError(response, model);
+      throw err;
     }
     let text = '';
     let reasoning = '';
     let usage = null;
     let finishReason = null;
+    let bodyErr = null;
     await _readSSE(response.body, (payload) => {
       if (payload === '[DONE]') return false;
       let chunk;
       try { chunk = JSON.parse(payload); } catch { return true; }
+      // A provider failure mid-stream arrives as a chunk, under a 200.
+      bodyErr = _bodyError(chunk);
+      if (bodyErr) return false;
       const choice = chunk.choices?.[0];
       const delta = choice?.delta;
       if (delta?.content) { text += delta.content; opts.onToken?.(delta.content); }
-      // Reasoning models put the answer in reasoning_content and leave content
-      // null. Held back rather than streamed, so a model's private thinking
-      // does not scroll through the terminal ahead of its answer; used only if
-      // no content ever arrives — the same parity genericOpenAIRequest keeps.
-      else if (delta?.reasoning_content) reasoning += delta.reasoning_content;
+      // A reasoning model's thinking is held back rather than streamed, so it
+      // does not scroll through the terminal ahead of the answer; it stands in
+      // for the answer only if the model FINISHED without content — the same
+      // parity genericOpenAIRequest keeps.
+      else reasoning += _reasoningText(delta);
       if (choice?.finish_reason) finishReason = choice.finish_reason;
       if (chunk.usage) usage = chunk.usage;
       return true;
     });
+    if (bodyErr) {
+      _trackLLM(provider, model, 0, Date.now() - _t0, false, { status: bodyErr.status, error: bodyErr.message });
+      if (bodyErr.status === 429 || bodyErr.status === 402) rotateKeyPool(provider);
+      throw bodyErr;
+    }
+    if (!text && finishReason === 'length') {
+      const err = _reasoningBudgetError(maxTokens);
+      _trackLLM(provider, model, 0, Date.now() - _t0, false, { error: err.message });
+      throw err;
+    }
     if (!text && reasoning) { text = reasoning; opts.onToken?.(reasoning); }
     if (text.trim() === '') {
-      _trackLLM(provider, model, 0, Date.now() - _t0, false);
-      throw _emptyStreamError();
+      const err = _emptyStreamError();
+      _trackLLM(provider, model, 0, Date.now() - _t0, false, { error: err.message });
+      throw err;
     }
     const tokens = usage?.total_tokens || _estimateTokens(messages, text);
     _trackLLM(provider, model, tokens, Date.now() - _t0, true);
@@ -1185,6 +1303,17 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     if (localIdx > 0 && localIdx !== candidates.length - 1) {
       candidates.push(...candidates.splice(localIdx, 1));
     }
+    // The fallbacks above already skip a provider in cooldown; the primary did
+    // not, so a resting primary was still tried first on every turn (the
+    // 2026-09-23 log: fail, fall back, fail, fall back). It now goes after the
+    // healthy cloud candidates — kept, not dropped: it may be the only one, and
+    // cooldowns end.
+    primary.configured = true;
+    if (!isHealthy(primary.provider) && candidates.some((c) => c !== primary && c.provider !== 'local')) {
+      candidates.splice(candidates.indexOf(primary), 1);
+      const at = candidates.findIndex((c) => c.provider === 'local');
+      candidates.splice(at === -1 ? candidates.length : at, 0, primary);
+    }
     return candidates;
   };
 
@@ -1210,10 +1339,18 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     if (_isCloud()) opts = { ...opts, _vercelStrict: true };
     const t0 = Date.now();
     const candidates = await _streamCandidates(role, opts);
-    const primary = candidates[0];
+    const primary = candidates.find((c) => c.configured) || candidates[0];
     const attempts = [];
     let lastErr = null;
     let lastFailed = null;
+    let primaryErr = null;
+    if (candidates[0] !== primary) {
+      // Say why the configured provider was not tried first.
+      opts.onFallback?.({
+        from: primary.provider, to: candidates[0].provider, model: candidates[0].model,
+        reason: `resting after failures: ${providerHealth[primary.provider]?.reason || 'in cooldown'}`,
+      });
+    }
 
     for (const c of candidates) {
       const fallback = c !== primary;
@@ -1227,6 +1364,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       const onToken = (t) => { if (!t) return; served++; partial += t; opts.onToken(t); };
       try {
         const r = await _dispatchStream(messages, c, { ...opts, onToken });
+        noteProviderSuccess(c.provider);
         const usedModel = r.model || c.model;
         if (fallback) notify(`↪ Fallback: ${role} streamed via ${c.provider}/${usedModel} (configured: ${primary.provider})`, { provider: c.provider });
         return {
@@ -1257,13 +1395,17 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
         }
         lastErr = e;
         lastFailed = c;
-        const status = e.status || Number(/error (\d{3})/i.exec(e.message)?.[1]) || (/429/.test(e.message) ? 429 : /402/.test(e.message) ? 402 : null);
+        const status = _failureStatus(e);
         if (status === 429 || status === 402) markUnhealthy(c.provider, status, e.message);
-        attempts.push({ provider: c.provider, status: status || null, message: e.message });
+        else noteProviderFailure(c.provider, e);
+        if (c === primary) primaryErr = e;
+        attempts.push({ provider: c.provider, status: status || null, message: e.message, configured: c === primary });
         console.warn(`[KERNEL] stream ${c.provider} failed (${e.message.slice(0, 120)}), trying next provider`);
       }
     }
-    throw _chainExhaustedError(attempts, lastErr);
+    // The configured provider's failure is the cause; a later rung that could
+    // not even start ("no local model is installed") is not.
+    throw _chainExhaustedError(attempts, primaryErr || lastErr);
   };
 
   // The provider/model the role WOULD stream through, and the context window
@@ -1391,19 +1533,36 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     if (_isCloud()) opts = { ...opts, _vercelStrict: true };
 
     // ── Registry path (preferred) ──
+    // Its failure is kept. It used to be logged and dropped, so when nothing
+    // else could serve, the operator read the LAST rung's error — "No local
+    // model is installed and no cloud provider is configured" — for a
+    // configured provider that was rate-limited for a minute.
+    let registryErr = null;
+    let registryAttempt = null;
     if (aeonEndpoints && !opts.provider && !opts.model) {
-      try {
-        const r = await aeonEndpoints.resolveForRole(role, supabase);
-        if (r && r.ok) {
-          if (r.via === 'relay') {
-            throw new Error(`Model "${r.model}" is desktop-only; relay required (desktop must be online).`);
-          }
-          const text = await _dispatchResolved(prompt, r, opts);
-          return opts.returnMeta ? { text, provider: r.provider, model: r.model } : text;
+      let r = null;
+      try { r = await aeonEndpoints.resolveForRole(role, supabase); }
+      catch (e) { console.warn(`[KERNEL] registry resolve(${role}) fell back:`, e.message); }
+      if (r && r.ok) {
+        if (r.via === 'relay') {
+          throw new Error(`Model "${r.model}" is desktop-only; relay required (desktop must be online).`);
         }
-      } catch (e) {
-        console.warn(`[KERNEL] registry resolve(${role}) fell back:`, e.message);
-        if (/desktop-only/.test(e.message)) throw e;
+        // A resting registry provider is skipped while another can serve —
+        // the same rule the chain below applies to every other provider.
+        if (isHealthy(r.provider) || !_anotherCanServe(r.provider)) {
+          try {
+            const text = await _dispatchResolved(prompt, r, opts);
+            noteProviderSuccess(r.provider);
+            return opts.returnMeta ? { text, provider: r.provider, model: r.model } : text;
+          } catch (e) {
+            const status = _failureStatus(e);
+            if (status === 429 || status === 402) markUnhealthy(r.provider, status, e.message);
+            else noteProviderFailure(r.provider, e);
+            registryErr = e;
+            registryAttempt = { provider: r.provider, status: status || null, message: e.message, configured: true };
+            console.warn(`[KERNEL] registry ${r.provider} failed (${e.message.slice(0, 120)}), trying the chain`);
+          }
+        }
       }
     }
 
@@ -1450,7 +1609,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     let lastErr = null;
     // Every failure in the chain, so the thrown error can name the real cause
     // rather than whichever provider happened to be tried last. See P8c below.
-    const attempts = [];
+    const attempts = registryAttempt ? [registryAttempt] : [];
     for (const p of chain) {
       if (!isHealthy(p)) continue;
       try {
@@ -1470,19 +1629,23 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
           text = await localNativeRequest(prompt, usedModel, opts);
         } else continue;
         if (text !== undefined) {
+          noteProviderSuccess(p);
           if (p !== provider) notify(`↪ Fallback: ${role} routed to ${p}/${usedModel} (configured: ${provider})`, { provider: p });
           return opts.returnMeta ? { text, provider: p, model: usedModel, fallback: p !== provider } : text;
         }
       } catch (e) {
         lastErr = e;
-        const status = /error (\d{3})/i.exec(e.message)?.[1] || (/429/.test(e.message) ? '429' : /402/.test(e.message) ? '402' : null);
+        const status = _failureStatus(e);
         if (status) markUnhealthy(p, Number(status), e.message);
+        else noteProviderFailure(p, e);
         attempts.push({ provider: p, status: status ? Number(status) : null, message: e.message });
         console.warn(`[KERNEL] ${p} failed (${e.message.slice(0, 120)}), trying next provider`);
       }
     }
 
-    throw _chainExhaustedError(attempts, lastErr);
+    // The configured (registry) provider's failure is the cause; a later rung
+    // that could not even start ("no local model is installed") is not.
+    throw _chainExhaustedError(attempts, registryErr || lastErr);
   };
 
   // BO-SHIP P8c — say which provider failed and why.
@@ -1528,7 +1691,12 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     // router turns this flag into a 503 so the caller gets an actionable
     // "nothing is configured" instead of a bare 500.
     const exhausted = lastErr || new Error('No LLM provider available (check API keys in Settings)');
-    exhausted.noProviderAvailable = true;
+    // A configured provider that ran and failed is not "nothing is configured":
+    // the router turns that flag into "assign a model in Settings", which is the
+    // wrong remedy for a provider that answered with an error or ran out of
+    // budget. Only an install where nothing configured could run gets it.
+    if (attempts.some((a) => a.configured)) exhausted.providerFailed = true;
+    else exhausted.noProviderAvailable = true;
     exhausted.attempts = attempts;
     return exhausted;
   }
@@ -1545,7 +1713,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     GEMINI_KEY_POOL, _trackLLM, _llmTelemetry, setActivityRecorder,
     getDailyCost, addRunCost,
     KILL_SWITCH_THRESHOLD, GEMINI_PRICE_PER_TOKEN, GROQ_PRICE_PER_TOKEN,
-    getProviderHealth, getKeyPoolInfo, dehydrateProvider, hydrateEnvFromVault,
+    getProviderHealth, _resetProviderHealth, getKeyPoolInfo, dehydrateProvider, hydrateEnvFromVault,
     defaultLocalModel, localRuntimePresent,
     envHydrated,
   };
