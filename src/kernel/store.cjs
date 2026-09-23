@@ -224,6 +224,11 @@ async function updateFromStore(pipeline, id, {
   const wasRunning = !!rs.isRunning?.(id);
   const keptAt = path.join(REMOVED, aside.asideName(id));
   aside.moveDir(path.join(BLOCKS, id), keptAt);
+  // Unmount the old version before the new one is proofed: the boot proof
+  // refuses any route "already served by a live block", and the old version's
+  // routes stay in the live registry until a rescan — the first live update
+  // collided with itself and rolled back (2026-09-23).
+  try { rescan(`update-aside:${id}`); } catch { /* the proof will say if routes still collide */ }
   let result;
   try {
     result = await pipeline.submitBuild('store', {

@@ -57,6 +57,7 @@ function pipeline({ score = 'LOW', outcome = 'live' } = {}) {
     validateBuild: async () => ({ ok: true, errors: [], score, verdict: { score } }),
     submitBuild: async (_src, build) => {
       calls.push(build.meta);
+      events.push('submit');
       if (outcome === 'live') {
         fs.mkdirSync(path.join(BLOCKS, ID), { recursive: true });
         fs.writeFileSync(path.join(BLOCKS, ID, 'block.manifest.json'), JSON.stringify(build.manifest));
@@ -69,13 +70,16 @@ function pipeline({ score = 'LOW', outcome = 'live' } = {}) {
     },
   };
 }
-const opts = () => ({ env: { AEON_STORE: STORE }, blocksDir: BLOCKS, stagingDir: STAGING, removedDir: REMOVED, runState });
+let events;
+const opts = () => ({ env: { AEON_STORE: STORE }, blocksDir: BLOCKS, stagingDir: STAGING, removedDir: REMOVED, runState,
+  rescan: (reason) => events.push(`rescan:${reason}`) });
 
 beforeEach(() => {
   T = fs.mkdtempSync(path.join(os.tmpdir(), 'aeon-update-'));
   [BLOCKS, STAGING, REMOVED, STORE] = ['blocks', 'staging', 'removed', 'store'].map((d) => path.join(T, d));
   fs.mkdirSync(BLOCKS); fs.mkdirSync(STAGING);
   running = new Set();
+  events = [];
   bufs = { '1.0.0': cartridge('1.0.0'), '1.1.0': cartridge('1.1.0') };
 });
 afterEach(() => fs.rmSync(T, { recursive: true, force: true }));
@@ -89,6 +93,9 @@ describe('updateFromStore', () => {
     expect(installedVersion()).toBe('1.1.0');
     expect(fs.readdirSync(REMOVED)).toEqual([expect.stringMatching(new RegExp(`^${ID}@`))]);
     expect(p.calls[0]).toMatchObject({ cartridge: `store:${ID}-1.1.0.aeon`, update: { from: '1.0.0' } });
+    // The old version's routes are unmounted before the new one is proofed —
+    // otherwise the proof sees them as a live collision (measured, 2026-09-23).
+    expect(events.slice(0, 2)).toEqual([`rescan:update-aside:${ID}`, 'submit']);
   });
 
   it('nothing to do when the newest version is installed', async () => {
