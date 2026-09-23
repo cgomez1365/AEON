@@ -239,6 +239,18 @@ module.exports = function secondBrainFactory(deps) {
     const { hits, by, searched, titleOf } = resolveByName(typed);
 
     if (!hits.length) {
+      // A folder is not a document, but "nothing matches" would be false.
+      const dir = resolveDoc(typed.trim().replace(/\\/g, '/').replace(/^\/+/, ''));
+      if (dir && dir !== path.resolve(BRAIN_DIR) && fs.existsSync(dir) && fs.statSync(dir).isDirectory()) {
+        const rel = path.relative(BRAIN_DIR, dir).split(path.sep).join('/');
+        const inside = walkVaultFiles().filter((f) => f.startsWith(`${rel}/`));
+        const shown = inside.slice(0, 15);
+        const text = `${rel} is a folder, not a document — ${inside.length} file${inside.length === 1 ? '' : 's'} inside:\n`
+          + shown.map((f) => `- ${f}`).join('\n')
+          + (inside.length > shown.length ? `\n…and ${inside.length - shown.length} more.` : '')
+          + (shown.length ? `\nThen: /doc ${argFor(shown[0])}` : '');
+        return res.json({ ok: true, found: false, reason: 'folder', folder: rel, files: shown, total: inside.length, text });
+      }
       const text = `Nothing in the Vault matches "${typed}". Searched: the exact path, `
         + `${searched.files.toLocaleString()} file names in every Vault folder (saved chats included), `
         + `and ${searched.titles.toLocaleString()} indexed titles. `

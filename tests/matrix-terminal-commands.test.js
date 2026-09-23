@@ -73,7 +73,8 @@ beforeEach(async () => {
 
   // One app holding the block's routes AND the dispatcher, the way the kernel
   // mounts them — the dispatcher addresses itself through PORT.
-  const deps = { isVercel: false, VAULT_ROOT: vault, DATA_ROOT: dataRoot, embed: bow, getDataFile: (id) => path.join(dataRoot, id) };
+  const kernelLLM = async (prompt) => `STUB: ${(/QUESTION: (.+)/.exec(prompt) || [])[1] || 'answer'} [1]`;
+  const deps = { isVercel: false, VAULT_ROOT: vault, DATA_ROOT: dataRoot, embed: bow, kernelLLM, getDataFile: (id) => path.join(dataRoot, id) };
   const app = express();
   app.use(express.json());
   app.use('/api', indexFactory(deps));
@@ -200,6 +201,14 @@ describe('/doc finds a document the way /ask-doc does', () => {
     expect(r.chip).not.toBe('Not found');
   });
 
+  it('a folder name lists what is inside instead of claiming nothing matches', async () => {
+    const r = await dispatch('/doc', 'Agents/council');
+    expect(r.status).toBe(200);
+    expect(r.chip).toMatch(/Agents\/council is a folder/);
+    expect(r.chip).toMatch(/2026-09-23T07-14-38-125Z\.md/);
+    expect(r.chip).not.toMatch(/Nothing in the Vault matches/);
+  });
+
   it('cannot be walked out of the Vault', async () => {
     const outside = path.join(root, 'secret.md');
     fs.writeFileSync(outside, 'TOP SECRET outside the vault');
@@ -277,5 +286,65 @@ describe('Matrix editor Save writes back to the file it opened', () => {
     });
     const index = JSON.parse(fs.readFileSync(path.join(dataRoot, 'vault_index.json'), 'utf8'));
     expect(index.documents['Notes/new-note.md']).toBeUndefined();
+  });
+});
+
+// ── Audit, 2026-09-23 — the rest of the operator's loop ──────────────────
+describe('the rest of the loop: ask, recall, notes with frontmatter', () => {
+  it('/ask shows its sources in the chip, and says why when it cannot answer', async () => {
+    await scan();
+    // The manifest said display:"answer", so the dispatcher took `answer` and
+    // dropped `text` — the citations never reached the chip, and an
+    // unanswered /ask (no `answer` field) rendered its whole body as JSON.
+    const hit = await dispatch('/ask', 'what was the council verdict on three packs or ten?');
+    expect(hit.chip).toMatch(/\[1\] Council debate/);
+    const miss = await dispatch('/ask', 'zxqw plorbin frimble');
+    expect(miss.chip).toMatch(/Nothing in the index/);
+    expect(miss.chip).not.toMatch(/```json/);
+  });
+
+  it('/recall never says "Found 1" above a list of two', async () => {
+    write('Notes/invoice-terms.md', '# Invoice terms\n\nInvoice terms are net fifteen days for all clients.');
+    write('Notes/payment-policy.md', '# Payment policy\n\nClients pay each invoice on receipt; late fees after thirty days. Terms are reviewed yearly.');
+    await scan();
+    const r = await fetch(`${base}/crn/second-brain/retrieve`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query: 'invoice terms net fifteen days clients' }),
+    });
+    const { text } = await r.json();
+    const listed = text.split('\n').filter((l) => /^\d+\. /.test(l)).length;
+    expect(listed).toBeGreaterThanOrEqual(2);                        // precondition: a real multi-hit answer
+    expect(Number((/^Found (\d+)/.exec(text) || [])[1])).toBeGreaterThanOrEqual(listed);
+  });
+
+  it('a note with YAML frontmatter is titled and summarised by its content, not its metadata', async () => {
+    // memory_core mirrors every memory as <random id>.md with frontmatter and
+    // no heading: /recall listed them as "1b4367dbf594", and the summary it
+    // embedded began "--- id: … category: fact pinned: false created: …".
+    write('Agents/Aeon/memory/1b4367dbf594.md', '---\nid: 1b4367dbf594\ncategory: fact\npinned: false\ncreated: 2026-09-23T08:40:57.366Z\nsource: api\n---\n\nThe operator\'s preferred invoice terms are net 15\n');
+    write('Notes/obsidian-style.md', '---\ntitle: "Quarterly fuel review"\ntags: [fuel, q3]\n---\n\nDiesel averaged $3.91 in Q3; the fuel-cost report flags any truck above $0.62 per mile.\n');
+    await scan();
+    const index = JSON.parse(fs.readFileSync(path.join(dataRoot, 'vault_index.json'), 'utf8'));
+    const mem = index.documents['Agents/Aeon/memory/1b4367dbf594.md'];
+    expect(mem.title).toBe("The operator's preferred invoice terms are net 15");
+    expect(mem.summary).not.toMatch(/category:|pinned:|^---/);
+    const obs = index.documents['Notes/obsidian-style.md'];
+    expect(obs.title).toBe('Quarterly fuel review');
+    expect(obs.summary).toMatch(/^Diesel averaged/);
+  });
+
+  it('/ask-doc takes a partial path the way /doc does', async () => {
+    write('Projects/Northwind/state.md', '# Northwind project state\n\nContract value: $18,500.');
+    await scan();
+    const r = await dispatch('/ask-doc', 'research/state.md what does the political line say?');
+    expect(r.chip).not.toMatch(/matches 2 documents/);
+    expect(r.chip).toMatch(/\[1\] Research block state/);
+  });
+
+  it('/ask-doc on a document that is not there is a failed chip, not a green one', async () => {
+    await scan();
+    const r = await dispatch('/ask-doc', 'nothing-here.md what does it say?');
+    expect(r.status).toBe(200);
+    expect(r.outcome.chipStatus).toBe(CHIP_STATUS.FAIL);
+    expect(r.chip).toMatch(/Nothing in the index matches "nothing-here\.md"/);
   });
 });

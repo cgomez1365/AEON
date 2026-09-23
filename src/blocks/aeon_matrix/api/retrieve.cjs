@@ -132,6 +132,18 @@ module.exports = function retrieveFactory(deps) {
     const exact = all.filter((d) => d.path === q || d.path.toLowerCase() === qLower);
     if (exact.length) return exact;
 
+    // A typed "/" is part of a path: "research/state.md" names the file whose
+    // path ENDS that way. Reducing it to its basename made it ambiguous again
+    // with every other state.md in the Vault — the list it had just printed.
+    const qPath = qLower.replace(/\\/g, '/').replace(/^\/+/, '').replace(/^vault\//, '');
+    if (qPath.includes('/')) {
+      const bySuffix = all.filter((d) => {
+        const p = d.path.toLowerCase();
+        return p === qPath || p.endsWith(`/${qPath}`);   // "Vault/<rel>" as the graph writes it, or a tail
+      });
+      if (bySuffix.length) return bySuffix;
+    }
+
     const byName = all.filter((d) => path.basename(d.path).toLowerCase() === qBase);
     if (byName.length) return byName;
 
@@ -557,10 +569,14 @@ module.exports = function retrieveFactory(deps) {
       // nothing now has something to tell them.
       // `matched` is how many cleared the floor before the cut to k — the
       // caller's only way to know it is looking at a sample (R02).
+      // `matched` counts the hits as good as the best (RELATIVE_MARGIN); the
+      // list is the top k above the absolute floor, which can be MORE. The
+      // header used `matched` alone and printed "Found 1:" above two lines.
+      const found = Math.max(matched ?? 0, documents.length);
       const text = unavailable
         ? `${unavailable.message} ${unavailable.action || ''}`.trim()
         : documents.length
-          ? `Found ${matched ?? documents.length}${(matched ?? documents.length) > documents.length ? `, showing ${documents.length} (top ${documents.length} by similarity; the rest are not listed)` : ''}:\n`
+          ? `Found ${found}${found > documents.length ? `, showing ${documents.length} (top ${documents.length} by similarity; the rest are not listed)` : ''}:\n`
             // The Vault path rides on every line: the title alone left the
             // operator nothing to hand /doc or /ask-doc (CEO, 2026-09-22 —
             // /recall pestle, then /doc state.md, then "Not found").
@@ -634,7 +650,10 @@ module.exports = function retrieveFactory(deps) {
       const titles = Object.values(index.documents || {}).slice(0, 8).map((d) => d.title || d.path);
       const text = `Nothing in the index matches "${docQuery}".`
         + (titles.length ? ` Some indexed documents: ${titles.join(', ')}.` : ' The index is empty — run /index-brain.');
-      return res.json({ ok: true, answered: false, reason: 'doc_not_found', message: text, text, candidates: [] });
+      // ok:false — the operator named a document and it is not there. Same
+      // answer /doc gives, and the terminal draws it as a failed chip. HTTP
+      // stays 200: a non-2xx through the dispatcher raises the app-wide banner.
+      return res.json({ ok: false, answered: false, reason: 'doc_not_found', error: text, message: text, text, candidates: [] });
     }
     if (matches.length > 1) {
       const candidates = matches.slice(0, 10).map((d) => ({ path: d.path, title: d.title }));

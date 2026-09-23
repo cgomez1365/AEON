@@ -65,7 +65,7 @@ work, depending on kernel mount order):
 | GET | `/crn/second-brain/health` | Vault/Library/Artifacts directory status |
 | GET | `/crn/second-brain/tree?section=` | Recursive file tree for a Vault section |
 | GET | `/crn/second-brain/search?q=` | Filename + content grep across the Vault |
-| GET | `/crn/second-brain/document?path=` | Read a document's raw text |
+| GET | `/crn/second-brain/document?path=` | Read a document's raw text by exact path (graph, search). With `&resolve=1` (the terminal's `/doc`): resolve by path, file name, path tail or title — one match opens, 2+ are listed, none answers 200 `{ok:false}` saying what was searched |
 | GET | `/crn/second-brain/raw?path=` | Serve a raw file (images, PDFs) with correct MIME type |
 | GET | `/crn/second-brain/extract?path=` | Universal text extraction (OCR fallback) — feeds Ask/Summary/Search |
 | GET | `/crn/second-brain/pdf-text?path=` | Cached PDF text-layer extraction |
@@ -75,10 +75,10 @@ work, depending on kernel mount order):
 | GET | `/crn/second-brain/vendor/:file` | Vendored graph libs (local-first, no CDN dependency) |
 | GET/POST | `/narrator/state` | Narrator playback position, keyed by node id |
 | POST | `/crn/second-brain/ingest/chat` | Append chat turns to a real file + ToC entry |
-| POST | `/crn/second-brain/ingest/document` | Create a ToC entry (and file, if content is given) — **never overwrites** an existing file |
-| PUT | `/crn/second-brain/ingest/document` | Overwrite an existing file's content and re-embed it — used by Edit mode |
+| POST | `/crn/second-brain/ingest/document` | Create a ToC entry (and file, if content is given) — **never overwrites** an existing file. `file_path` may carry the graph's `Vault/` prefix |
+| PUT | `/crn/second-brain/ingest/document` | Overwrite an existing file's content and re-embed it — used by Edit mode. Update-only: a path that is not a file answers 404 and writes nothing |
 | DELETE | `/crn/second-brain/ingest/document` | Remove a doc's ToC + manifest entry |
-| POST | `/crn/second-brain/ingest/scan-docs` | Incremental re-index, streamed via SSE |
+| POST | `/crn/second-brain/ingest/scan-docs` | Incremental re-index, streamed via SSE (Index panel). `?format=summary` (the terminal's `/scan`, `/index-brain`) answers one JSON body with counts and a one-line `text` |
 | GET | `/crn/second-brain/index-status` | Last index run stats (doc count, errors) |
 | POST | `/crn/second-brain/retrieve` | Semantic retrieval, no intent gate (block-namespaced) |
 | ~~POST~~ | ~~`/search`~~ | **Deleted 2026-08-16 (§21).** Its only caller was `NeuralTerminal.jsx`, removed the same day. The recall gate and the `/matrix ` bypass live on in `dashboard/api/chat.cjs`, which re-implements them locally; retrieval itself is unchanged on `/crn/second-brain/retrieve`. |

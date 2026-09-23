@@ -121,14 +121,38 @@ function compareFile(storedHash, stat) {
   return 'changed';
 }
 
+// YAML frontmatter is metadata, not content. memory_core mirrors every memory
+// as "<random id>.md" with frontmatter and no heading, so /recall listed them
+// as "1b4367dbf594" and the summary it embedded began "--- id: … category:
+// fact pinned: false created: …" — the vector described the bookkeeping, not
+// the memory. Obsidian-style notes carry the same block. Measured 2026-09-23.
+const FRONTMATTER_RE = /^﻿?---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/;
+function splitFrontmatter(text) {
+  const m = FRONTMATTER_RE.exec(String(text || ''));
+  if (!m) return { meta: null, body: String(text || '') };
+  return { meta: m[1], body: String(text).slice(m[0].length) };
+}
+
 function deriveTitle(fullPath, text) {
-  const heading = text.match(/^#\s+(.+)$/m);
+  const { meta, body } = splitFrontmatter(text);
+  const heading = body.match(/^#\s+(.+)$/m);
   if (heading) return heading[1].trim().slice(0, 120);
+  if (meta) {
+    const t = /^title:\s*(.+)$/m.exec(meta);
+    const named = t ? t[1].trim().replace(/^["']|["']$/g, '').trim() : '';
+    if (named) return named.slice(0, 120);
+    // No heading and no title: the first line of content says more than a
+    // generated file name does.
+    const first = body.split(/\r?\n/).map((l) => l.trim()).find(Boolean);
+    if (first) return first.slice(0, 120);
+  }
   return path.basename(fullPath, path.extname(fullPath));
 }
 
 function deriveSummary(text) {
-  const flat = text.replace(/\s+/g, ' ').trim();
+  const { body } = splitFrontmatter(text);
+  // A file that is ALL frontmatter still gets a summary rather than an empty one.
+  const flat = (body.trim() ? body : String(text || '')).replace(/\s+/g, ' ').trim();
   if (flat.length <= SUMMARY_CHARS) return flat;
   const cut = flat.slice(0, SUMMARY_CHARS);
   const lastSpace = cut.lastIndexOf(' ');

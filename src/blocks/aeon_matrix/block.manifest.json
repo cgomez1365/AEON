@@ -133,7 +133,6 @@
         "method": "POST",
         "route": "/api/crn/second-brain/ask",
         "param": "query",
-        "display": "answer",
         "mode": "instant",
         "category": "content",
         "when": "embed"
