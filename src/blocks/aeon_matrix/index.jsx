@@ -97,6 +97,7 @@ export default function AeonMatrix() {
   const [view, setView] = useState('search'); // 'search' | 'graph' | 'index' | 'help'
   const [query, setQuery] = useState('');
   const [results, setResults] = useState(null);
+  const [truncated, setTruncated] = useState(0); // the server's cap, when it stopped early
   const [facet, setFacet] = useState('all');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -112,6 +113,7 @@ export default function AeonMatrix() {
       if (!r.ok) throw new Error(`Server unreachable or errored (${r.status || 'no response'})`);
       if (d?.error) throw new Error(d.error);
       setResults(d?.results || []);
+      setTruncated(d?.truncated ? (d.limit || (d.results || []).length) : 0);
     } catch (e) { setError(e.message); setResults(null); }
     setLoading(false);
   }, [query, loading]);
@@ -238,6 +240,12 @@ export default function AeonMatrix() {
           )}
 
           {error && <div style={{ color: 'var(--coral)', fontSize: 12 }}>{error}</div>}
+
+          {results && truncated > 0 && (
+            <div role="status" style={{ fontSize: 11.5, color: 'var(--text-dim)', marginBottom: 10 }}>
+              Showing the first {truncated} matches — there are more. Add a word to narrow the search.
+            </div>
+          )}
 
           {results && filtered.length === 0 && (
             <div style={{ textAlign: 'center', padding: 24, color: 'var(--text-dim)', fontSize: 12 }}>No matches in this facet.</div>

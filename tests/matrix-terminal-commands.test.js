@@ -456,3 +456,15 @@ describe('a short note is quoted from its content, not its frontmatter', () => {
     expect(body.text).not.toMatch(/category: fact/);
   });
 });
+
+describe('Matrix search says when it stopped counting', () => {
+  it('caps at 50 and says there were more, instead of a silent 50-something', async () => {
+    for (let i = 0; i < 30; i++) write(`Projects/Fleet/truck-${String(i).padStart(2, '0')}.md`, `# Truck ${i}\n\nFuel log for truck ${i}.`);
+    for (let i = 0; i < 30; i++) write(`Reading_Library/Fuel/fuel-guide-${i}.md`, `# Fuel guide ${i}\n\nHow to read a fuel log.`);
+    const r = await fetch(`${base}/crn/second-brain/search?q=fuel`);
+    const body = await r.json();
+    expect(body.results.length).toBe(50);
+    expect(body.count).toBe(50);
+    expect(body.truncated).toBe(true);
+  });
+});

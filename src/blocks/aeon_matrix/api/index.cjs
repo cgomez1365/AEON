@@ -117,29 +117,38 @@ module.exports = function secondBrainFactory(deps) {
     const q = (req.query.q || '').toLowerCase();
     if (!q) return res.status(400).json({ error: 'Missing ?q= query' });
 
+    // At most MAX_RESULTS, and `truncated` when a further match existed. The
+    // old check ran only after a FILE, never after returning from a folder, so
+    // the cap leaked, and nothing told the page it had stopped at all.
+    const MAX_RESULTS = 50;
     const results = [];
+    let truncated = false;
+    const add = (hit) => {
+      if (results.length >= MAX_RESULTS) { truncated = true; return; }
+      results.push(hit);
+    };
     const NESTED_SECTION_NAMES = new Set(['Reading_Library', 'Saved_Artifacts']);
     const searchDir = (dir, isRoot = false) => {
-      if (!fs.existsSync(dir)) return;
+      if (truncated || !fs.existsSync(dir)) return;
       try {
         for (const name of fs.readdirSync(dir)) {
+          if (truncated) return;
           if (name.startsWith('.')) continue;
           if (isRoot && dir === BRAIN_DIR && NESTED_SECTION_NAMES.has(name)) continue;
           const full = path.join(dir, name);
           const stat = fs.statSync(full);
           if (stat.isDirectory()) { searchDir(full); continue; }
           if (name.toLowerCase().includes(q)) {
-            results.push({ file: vaultRel(full), match: 'filename' });
+            add({ file: vaultRel(full), match: 'filename' });
           } else if (/\.(md|txt|json)$/i.test(name) && stat.size < 500_000) {
             try {
               const content = fs.readFileSync(full, 'utf8');
               if (content.toLowerCase().includes(q)) {
                 const line = content.split('\n').find(l => l.toLowerCase().includes(q)) || '';
-                results.push({ file: vaultRel(full), match: 'content', snippet: line.trim().slice(0, 200) });
+                add({ file: vaultRel(full), match: 'content', snippet: line.trim().slice(0, 200) });
               }
             } catch {}
           }
-          if (results.length >= 50) return;
         }
       } catch {}
     };
@@ -147,7 +156,7 @@ module.exports = function secondBrainFactory(deps) {
     searchDir(BRAIN_DIR, true);
     searchDir(LIBRARY_DIR);
     searchDir(ARTIFACTS_DIR);
-    res.json({ query: q, count: results.length, results });
+    res.json({ query: q, count: results.length, results, ...(truncated ? { truncated: true, limit: MAX_RESULTS } : {}) });
   });
 
   // ─── /doc <name> — open a document the way an operator names it ─

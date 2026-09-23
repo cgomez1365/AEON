@@ -421,12 +421,11 @@ const SecondBrainVisualizer = () => {
           refs: selectedFile ? [{ kind: 'matrix-node', id: selectedFile, title: fileName }] : [],
         })
       });
-      if (!response.ok) {
-        let reason = `${response.status}`;
-        try { reason = (await response.json())?.error || reason; } catch { /* non-JSON body */ }
-        throw new Error(reason);
-      }
-      flashMemoryStatus('✅ Saved to Memory Core');
+      let d = null;
+      try { d = await response.json(); } catch { /* non-JSON body */ }
+      if (!response.ok) throw new Error(d?.error || `${response.status}`);
+      // memory_core answers a repeat with ok + deduped: nothing new was stored.
+      flashMemoryStatus(d?.deduped ? '✅ Already in Memory Core — nothing new saved' : '✅ Saved to Memory Core');
     } catch (e) {
       flashMemoryStatus(`❌ Save failed: ${e.message}`, 5000);
     }
