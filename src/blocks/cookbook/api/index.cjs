@@ -1,6 +1,6 @@
 // routes/cookbook.js — Cookbook Hardware: GPU probing, model download/serve, cache scan
 // Ported from Python cookbook_routes.py + cookbook_helpers.py + hwfit_routes.py
-// Runs directly on the Windows host via child_process (no Docker/tmux/SSH).
+// Runs directly on the host via child_process (no Docker/tmux/SSH) — Windows, macOS, Linux.
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
@@ -10,6 +10,7 @@ const EventEmitter = require('events');
 const os = require('os');
 const { isCloud: _isCloud } = require('../../../kernel/runtime.cjs');
 const { ggufProbe } = require('./_ggufProbe.cjs');
+const { stopProcessTree } = require('./_procControl.cjs');
 const {
   parseServeCommand, isModelInstalled, checkVramFit, estimateVram, vramErrorMessage,
 } = require('./_serveCommand.cjs');
@@ -292,6 +293,13 @@ module.exports = function createCookbookRouter(deps) {
       if (result.gpus.length) {
         return res.json({ ok: true, ...result });
       }
+      // F-02, regressed here: probeNvidiaGpus says "notApplicable" with a reason
+      // when the machine simply has no NVIDIA tooling (every Mac), and this
+      // route dropped both — so the Hardware tab painted a red "No GPU probe
+      // available" error on a correct state. Pass the distinction through.
+      if (result.notApplicable) {
+        return res.json({ ok: false, gpus: [], notApplicable: true, reason: result.reason });
+      }
       return res.json({ ok: false, gpus: [], error: result.error || 'No GPU probe available' });
     } catch (e) {
       res.json({ ok: false, gpus: [], error: e.message });
@@ -326,15 +334,34 @@ module.exports = function createCookbookRouter(deps) {
 
   // ── Kill GPU process ────────────────────────────────────────────
 
+  //
+  // The Hardware tab's Kill button, next to each process nvidia-smi lists on a
+  // GPU. This ran `taskkill /F /T` on ANY pid >= 100 a caller named — a general
+  // "kill a process on this machine" endpoint — and on macOS/Linux, where
+  // taskkill does not exist, it did nothing. Now it stops only what Cookbook
+  // can account for: one of its own running tasks, or a process nvidia-smi
+  // lists on a GPU right now. Anything else is refused by name.
   router.post('/cookbook/kill-pid', async (req, res) => {
-    const { pid } = req.body;
-    if (!pid || pid < 100) return res.status(400).json({ ok: false, error: 'Invalid PID' });
-    try {
-      execFileSync('taskkill', ['/F', '/T', '/PID', String(parseInt(pid))], { stdio: 'ignore', windowsHide: true });
-      res.json({ ok: true, pid });
-    } catch (e) {
-      res.json({ ok: false, error: e.message });
+    const pid = parseInt(req.body && req.body.pid, 10);
+    if (!Number.isInteger(pid) || pid < 100) return res.status(400).json({ ok: false, error: 'Invalid PID' });
+    const own = Object.values(activeTasks).some(t => t && t.pid === pid && !t.exited);
+    let onGpu = false;
+    if (!own) {
+      try {
+        const probe = await probeNvidiaGpus();
+        onGpu = (probe.gpus || []).some(g => (g.processes || []).some(p => p.pid === pid));
+      } catch { onGpu = false; }
     }
+    if (!own && !onGpu) {
+      return res.status(403).json({
+        ok: false,
+        error: `PID ${pid} is not a Cookbook task or a process nvidia-smi lists on a GPU. Cookbook only stops processes it can account for.`,
+      });
+    }
+    const result = await stopProcessTree(pid, { tree: own });
+    if (!result.stopped) return res.status(500).json({ ok: false, pid, error: result.error });
+    if (writeOSAudit) { try { writeOSAudit('COOKBOOK-KILL', `Stopped pid ${pid} (${own ? 'cookbook task' : 'GPU process'}, ${result.method})`); } catch {} }
+    res.json({ ok: true, pid, method: result.method });
   });
 
   // ── Cached Model Scan ──────────────────────────────────────────
@@ -751,6 +778,7 @@ module.exports = function createCookbookRouter(deps) {
           logStream.end();
         } catch { /* stream already gone */ }
         if (task) {
+          task.exited = true;
           task.status = 'error';
           task.exitCode = null;
           task.error = detail;
@@ -761,7 +789,9 @@ module.exports = function createCookbookRouter(deps) {
       proc.on('close', (code) => {
         const task = activeTasks[sessionId];
         if (task) {
-          task.status = code === 0 ? 'done' : 'error';
+          task.exited = true;
+          // A download the operator stopped is "stopped", not a failure.
+          task.status = task.stopRequested ? 'stopped' : (code === 0 ? 'done' : 'error');
           task.exitCode = code;
           logStream.write(`\n=== Process exited with code ${code} ===\n`);
           if (code === 0) logStream.write('DOWNLOAD_OK\n');
@@ -891,7 +921,7 @@ module.exports = function createCookbookRouter(deps) {
         console.error(`[COOKBOOK] serve spawn failed (${sessionId}): ${detail}`);
         try { logStream.write(`\n=== Failed to start process ===\n${detail}\n`); logStream.end(); } catch {}
         const t = activeTasks[sessionId];
-        if (t) { t.status = 'error'; t.error = detail; }
+        if (t) { t.exited = true; t.status = 'error'; t.error = detail; }
       });
 
       proc.unref();
@@ -911,7 +941,8 @@ module.exports = function createCookbookRouter(deps) {
       proc.on('close', (code) => {
         const task = activeTasks[sessionId];
         if (task) {
-          task.status = code === 0 ? 'done' : 'error';
+          task.exited = true;
+          task.status = task.stopRequested ? 'stopped' : (code === 0 ? 'done' : 'error');
           task.exitCode = code;
           logStream.write(`\n=== Process exited with code ${code} ===\n`);
           logStream.end();
@@ -1041,18 +1072,40 @@ module.exports = function createCookbookRouter(deps) {
 
   // ── Stop Task ──────────────────────────────────────────────────
 
-  router.post('/cookbook/task-stop/:sessionId', (req, res) => {
+  //
+  // Was taskkill on every platform, failure swallowed, then ok:true — on macOS
+  // and Linux Stop marked the task "stopped" while the process kept running
+  // (tests/cookbook-task-stop.test.js). Now: stop the process tree Cookbook
+  // spawned (_procControl.cjs), confirm it is gone, and say what happened.
+  router.post('/cookbook/task-stop/:sessionId', async (req, res) => {
     const { sessionId } = req.params;
     const task = activeTasks[sessionId];
-    if (!task) return res.json({ ok: false, error: 'Task not found' });
+    if (!task) return res.status(404).json({ ok: false, error: 'Task not found — it may have belonged to an earlier AEON session.' });
 
-    if (task.pid) {
-      try {
-        execFileSync('taskkill', ['/F', '/T', '/PID', String(parseInt(task.pid))], { stdio: 'ignore', windowsHide: true });
-      } catch {}
+    // The catalogue installers run INSIDE AEON: no child process, no abort
+    // signal. Marking one "stopped" while it keeps downloading (and later flips
+    // itself to "done") is the lie this route used to tell.
+    if (!task.pid) {
+      if (task.status !== 'running') return res.json({ ok: true, alreadyExited: true, status: task.status });
+      return res.status(409).json({
+        ok: false,
+        error: 'This install runs inside AEON and cannot be stopped mid-download. It will finish or fail on its own; delete the model afterwards if you do not want it.',
+      });
+    }
+
+    // Never signal a pid whose process already ended: the OS may have handed
+    // that number to something else.
+    if (task.exited) return res.json({ ok: true, alreadyExited: true, status: task.status });
+
+    task.stopRequested = true;
+    const result = await stopProcessTree(task.pid);
+    if (!result.stopped) {
+      task.stopRequested = false;
+      return res.status(500).json({ ok: false, error: `Could not stop ${task.type} (pid ${task.pid}): ${result.error}` });
     }
     task.status = 'stopped';
-    res.json({ ok: true });
+    if (writeOSAudit) { try { writeOSAudit(`COOKBOOK-${sessionId}`, `Stopped ${task.type} pid ${task.pid} (${result.method})`); } catch {} }
+    res.json({ ok: true, stopped: true, pid: task.pid, method: result.method });
   });
 
   // ── Cookbook State Persistence ──────────────────────────────────

@@ -226,7 +226,9 @@
     "tables": [],
     "scope": "block"
   },
-  "dependencies": [],
+  "dependencies": [
+    "fleet_control"
+  ],
   "deployment": {
     "target": "local_required",
     "runtime": "local"

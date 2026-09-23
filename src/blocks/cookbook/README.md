@@ -3,7 +3,7 @@
 **ID:** `cookbook`
 **Route:** `/cookbook`
 **Tier:** `plugin`
-**Status:** `ACTIVE` — local-only (`deployment.target: local_required`, runs on the Windows host via `child_process`, no Docker/tmux/SSH)
+**Status:** `ACTIVE` — local-only (`deployment.target: local_required`, runs on the host via `child_process` on Windows, macOS and Linux; no Docker/tmux/SSH)
 
 Local AI model management: probe GPU/CPU/RAM hardware, browse and download models
 from HuggingFace, launch a serving process (vLLM / llama.cpp /
@@ -20,7 +20,9 @@ SGLang), and track running/queued tasks with live log tails and error diagnosis.
 
 - **Hardware tab** — runs `nvidia-smi` to list GPUs (VRAM used/free, utilization,
   per-GPU processes with a Kill button), plus a CPU/RAM/hostname summary card.
-  Reports no GPU when `nvidia-smi` is absent; CPU inference still works.
+  With no `nvidia-smi` (every Mac, most laptops) `/cookbook/gpus` answers
+  `notApplicable: true` with a reason and the tab shows a note, not an error;
+  models are ranked against system memory instead.
 - **What Fits tab** — ranks candidate models by whether they fit the detected
   (or manually-simulated) hardware at a given quantization/context length, with
   a "What if I had..." hardware simulator (GPU count, VRAM/GPU, RAM, backend).
@@ -40,6 +42,13 @@ SGLang), and track running/queued tasks with live log tails and error diagnosis.
   a log tail, lets you stop a task or kill a GPU process by PID, and runs
   pattern-based error diagnosis (OOM, port in use, missing GGUF, gated repo,
   missing vLLM/llama.cpp/torch, etc.) with suggested retry flags.
+  **Stop** stops the process tree Cookbook spawned and confirms it is gone
+  (`api/_procControl.cjs`: `taskkill /F /T` on Windows; on macOS/Linux SIGTERM
+  to the child's process group, SIGKILL after 3 s). A catalogue install runs
+  inside AEON with no process of its own and cannot be cancelled mid-download —
+  Stop says so (409) instead of pretending. Tasks live in memory: after an AEON
+  restart a serve started earlier is no longer listed, and its pid file under
+  `data/cookbook/logs/` is the only record.
 
 ## API routes (this block, mounted at `/api/*` and `/block/cookbook/*`)
 
@@ -51,8 +60,8 @@ SGLang), and track running/queued tasks with live log tails and error diagnosis.
 | POST | `/model/serve` | Start a serve process (allow-listed binaries only) |
 | GET | `/cookbook/tasks/status` | Poll all active/finished tasks, with log tail + diagnosis |
 | GET | `/cookbook/task-stream/:sessionId` | SSE tail of a task's log file (not currently used by the UI) |
-| POST | `/cookbook/task-stop/:sessionId` | Kill a running task by session id |
-| POST | `/cookbook/kill-pid` | `taskkill` a GPU process by PID |
+| POST | `/cookbook/task-stop/:sessionId` | Stop a task's process tree and confirm it exited; 409 for an in-app install (no process to stop), 404 for an unknown session |
+| POST | `/cookbook/kill-pid` | Stop a process by PID — only a running Cookbook task or a process `nvidia-smi` lists on a GPU; anything else is refused (403) |
 | POST | `/cookbook/delete-cache` | Delete a cached HF repo from disk |
 | GET | `/cookbook/hf-latest` | Cached (10 min TTL) HuggingFace trending-models query |
 | GET/POST | `/cookbook/state` | Read/write a small persisted JSON blob (not currently used by the UI) |
@@ -63,7 +72,10 @@ The **What Fits** tab calls `/api/hwfit/system`, `/api/hwfit/models`, and
 `/api/hwfit/profiles` — these are defined in
 `src/blocks/fleet_control/api/hwfit.cjs`, not in this block. This is a real,
 intentional dependency (hardware-fitness scoring lives with Fleet Control), and
-`block.manifest.json` now declares it via `requires.blocks: ["fleet_control"]`.
+`block.manifest.json` declares it in both `requires.blocks` and `dependencies`
+(an empty `dependencies: []` used to hide the first — the kernel reads
+`dependencies || requires.blocks`), so the registry reports cookbook as
+`degraded` with `missingBlocks: ["fleet_control"]` when Fleet Control is absent.
 If `fleet_control` is ever removed, the What Fits tab will fail to load data
 (the rest of Cookbook is unaffected).
 
@@ -90,8 +102,9 @@ If `fleet_control` is ever removed, the What Fits tab will fail to load data
   driver install), and everything degrades gracefully (empty/CPU-only
   responses, never a crash) when either is missing.
 - `contract.permissions.shell` is `true` — this block's entire job is spawning
-  `child_process` calls (`nvidia-smi`, `hf`/`python`, `taskkill`,
-  and the serve command itself via Git Bash on Windows or a direct spawn).
+  `child_process` calls (`nvidia-smi`, `hf`/`python`, `taskkill` on Windows,
+  and the serve command itself as a direct spawn — no shell, allow-listed
+  executables only).
 
 ## Terminal commands (`contract.commands`)
 

@@ -526,23 +526,35 @@ export default function CookbookHardware() {
     }
   }
 
+  // Both answers are read now. Stop used to be fire-and-forget over a route
+  // that answered ok:true whether or not anything stopped; the route now says
+  // when it could not (an in-app install cannot be cancelled mid-download), and
+  // the operator has to see that rather than a task that quietly carries on.
   async function stopTask(sessionId) {
     try {
-      await fetch(`/api/cookbook/task-stop/${sessionId}`, { method: 'POST' });
-      pollTasks();
-    } catch {}
+      const res = await fetch(`/api/cookbook/task-stop/${sessionId}`, { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.ok === false) alert('Stop failed: ' + (data.error || `HTTP ${res.status}`));
+    } catch (e) {
+      alert('Stop failed: ' + e.message);
+    }
+    pollTasks();
   }
 
   async function killPid(pid) {
     if (!window.confirm(`Kill PID ${pid}?`)) return;
     try {
-      await fetch('/api/cookbook/kill-pid', {
+      const res = await fetch('/api/cookbook/kill-pid', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ pid }),
       });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.ok === false) alert('Kill failed: ' + (data.error || `HTTP ${res.status}`));
       setTimeout(probeGpus, 1500);
-    } catch {}
+    } catch (e) {
+      alert('Kill failed: ' + e.message);
+    }
   }
 
   async function deleteCached(repo) {
