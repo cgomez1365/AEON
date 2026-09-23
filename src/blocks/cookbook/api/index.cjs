@@ -859,7 +859,10 @@ module.exports = function createCookbookRouter(deps) {
         ok: false,
         code: 'model_not_installed',
         repo_id,
-        error: `${short} is not installed. Install it from Local models first.`,
+        // Named in the screen's own words: the installer is the Hardware tab's
+        // "Local AI runtime (llama.cpp)" section. "Local models" named nothing
+        // the operator could find (measured 2026-09-23, What Fits ▸ Quick serve).
+        error: `${short} is not installed. Install a model from the Hardware tab (Local AI runtime) first — AEON downloads and verifies it — then serve it from the Models tab.`,
       });
     }
 

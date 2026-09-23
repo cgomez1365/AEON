@@ -61,6 +61,29 @@ describe('GPU probe on a machine without NVIDIA tooling', () => {
   });
 });
 
+describe('serve with no model installed', () => {
+  it('refuses by name and points at the screen that installs one, in the words that screen uses', async () => {
+    // Measured live 2026-09-23 (What Fits ▸ Quick serve on a fresh install): the
+    // operator got "Install it from Local models first." — no section of the
+    // Cookbook screen is called that; the installer is Hardware ▸ "Local AI
+    // runtime (llama.cpp)", and the Models tab already says "Install one from
+    // the Hardware tab".
+    const port = await mount();
+    const r = await fetch(`http://127.0.0.1:${port}/api/model/serve`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ repo_id: 'Qwen/Qwen3-8B', cmd: 'vllm serve Qwen/Qwen3-8B --port 8000' }),
+    });
+    const body = await r.json();
+    expect(r.status).toBe(409);
+    expect(body.code).toBe('model_not_installed');
+    expect(body.error).toMatch(/Qwen3-8B is not installed/);
+    expect(body.error).toMatch(/Hardware tab/);
+    const ui = fs.readFileSync(path.join(ROOT, 'src/blocks/cookbook/index.jsx'), 'utf8');
+    expect(ui).toMatch(/Local AI runtime \(llama\.cpp\)/);
+    expect(body.error).toMatch(/Local AI runtime/);
+  });
+});
+
 describe('kill-pid stops only what Cookbook can account for', () => {
   it('refuses a pid that is neither a Cookbook task nor a GPU process, and leaves it running', async () => {
     const bystander = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { stdio: 'ignore' });
