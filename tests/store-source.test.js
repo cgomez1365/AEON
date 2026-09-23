@@ -55,7 +55,8 @@ describe('the store source', () => {
     expect(storeSource.resolveSource({ AEON_STORE: 'https://example.com/store/catalog.json' }))
       .toEqual({ kind: 'url', catalogUrl: 'https://example.com/store/catalog.json' });
     expect(storeSource.resolveSource({ AEON_STORE: 'http://example.com/catalog.json' }).kind).toBe('invalid');
-    expect(storeSource.resolveSource({ AEON_STORE: '/srv/aeon-store' })).toEqual({ kind: 'dir', dir: '/srv/aeon-store' });
+    // path.resolve, not the literal: on Windows a drive-less absolute path borrows the cwd drive (as in 875b8af).
+    expect(storeSource.resolveSource({ AEON_STORE: '/srv/aeon-store' })).toEqual({ kind: 'dir', dir: path.resolve('/srv/aeon-store') });
     // .env is not shell-expanded: "~" and relative paths are refused with the fix named.
     expect(storeSource.resolveSource({ AEON_STORE: '~/aeon-store' })).toMatchObject({ kind: 'invalid', error: expect.stringMatching(/full path/) });
     expect(storeSource.resolveSource({ AEON_STORE: 'aeon-store' }).kind).toBe('invalid');
