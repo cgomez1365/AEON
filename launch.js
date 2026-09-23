@@ -35,6 +35,36 @@ const ENV_PATH = envFilePath({ appRoot: ROOT });
 const ENV_EXAMPLE = path.join(ROOT, '.env.example');
 const PORT = process.env.PORT || 3001;
 
+// ── .env is owner-only ──────────────────────────────────────────────────────
+// It holds AEON_VAULT_MASTER_KEY, half of what unlocks every stored API key.
+// It used to be created by copyFileSync from .env.example (0644, and the copy
+// keeps the mode) and rewritten with a bare writeFileSync — readable by every
+// local account on macOS/Linux (measured 2026-09-23). A mode passed to
+// writeFileSync only applies when the file is CREATED, so an existing file is
+// chmod-ed explicitly. Windows has no POSIX modes; chmod there is a no-op.
+const ENV_MODE = 0o600;
+function secureEnvFile(file) {
+  try {
+    const from = fs.statSync(file).mode & 0o777;
+    if (os.platform() === 'win32' || from === ENV_MODE) return { changed: false };
+    fs.chmodSync(file, ENV_MODE);
+    return { changed: true, from: from.toString(8) };
+  } catch (e) {
+    return { changed: false, error: e.message };
+  }
+}
+function writeEnvFile(file, content) {
+  fs.writeFileSync(file, content, { mode: ENV_MODE });
+  return secureEnvFile(file);
+}
+
+// Required (tests) rather than run: export the helpers, run nothing — the rest
+// of this file is the interactive launcher and ends by booting the server.
+if (require.main !== module) {
+  module.exports = { writeEnvFile, secureEnvFile, ENV_MODE };
+  return;
+}
+
 // ── colors ──────────────────────────────────────────────────────────────────
 const PU = '\x1b[38;5;141m', LP = '\x1b[38;5;183m', DG = '\x1b[38;5;240m',
       GR = '\x1b[38;5;245m', GN = '\x1b[32m', YL = '\x1b[33m', RD = '\x1b[31m', RS = '\x1b[0m';
@@ -166,6 +196,7 @@ async function main() {
     // userData); that directory need not exist yet.
     try { fs.mkdirSync(path.dirname(ENV_PATH), { recursive: true }); } catch { }
     fs.copyFileSync(ENV_EXAMPLE, ENV_PATH);
+    secureEnvFile(ENV_PATH); // the copy inherits the template's 0644
     ok(`Created your private configuration file at ${ENV_PATH}`);
     p('');
     info('AEON can use free cloud AI (Gemini, Groq, OpenRouter). If you already');
@@ -187,7 +218,7 @@ async function main() {
         ok('Saved.');
       } else info('Skipped — add it later in Settings.');
     }
-    fs.writeFileSync(ENV_PATH, env);
+    writeEnvFile(ENV_PATH, env);
   } else ok('.env configuration found.');
 
   // ── 4. vault bootstrap — master key is generated, never asked for ─────────
@@ -241,9 +272,14 @@ async function main() {
   if (rotateCompromised('AEON_MOBILE_SECRET', newMobile)) {
     ok('AEON_MOBILE_SECRET was a known-exposed value — rotated automatically.');
   }
-  fs.writeFileSync(ENV_PATH, env);
+  writeEnvFile(ENV_PATH, env);
   if (madeVault) ok('Vault created — your API keys will be encrypted on this computer.');
   else ok('Vault key present.');
+  // Every launch, not only the first: an install from before this fix has a
+  // 0644 .env that nothing else would ever tighten. Said out loud (R-05).
+  const envMode = secureEnvFile(ENV_PATH);
+  if (envMode.changed) ok(`.env made owner-only (was ${envMode.from}, now 600) — it holds your vault key.`);
+  else if (envMode.error) warn(`Could not restrict .env permissions: ${envMode.error}`);
 
   // (db/host-runtime.json used to be written here; nothing ever read it.)
 
