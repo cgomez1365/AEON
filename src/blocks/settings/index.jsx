@@ -6,6 +6,7 @@ import { BLOCKS as INSTALLED_BLOCKS } from '../../kernel/blockRegistry';
 import { BlockIcon } from '../../components/BlockIcon';
 import { applyAppearance, applyThemeBuilder } from '../../kernel/appearance';
 import { createLifecycleClient, runLabel, UI_NOTE as LIFECYCLE_UI_NOTE } from './blockLifecycle';
+import { createLoginGuardClient, loginGuardText } from './loginGuard';
 
 // Derive provider registry from nervous system — no mutable module state.
 function getProviderRegistry(ns) {
@@ -264,6 +265,57 @@ function PrefToggle({ label, desc, prefKey, defaultVal = true, onMsg, offMsg, on
         aria-label={label}
         aria-disabled={!!pending}
         title={pending || undefined}
+      >
+        <span className="pref-toggle-knob" />
+      </button>
+    </div>
+  );
+}
+
+// ── Require login — the Security Guardian's real switch ──────────────
+// Reads/writes /api/security/policy via ./loginGuard.js. It used to be a
+// PrefToggle on `require_login`, a preference nothing enforces: "Login
+// requirement disabled" was toasted while every route still demanded a
+// session (measured 2026-09-23).
+function LoginGuardToggle() {
+  const client = useMemo(() => createLoginGuardClient(), []);
+  const [state, setState] = useState(null);   // { enabled, accountConfigured }
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  const read = useCallback(async () => {
+    const r = await client.read();
+    if (r.ok) { setState(r); setError(null); } else setError(r.error);
+  }, [client]);
+  useEffect(() => { read(); }, [read]);
+
+  const toggle = async () => {
+    if (!state) return;
+    const next = !state.enabled;
+    if (!next && !window.confirm('Turn login OFF?\n\nAnyone who can reach AEON on this computer gets in without a password, and Remote Access stays locked until it is back on.')) return;
+    setBusy(true);
+    const r = await client.set(next);
+    if (r.ok) { setState(r); setError(null); showToast(next ? 'Login required — AEON asks for your password' : 'Login turned off'); }
+    else setError(r.error);
+    setBusy(false);
+  };
+
+  return (
+    <div className="pref-toggle-row">
+      <div className="pref-toggle-info">
+        <span className="pref-toggle-label">Require login</span>
+        <span className="pref-toggle-desc">{state ? loginGuardText(state) : 'Reading the Security policy…'}</span>
+        {error && <span role="alert" className="pref-toggle-desc" style={{ color: '#f87171' }}>{error}</span>}
+      </div>
+      <button
+        className={`pref-toggle-btn ${state?.enabled ? 'pref-toggle-btn--on' : ''} ${!state ? 'pref-toggle-btn--loading' : ''}`}
+        onClick={toggle}
+        disabled={busy || !state || !state.accountConfigured}
+        type="button"
+        role="switch"
+        aria-checked={!!state?.enabled}
+        aria-label="Require login"
+        title={state && !state.accountConfigured ? 'Create your operator account under Security first' : undefined}
       >
         <span className="pref-toggle-knob" />
       </button>
@@ -3228,14 +3280,7 @@ export default function SystemSettings() {
         <>
           <AccountPanel />
           <div className="admin-card prefs-card">
-            <PrefToggle
-              label="Require login"
-              desc="Gate the portal behind operator authentication"
-              prefKey="require_login"
-              defaultVal={false}
-              onMsg="Login required — portal is now gated"
-              offMsg="Login requirement disabled"
-            />
+            <LoginGuardToggle />
           </div>
         </>
       )}

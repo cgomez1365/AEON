@@ -83,10 +83,14 @@ reachable two different ways.
    might land on either tab looking for it).
 
 6. **Account** — `AccountPanel` (login/profile/change-password against the
-   security block's session API) plus the `require_login` preference
-   toggle. **Read the "Known dead surface" section below before touching
-   this tab** — two of its three write actions call routes that do not
-   exist in the current kernel.
+   security block's session API — `/api/auth/profile` and
+   `/api/auth/change-password` both exist and were exercised 2026-09-23)
+   plus **Require login** (`LoginGuardToggle`, `loginGuard.js`), which reads
+   and writes the Security Guardian's policy through `/api/security/policy`.
+   It used to be a `PrefToggle` on the `require_login` preference, which
+   nothing enforces (the Guardian only mirrors its own state into it): the
+   switch toasted "Login requirement disabled" while every route still
+   required a session.
 
 7. **Agent** — `BuildQueuePanel` (pending block-build approvals from the
    Build Pipeline, `/api/build/*` — HIGH-score items require reviewing the
@@ -177,8 +181,9 @@ downloaded or is migrating from another machine.** No control in
 patch system was built to close.
 
 `PrefToggle`/`savePref()` and `PUT /api/prefs/:key` are a separate, simpler
-single-key write path (used for things like `require_login`,
-`vision_enabled`, appearance) — no patch/merge concern there since each
+single-key write path (used for things like `vision_enabled`, appearance;
+`require_login` is only a mirror the Security Guardian writes — never a
+switch) — no patch/merge concern there since each
 call only ever touches one key.
 
 ## How a new block's settings contract gets picked up automatically
@@ -385,7 +390,15 @@ in the same pass. They're inert — nothing calls them, they can't corrupt
 the live `settings.models`/endpoint-registry path — but a future cleanup
 could delete both the two backend routes and the dead CSS rules together.
 
-## Cross-platform note (not fixed — flagging)
+## Cross-platform note (fixed 2026-09-20 — kept for the history)
+
+`connectivity.js` now picks the release asset per `os.platform()`/`os.arch()`
+(`cloudflaredTarget()`, tests/cloudflare-tunnel-platform.test.js) and, since
+2026-09-23, refuses to start a tunnel unless an operator account exists and
+login is on (tests/settings-tunnel-precondition.test.js): tunnel traffic
+reaches the server from 127.0.0.1, so the Bearer gate never applies to it and
+the operator login is its only protection. What follows is the original note.
+
 
 `api/connectivity.js`'s Cloudflare Tunnel feature hardcodes
 `cloudflared-windows-amd64.exe` and spawns it via `cmd.exe`-style
