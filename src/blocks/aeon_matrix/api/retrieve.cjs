@@ -561,7 +561,10 @@ module.exports = function retrieveFactory(deps) {
         ? `${unavailable.message} ${unavailable.action || ''}`.trim()
         : documents.length
           ? `Found ${matched ?? documents.length}${(matched ?? documents.length) > documents.length ? `, showing ${documents.length} (top ${documents.length} by similarity; the rest are not listed)` : ''}:\n`
-            + documents.map((d, i) => `${i + 1}. ${d.metadata?.source || d.id} (${(d.similarity || 0).toFixed(2)}) — ${String(d.content || '').replace(/\s+/g, ' ').trim().slice(0, 160)}${String(d.content || '').length > 160 ? '…' : ''}`).join('\n')
+            // The Vault path rides on every line: the title alone left the
+            // operator nothing to hand /doc or /ask-doc (CEO, 2026-09-22 —
+            // /recall pestle, then /doc state.md, then "Not found").
+            + documents.map((d, i) => `${i + 1}. ${d.metadata?.source || d.id} — ${d.id} (${(d.similarity || 0).toFixed(2)}) — ${String(d.content || '').replace(/\s+/g, ' ').trim().slice(0, 160)}${String(d.content || '').length > 160 ? '…' : ''}`).join('\n')
           : 'Nothing in the index scored above the match threshold for that search.';
       res.json({
         ok: true,

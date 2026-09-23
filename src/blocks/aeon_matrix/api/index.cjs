@@ -150,6 +150,135 @@ module.exports = function secondBrainFactory(deps) {
     res.json({ query: q, count: results.length, results });
   });
 
+  // ─── /doc <name> — open a document the way an operator names it ─
+  //
+  // CEO, 2026-09-22: `/recall pestle` found blocks/research/state.md, and the
+  // very next line, `/doc state.md`, answered 404 "Not found" in 44 ms — and lit
+  // the global "[API FAILED]" banner. /doc wanted the exact Vault path, which
+  // nothing had shown him. A saved chat, `/doc 2026-09-20T…json`, same.
+  //
+  // The terminal's /doc (manifest route /crn/second-brain/document?resolve=1)
+  // now gets /ask-doc's rules
+  // (retrieve.cjs resolveDocument): the exact path wins; then the exact file
+  // name (or, when a "/" was typed, the path suffix); then titles and file
+  // names that CONTAIN the text. One match opens. Two or more are listed and
+  // none is opened — never a guess (§08). None says what was searched.
+  //
+  // It walks the Vault's FILES, not only the index: saved chats are kept out of
+  // the index on purpose (R09) but they are the operator's files and he can
+  // name one. The graph and the Matrix search keep the strict route below —
+  // a clicked node must open that node or fail, never a namesake.
+  //
+  // Not-found is HTTP 200 with ok:false, not a 404. The dispatcher forwards the
+  // status verbatim and every non-2xx from /api/commands/dispatch raises the
+  // app-wide red banner — a second, louder rendering of a failure the chip
+  // already shows, labelled as a broken API when the API answered perfectly.
+  const DATA_ROOT  = deps?.DATA_ROOT || path.join(__dirname, '..', 'data');
+  const INDEX_FILE = path.join(DATA_ROOT, 'vault_index.json');
+  // Security's own state is never offered up by a fuzzy name; its exact path
+  // still reads as it always has.
+  const NAME_SKIP  = new Set(['blocks/security']);
+  const MAX_WALK   = 50000;
+  const TERMINAL_TEXT_CHARS = 20000;
+
+  function walkVaultFiles() {
+    const out = [];
+    const walk = (dir, depth) => {
+      if (depth > 16 || out.length >= MAX_WALK) return;
+      let entries = [];
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+      for (const e of entries) {
+        if (e.name.startsWith('.') || e.name === 'node_modules') continue;
+        const full = path.join(dir, e.name);
+        const rel = path.relative(BRAIN_DIR, full).split(path.sep).join('/');
+        if (NAME_SKIP.has(rel)) continue;
+        if (e.isDirectory()) walk(full, depth + 1);
+        else if (e.isFile()) out.push(rel);
+        if (out.length >= MAX_WALK) return;
+      }
+    };
+    walk(BRAIN_DIR, 0);
+    return out;
+  }
+
+  function indexedTitles() {
+    try {
+      const idx = JSON.parse(fs.readFileSync(INDEX_FILE, 'utf8'));
+      return Object.values(idx?.documents || {}).filter((d) => d && d.path);
+    } catch { return []; }
+  }
+
+  function resolveByName(typed) {
+    const q = typed.trim().replace(/\\/g, '/').replace(/^\/+/, '').replace(/^Vault\//i, '');
+    const ql = q.toLowerCase();
+    const files = walkVaultFiles();
+    const docs = indexedTitles();
+    const titleOf = new Map(docs.map((d) => [d.path, d.title]));
+    const searched = { files: files.length, titles: docs.length };
+    if (!ql) return { hits: [], by: null, searched, titleOf };
+
+    const exact = files.filter((f) => f.toLowerCase() === ql);
+    if (exact.length) return { hits: exact, by: 'path', searched, titleOf };
+
+    const named = ql.includes('/')
+      ? files.filter((f) => f.toLowerCase().endsWith(`/${ql}`))
+      : files.filter((f) => path.posix.basename(f).toLowerCase() === ql);
+    if (named.length) return { hits: named, by: ql.includes('/') ? 'partial path' : 'file name', searched, titleOf };
+
+    // Containment needs a few characters, or "a" would match the whole Vault.
+    if (ql.length < 3) return { hits: [], by: null, searched, titleOf };
+    const onDisk = new Set(files);
+    const byTitle = docs.filter((d) => onDisk.has(d.path) && String(d.title || '').toLowerCase().includes(ql)).map((d) => d.path);
+    const byName = files.filter((f) => path.posix.basename(f).toLowerCase().includes(ql));
+    return { hits: [...new Set([...byTitle, ...byName])], by: 'title or file name', searched, titleOf };
+  }
+
+  const argFor = (rel) => (/\s/.test(rel) ? `"${rel}"` : rel);
+
+  async function openByName(typed, res) {
+    const { hits, by, searched, titleOf } = resolveByName(typed);
+
+    if (!hits.length) {
+      const text = `Nothing in the Vault matches "${typed}". Searched: the exact path, `
+        + `${searched.files.toLocaleString()} file names in every Vault folder (saved chats included), `
+        + `and ${searched.titles.toLocaleString()} indexed titles. `
+        + 'Try /recall <words from the document> to search by meaning — it prints each match\'s path for /doc.';
+      return res.json({ ok: false, found: false, reason: 'not_found', error: text, text, searched });
+    }
+
+    if (hits.length > 1) {
+      const shown = hits.slice(0, 15);
+      const text = `"${typed}" matches ${hits.length} documents — say which one:\n`
+        + shown.map((p) => `- ${p}${titleOf.get(p) ? ` — ${titleOf.get(p)}` : ''}`).join('\n')
+        + (hits.length > shown.length ? `\n…and ${hits.length - shown.length} more — type more of the path.` : '')
+        + `\nThen: /doc ${argFor(shown[0])}`;
+      return res.json({ ok: true, found: false, reason: 'ambiguous', candidates: shown.map((p) => ({ path: p, title: titleOf.get(p) || null })), total: hits.length, text });
+    }
+
+    const rel = hits[0];
+    const full = resolveDoc(rel);
+    if (!full || !fs.existsSync(full)) {
+      const text = `${rel} could not be opened.`;
+      return res.json({ ok: false, found: false, reason: 'unreadable', error: text, text });
+    }
+    try {
+      const { extractText } = require('./_extract.cjs');
+      const { text: content, ...meta } = await extractText(full);
+      const body = String(content || '');
+      const how = by === 'path' ? '' : ` — matched "${typed}" by ${by}`;
+      const clipped = body.length > TERMINAL_TEXT_CHARS
+        ? `${body.slice(0, TERMINAL_TEXT_CHARS)}\n\n… showing the first ${TERMINAL_TEXT_CHARS.toLocaleString()} of ${body.length.toLocaleString()} characters. Ask about the rest with /ask-doc ${argFor(rel)} <question>, or open it in Aeon Matrix.`
+        : (body || '(this file has no readable text)');
+      res.json({
+        ok: true, found: true, path: `Vault/${rel}`, matchedBy: by, content: body, ...meta,
+        text: `${rel}${how}\n\n${clipped}`,
+      });
+    } catch (e) {
+      const text = `${rel} was found but could not be read: ${e.message}`;
+      res.json({ ok: false, found: true, reason: 'extraction_failed', path: `Vault/${rel}`, error: text, text });
+    }
+  }
+
   // ─── Read a specific document ─────────────────────────────────
   //
   // Was `fs.readFileSync(resolved, 'utf8')` — a raw byte read decoded as
@@ -163,6 +292,7 @@ module.exports = function secondBrainFactory(deps) {
   router.get('/crn/second-brain/document', async (req, res) => {
     const filePath = req.query.path;
     if (!filePath) return res.status(400).json({ error: 'Missing ?path=' });
+    if (String(req.query.resolve || '') === '1') return openByName(String(filePath), res);
 
     const resolved = resolveDoc(filePath);
     if (!resolved) return res.status(403).json({ error: 'Access denied' });

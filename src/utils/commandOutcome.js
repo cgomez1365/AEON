@@ -68,7 +68,16 @@ export function describeDispatchOutcome({ status, data } = {}) {
     };
   }
 
-  if (body.ok) {
+  // The envelope's `ok` is the HTTP status of the block route the dispatcher
+  // proxied to. A block that answers 200 and says `ok:false` in its own body
+  // has reported a failure; drawing that as a green EXIT 0 with the failure
+  // text inside it is the screen asserting an outcome the block denied (§08).
+  // Only an explicit `false` counts — most block bodies carry no `ok` at all.
+  // /doc answers this way on purpose: a non-2xx would also raise the app-wide
+  // "[API FAILED]" banner over a chip that already says what went wrong.
+  const blockSaidNo = body.data && typeof body.data === 'object' && body.data.ok === false;
+
+  if (body.ok && !blockSaidNo) {
     return {
       kind: 'ok',
       chipStatus: CHIP_STATUS.OK,
@@ -82,7 +91,7 @@ export function describeDispatchOutcome({ status, data } = {}) {
     chipStatus: CHIP_STATUS.FAIL,
     // A failure is worth opening; a success is not.
     expand: true,
-    error: body.error || null,
+    error: body.error || (blockSaidNo ? (body.data.error || body.text || null) : null),
   };
 }
 

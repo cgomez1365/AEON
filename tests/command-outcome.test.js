@@ -86,6 +86,25 @@ describe('a real result reports what actually happened', () => {
     const o = describeDispatchOutcome({ status: 200, data: { ok: true, text: '   ' } });
     expect(o.text).toBeNull();
   });
+
+  it('a block that answered ok:false failed, even over HTTP 200', () => {
+    // The dispatcher's envelope `ok` is the HTTP status of the block route.
+    // A block that reports its own failure in the body — /doc naming a file
+    // the Vault does not have — used to render as a green EXIT 0 with the
+    // failure text inside it. The block's own word wins.
+    const o = describeDispatchOutcome({
+      status: 200,
+      data: { ok: true, text: 'Nothing in the Vault matches "x.md".', data: { ok: false, error: 'Nothing in the Vault matches "x.md".' } },
+    });
+    expect(o.chipStatus).toBe(CHIP_STATUS.FAIL);
+    expect(o.expand).toBe(true);
+    expect(o.error).toMatch(/Nothing in the Vault/);
+  });
+
+  it('a block body with no ok field is still judged by the envelope', () => {
+    // Most block routes never set `ok` in their body (/memory, /document).
+    expect(describeDispatchOutcome({ status: 200, data: { ok: true, text: 'x', data: { memories: [] } } }).chipStatus).toBe(CHIP_STATUS.OK);
+  });
 });
 
 describe('BO-D2d — empty is a legitimate answer and must read as one', () => {

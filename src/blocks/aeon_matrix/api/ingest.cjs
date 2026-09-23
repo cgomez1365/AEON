@@ -194,6 +194,16 @@ module.exports = function ingestFactory(deps) {
     return resolved;
   }
 
+  // The document routes below speak the same ids as the rest of this block.
+  // The graph, /document and the terminal all name a file "Vault/<relative>"
+  // (index.cjs resolveDoc strips the prefix; retrieve.cjs resolveIndexedPath
+  // does too). These three routes did not, so the Matrix editor opened
+  // "Vault/Agents/council/debates/x.md" through /document, and Save (PUT) then
+  // looked for <Vault>/Vault/Agents/… and answered "File not found" — beneath
+  // the very content it had just shown (CEO, 2026-09-23). POST with content
+  // was worse: it would have CREATED that second copy under <Vault>/Vault/.
+  const docRelPath = (p) => String(p).replace(/^[\\/]?Vault(?=[\\/])[\\/]/, '');
+
   // The manifest gets the same single owner as the index: a route's entry
   // written between two scan checkpoints was overwritten by the scan's private
   // copy, and the document was re-ingested from scratch on the next scan.
@@ -715,7 +725,7 @@ module.exports = function ingestFactory(deps) {
     const { file_path, content: bodyContent } = req.body || {};
     if (!file_path) return res.status(400).json({ error: 'file_path required' });
 
-    const resolved = resolveVaultPath(file_path);
+    const resolved = resolveVaultPath(docRelPath(file_path));
     if (!resolved) return res.status(403).json({ error: 'Access denied' });
 
     if (bodyContent && !fs.existsSync(resolved)) {
@@ -757,9 +767,13 @@ module.exports = function ingestFactory(deps) {
     if (!file_path) return res.status(400).json({ error: 'file_path required' });
     if (typeof content !== 'string') return res.status(400).json({ error: 'content (string) required' });
 
-    const resolved = resolveVaultPath(file_path);
+    const resolved = resolveVaultPath(docRelPath(file_path));
     if (!resolved) return res.status(403).json({ error: 'Access denied' });
-    if (!fs.existsSync(resolved)) return res.status(404).json({ error: 'File not found' });
+    // Update-only, deliberately: Save must never be the thing that creates a
+    // file, so a wrong id can only fail — it cannot write a copy elsewhere.
+    if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
+      return res.status(404).json({ error: `File not found: ${docRelPath(file_path)} is not in the Vault. Nothing was written.` });
+    }
 
     try {
       fs.writeFileSync(resolved, content, 'utf8');
@@ -792,16 +806,18 @@ module.exports = function ingestFactory(deps) {
     const { file_path } = req.body || {};
     if (!file_path) return res.status(400).json({ error: 'file_path required' });
     try {
+      const rel = docRelPath(file_path).replace(/\\/g, '/');
       const index = readIndex();
-      delete index.documents[file_path];
+      delete index.documents[rel];
+      delete chunks()[rel];
       writeIndex(index);
 
       const manifest = readManifest();
-      delete manifest[String(file_path).replace(/\\/g, '/')];
-      delete manifest[String(file_path).replace(/\//g, path.sep)]; // an entry written before keys were POSIX
+      delete manifest[rel];
+      delete manifest[rel.replace(/\//g, path.sep)]; // an entry written before keys were POSIX
       writeManifest(manifest);
 
-      res.json({ ok: true, deleted: file_path });
+      res.json({ ok: true, deleted: rel });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -811,11 +827,75 @@ module.exports = function ingestFactory(deps) {
   // The scan itself must survive the client disconnecting early (a long scan,
   // a closed tab, a timed-out test request) — a dead res.write() shouldn't be
   // able to silently kill an in-progress rescan.
+  //
+  // ?format=summary — ONE JSON answer when the scan ends, for the terminal.
+  // /index-brain and /scan (manifest route /crn/second-brain/ingest/scan-docs?format=summary)
+  // go through the command dispatcher, which reads a JSON body. It got an event
+  // stream, parsed nothing, and handed the chip `{}` — so a scan that indexed
+  // real documents rendered "Nothing to show — the command ran and found no
+  // entries" (CEO, 2026-09-22). Matrix ▸ Index still streams: no flag, no change.
   router.post('/crn/second-brain/ingest/scan-docs', async (req, res) => {
+    if (String(req.query.format || '') === 'summary') return scanSummary(req, res);
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' });
     await runScan((ev) => { try { res.write(`data: ${JSON.stringify(ev)}\n\n`); } catch { /* client gone, scan keeps going */ } });
     try { res.end(); } catch { /* already gone */ }
   });
+
+  const BACKFILL_ACTIONS = new Set(['embed-backfill', 'space-migrate', 'chunk-backfill']);
+  const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
+  /** The scan's result as one sentence an operator can act on. Counts only what the run reported. */
+  function describeScan(r, tally, totalDocs, joined) {
+    if (r.reason) return `The Vault was not indexed — ${r.reason}.`;
+    // A caller that joined a run in flight saw none of its per-file events,
+    // so it cannot split new from backfilled — it says so rather than guess.
+    const parts = joined
+      ? [`${r.ingested} new, changed or backfilled`]
+      : [`${tally.fresh} new or changed`, ...(tally.backfilled ? [`${tally.backfilled} backfilled`] : [])];
+    parts.push(`${r.embedded || 0} embedded`, `${r.skipped} unchanged`, `${r.deleted} removed`);
+    const lines = [`${joined ? 'A scan was already running; its result: ' : ''}Vault indexed — ${parts.join(', ')}. ${plural(totalDocs, 'document')} in the index.`];
+    // Chunk backfill re-embeds windows of a document that already has its
+    // vector, and is not counted in `embedded` — it cannot prove a missing model.
+    const needed = joined ? r.ingested : tally.fresh + tally.vectors;
+    if (needed > 0 && !r.embedded) {
+      lines.push(`None of them were embedded — no embedding model answered, so /recall and /ask cannot find them by meaning yet. Install one in Cookbook or assign the Embedding role in Settings, then run /index-brain again.`);
+    }
+    const errs = r.errors || [];
+    if (errs.length) {
+      lines.push(`${plural(errs.length, 'file')} could not be read: ${errs.slice(0, 3).map((e) => `${e.file} (${e.error})`).join('; ')}${errs.length > 3 ? '; …' : ''}.`);
+    }
+    return lines.join('\n');
+  }
+
+  async function scanSummary(_req, res) {
+    // Headers go out now and a space every 15 s after: leading whitespace is
+    // valid JSON, and it keeps a long first-time scan from tripping the
+    // dispatcher's fetch timeouts (undici: 300 s to headers, 300 s between
+    // body chunks) while the terminal chip honestly says "running".
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-cache' });
+    const keepAlive = setInterval(() => { try { res.write(' '); } catch { /* client gone */ } }, 15000);
+    keepAlive.unref?.();
+    const tally = { fresh: 0, backfilled: 0, vectors: 0 };
+    let joined = false;
+    let body;
+    try {
+      const r = await runScan((ev) => {
+        if (ev.joined) joined = true;
+        if (!ev.file || ev.error || ev.deleted) return;
+        if (BACKFILL_ACTIONS.has(ev.action)) {
+          tally.backfilled++;
+          if (ev.action !== 'chunk-backfill') tally.vectors++;
+        } else if (!ev.action) tally.fresh++;
+      });
+      const totalDocs = Object.keys(readIndex().documents || {}).length;
+      body = { ok: true, ...r, fresh: tally.fresh, backfilled: tally.backfilled, totalDocs, text: describeScan(r, tally, totalDocs, joined) };
+    } catch (e) {
+      body = { ok: false, error: e.message, text: `The index run failed: ${e.message}` };
+    } finally {
+      clearInterval(keepAlive);
+    }
+    try { res.end(JSON.stringify(body)); } catch { /* already gone */ }
+  }
 
   // GET /crn/second-brain/index-status — for Settings ▸ Installed blocks
   // nervous-system view, and for the Matrix ▸ Index panel.

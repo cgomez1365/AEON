@@ -80,14 +80,14 @@
         "cmd": "/index-brain",
         "desc": "Rebuild the Second Brain index (new/changed/deleted files); embeds what it can",
         "method": "POST",
-        "route": "/api/crn/second-brain/ingest/scan-docs",
+        "route": "/api/crn/second-brain/ingest/scan-docs?format=summary",
         "mode": "instant"
       },
       {
         "cmd": "/scan",
         "desc": "Index the vault — new, changed and deleted files (same as /index-brain)",
         "method": "POST",
-        "route": "/api/crn/second-brain/ingest/scan-docs",
+        "route": "/api/crn/second-brain/ingest/scan-docs?format=summary",
         "mode": "instant"
       },
       {
@@ -115,9 +115,9 @@
       },
       {
         "cmd": "/doc",
-        "desc": "Read a document from the vault by relative path",
+        "desc": "Open a Vault document by name, title or path — /doc state.md, /doc phishing triage, /doc blocks/research/state.md. Two or more matches are listed, never guessed.",
         "method": "GET",
-        "route": "/api/crn/second-brain/document",
+        "route": "/api/crn/second-brain/document?resolve=1",
         "params": [
           {
             "name": "path",
