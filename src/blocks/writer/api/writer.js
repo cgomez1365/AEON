@@ -97,28 +97,61 @@ OUTPUT FORMAT — the document is HTML. Return valid HTML using only these tags:
   //
   // Returns a string. Throws on failure — callers must surface, never substitute
   // empty content for an error (that substitution WAS the data-loss bug).
-  async function llm(prompt, opts = {}) {
+  //
+  // Truncation. kernelLLM's blocking form returns the text alone, so an answer
+  // a free model cut off at 1024 tokens (finish_reason "length") read as
+  // complete — and /improve handed back "…the final recommendation is that you
+  // should" to be assigned over the whole document (measured 2026-09-23).
+  // kernelLLM.stream reports truncated / truncationReason, so that is asked
+  // when the host provides it. `llmMeta` returns { text, truncated } where
+  // truncated is null when the transport cannot tell.
+  const WRITER_SYSTEM = 'You are AEON, a private AI workspace. You are concise, accurate, and action-oriented. When given a task, execute it directly. Never fabricate data.';
+  async function llmMeta(prompt, opts = {}) {
     if (typeof kernelLLM !== 'function') {
       const e = new Error('AI is unavailable: this block was mounted without the kernel LLM service.');
       e.aiUnavailable = true;
       throw e;
     }
-    const out = await kernelLLM(prompt, { role: 'creative', ...opts });
-    const text = typeof out === 'string' ? out : out?.text;
+    let text; let truncated = null;
+    if (typeof kernelLLM.stream === 'function') {
+      const r = await kernelLLM.stream(
+        [{ role: 'system', content: WRITER_SYSTEM }, { role: 'user', content: prompt }],
+        { role: 'creative', ...opts, onToken: () => {} },
+      );
+      text = r?.text; truncated = !!r?.truncated;
+    } else {
+      const out = await kernelLLM(prompt, { role: 'creative', ...opts });
+      text = typeof out === 'string' ? out : out?.text;
+    }
     if (typeof text !== 'string' || text.trim() === '') {
       const e = new Error('AI returned no content. Check the Creative model in Settings.');
       e.aiUnavailable = true;
       throw e;
     }
-    return text;
+    return { text, truncated };
   }
+  async function llm(prompt, opts = {}) { return (await llmMeta(prompt, opts)).text; }
+
+  // A rewrite of the operator's OWN text that the model cut off is refused:
+  // handing it back replaces their closing paragraphs with half a sentence.
+  function truncatedRewrite(res) {
+    return res.status(502).json({
+      truncated: true,
+      aiUnavailable: false,
+      error: 'The model stopped at its output limit before it finished, so your document was not changed. '
+        + 'Rewrite a shorter selection, or assign a model with a larger output budget to the Creative role in Settings (free OpenRouter models stop at 1024 tokens).',
+    });
+  }
+  const flag = (truncated) => (truncated ? { truncated: true } : {});
 
   // One shape for every AI failure, so the UI can always say something true.
   function aiError(res, e) {
-    const status = (e.noProviderAvailable || e.aiUnavailable) ? 503 : 502;
+    const rateLimited = !!e.rateLimited || e.status === 429;
+    const status = rateLimited ? 429 : (e.noProviderAvailable || e.aiUnavailable) ? 503 : 502;
     return res.status(status).json({
       error: e.message || 'AI request failed',
       aiUnavailable: !!(e.aiUnavailable || e.noProviderAvailable),
+      ...(rateLimited ? { rateLimited: true } : {}),
     });
   }
 
@@ -224,7 +257,7 @@ OUTPUT FORMAT — the document is HTML. Return valid HTML using only these tags:
       if (samples.length === 0) return res.status(400).json({ error: 'No documents found. Save some writing first.' });
 
       const corpus = samples.map(s => `--- ${s.title} ---\n${s.text}`).join('\n\n');
-      const text = await llm(
+      const { text, truncated } = await llmMeta(
         `Analyze the writing style of these samples and return a JSON object with:
 - "summary": 2-3 sentence description of voice and style
 - "traits": array of 6-10 style traits
@@ -242,7 +275,12 @@ Return ONLY valid JSON.\n\nSamples:\n${corpus}`
         // An unparseable answer is a failed analysis, not an empty profile. The
         // old code wrote a blank fallback to disk, overwriting a good profile
         // with garbage and lighting up "Style DNA" as if it had succeeded.
-        return res.status(502).json({ error: 'Could not read a style profile from the model response. Nothing was changed.' });
+        return res.status(502).json({
+          error: truncated
+            ? 'The model stopped at its output limit before the style profile was complete. Nothing was changed.'
+            : 'Could not read a style profile from the model response. Nothing was changed.',
+          ...flag(truncated),
+        });
       }
       if (!profile || typeof profile !== 'object' || !profile.summary) {
         return res.status(502).json({ error: 'Style analysis returned an incomplete profile. Nothing was changed.' });
@@ -284,8 +322,12 @@ Return ONLY valid JSON.\n\nSamples:\n${corpus}`
         userMsg = prompt;
       }
 
-      const content = await llm(`${system}\n\n${userMsg}`);
-      res.json({ content, usedStyle: !!profile });
+      const { text: content, truncated } = await llmMeta(`${system}\n\n${userMsg}`);
+      // A brain dump is the operator's own ideas, restructured; a cut-off
+      // restructure silently drops the later ones (and the editor clears the
+      // box they were typed in). New writing and feedback come back flagged.
+      if (truncated && mode === 'braindump') return truncatedRewrite(res);
+      res.json({ content, usedStyle: !!profile, ...flag(truncated) });
     } catch (e) { aiError(res, e); }
   });
 
@@ -321,15 +363,17 @@ Return ONLY valid JSON.\n\nSamples:\n${corpus}`
             error: 'That selection spans formatting, so it cannot be rewritten on its own. Select text within a single paragraph, or clear the selection to rewrite the whole document.',
           });
         }
-        const rewritten = (await llm(`${instr}${styleNote}\n\nReturn ONLY the rewritten fragment, as HTML, with no code fence:\n\n${selection}`)).trim();
-        return res.json({ content: text.replace(selection, rewritten), selectionReplaced: true });
+        const out = await llmMeta(`${instr}${styleNote}\n\nReturn ONLY the rewritten fragment, as HTML, with no code fence:\n\n${selection}`);
+        if (out.truncated) return truncatedRewrite(res);
+        return res.json({ content: text.replace(selection, out.text.trim()), selectionReplaced: true });
       }
       // Critique is read by a human and never written into the document, so it
       // gets stripped prose in and prose out; everything else round-trips HTML.
       const isCritique = action === 'critique';
       const body = isCritique ? stripHtml(text) : text;
-      const content = await llm(`${instr}${styleNote}${isCritique ? '' : HTML_CONTRACT}\n\nReturn ONLY the result:\n\n${body}`);
-      res.json({ content });
+      const out = await llmMeta(`${instr}${styleNote}${isCritique ? '' : HTML_CONTRACT}\n\nReturn ONLY the result:\n\n${body}`);
+      if (out.truncated && !isCritique) return truncatedRewrite(res);
+      res.json({ content: out.text, ...flag(out.truncated) });
     } catch (e) { aiError(res, e); }
   });
 
@@ -368,8 +412,8 @@ ${styleNote}${draftNote}`;
       ]).join('\n');
 
       const fullPrompt = `${systemMsg}\n\n${historyMsgs ? historyMsgs + '\n\n' : ''}User: ${prompt}\n\nAssistant:`;
-      const response = await llm(fullPrompt);
-      res.json({ response });
+      const { text: response, truncated } = await llmMeta(fullPrompt);
+      res.json({ response, ...flag(truncated) });
     } catch (e) { aiError(res, e); }
   });
 

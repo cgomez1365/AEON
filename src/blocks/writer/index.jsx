@@ -356,21 +356,25 @@ export default function Writer() {
     fetch('/api/writer/style').then(r => r.json()).then(d => { if (d.profile) setStyleProfile(d.profile); }).catch(() => {});
   }, []);
 
-  const showToast = (msg) => {
+  // Errors and warnings stay up long enough to read; 2.5 s was shorter than
+  // the sentence explaining why the document was not changed.
+  const showToast = (msg, ms = 2500) => {
     setToast(msg);
     clearTimeout(toastTimer.current);
-    toastTimer.current = setTimeout(() => setToast(''), 2500);
+    toastTimer.current = setTimeout(() => setToast(''), ms);
   };
+  // The server flags an answer the model cut off at its output limit.
+  const CUT_WARNING = 'Cut off — the model stopped at its output limit, so this ends mid-way. A model with a larger output budget on the Creative role (Settings) gives the full text.';
 
   // Every AI action funnels its failures here. Two rules, both learned the hard
   // way: an AI failure must never be silent, and it must never reach setVal() —
   // writing an empty result over the document was destroying user work.
   const aiFail = (d, res) => {
     if (res && !res.ok) {
-      showToast(d?.error || `AI unavailable (${res.status})`);
+      showToast(d?.error || `AI unavailable (${res.status})`, 7000);
       return true;
     }
-    if (d?.error) { showToast(d.error); return true; }
+    if (d?.error) { showToast(d.error, 7000); return true; }
     return false;
   };
   const aiCrash = (e) => showToast(e?.message ? `AI request failed: ${e.message}` : 'AI request failed');
@@ -762,7 +766,7 @@ export default function Writer() {
         setAiLoading(false);
         return;
       }
-      if (action === 'critique') { setCritiqueText(d.content); }
+      if (action === 'critique') { setCritiqueText(d.content); if (d.truncated) showToast(CUT_WARNING, 7000); }
       else { setVal(d.content); }
     } catch (e) { aiCrash(e); }
     setAiLoading(false);
@@ -788,7 +792,7 @@ export default function Writer() {
         body: JSON.stringify({ prompt: p, mode: writeMode, draft: content, tone: generateTone, length: generateLength }) });
       const d = await r.json();
       if (aiFail(d, r)) { setAiLoading(false); return; }
-      if (d.content) { setVal(d.content); setEditorMode('read'); }
+      if (d.content) { setVal(d.content); setEditorMode('read'); if (d.truncated) showToast(CUT_WARNING, 7000); }
       else showToast('AI returned no content.');
     } catch (e) { aiCrash(e); }
     setAiLoading(false);
@@ -802,7 +806,7 @@ export default function Writer() {
         body: JSON.stringify({ mode: 'continue', draft: content }) });
       const d = await r.json();
       if (aiFail(d, r)) { setAiLoading(false); return; }
-      if (d.content) { setVal(content + '\n\n' + d.content); setEditorMode('read'); }
+      if (d.content) { setVal(content + '\n\n' + d.content); setEditorMode('read'); if (d.truncated) showToast(CUT_WARNING, 7000); }
       else showToast('AI returned no continuation.');
     } catch (e) { aiCrash(e); }
     setAiLoading(false);
@@ -856,7 +860,8 @@ export default function Writer() {
       const r = await fetch('/api/writer/cowrite', { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt: msg, draft: content, history: apiHistory }) });
       const d = await r.json();
-      setCowriteHistory(prev => [...prev, { role: 'ai', content: d.response || d.error || 'No response' }]);
+      const reply = d.response ? `${d.response}${d.truncated ? '\n\n(Cut off — the model stopped at its output limit.)' : ''}` : (d.error || 'No response');
+      setCowriteHistory(prev => [...prev, { role: 'ai', content: reply }]);
     } catch (e) {
       setCowriteHistory(prev => [...prev, { role: 'ai', content: 'Error: ' + e.message }]);
     }
