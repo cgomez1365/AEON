@@ -23,7 +23,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Send, Loader, Cpu, Clock, Zap, ChevronRight, ChevronDown, ShieldAlert, Paperclip, Square, X as XIcon, Archive, History, Plus, Trash2, Pencil, BookmarkPlus, Check } from 'lucide-react';
+import { Send, Loader, Cpu, Clock, Zap, ChevronRight, ChevronDown, ShieldAlert, Paperclip, Square, X as XIcon, Archive, History, Plus, Trash2, Pencil, BookmarkPlus, Check, Sparkles } from 'lucide-react';
 import { describeStreamFailure, SELF_REPORTED_HEADER } from '../utils/interceptorPolicy.js';
 import { describeDispatchOutcome, describeDenial, describeCommandOutput } from '../utils/commandOutcome.js';
 
@@ -256,6 +256,7 @@ const Terminal2 = ({ onUsageUpdate }) => {
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
   }, [input]);
   const [feed, setFeed] = useState([BOOT_MSG]);
+  const [distilling, setDistilling] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [commands, setCommands] = useState([]);
   const [showPalette, setShowPalette] = useState(false);
@@ -286,6 +287,46 @@ const Terminal2 = ({ onUsageUpdate }) => {
   }, []);
 
   useEffect(() => { fetchSessions(); }, [fetchSessions]);
+
+  // ── Two different verbs, deliberately next to each other ──
+  //
+  // SAVE keeps the chat: the whole thing, word for word, so it can be reopened
+  // another day. DISTILL keeps what the chat was ABOUT: a handful of durable
+  // facts in Memory Core that ride into future conversations. One is an
+  // archive, the other is learning, and the operator wants them separate.
+  //
+  // This sends the LIVE feed rather than letting the server hunt for a saved
+  // file. Memory Core's own button reads the newest session on disk, which is
+  // right for it and wrong here: an active chat is not written out until it is
+  // saved, so "distil what I am looking at" read whatever was saved last -
+  // the operator distilled a Stephen King conversation and got memories about
+  // an unrelated session that happened to be newer on disk.
+  const distillToMemory = useCallback(async () => {
+    const msgs = (feedRef.current || [])
+      .filter(m => m.type === 'msg' && (m.role === 'user' || m.role === 'assistant'));
+    if (msgs.length < 2) {
+      push({ type: 'msg', role: 'system', content: 'Nothing to distil yet — have a conversation first.' });
+      return;
+    }
+    setDistilling(true);
+    try {
+      const transcript = msgs.slice(-30)
+        .map(m => `${m.role}: ${String(m.content || '').slice(0, 400)}`).join('\n');
+      const r = await fetch('/api/memory/distill', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transcript }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || d.error) throw new Error(d.error || `HTTP ${r.status}`);
+      const n = d.added?.length || 0;
+      push({ type: 'msg', role: 'system',
+        content: n
+          ? `🧠 Added ${n} ${n === 1 ? 'memory' : 'memories'} to Memory Core from this chat.`
+          : `🧠 Nothing durable found in this chat — ${d.candidates || 0} candidates, none new.` });
+    } catch (e) {
+      push({ type: 'msg', role: 'error', content: `[DISTILL] ${e.message}` });
+    } finally { setDistilling(false); }
+  }, []);
 
   const saveSession = useCallback(async ({ name, autoSaved = false } = {}) => {
     const msgs = feedRef.current.filter(e => e.type === 'msg' && (e.role === 'user' || e.role === 'assistant'));
@@ -982,11 +1023,18 @@ const Terminal2 = ({ onUsageUpdate }) => {
       {/* ── Session action strip — top of terminal, not in the input row ── */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 0, borderBottom: '1px solid #111a28', flexShrink: 0 }}>
         <button onClick={() => saveSession().then(d => d && push({ type: 'msg', role: 'system', content: `💾 Saved: ${d.name}` }))}
-          title="Save this chat"
+          title="Keep this whole chat so you can reopen it later. To keep what it TAUGHT AEON, use Distil."
           style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'transparent', border: 'none', borderRight: '1px solid #111a28', color: sessionSaving ? '#39ff14' : '#3a5070', padding: '5px 12px', cursor: 'pointer', fontSize: 10, fontFamily: 'inherit', letterSpacing: '0.08em', whiteSpace: 'nowrap' }}
           onMouseEnter={e => e.currentTarget.style.color = '#00f2ff'}
           onMouseLeave={e => e.currentTarget.style.color = sessionSaving ? '#39ff14' : '#3a5070'}>
           <Archive size={11} /> SAVE
+        </button>
+        <button onClick={distillToMemory} disabled={distilling}
+          title="Pull the durable facts out of this chat into Memory Core, so AEON carries them into future conversations."
+          style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'transparent', border: 'none', borderRight: '1px solid #111a28', color: distilling ? '#39ff14' : '#3a5070', padding: '5px 12px', cursor: distilling ? 'default' : 'pointer', fontSize: 10, fontFamily: 'inherit', letterSpacing: '0.08em', whiteSpace: 'nowrap' }}
+          onMouseEnter={e => { if (!distilling) e.currentTarget.style.color = '#00f2ff'; }}
+          onMouseLeave={e => { e.currentTarget.style.color = distilling ? '#39ff14' : '#3a5070'; }}>
+          <Sparkles size={11} /> {distilling ? 'DISTILLING…' : 'DISTIL → MEMORY'}
         </button>
         <button onClick={() => { setShowSessions(v => !v); if (!showSessions) fetchSessions(); }}
           title="Chat history"

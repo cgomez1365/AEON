@@ -27,6 +27,20 @@ const memoryPolicy = require('../../../kernel/memory-policy.cjs');
 const sections = require('../../../kernel/memorySections.cjs');
 const crypto = require('crypto');
 
+
+
+/** How long ago, in words a person reads rather than a timestamp. */
+function timeAgo(iso) {
+  const ms = Date.now() - (Date.parse(iso) || 0);
+  if (ms < 90e3) return 'moments ago';
+  const m = Math.round(ms / 60e3);
+  if (m < 60) return `${m} minute${m === 1 ? '' : 's'} ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h} hour${h === 1 ? '' : 's'} ago`;
+  const d = Math.round(h / 24);
+  return `${d} day${d === 1 ? '' : 's'} ago`;
+}
+
 module.exports = function createMemoryRouter(deps) {
   const router = express.Router();
   const { kernelLLM, VAULT_ROOT, TERMINAL_HISTORY_FILE } = deps;
@@ -44,6 +58,22 @@ module.exports = function createMemoryRouter(deps) {
 
   const MEM_DIR = path.join(VAULT_ROOT || path.join(__dirname, '..', '..', 'aeon_matrix', 'data', 'Vault'), 'Agents', 'Aeon', 'memory');
   const STORE = path.join(MEM_DIR, 'memories.json');
+  // Which transcripts have already been distilled. Kept beside the memories
+  // rather than in db/ because it is only meaningful next to them: restore an
+  // old vault and the ledger that matches it comes too.
+  const DISTILLED = path.join(MEM_DIR, '.distilled.json');
+  const loadDistilled = () => {
+    try { const j = JSON.parse(fs.readFileSync(DISTILLED, 'utf8')); return Array.isArray(j) ? j : []; }
+    catch { return []; }
+  };
+  const rememberDistilled = (sha, added) => {
+    try {
+      // Bounded: the last 200 runs is far more history than any question needs,
+      // and an unbounded ledger beside a vault is a file that only grows.
+      const next = [...loadDistilled().filter(r => r.sha !== sha), { sha, at: new Date().toISOString(), added }].slice(-200);
+      fs.writeFileSync(DISTILLED, JSON.stringify(next, null, 2));
+    } catch { /* a ledger that cannot be written must not fail the distil */ }
+  };
   try { if (!fs.existsSync(MEM_DIR)) fs.mkdirSync(MEM_DIR, { recursive: true }); } catch {}
 
   const load = () => {
@@ -295,6 +325,32 @@ module.exports = function createMemoryRouter(deps) {
         }
       }
     }
+    // ALREADY DISTILLED THIS EXACT CONVERSATION? SAY SO AND STOP.
+    //
+    // The operator clicked distil three times on one session and got thirteen
+    // memories: the same five facts written three ways. The store's existing
+    // check compares text exactly, which never fires, because a model asked
+    // the same question twice paraphrases rather than repeats.
+    //
+    // A fuzzy text comparison was tried and measured against those real
+    // duplicates: it caught 2 of 9 and wrongly flagged a genuine memory. It is
+    // the wrong tool. Paraphrases share meaning, not words.
+    //
+    // The cause is not similar text, it is a repeated INPUT, so that is what
+    // is remembered. A transcript that has already been distilled is refused
+    // outright - deterministic, no false positives, and a conversation that
+    // has moved on since hashes differently and distils again as it should.
+    const transcriptSha = crypto.createHash('sha256').update(String(transcript)).digest('hex').slice(0, 16);
+    const seen = loadDistilled();
+    const priorRun = seen.find(r => r.sha === transcriptSha);
+    if (priorRun && !req.body?.force) {
+      return res.status(200).json({
+        ok: true, added: [], candidates: 0, session: usedSession, alreadyDistilled: true,
+        message: `Nothing new — this conversation was distilled ${timeAgo(priorRun.at)}, and nothing has been said since. `
+          + `Carry on chatting and distil again, or pass force to run it anyway.`,
+      });
+    }
+
     const prompt = `Distill durable memories from this operator/VP terminal session. Prefer the operator's working artifacts over chit-chat:
 - outline: a scoped structure/plan that was settled
 - algorithm: logic or a flow that was decided
@@ -314,6 +370,7 @@ ${String(transcript).slice(0, 8000)}`;
       for (const c of arr.slice(0, 5)) {
         if (!c.text || c.text.length < 10) continue;
         if (all.find(m => m.text.trim().toLowerCase() === c.text.trim().toLowerCase())) continue;
+
         const m = {
           id: newId(), text: c.text.trim(), category: c.category || 'fact',
           type: ['outline', 'algorithm', 'decision', 'milestone'].includes(c.type) ? c.type : null,
@@ -323,6 +380,10 @@ ${String(transcript).slice(0, 8000)}`;
         all.push(m); mdMirror(m); added.push(m);
       }
       if (added.length) { save(all); requestIndex('memory-distill'); }
+      // Recorded whether or not anything was added: a run that found nothing
+      // durable will find nothing durable again, and should not re-ask the
+      // model every time the button is pressed.
+      rememberDistilled(transcriptSha, added.length);
       // Name the session that was read. A button that silently distils
       // something is a button nobody trusts twice.
       res.json({ ok: true, added, candidates: arr.length, session: usedSession });
