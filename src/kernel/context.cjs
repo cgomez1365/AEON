@@ -97,7 +97,27 @@ const FORMATTING = 'Your answer is read in a narrow terminal panel, so prefer sh
 // The wake phrase. Was a private const in chat-stream.cjs; the terminal needs
 // the same one, and two copies of a trigger phrase drift exactly like two
 // copies of a gate do.
-const WAKE_RE = /\bvp[,!]?\s+(?:come\s+)?online\b/i;
+//
+// It only ever matched "vp", the persona's name before it was renamed to Aeon
+// (Agents/vp -> Agents/Aeon, commit 30eea62). The rename never reached here, so
+// the one phrase that loads the operator's FULL memory could not be said using
+// the product's own name: "aeon come online" did nothing at all, silently,
+// which reads as a memory that simply does not work.
+//
+// An optional agent name sits between the wake word and "online", so
+// "aeon shield come online" names who is being called. The name is captured for
+// the caller to resolve against the roster; an unknown one still wakes AEON
+// itself rather than failing, because the operator's intent to wake is not in
+// doubt just because the name was.
+const WAKE_RE = /\b(?:aeon|vp)(?:\s+([a-z][a-z0-9 _-]{0,30}?))?[,!]?\s+(?:come\s+)?online\b/i;
+
+/** The agent named in a wake phrase, or null for AEON itself. */
+function parseWake(message) {
+  const m = WAKE_RE.exec(String(message || ''));
+  if (!m) return { wake: false, agent: null };
+  const named = (m[1] || '').trim().toLowerCase();
+  return { wake: true, agent: named && named !== 'come' ? named : null };
+}
 
 /**
  * Everything a single-prompt transport needs, as one string.
@@ -130,20 +150,63 @@ function isRecallQuery(text) {
 }
 
 /**
- * Split a message into { query, forced }.
+ * Split a message into { query, forced, manifest }.
  *
  * The force prefix is stripped so the model never sees the command itself —
  * and the SAME string is both gated and queried. The old copies gated on one
  * field and queried with another, which is how one of them ended up unable to
  * fire for any real caller.
+ *
+ * `/matrix list <query>` asks WHAT MATCHED without paying for the passages. A
+ * search result and a document are different things, and treating them as one
+ * is what makes a single question cost a whole window: the operator wanting to
+ * know whether a PDF is in there does not need the PDF.
  */
 function parseRecallInput(message) {
   const raw = String(message || '');
   const forced = raw.toLowerCase().startsWith(FORCE_PREFIX);
-  const query = forced
+  let query = forced
     ? raw.slice(FORCE_PREFIX.length).trim().replace(/^"(.*)"$/, '$1')
     : raw;
-  return { query, forced };
+  let manifest = false;
+  const listed = /^(?:list|which|what)\s+(.+)$/is.exec(query);
+  if (forced && listed) {
+    manifest = true;
+    query = listed[1].trim().replace(/^"(.*)"$/, '$1');
+  }
+  return { query, forced, manifest };
+}
+
+/**
+ * What matched, without what it says.
+ *
+ * Costs roughly 25 tokens a document instead of the hundreds a passage costs,
+ * so a search over a large vault is affordable on any model — including a
+ * local one whose whole window is smaller than a single PDF.
+ *
+ * The model is told plainly that it has titles and NOT contents, because the
+ * failure this invites is obvious and severe: a list of filenames is exactly
+ * enough for a model to guess confidently at what is inside them.
+ */
+function renderManifest({ docs, matched, query, budgetTokens, reason = 'asked' }) {
+  const rows = docs.map((d, i) => {
+    const title = d?.metadata?.source || d?.id || 'document';
+    const p = d?.metadata?.path || d?.metadata?.source_id || d?.id || '';
+    const sim = typeof d?.similarity === 'number' ? ` · ${d.similarity.toFixed(2)}` : '';
+    return `${i + 1}. ${title}${p && p !== title ? ` — ${p}` : ''}${sim}`;
+  });
+  const total = Number.isFinite(matched) ? matched : docs.length;
+  const why = reason === 'too-large'
+    ? `Every match was too large for this turn's ${budgetTokens}-token budget, so here is what was found instead of nothing.`
+    : 'The operator asked what matched, not for the passages.';
+
+  return `\n\n[AEON SECOND BRAIN CONTEXT — SEARCH RESULTS ONLY]\n`
+    + `${total} document${total === 1 ? '' : 's'} in the operator's vault match "${query}". `
+    + `${why} Showing ${rows.length}.\n\n${rows.join('\n')}\n\n`
+    + `You have their TITLES ONLY. You have not read them, and you must not say what any of them `
+    + `contains, summarise one, or answer a question from one. Report the list, and tell the `
+    + `operator they can name one to open it. If they asked a question these documents might `
+    + `answer, say which look relevant and that you need to open one first.`;
 }
 
 /**
@@ -223,8 +286,10 @@ async function buildRecallContext(message, {
   budgetTokens = 2048,
   timeoutMs = 8000,
   fetchImpl = null,
+  manifest = false,
 } = {}) {
-  const { query, forced } = parseRecallInput(message);
+  const { query, forced, manifest: wantsManifest } = parseRecallInput(message);
+  const manifestMode = manifest || wantsManifest;
   const base = {
     query, forced, ran: false, ok: true, count: 0, dropped: 0,
     citations: [], context: '',
@@ -284,16 +349,47 @@ async function buildRecallContext(message, {
   const docs = Array.isArray(data.documents) ? data.documents : [];
 
   if (docs.length) {
+    const matchedTotal = Number.isFinite(data.matched) ? Number(data.matched) : docs.length;
+
+    // Asked for the list: hand back the list. This is the cheap half of a
+    // two-step read — find out what is there, then open the one that matters —
+    // and it costs about 25 tokens a document instead of the hundreds a
+    // passage costs.
+    if (manifestMode) {
+      return {
+        query, forced, ran: true, ok: true, manifest: true,
+        count: docs.length, dropped: 0, matched: matchedTotal,
+        citations: docs.map((d, i) => ({
+          n: i + 1,
+          title: d?.metadata?.source || d?.id || 'document',
+          path: d?.metadata?.path || d?.metadata?.source_id || d?.id || null,
+          similarity: typeof d?.similarity === 'number' ? Number(d.similarity.toFixed(3)) : null,
+        })),
+        context: renderManifest({ docs, matched: matchedTotal, query, budgetTokens, reason: 'asked' }),
+      };
+    }
+
     const { kept, dropped, tokensUsed } = fitDocuments(docs, budgetTokens);
 
     // Every match was too large for this window — a real case on a small local
     // model. Rendering the "relevant knowledge" header above an empty list
     // would read as "searched, found nothing", which is the opposite of true.
+    // Nothing fit. This used to be a dead end: an apology, and an operator none
+    // the wiser about what had actually matched. But a list of titles is a
+    // fraction of the cost of one passage, so the budget that could not afford
+    // the documents can always afford their names. A narrower question is far
+    // easier to ask when you can see what is there.
     if (!kept.length) {
       return {
-        query, forced, ran: true, ok: true,
-        count: 0, dropped, citations: [], tokensUsed: 0,
-        context: `\n\n[AEON SECOND BRAIN CONTEXT]\n${dropped} matching document${dropped === 1 ? '' : 's'} were found, but none fit this turn's context budget (${budgetTokens} tokens). Tell the operator their documents matched but could not be loaded into this turn, and suggest a narrower question or a model with a larger context window. Do NOT answer as though their vault held nothing.`,
+        query, forced, ran: true, ok: true, manifest: true,
+        count: 0, dropped, matched: matchedTotal, tokensUsed: 0,
+        citations: docs.map((d, i) => ({
+          n: i + 1,
+          title: d?.metadata?.source || d?.id || 'document',
+          path: d?.metadata?.path || d?.metadata?.source_id || d?.id || null,
+          similarity: typeof d?.similarity === 'number' ? Number(d.similarity.toFixed(3)) : null,
+        })),
+        context: renderManifest({ docs, matched: matchedTotal, query, budgetTokens, reason: 'too-large' }),
       };
     }
     const citations = kept.map((k, i) => ({
@@ -309,7 +405,7 @@ async function buildRecallContext(message, {
       : '';
     // How many cleared the floor versus how many are shown. The retriever cuts
     // to k; the model must know it is looking at a sample.
-    const matched = Number.isFinite(data.matched) ? Number(data.matched) : docs.length;
+    const matched = matchedTotal;
     const subsetNote = matched > kept.length
       ? `\n\nShowing ${kept.length} of ${matched} matching documents.`
       : '';
