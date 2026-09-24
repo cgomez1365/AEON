@@ -89,7 +89,19 @@ module.exports = function ({ kernelLLM, loadSettings: loadSettingsDep, VAULT_ROO
       wake,
       // Wake lifts the count cap entirely; otherwise the operator's cap applies
       // and memory-policy still keeps pinned memories ahead of it.
-      maxCount: wake ? 0 : Math.max(prefs.memory_max_context || 25, 0),
+      //
+      // The default was 25, chosen when budgetTokens above was a fraction of an
+      // assumed 8k window and could not be trusted to hold anything back. It
+      // can now: describeRole reports the model's real window and inputBudgets
+      // caps what may be spent on memory in tokens, which is the honest unit —
+      // selectForInjection ranks, slices to this count, THEN fits to the
+      // budget, so a low count is the one limiter that discards a memory
+      // without ever pricing it.
+      //
+      // 200 leaves the token budget as the real constraint (32,000 tokens is
+      // roughly 180 average memories) while staying a rail against a runaway
+      // store. An operator who set this value explicitly still wins.
+      maxCount: wake ? 0 : Math.max(prefs.memory_max_context || 200, 0),
       enabled: prefs.memory_in_context !== false,
       autoMemoryEnabled: !!prefs.auto_memory,
     });

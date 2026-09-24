@@ -8,6 +8,9 @@ const fs = require('fs');
 const path = require('path');
 const { isCloud: _isCloud } = require('../src/kernel/runtime.cjs');
 const _capabilities = require('../src/kernel/capabilities.cjs');
+// What a cloud model's context window actually is, so the memory budget is a
+// fraction of the real window rather than of an assumed 8k floor.
+const modelContext = require('../src/kernel/modelContext.cjs');
 
 // Phase 6: native local runtime (llama.cpp). Lazy require.
 // Loaded lazily so ai.js still boots on machines without the runtime installed.
@@ -1428,9 +1431,17 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   };
 
   // The provider/model the role WOULD stream through, and the context window
-  // the memory budget should be denominated in. Local models know their real
-  // window; cloud windows are far larger than anything injected, so 8k is a
-  // safe floor there rather than a guess that matters.
+  // the memory budget should be denominated in.
+  //
+  // This used to hand back a flat 8,192 for every cloud model, reasoning that
+  // cloud windows are larger than anything injected so the floor was safe. It
+  // is not: the injection is DERIVED from this number. inputBudgets() spends
+  // 12% of it on memory, so 8,192 meant 983 tokens — six or seven memories —
+  // on a model serving a million. That is why the operator's chat answered
+  // "not in current context" about memories that were indexed and present.
+  //
+  // Both sides are asked for the truth now. A provider that will not say keeps
+  // the 8k floor, which is the honest answer to "we do not know".
   const describeRole = async (role = 'chat') => {
     const opts = _isCloud() ? { _vercelStrict: true } : {};
     let c = null;
@@ -1443,6 +1454,13 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       const lr = _getLocalRT();
       if (!model) model = defaultLocalModel();
       try { contextTokens = (await lr?.plannedContext?.(model))?.contextTokens || 8192; } catch {}
+    } else if (model) {
+      try {
+        const known = await modelContext.lookup({
+          provider: c.provider, model, base_url: c.base_url, apiKey: c.apiKey,
+        });
+        if (known) contextTokens = known;
+      } catch { /* the floor stands */ }
     }
     return { provider: c.provider, model: model ?? null, contextTokens };
   };

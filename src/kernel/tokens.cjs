@@ -61,7 +61,31 @@ function estimateMessageTokens(messages) {
  * Lives here rather than with the local-runtime budget engine because blocks
  * need it and a block may only reach into the kernel. Dividing a window is
  * arithmetic on the unit; it has nothing to do with llama.cpp.
+ *
+ * THE CAPS BELOW EXIST BECAUSE A FRACTION ALONE STOPS MAKING SENSE AT SCALE.
+ *
+ * While describeRole() reported a flat 8k for every cloud model these were
+ * small numbers and the fractions were the whole story. Once it started
+ * reporting the truth — and a free OpenRouter model turned out to serve a
+ * million tokens — 25% of the window became 250,000 tokens of retrieved
+ * documents injected into one turn.
+ *
+ * Nothing about that is an improvement. Attention does not scale with the
+ * window: a model reads the middle of an enormous prompt poorly, whatever its
+ * advertised size. Neither does latency, and a free tier meets its rate limit
+ * long before it meets its context limit. The window says what CAN be sent;
+ * it was never an argument for sending it.
+ *
+ * So the fraction still governs small windows, where it is the right answer,
+ * and an absolute ceiling governs large ones. The ceilings are deliberately
+ * far above real use — the operator's entire memory core is about 5,400
+ * tokens, so a 32,000-token memory cap is six times everything they have —
+ * and they only bind above roughly a 266k window. No local model and no
+ * modest cloud one ever reaches them, so nothing that worked before changes.
  */
+const MAX_MEMORY_TOKENS = 32_000;
+const MAX_SKILL_TOKENS = 8_000;
+const MAX_RECALL_TOKENS = 32_000;
 function inputBudgets(contextTokens, opts = {}) {
   const ctx = Math.max(512, Number(contextTokens) || 4096);
   const memoryFraction = opts.memoryFraction ?? (opts.wake ? 0.25 : 0.12);
@@ -78,10 +102,13 @@ function inputBudgets(contextTokens, opts = {}) {
   const recallFraction = opts.recallFraction ?? 0.25;
   return {
     contextTokens: ctx,
-    memoryTokens: Math.floor(ctx * memoryFraction),
-    skillTokens: Math.floor(ctx * skillFraction),
-    recallTokens: Math.floor(ctx * recallFraction),
+    memoryTokens: Math.min(Math.floor(ctx * memoryFraction), opts.maxMemoryTokens ?? MAX_MEMORY_TOKENS),
+    skillTokens: Math.min(Math.floor(ctx * skillFraction), opts.maxSkillTokens ?? MAX_SKILL_TOKENS),
+    recallTokens: Math.min(Math.floor(ctx * recallFraction), opts.maxRecallTokens ?? MAX_RECALL_TOKENS),
   };
 }
 
-module.exports = { estimateTokens, estimateMessageTokens, detectKind, inputBudgets, CHARS_PER_TOKEN };
+module.exports = {
+  estimateTokens, estimateMessageTokens, detectKind, inputBudgets, CHARS_PER_TOKEN,
+  MAX_MEMORY_TOKENS, MAX_SKILL_TOKENS, MAX_RECALL_TOKENS,
+};
