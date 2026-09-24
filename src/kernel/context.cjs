@@ -161,6 +161,12 @@ function isRecallQuery(text) {
  * search result and a document are different things, and treating them as one
  * is what makes a single question cost a whole window: the operator wanting to
  * know whether a PDF is in there does not need the PDF.
+ *
+ * Only `list` opens that mode. `what` and `which` were tried and are wrong:
+ * they open ordinary questions far more often than they request a list, so
+ * `/matrix what changed` became a manifest search for "changed" and quietly
+ * answered a question nobody asked. A keyword that captures normal speech is
+ * not a keyword.
  */
 function parseRecallInput(message) {
   const raw = String(message || '');
@@ -169,7 +175,7 @@ function parseRecallInput(message) {
     ? raw.slice(FORCE_PREFIX.length).trim().replace(/^"(.*)"$/, '$1')
     : raw;
   let manifest = false;
-  const listed = /^(?:list|which|what)\s+(.+)$/is.exec(query);
+  const listed = /^list\s+(.+)$/is.exec(query);
   if (forced && listed) {
     manifest = true;
     query = listed[1].trim().replace(/^"(.*)"$/, '$1');
@@ -197,7 +203,7 @@ function renderManifest({ docs, matched, query, budgetTokens, reason = 'asked' }
   });
   const total = Number.isFinite(matched) ? matched : docs.length;
   const why = reason === 'too-large'
-    ? `Every match was too large for this turn's ${budgetTokens}-token budget, so here is what was found instead of nothing.`
+    ? `Every match was too large for this turn's ${budgetTokens}-token budget — none fit, so here is what was found instead of nothing.`
     : 'The operator asked what matched, not for the passages.';
 
   return `\n\n[AEON SECOND BRAIN CONTEXT — SEARCH RESULTS ONLY]\n`

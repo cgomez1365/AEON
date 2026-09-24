@@ -151,8 +151,12 @@ describe('the gate', () => {
   });
 
   it('strips the force prefix so the model never sees the command', () => {
-    expect(ctx.parseRecallInput('/matrix what changed')).toEqual({ query: 'what changed', forced: true });
-    expect(ctx.parseRecallInput('ordinary text')).toEqual({ query: 'ordinary text', forced: false });
+    // `manifest` joined the shape when `/matrix list` arrived. A question is
+    // not a list request: "what changed" must stay the query, whole.
+    expect(ctx.parseRecallInput('/matrix what changed')).toEqual({ query: 'what changed', forced: true, manifest: false });
+    expect(ctx.parseRecallInput('ordinary text')).toEqual({ query: 'ordinary text', forced: false, manifest: false });
+    // Only the explicit keyword opens the cheap mode, and it is stripped.
+    expect(ctx.parseRecallInput('/matrix list phishing')).toEqual({ query: 'phishing', forced: true, manifest: true });
   });
 });
 
