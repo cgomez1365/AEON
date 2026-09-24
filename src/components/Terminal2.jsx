@@ -552,6 +552,59 @@ const Terminal2 = ({ onUsageUpdate }) => {
     commands.filter(c => c.cmd.startsWith(paletteFilter) || paletteFilter === '/'),
     [commands, paletteFilter]);
 
+  // ── Picking a command leaves the cursor where the first value goes ──
+  //
+  // Choosing /ask-doc used to insert "/ask-doc " and stop, which says nothing
+  // about the two things the operator then has to know: that a document is
+  // named first, and that its name has to be quoted because it contains
+  // spaces. Both are obvious once and easy to forget every time after.
+  //
+  // So a command whose first field is a document inserts the quotes too and
+  // puts the caret between them. The shape of the line answers the question
+  // before it is asked — the operator types or pastes, and the quoting is
+  // already right.
+  const firstParamName = (c) => {
+    const p = Array.isArray(c?.params) && c.params.length ? c.params[0] : null;
+    if (!p) return null;
+    return typeof p === 'string' ? p : (p?.name || null);
+  };
+  // Fields that name a file. These are the ones that carry spaces, so these
+  // are the ones that need quoting; a plain word field would only be made
+  // harder to type by wrapping it.
+  const NAMES_A_DOCUMENT = /^(path|file|filename|title|doc|document)$/i;
+
+  const pickCommand = useCallback((c) => {
+    const first = firstParamName(c);
+    const quoted = first && NAMES_A_DOCUMENT.test(first);
+    const text = quoted ? `${c.cmd} ""` : `${c.cmd} `;
+    const caret = quoted ? text.length - 1 : text.length;
+    setInput(text);
+    // After the value lands, or the caret is placed in the old text and the
+    // re-render moves it back to the end.
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      el.focus();
+      try { el.setSelectionRange(caret, caret); } catch { /* not all inputs allow it */ }
+    });
+  }, []);
+
+  // What the command being typed still expects, shown under the field while it
+  // is being typed. The registry already knows the field names; nothing was
+  // showing them at the moment they are needed.
+  const usageHint = useMemo(() => {
+    if (!input.startsWith('/')) return null;
+    const token = input.slice(0, input.indexOf(' ') === -1 ? input.length : input.indexOf(' '));
+    const c = commands.find(x => x.cmd === token);
+    if (!c || !Array.isArray(c.params) || !c.params.length) return null;
+    const fields = c.params
+      .map(p => (typeof p === 'string' ? p : p?.name))
+      .filter(Boolean);
+    if (!fields.length) return null;
+    const shape = fields.map((f, i) => (i === 0 && NAMES_A_DOCUMENT.test(f) ? `"${f}"` : `<${f}>`)).join(' ');
+    return `${c.cmd} ${shape}`;
+  }, [input, commands]);
+
   // ── Image attach → vision two-hop ──
   // The chat model can't see images; the Settings "vision" role reads the
   // attachment first (kernel route, provider-agnostic) and its description
@@ -1041,7 +1094,7 @@ const Terminal2 = ({ onUsageUpdate }) => {
           {filteredCommands.map(c => {
             const off = c.available === false;
             return (
-              <div key={c.id || c.cmd} onClick={() => setInput(c.cmd + ' ')} title={off ? c.reason || 'unavailable' : undefined}
+              <div key={c.id || c.cmd} onClick={() => pickCommand(c)} title={off ? c.reason || 'unavailable' : undefined}
                 data-unavailable={off ? 'true' : undefined}
                 style={{ padding: '3px 16px', fontSize: 11.5, cursor: 'pointer', display: 'flex', gap: 10, opacity: off ? 0.55 : 1 }}
                 onMouseEnter={e => e.currentTarget.style.background = 'rgba(0,242,255,0.07)'}
@@ -1176,6 +1229,14 @@ const Terminal2 = ({ onUsageUpdate }) => {
           {modelSortNote && (
             <span style={{ color: '#3a5070', fontSize: 10, paddingLeft: 20 }}>{modelSortNote}</span>
           )}
+        </div>
+      )}
+      {usageHint && (
+        // Sits above the field, not in the placeholder: a placeholder vanishes
+        // the moment there is any text, which is exactly when the shape of the
+        // rest of the line starts mattering.
+        <div style={{ padding: '4px 14px 0 38px', fontSize: 10.5, color: '#4a6a90', fontFamily: 'inherit' }}>
+          {usageHint}
         </div>
       )}
       <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, padding: '10px 14px', borderTop: '1px solid #1e2d45' }}>
