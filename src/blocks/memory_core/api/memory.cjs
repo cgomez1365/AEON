@@ -235,18 +235,65 @@ module.exports = function createMemoryRouter(deps) {
     if (transcript && !refs) {
       refs = [{ kind: 'transcript', sha: crypto.createHash('sha256').update(String(transcript)).digest('hex').slice(0, 12), at: new Date().toISOString() }];
     }
+    // WHERE THE CONVERSATION ACTUALLY IS.
+    //
+    // "Distill session" sends an empty body, so this fell straight through to
+    // db/aeon_terminal_history.json — a file only host_os writes, and which
+    // does not exist on a normal install. The operator got "no transcript
+    // supplied and terminal history unreadable" over a terminal visibly full
+    // of conversation.
+    //
+    // The conversation is saved, just somewhere else: the terminal writes each
+    // session to Vault/Agents/Aeon/chat_sessions/<id>.json. So look there
+    // first, newest by updatedAt, which IS the session the operator is sitting
+    // in. A caller that knows better may name one with `sessionId`.
+    let usedSession = null;
     if (!transcript) {
-      // Pull the tail of terminal history if none supplied
       try {
-        // The kernel resolves this file (storage.getLocalFile → <home>/db);
-        // a block-relative db/ path pointed at the install, which no longer
-        // holds it.
-        if (!TERMINAL_HISTORY_FILE) throw new Error('TERMINAL_HISTORY_FILE not injected');
-        const h = JSON.parse(fs.readFileSync(TERMINAL_HISTORY_FILE, 'utf8'));
-        const msgs = Array.isArray(h) ? h : h.messages || [];
-        transcript = msgs.slice(-30).map(m => `${m.role}: ${String(m.content).slice(0, 400)}`).join('\n');
-        refs = [{ kind: 'terminal-history', file: 'db/aeon_terminal_history.json', span: `last-${Math.min(msgs.length, 30)}-turns`, at: new Date().toISOString() }];
-      } catch { return res.status(400).json({ error: 'no transcript supplied and terminal history unreadable' }); }
+        const CHAT_DIR = path.join(MEM_DIR, '..', 'chat_sessions');
+        const wanted = typeof req.body?.sessionId === 'string' ? req.body.sessionId : null;
+        const files = fs.readdirSync(CHAT_DIR).filter(f => f.endsWith('.json'));
+        if (!files.length) throw new Error('no saved sessions');
+        let pick = null;
+        for (const f of files) {
+          let j; try { j = JSON.parse(fs.readFileSync(path.join(CHAT_DIR, f), 'utf8')); } catch { continue; }
+          const msgs = Array.isArray(j) ? j : (j.messages || []);
+          if (!msgs.length) continue;
+          if (wanted && j.id !== wanted && f !== `${wanted}.json`) continue;
+          const at = Date.parse(j.updatedAt || j.savedAt || '') || 0;
+          if (!pick || at > pick.at) pick = { at, file: f, name: j.name || f, msgs };
+        }
+        if (!pick) throw new Error(wanted ? 'that session has no messages' : 'every saved session is empty');
+        // Assistant turns are included: the meaning of an exchange usually
+        // lives in the exchange. They are safe here in a way they are NOT safe
+        // in the document index (ingest.cjs, doctrine R09) because a distilled
+        // memory is written, reviewed and owned by the operator, and carries a
+        // ref back to the session it came from.
+        transcript = pick.msgs.slice(-30)
+          .map(m => `${m.role}: ${String(m.content || '').slice(0, 400)}`).join('\n');
+        usedSession = pick.name;
+        refs = [{ kind: 'chat-session', file: `Agents/Aeon/chat_sessions/${pick.file}`,
+                  span: `last-${Math.min(pick.msgs.length, 30)}-turns`, at: new Date().toISOString() }];
+      } catch (sessionErr) {
+        // The old path, kept: an install where host_os does write that file
+        // should not lose a working button.
+        try {
+          if (!TERMINAL_HISTORY_FILE) throw new Error('TERMINAL_HISTORY_FILE not injected');
+          const h = JSON.parse(fs.readFileSync(TERMINAL_HISTORY_FILE, 'utf8'));
+          const msgs = Array.isArray(h) ? h : h.messages || [];
+          if (!msgs.length) throw new Error('terminal history is empty');
+          transcript = msgs.slice(-30).map(m => `${m.role}: ${String(m.content).slice(0, 400)}`).join('\n');
+          refs = [{ kind: 'terminal-history', file: 'db/aeon_terminal_history.json', span: `last-${Math.min(msgs.length, 30)}-turns`, at: new Date().toISOString() }];
+        } catch (histErr) {
+          // Say what was looked for and where. The old sentence named a file
+          // the operator has never heard of and gave them nothing to do.
+          return res.status(400).json({
+            error: 'Nothing to distill. No transcript was sent, no saved chat session could be read '
+              + `(${sessionErr.message}), and the terminal history file is unavailable (${histErr.message}). `
+              + 'Send a message in the terminal first, or pass a transcript.',
+          });
+        }
+      }
     }
     const prompt = `Distill durable memories from this operator/VP terminal session. Prefer the operator's working artifacts over chit-chat:
 - outline: a scoped structure/plan that was settled
@@ -276,7 +323,9 @@ ${String(transcript).slice(0, 8000)}`;
         all.push(m); mdMirror(m); added.push(m);
       }
       if (added.length) { save(all); requestIndex('memory-distill'); }
-      res.json({ ok: true, added, candidates: arr.length });
+      // Name the session that was read. A button that silently distils
+      // something is a button nobody trusts twice.
+      res.json({ ok: true, added, candidates: arr.length, session: usedSession });
     } catch (e) { res.status(500).json({ error: 'distill failed: ' + e.message }); }
   });
 

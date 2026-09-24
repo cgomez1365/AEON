@@ -114,7 +114,11 @@ export default function MemoryCore() {
     const r = await fetch('/api/memory/distill', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
     const d = await r.json();
     if (d.error) throw new Error(d.error);
-    setNote(`distilled ${d.added?.length || 0} new memories`);
+    const from = d.session ? ` from "${d.session}"` : '';
+    const n = d.added?.length || 0;
+    setNote(n
+      ? `distilled ${n} new ${n === 1 ? 'memory' : 'memories'}${from}`
+      : `nothing durable found${from} — ${d.candidates || 0} candidates, none new`);
   });
 
   const shown = memories.filter(m => {
