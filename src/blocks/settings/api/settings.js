@@ -492,14 +492,30 @@ module.exports = (app, deps) => {
       custom:     { keys: [], kind: 'cloud', icon: '🔌', base: null, alwaysOffer: true },
     };
 
-    // Check endpoint registry for vault-stored connections
+    // Check endpoint registry for vault-stored connections.
+    // registryProviders accumulates ALL accounts per provider type into an
+    // array — previously this was a plain object assignment which meant the
+    // second OpenRouter (or Groq, etc.) vault entry silently overwrote the
+    // first, so the nervous system only ever knew about one account even when
+    // two were configured. Now every endpoint is kept; the provider record
+    // carries an `accounts` array the UI can surface.
     let registryProviders = {};
     try {
       const endpointsMod = require(path.join(__dirname, '..', '..', '..', 'kernel', 'endpoints.cjs'));
       const supabase = deps && deps.supabase ? deps.supabase : null;
       const reg = await endpointsMod.load(supabase);
       for (const ep of (reg.endpoints || [])) {
-        registryProviders[ep.provider] = { models: ep.models || [], label: ep.label };
+        if (!registryProviders[ep.provider]) {
+          registryProviders[ep.provider] = { models: ep.models || [], label: ep.label, accounts: [] };
+        } else {
+          // Merge models from additional accounts (union, no duplicates)
+          const existing = registryProviders[ep.provider].models;
+          for (const m of (ep.models || [])) { if (!existing.includes(m)) existing.push(m); }
+        }
+        registryProviders[ep.provider].accounts.push({
+          label: ep.label || ep.provider,
+          authRef: ep.auth_ref || null,
+        });
       }
     } catch {}
 
@@ -568,6 +584,9 @@ module.exports = (app, deps) => {
         blocks,
         details,
         registryModels: registryProviders[id]?.models || [],
+        // All vault accounts for this provider (may be > 1 for roulette pools).
+        // Empty array when the provider is env-only with no vault connections.
+        accounts: registryProviders[id]?.accounts || [],
         // A custom endpoint needs a key at runtime but has no env var to read,
         // so the env-derived test would wrongly report "no key required".
         needsKey: meta.alwaysOffer ? true : (meta.keys.length > 0 && !meta.detect),

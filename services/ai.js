@@ -1627,24 +1627,38 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     }
 
     if (settings.roulette && !opts.provider) {
-      const providers = ['groq', 'gemini'].filter(p => {
-        if (p === 'groq') return !!process.env.GROQ_API_KEY && isHealthy('groq');
-        if (p === 'gemini') return GEMINI_KEY_POOL.length > 0 && isHealthy('gemini');
-        return false;
-      });
-      if (providers.length > 0) {
-        const pick = providers[Math.floor(Math.random() * providers.length)];
+      // Build the candidate list from every cloud provider that is currently
+      // configured AND healthy. Include openrouter (previously missing) so
+      // that multiple OpenRouter accounts registered in the vault all join
+      // the rotation. Shuffle so no single provider is always tried first.
+      const rouletteCandidates = [
+        { id: 'groq',        ready: () => KEY_POOLS.groq.length > 0 && isHealthy('groq'),        call: (p, m, o) => groqRequest(p, m || 'openai/gpt-oss-120b', 0, o),       fallbackModel: 'openai/gpt-oss-120b' },
+        { id: 'gemini',      ready: () => GEMINI_KEY_POOL.length > 0 && isHealthy('gemini'),      call: (p, m, o) => geminiRequest(p, m || 'gemini-flash-latest', 0, o),     fallbackModel: 'gemini-flash-latest' },
+        { id: 'openrouter',  ready: () => KEY_POOLS.openrouter.length > 0 && isHealthy('openrouter'), call: (p, m, o) => openRouterRequest(p, m || 'openai/gpt-4o-mini', o), fallbackModel: 'openai/gpt-4o-mini' },
+      ].filter(c => c.ready());
+
+      // Fisher-Yates shuffle so roulette lives up to its name
+      for (let i = rouletteCandidates.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [rouletteCandidates[i], rouletteCandidates[j]] = [rouletteCandidates[j], rouletteCandidates[i]];
+      }
+
+      for (const c of rouletteCandidates) {
         try {
-          let text;
-          if (pick === 'groq') text = await groqRequest(prompt, 'openai/gpt-oss-120b', 0, opts);
-          if (pick === 'gemini') text = await geminiRequest(prompt, 'gemini-flash-latest', 0, opts);
-          if (text !== undefined) return opts.returnMeta ? { text, provider: pick, model: pick === 'groq' ? 'openai/gpt-oss-120b' : 'gemini-flash-latest' } : text;
+          const usedModel = c.id === provider ? model : c.fallbackModel;
+          const text = await c.call(prompt, usedModel, opts);
+          if (text !== undefined) {
+            noteProviderSuccess(c.id);
+            return opts.returnMeta ? { text, provider: c.id, model: usedModel } : text;
+          }
         } catch (e) {
-          const status = /error (\d{3})/i.exec(e.message)?.[1];
-          if (status) markUnhealthy(pick, Number(status), e.message);
-          notify(`⚠ Roulette: ${pick} failed (${e.message.slice(0, 80)}), falling through chain`, { provider: pick });
+          const status = _failureStatus(e);
+          if (status) markUnhealthy(c.id, Number(status), e.message);
+          else noteProviderFailure(c.id, e);
+          notify(`⚠ Roulette: ${c.id} failed (${e.message.slice(0, 80)}), trying next`, { provider: c.id });
         }
       }
+      // All roulette candidates exhausted — fall through to local below.
     }
 
     const availableProviders = opts._vercelStrict
@@ -1664,16 +1678,24 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       try {
         let text;
         let usedModel = model;
-        if (p === 'groq' && process.env.GROQ_API_KEY) {
+        if (p === 'groq' && KEY_POOLS.groq.length > 0) {
           usedModel = p === provider ? model : 'openai/gpt-oss-120b';
           text = await groqRequest(prompt, usedModel, 0, opts);
         } else if (p === 'gemini' && GEMINI_KEY_POOL.length > 0) {
           usedModel = p === provider ? model : 'gemini-flash-latest';
           text = await geminiRequest(prompt, usedModel, 0, opts);
-        } else if (p === 'openrouter' && process.env.OPENROUTER_API_KEY) {
+        } else if (p === 'openrouter' && KEY_POOLS.openrouter.length > 0) {
           usedModel = p === provider ? model : 'openai/gpt-4o-mini';
           text = await openRouterRequest(prompt, usedModel, opts);
         } else if (p === 'local') {
+          // Pre-check: if no local runtime is installed, skip this rung
+          // rather than throwing — a "no local model" throw is not a failure
+          // of the provider, and its error message incorrectly replaced the
+          // real upstream failure (e.g. Groq 413) as the chain's root cause.
+          if (!localRuntimePresent()) {
+            notify('⏭ Local runtime not installed — skipping local fallback rung', { provider: 'local' });
+            continue;
+          }
           usedModel = p === provider ? model : undefined;
           text = await localNativeRequest(prompt, usedModel, opts);
         } else continue;

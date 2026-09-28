@@ -14,6 +14,10 @@ function getProviderRegistry(ns) {
   return Object.values(ns.providers).map(p => ({
     id: p.id, label: p.label, icon: p.icon, kind: p.kind,
     fallbackModels: p.registryModels || [],
+    // All vault accounts registered for this provider. Length > 1 when the
+    // operator added multiple keys of the same type (e.g. two OpenRouter
+    // accounts) for roulette-mode rotation.
+    accounts: p.accounts || [],
   }));
 }
 
