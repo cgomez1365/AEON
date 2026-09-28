@@ -203,7 +203,10 @@ module.exports = (app, deps) => {
       }
       // A new account is new capacity: let the running process use it without
       // a restart, the same way hydration does on boot.
-      if (deps.hydrateEnvFromVault) { try { await deps.hydrateEnvFromVault(); } catch {} }
+      if (deps.hydrateEnvFromVault) {
+        try { await deps.hydrateEnvFromVault(); }
+        catch (e) { console.error('[CONNECTIONS] new key saved but not loaded until restart:', e.message); }
+      }
       audit('CONN_KEY_ADD', `Endpoint ${ep.id} (${ep.provider}) key ${ref}`, 200, 0);
       res.json({ ok: true, endpoint: updated, keyPool: await endpoints.credentialReport(supabase) });
     } catch (e) { res.status(e.status || 500).json({ error: e.message }); }

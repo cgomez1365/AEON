@@ -493,6 +493,31 @@ module.exports = (app, deps) => {
     res.json({ ok: true });
   });
 
+  // ── POST /api/auth/reauth — confirm the password for one sensitive action ──
+  // Issues a single-use, two-minute token (src/kernel/reauth.cjs) for a route
+  // that must not trust the session alone. Five wrong passwords block it for
+  // fifteen minutes — a session is not a licence to guess.
+  const _reauthFails = { n: 0, until: 0 };
+  app.post('/api/auth/reauth', requireAuth, (req, res) => {
+    const u = loadUser();
+    if (!u) return res.status(404).json({ error: 'No account' });
+    if (Date.now() < _reauthFails.until) {
+      return res.status(429).json({ error: 'Too many wrong passwords. Try again in 15 minutes.' });
+    }
+    const { password, purpose } = req.body || {};
+    if (!purpose) return res.status(400).json({ error: 'purpose required' });
+    if (!verifyPassword(password || '', u.salt, u.passHash)) {
+      _reauthFails.n++;
+      if (_reauthFails.n >= MAX_FAILED) { _reauthFails.n = 0; _reauthFails.until = Date.now() + LOCKOUT_MS; }
+      if (deps && deps.writeOSAudit) deps.writeOSAudit('AUTH_REAUTH_FAIL', `Re-auth failed for ${purpose}`, 401, 0);
+      return res.status(401).json({ error: 'Password is incorrect' });
+    }
+    _reauthFails.n = 0;
+    const token = require('../../../kernel/reauth.cjs').issue(String(purpose));
+    if (deps && deps.writeOSAudit) deps.writeOSAudit('AUTH_REAUTH', `Re-auth for ${purpose}`, 200, 0);
+    res.json({ ok: true, token });
+  });
+
   // ── GET /api/auth/sessions — active sessions ───────────────────────
   app.get('/api/auth/sessions', requireAuth, (req, res) => {
     const u = loadUser();

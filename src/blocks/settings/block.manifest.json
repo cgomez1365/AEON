@@ -231,7 +231,7 @@
       "auth": true
     },
     {
-      "method": "GET",
+      "method": "POST",
       "path": "/api/settings/export-credentials",
       "auth": true
     },

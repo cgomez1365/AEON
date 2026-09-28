@@ -137,6 +137,11 @@
       "auth": true
     },
     {
+      "method": "POST",
+      "path": "/api/auth/reauth",
+      "auth": true
+    },
+    {
       "method": "GET",
       "path": "/api/auth/sessions",
       "auth": true

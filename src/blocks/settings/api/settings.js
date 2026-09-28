@@ -323,11 +323,17 @@ module.exports = (app, deps) => {
     res.send(JSON.stringify(bundle, null, 2));
   });
 
-  // ── GET /api/settings/export-credentials — full credential backup (WITH secrets) ──
+  // ── POST /api/settings/export-credentials — full credential backup (WITH secrets) ──
   // Bundles .env + secrets/aeon-keyslots.json + provider_credentials.json into
   // one JSON file the user saves offline. Restoring into a fresh clone requires
   // all three — a partial restore causes a vault mismatch and locks the user out.
-  app.get('/api/settings/export-credentials', (req, res) => {
+  app.post('/api/settings/export-credentials', (req, res) => {
+    // The bundle is the whole vault, both halves. A session alone is not
+    // enough: the password must be confirmed for this one download.
+    const reauth = require(path.join(__dirname, '..', '..', '..', 'kernel', 'reauth.cjs'));
+    if (!reauth.consume(req.body && req.body.reauthToken, 'export-credentials')) {
+      return res.status(401).json({ error: 'Confirm your password to export credentials.', reauthRequired: true });
+    }
     // BO-SHIP P2.2 — this used to assemble the bundle itself: it built the
     // secrets/ path, dynamically required services/storage.js, and called
     // getVaultFile('blocks/security') to read a SIBLING BLOCK's Vault

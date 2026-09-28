@@ -1298,14 +1298,7 @@ function ConnectionsPanel({ nervousSystem }) {
               A reinstall or lost <code>.env</code> permanently locks your vault. Back up all three files together — <code>.env</code>, <code>secrets/aeon-keyslots.json</code>, and <code>provider_credentials.json</code>. A partial restore causes a key mismatch and locks you out.
             </div>
           </div>
-          <a
-            href="/api/settings/export-credentials"
-            download
-            className="settings-btn settings-btn--secondary"
-            style={{ flexShrink: 0, fontSize: 11, whiteSpace: 'nowrap' }}
-          >
-            ↓ Export backup
-          </a>
+          <ExportCredentialsButton />
         </div>
       )}
 
@@ -1467,6 +1460,55 @@ function ConnectionsPanel({ nervousSystem }) {
       {/* Account identities — full service map */}
       <AccountIdentities endpoints={data?.endpoints || []} nervousSystem={nervousSystem} />
     </div>
+  );
+}
+
+// ── Credential export — password confirmed for each download ─────────
+function ExportCredentialsButton() {
+  const [asking, setAsking] = useState(false);
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const exportNow = async () => {
+    setBusy(true);
+    try {
+      const a = await fetch('/api/auth/reauth', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password, purpose: 'export-credentials' }),
+      });
+      const auth = await a.json().catch(() => ({}));
+      if (!a.ok) { showToast(auth.error || 'Password not confirmed', 'error'); return; }
+      const r = await fetch('/api/settings/export-credentials', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reauthToken: auth.token }),
+      });
+      if (!r.ok) { const e = await r.json().catch(() => ({})); showToast(e.error || 'Export failed', 'error'); return; }
+      const name = /filename="([^"]+)"/.exec(r.headers.get('Content-Disposition') || '')?.[1] || 'aeon-credentials.json';
+      const url = URL.createObjectURL(await r.blob());
+      const link = document.createElement('a');
+      link.href = url; link.download = name; link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setAsking(false);
+    } finally { setPassword(''); setBusy(false); }
+  };
+  if (!asking) {
+    return (
+      <button type="button" className="settings-btn settings-btn--secondary"
+        style={{ flexShrink: 0, fontSize: 11, whiteSpace: 'nowrap' }} onClick={() => setAsking(true)}>
+        ↓ Export backup
+      </button>
+    );
+  }
+  return (
+    <form style={{ display: 'flex', gap: 6, flexShrink: 0 }} onSubmit={e => { e.preventDefault(); exportNow(); }}>
+      <input className="settings-input" type="password" autoFocus aria-label="Your AEON password"
+        placeholder="Your AEON password" value={password} onChange={e => setPassword(e.target.value)} style={{ width: 170 }} />
+      <button type="submit" className="settings-btn settings-btn--primary" disabled={busy || !password} style={{ fontSize: 11 }}>
+        {busy ? '…' : 'Export'}
+      </button>
+      <button type="button" className="settings-btn settings-btn--secondary" onClick={() => { setAsking(false); setPassword(''); }} style={{ fontSize: 11 }}>
+        Cancel
+      </button>
+    </form>
   );
 }
 
