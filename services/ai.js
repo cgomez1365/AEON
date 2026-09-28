@@ -642,32 +642,28 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       if (!_vault.isUnlocked()) return;
       const reg = await aeonEndpoints.load(supabase);
       for (const ep of (reg.endpoints || [])) {
-        if (!ep.auth_ref) continue;
-        // Every registered Gemini ACCOUNT (not just the first) feeds the
-        // rotation pool — this is what lets "I have a few Gemini accounts"
-        // actually mean something: geminiRequest's existing rotate-on-429
-        // logic cycles through all of them automatically, no cap at 4.
-        if (ep.provider === 'gemini') {
-          const key = await _vault.getSecret(ep.auth_ref, supabase);
-          if (key) geminiVaultKeys.push(key);
-          continue;
-        }
+        // Every key in the connection's pool (auth_refs), not only auth_ref —
+        // three keys on one connection used to hydrate as a pool of one, so
+        // rotation had nothing to rotate. Gemini keys feed GEMINI_KEY_POOL;
+        // the rest join the numbered env pool (BASE, BASE_2, …) buildPool reads.
+        const refs = aeonEndpoints.credentialRefs(ep);
         const envName = ENV_FOR_PROVIDER[ep.provider];
-        if (!envName) continue;
-        const key = await _vault.getSecret(ep.auth_ref, supabase);
-        if (!key) continue;
-        // Every vault account joins the numbered env pool (BASE, BASE_2, …) —
-        // the convention buildPool/getGroqKeys read. Previously only the first
-        // account per provider hydrated (`process.env[envName]` short-circuit);
-        // a second Groq/OpenRouter account added in Settings was silently
-        // ignored, so pools reported 1 key and rotation had nothing to rotate.
-        const existing = buildPool(envName);
-        if (existing.includes(key)) continue;
-        let n = existing.length + 1;
-        let slot = n === 1 ? envName : `${envName}_${n}`;
-        while (process.env[slot]) { n++; slot = `${envName}_${n}`; }
-        process.env[slot] = key;
-        console.log(`[KERNEL] Hydrated ${slot} from vault (${ep.provider}).`);
+        if (!refs.length || (ep.provider !== 'gemini' && !envName)) continue;
+        for (const ref of refs) {
+          // One unreadable key must not stop every connection after it.
+          try {
+            const key = await _vault.getSecret(ref, supabase);
+            if (!key) { console.warn(`[KERNEL] vault key ${ref} (${ep.provider}) is empty — not hydrated.`); continue; }
+            if (ep.provider === 'gemini') { geminiVaultKeys.push(key); continue; }
+            const existing = buildPool(envName);
+            if (existing.includes(key)) continue;
+            let n = existing.length + 1;
+            let slot = n === 1 ? envName : `${envName}_${n}`;
+            while (process.env[slot]) { n++; slot = `${envName}_${n}`; }
+            process.env[slot] = key;
+            console.log(`[KERNEL] Hydrated ${slot} from vault (${ep.provider}).`);
+          } catch (e) { console.error(`[KERNEL] vault key ${ref} (${ep.provider}) not hydrated: ${e.message}`); }
+        }
       }
     } catch (e) { console.warn('[KERNEL] vault→env hydration skipped:', e.message); }
 

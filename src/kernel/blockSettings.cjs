@@ -25,16 +25,24 @@ const LEGACY = {
   },
 };
 
-const _defaults = new Map();
+// Cached per manifest mtime: a block installed, updated or removed from the
+// store with AEON running (no restart) is read fresh on its next call.
+const _defaults = new Map(); // id -> { mtimeMs, values }
 function defaults(id) {
-  if (_defaults.has(id)) return _defaults.get(id);
-  const out = {};
-  try {
-    const m = JSON.parse(fs.readFileSync(path.join(BLOCKS_DIR, id, 'block.manifest.json'), 'utf8'));
-    for (const def of (m.contract?.settings || [])) out[def.key] = def.default;
-  } catch { /* block not installed — saved values still resolve */ }
-  _defaults.set(id, out);
-  return out;
+  const file = path.join(BLOCKS_DIR, id, 'block.manifest.json');
+  let mtimeMs = -1;
+  try { mtimeMs = fs.statSync(file).mtimeMs; } catch { /* not installed */ }
+  const hit = _defaults.get(id);
+  if (hit && hit.mtimeMs === mtimeMs) return hit.values;
+  const values = {};
+  if (mtimeMs !== -1) {
+    try {
+      const m = JSON.parse(fs.readFileSync(file, 'utf8'));
+      for (const def of (m.contract?.settings || [])) values[def.key] = def.default;
+    } catch (e) { console.error(`[BLOCK SETTINGS] ${id} manifest unreadable: ${e.message}`); }
+  }
+  _defaults.set(id, { mtimeMs, values });
+  return values;
 }
 
 function get(id, settings = {}) {

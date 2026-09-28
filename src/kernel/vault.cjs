@@ -53,6 +53,7 @@ function masterKey() {
   _dek = null; _dekEnvKey = raw;
   const kek = envKek();
   const slots = readKeyslots();
+  if (slots?.corrupt) return null; // locked, never guessed
   if (slots?.slots?.file && kek) {
     try { _dek = unwrapDEK(slots.slots.file, kek); return _dek; }
     catch { _dek = null; return null; } // env key doesn't match this vault → locked
@@ -105,14 +106,28 @@ function unwrapDEK(slot, kek) {
   decipher.setAuthTag(Buffer.from(slot.tag, 'hex'));
   return Buffer.concat([decipher.update(Buffer.from(slot.data, 'hex')), decipher.final()]);
 }
+// A keyslot file that exists but does not parse is NOT "no vault yet". Read
+// as missing, it let ensureKeyslots() mint a fresh file over it on the next
+// boot — destroying the wrapped key and the recovery slot, i.e. every secret,
+// from one bad byte. It now reads as { corrupt: true }: the vault stays
+// locked, the file stays exactly as it is, and the log says why.
 function readKeyslots() {
   if (!fs.existsSync(KEYSLOTS_FILE)) return null;
-  try { return JSON.parse(fs.readFileSync(KEYSLOTS_FILE, 'utf8')); } catch { return null; }
+  try { return JSON.parse(fs.readFileSync(KEYSLOTS_FILE, 'utf8')); }
+  catch (e) {
+    console.error(`[VAULT] ${path.basename(KEYSLOTS_FILE)} is unreadable (${e.message}) — vault locked, file left untouched. Restore it from a backup.`);
+    return { corrupt: true };
+  }
 }
 function writeKeyslots(slots) {
-  const tmp = KEYSLOTS_FILE + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(slots, null, 2), { mode: 0o600 });
-  fs.renameSync(tmp, KEYSLOTS_FILE);
+  const tmp = `${KEYSLOTS_FILE}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(slots, null, 2), { mode: 0o600 });
+    fs.renameSync(tmp, KEYSLOTS_FILE);
+  } catch (e) {
+    try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {}
+    throw e;
+  }
 }
 // The .env key and the keyslot file are two halves of the SAME protector: the
 // "file" slot wraps the DEK under the key stored in .env. AEON_SECRETS_DIR
@@ -128,14 +143,24 @@ const ENV_FILE = require('./envFile.cjs').envFilePath({ appRoot: APP_ROOT });
 
 function writeEnvKey(hexKey) {
   const envFile = ENV_FILE;
-  let env = '';
-  try { env = fs.existsSync(envFile) ? fs.readFileSync(envFile, 'utf8') : ''; } catch {}
+  // An .env that exists but cannot be read must not be replaced by a file
+  // holding only the master key — every other setting in it would be lost.
+  const env0 = fs.existsSync(envFile) ? fs.readFileSync(envFile, 'utf8') : '';
+  let env = env0;
   if (/^AEON_VAULT_MASTER_KEY=.*$/m.test(env)) {
     env = env.replace(/^AEON_VAULT_MASTER_KEY=.*$/m, `AEON_VAULT_MASTER_KEY=${hexKey}`);
   } else {
     env += `${env.endsWith('\n') || !env ? '' : '\n'}AEON_VAULT_MASTER_KEY=${hexKey}\n`;
   }
-  fs.writeFileSync(envFile, env, { mode: 0o600 });
+  // Atomic: a crash mid-write must not leave an .env without the master key.
+  const tmp = `${envFile}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+  try {
+    fs.writeFileSync(tmp, env, { mode: 0o600 });
+    fs.renameSync(tmp, envFile);
+  } catch (e) {
+    try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {}
+    throw e;
+  }
 }
 
 /**
@@ -148,7 +173,8 @@ function ensureKeyslots() {
   if (isVercel) return { created: false, reason: 'cloud-readonly' };
   const kek = envKek();
   if (!kek) return { created: false, reason: 'no-env-key' };
-  if (readKeyslots()) return { created: false, reason: 'exists' };
+  // Existence, not parseability: never write over a keyslot file, even a bad one.
+  if (fs.existsSync(KEYSLOTS_FILE)) return { created: false, reason: readKeyslots()?.corrupt ? 'corrupt' : 'exists' };
   const dek = masterKey(); // = envKek() here (no keyslots yet)
   if (!dek) return { created: false, reason: 'locked' };
   const code = genRecoveryCode();
@@ -202,9 +228,14 @@ function getRecoveryStatus() {
 function __resetForTest() { _dek = null; _dekEnvKey = null; _pendingRecoveryCode = null; }
 
 // ── Storage backends ─────────────────────────────────────────────────
+// Unreadable is not empty: returning null here let the next setSecret write
+// a vault holding only that one secret over every other one.
 function readLocalBlob() {
   if (!fs.existsSync(VAULT_FILE)) return null;
-  try { return JSON.parse(fs.readFileSync(VAULT_FILE, 'utf8')); } catch { return null; }
+  try { return JSON.parse(fs.readFileSync(VAULT_FILE, 'utf8')); }
+  catch (e) {
+    throw new Error(`Vault file ${path.basename(VAULT_FILE)} is unreadable (${e.message}); left untouched — restore it from a backup.`);
+  }
 }
 function writeLocalBlob(blob) {
   // Atomic write: tmp → rename, so a crash mid-save never corrupts the vault.
@@ -318,10 +349,16 @@ async function writeCloudBlob(supabase, blob) {
 
 // ── Public API ───────────────────────────────────────────────────────
 /** Load decrypted secrets map. On Vercel, source from cloud; on desktop, local. */
-async function loadSecrets(supabase) {
+// strict: for a read-modify-write. A vault that exists but will not decrypt
+// must stop the write — merged into {}, one new key would replace them all.
+async function loadSecrets(supabase, { strict = false } = {}) {
   const blob = isVercel ? await readCloudBlob(supabase) : (readLocalBlob() || await readCloudBlob(supabase));
   if (!blob) return {};
-  try { return decrypt(blob); } catch (e) { console.error('[VAULT] decrypt failed:', e.message); return {}; }
+  try { return decrypt(blob); } catch (e) {
+    console.error('[VAULT] decrypt failed:', e.message);
+    if (strict) throw new Error(`The vault exists but could not be decrypted (${e.message}); nothing was written.`);
+    return {};
+  }
 }
 
 /** Get one secret by ref. */
@@ -334,7 +371,7 @@ async function getSecret(ref, supabase) {
 async function setSecret(ref, value, supabase) {
   // The read and the write are one critical section — see withVaultLock.
   return withVaultLock(async () => {
-    const all = await loadSecrets(supabase);
+    const all = await loadSecrets(supabase, { strict: true });
     all[ref] = value;
     const blob = encrypt(all);
     if (!isVercel) writeLocalBlob(blob);
@@ -347,7 +384,7 @@ async function setSecret(ref, value, supabase) {
 async function removeSecret(ref, supabase) {
   // Same read-modify-write critical section as setSecret.
   return withVaultLock(async () => {
-    const all = await loadSecrets(supabase);
+    const all = await loadSecrets(supabase, { strict: true });
     delete all[ref];
     const blob = encrypt(all);
     if (!isVercel) writeLocalBlob(blob);

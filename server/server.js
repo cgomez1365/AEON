@@ -137,6 +137,12 @@ try {
 // ── Services ──
 const settingsService = require('../services/settings.js');
 const { loadSettings, hydrateProviderSecrets } = settingsService;
+// Keys found in .env move into the encrypted vault (no .env file in the
+// cloud, so there it does nothing).
+try {
+  const mig = settingsService.migrateEnvKeysToVault(ENV_FILE);
+  if (mig.moved.length) console.log(`[VAULT] Moved ${mig.moved.length} key(s) from .env into the encrypted vault: ${mig.moved.join(', ')}`);
+} catch (e) { console.error('[VAULT] .env key move failed — keys left in .env:', e.message); }
 hydrateProviderSecrets(process.env);
 const cloudCredentialStore = settingsService.createCloudCredentialStore();
 const vaultCrypto = require('../src/kernel/vault.cjs');

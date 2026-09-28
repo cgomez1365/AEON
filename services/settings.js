@@ -363,6 +363,55 @@ function createProviderCredentialStore(options = {}) {
   return { save, hydrate, metadata, file };
 }
 
+/**
+ * One home for keys: move provider/search keys found in .env into the
+ * encrypted vault, then comment their .env lines out. A key in both places
+ * meant removing it in Settings did not stick — .env brought it back on the
+ * next boot — and it sat in plaintext on disk. Bootstrap values (the vault
+ * master key, VITE_*, paths, rate limits) are not keys and stay in .env.
+ *
+ * Each key is written, then read back from the vault, BEFORE its .env line
+ * changes; anything that cannot be verified is left exactly where it was.
+ * Skipped when the vault is locked or the store is unreadable. Idempotent.
+ */
+function migrateEnvKeysToVault(envFile, { store = createProviderCredentialStore(), date = new Date() } = {}) {
+  if (!envFile || !fs.existsSync(envFile)) return { moved: [], skipped: 'no-env-file' };
+  if (!vault.isUnlocked()) return { moved: [], skipped: 'vault-locked' };
+  const meta = store.metadata();
+  if (meta.__unreadable) return { moved: [], skipped: 'store-unreadable' };
+
+  const text = fs.readFileSync(envFile, 'utf8');
+  const found = {};
+  for (const line of text.split(/\r?\n/)) {
+    const m = /^\s*(?:export\s+)?([A-Z0-9_]+)\s*=\s*(.*?)\s*$/.exec(line);
+    if (!m || !isProviderSecretKey(m[1])) continue;
+    const value = m[2].replace(/^(['"])(.*)\1$/, '$2');
+    if (value) found[m[1]] = value;
+  }
+  const names = Object.keys(found);
+  if (!names.length) return { moved: [], skipped: null };
+
+  // The vault already wins at boot (hydrate runs after dotenv), so a key it
+  // holds is not overwritten; only keys it lacks are imported.
+  const toImport = Object.fromEntries(names.filter((n) => !meta[n]).map((n) => [n, found[n]]));
+  if (Object.keys(toImport).length) store.save(toImport);
+  const check = {};
+  store.hydrate(check);
+  const verified = names.filter((n) => typeof check[n] === 'string' && check[n].length > 0);
+  if (!verified.length) return { moved: [], skipped: 'not-verified' };
+
+  const stamp = date.toISOString().slice(0, 10);
+  const out = text.split(/(\r?\n)/).map((part) => {
+    const m = /^\s*(?:export\s+)?([A-Z0-9_]+)\s*=/.exec(part);
+    return m && verified.includes(m[1])
+      ? `# ${m[1]} moved to the encrypted vault ${stamp} — manage it in Settings`
+      : part;
+  }).join('');
+  writeFileAtomic(envFile, out);
+  try { fs.chmodSync(envFile, 0o600); } catch { /* not supported here */ }
+  return { moved: verified, imported: Object.keys(toImport), skipped: null };
+}
+
 function hydrateProviderSecrets(target = process.env) {
   return createProviderCredentialStore().hydrate(target);
 }
@@ -376,6 +425,7 @@ module.exports = {
   createCloudCredentialStore,
   createProviderCredentialStore,
   hydrateProviderSecrets,
+  migrateEnvKeysToVault,
   SETTINGS_FILE,
   CLOUD_CREDENTIALS_FILE,
   PROVIDER_CREDENTIALS_FILE,

@@ -170,12 +170,23 @@ function defaultRegistry() {
 }
 
 // ── Storage (local file + Supabase mirror) ───────────────────────────
+// Unreadable is not empty. Read as missing, a damaged registry fell through
+// to defaultRegistry() and the next save wrote that over every connection and
+// key ref. It now throws: routing falls back to env keys (callers catch), and
+// no mutation can write until the file is restored.
 function readLocal() {
   if (!fs.existsSync(REG_FILE)) return null;
-  try { return JSON.parse(fs.readFileSync(REG_FILE, 'utf8')); } catch { return null; }
+  try { return JSON.parse(fs.readFileSync(REG_FILE, 'utf8')); }
+  catch (e) {
+    const err = new Error(`Connections file ${path.basename(REG_FILE)} is unreadable (${e.message}); left untouched — restore it from a backup.`);
+    err.status = 500;
+    console.error(`[ENDPOINTS] ${err.message}`);
+    throw err;
+  }
 }
+const readLocalOrNull = () => { try { return readLocal(); } catch { return null; } };
 function writeLocal(reg) {
-  const tmp = REG_FILE + '.tmp';
+  const tmp = `${REG_FILE}.${process.pid}.${require('crypto').randomBytes(6).toString('hex')}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(reg, null, 2));
   fs.renameSync(tmp, REG_FILE);
 }
@@ -483,7 +494,7 @@ async function discoverModels(provider, base_url, apiKey) {
  * isConfigured() already is.
  */
 function isProviderConfigured(provider) {
-  const reg = readLocal();
+  const reg = readLocalOrNull();
   if (!reg || !Array.isArray(reg.endpoints)) return false;
   return reg.endpoints.some(e => e.provider === provider && credentialRefs(e).length > 0);
 }
@@ -492,7 +503,7 @@ function isProviderConfigured(provider) {
  *  rule as isProviderConfigured, so provider health can list a configured
  *  custom endpoint before its first call. */
 function configuredProviders() {
-  const reg = readLocal();
+  const reg = readLocalOrNull();
   if (!reg || !Array.isArray(reg.endpoints)) return [];
   return [...new Set(reg.endpoints.filter(e => e.provider && credentialRefs(e).length > 0).map(e => e.provider))];
 }
@@ -822,7 +833,7 @@ function describeRoleLocal(role) {
       : { ok: false, provider: 'local', reason: 'no_local_model' };
   }
 
-  const reg = readLocal();
+  const reg = readLocalOrNull();
   if (!reg || !Array.isArray(reg.endpoints) || !reg.endpoints.length) {
     // No registry file is the NORMAL state of a clean install — the file is
     // written the first time a provider is added through Settings. Reporting
