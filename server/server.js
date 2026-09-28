@@ -266,7 +266,7 @@ const baseDeps = {
   // A key added in Settings joins the running process's pools immediately,
   // rather than on the next boot.
   hydrateEnvFromVault: ai.hydrateEnvFromVault,
-  _llmTelemetry: ai._llmTelemetry, loadSettings,
+  _llmTelemetry: ai._llmTelemetry, loadSettings, saveSettings: settingsService.saveSettings,
   GEMINI_KEY_POOL: ai.GEMINI_KEY_POOL, _trackLLM: ai._trackLLM,
   GEMINI_PRICE_PER_TOKEN: ai.GEMINI_PRICE_PER_TOKEN, GROQ_PRICE_PER_TOKEN: ai.GROQ_PRICE_PER_TOKEN,
   KILL_SWITCH_THRESHOLD: ai.KILL_SWITCH_THRESHOLD,

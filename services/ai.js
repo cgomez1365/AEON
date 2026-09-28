@@ -883,6 +883,10 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     let tries = 0;
 
     for (;;) {
+      // Transports rotate the env pool themselves on a 429/402; rotating again
+      // here skipped a key, and on a two-key pool landed back on the one that
+      // had just failed.
+      const idxBefore = keyPoolIdx[r.provider] || 0;
       try {
         const out = await attempt(apiKey, ref);
         if (ref) aeonEndpoints?.markCredentialOk?.(r.endpoint_id, ref);
@@ -911,7 +915,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
         }
 
         if (poolCount > 1) {
-          rotateKeyPool(r.provider);
+          if ((keyPoolIdx[r.provider] || 0) === idxBefore) rotateKeyPool(r.provider);
           apiKey = nextKey(r.provider);
           notify(
             `🔁 ${r.provider}: rotated to key ${(keyPoolIdx[r.provider] || 0) + 1} of ${poolCount} in pool (${status || 'rate limit'})`,
@@ -1294,6 +1298,30 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   const LEGACY_CHAIN_PROVIDERS = new Set(['groq', 'gemini', 'openrouter', 'local', 'claude']);
 
   const _STREAM_FALLBACK_MODELS = { groq: 'openai/gpt-oss-120b', gemini: 'gemini-flash-latest', openrouter: 'openai/gpt-4o-mini', local: undefined };
+  // Which provider and model a role uses is what Settings declares
+  // (settings.models[role], else chat). The registry supplies that provider's
+  // address, model list and key pool. It used to be the other way round: the
+  // registry's own role map won, falling back to ITS chat entry, so a role set
+  // to local — or to any provider the UI's best-effort mirror missed — was
+  // served by whatever the registry last held.
+  const _resolveDeclared = async (role, settings) => {
+    if (!aeonEndpoints) return null;
+    if (aeonEndpoints.isPortable?.()) return aeonEndpoints.resolveForRole(role, supabase);
+    const models = settings?.models || {};
+    const d = models[role] || (role === 'embed' ? null : models.chat);
+    // Nothing usable declared (no entry, "none", or the install default of
+    // local with no local model): the registry's auto-pick, so adding a key
+    // still just works.
+    if (!d || !d.provider || d.provider === 'none' || (d.provider === 'local' && !localRuntimePresent())) {
+      return aeonEndpoints.resolveForRole(role, supabase);
+    }
+    if (d.provider === 'local') return null;                                     // the settings path serves local
+    // A connection for that provider (keyed or not — LM Studio and local
+    // servers have none) serves it; without one, the env-key chain does.
+    const r = await aeonEndpoints.resolveForProvider(d.provider, d.model || null, supabase).catch(() => null);
+    return r && r.ok ? { ...r, role } : null;
+  };
+
   // Every provider Settings declares, as fallback candidates after the
   // primary. Registry connections come first-class (their own model, address
   // and key pool — custom, openai, claude, lmstudio included); env-only
@@ -1355,7 +1383,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       primary = { provider: opts.provider, model: opts.model, source: 'override' };
     } else if (aeonEndpoints) {
       try {
-        const r = await aeonEndpoints.resolveForRole(role, supabase);
+        const r = await _resolveDeclared(role, settings);
         if (r && r.ok) {
           if (r.via === 'relay') {
             throw new Error(`Model "${r.model}" is desktop-only; relay required (desktop must be online).`);
@@ -1653,7 +1681,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       try {
         r = namedRegistryProvider
           ? await aeonEndpoints.resolveForProvider(opts.provider, opts.model, supabase)
-          : await aeonEndpoints.resolveForRole(role, supabase);
+          : await _resolveDeclared(role, loadSettings());
       }
       catch (e) { console.warn(`[KERNEL] registry resolve(${opts.provider || role}) fell back:`, e.message); }
       if (namedRegistryProvider && r && !r.ok) {

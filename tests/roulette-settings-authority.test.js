@@ -80,6 +80,7 @@ const servers = [];
 let ai;
 let keyPool;
 let roulette = true;
+let declaredChat = { provider: 'custom', model: 'primary-model' };
 const notices = [];
 
 beforeAll(async () => {
@@ -106,7 +107,7 @@ beforeAll(async () => {
     supabase: null,
     writeOSAudit: () => {},
     TOKEN_LEDGER_FILE: path.join(ledgerDir, 'token_ledger.json'),
-    loadSettings: () => ({ models: { chat: { provider: 'custom', model: 'primary-model' } }, roulette, prefs: {} }),
+    loadSettings: () => ({ models: { chat: declaredChat }, roulette, prefs: {} }),
     aeonTerminalStream: { emit: (_e, ev) => notices.push(ev.message) },
   });
 });
@@ -126,6 +127,7 @@ beforeEach(() => {
   keyPool._reset(); ai._resetProviderHealth?.();
   modes.primary = 'ok'; modes.backup = 'ok'; hits.primary = 0; hits.backup = 0;
   notices.length = 0; roulette = true;
+  declaredChat = { provider: 'custom', model: 'primary-model' };
 });
 
 const stream = (extra = {}) => ai.kernelLLMStream([{ role: 'user', content: 'hello' }], { role: 'chat', onToken() {}, ...extra });
@@ -176,5 +178,23 @@ describe('a provider out of credits hands off with a notice, not an error', () =
     expect(err.message).toMatch(/custom out of credits/);
     expect(err.message).toMatch(/openai is rate-limited/);
     expect(err.message).not.toMatch(/example\/credits|\{"error"/);
+  });
+});
+
+describe('Settings, not the registry, decides which provider a role uses', () => {
+  // The registry's own role map still says chat → the custom endpoint.
+  it('stream: chat declared as openai in Settings is served by openai', async () => {
+    declaredChat = { provider: 'openai', model: 'backup-model' };
+    const r = await stream();
+    expect(r).toMatchObject({ provider: 'openai', model: 'backup-model', text: 'from-backup' });
+    expect(hits.primary).toBe(0);
+  });
+
+  it('non-stream: the same', async () => {
+    declaredChat = { provider: 'openai', model: 'backup-model' };
+    roulette = false;
+    const r = await ai.kernelLLM('hello', { role: 'chat', returnMeta: true });
+    expect(r).toMatchObject({ provider: 'openai', text: 'from-backup' });
+    expect(hits.primary).toBe(0);
   });
 });

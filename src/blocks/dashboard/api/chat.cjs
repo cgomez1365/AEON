@@ -11,7 +11,7 @@ module.exports = function createChatRouter(deps) {
     isVercel, supabase, LOG_FILE, AUDIT_FILE,
     getLocalFile, getDailyCost, addRunCost,
     KILL_SWITCH_THRESHOLD, GEMINI_PRICE_PER_TOKEN, GROQ_PRICE_PER_TOKEN,
-    geminiRequest, groqRequest, writeOSAudit, fetchDuckDuckGo,
+    writeOSAudit, fetchDuckDuckGo,
     aeonTerminalStream, TERMINAL_HISTORY_FILE, DEFAULT_LOCAL_MODEL, defaultLocalModel,
     // Naming a chat is a model call; the block declares permissions.ai, so the
     // loader hands it kernelLLM rather than the block reaching for a provider.
@@ -474,30 +474,20 @@ module.exports = function createChatRouter(deps) {
           throttle_active = true;
         }
 
+        // The same chain every other chat takes: the role Settings assigns,
+        // then every provider Settings declares, with cooldowns and key pools.
+        // This route used to call Gemini, then Gemini, then Groq directly.
         try {
-          provider = 'Gemini Key Pool';
-          aiResponse = await geminiRequest(modifiedPrompt, activeModel);
-        } catch (err) {
-          console.error('[AEON] Chat AI generation failed, falling back to Gemini:', err);
-          try {
-            aiResponse = await geminiRequest(modifiedPrompt, 'gemini-2.0-flash');
-            provider = 'Gemini Fallback';
-            activeModel = 'gemini-2.0-flash';
-          } catch (geminiErr) {
-            console.error('[AEON] Gemini Fallback failed, routing to Groq roulette fallback:', geminiErr);
-            try {
-              // llama-3.1-8b-instant 404'd live, 2026-09-20 — retired along
-              // with the rest of Groq's Llama 3.x lineup. gpt-oss-20b is
-              // their current small/fast tier, same role as the last resort.
-              aiResponse = await groqRequest(modifiedPrompt, 'openai/gpt-oss-20b');
-              provider = 'Groq Roulette Fallback';
-              activeModel = 'openai/gpt-oss-20b';
-            } catch (fatalErr) {
-              console.error('[AEON] Fatal AI Error during fallback:', fatalErr);
-              aiResponse = `**System Alert:** I encountered a critical neural link error while processing that request (Error: ${fatalErr.message.substring(0, 100)}...). This is often caused by safety filters or API rate limits on the external model.`;
-              provider = 'Offline Failsafe';
-            }
-          }
+          const r = await kernelLLM(modifiedPrompt, throttle_active
+            ? { provider: 'local', role: 'chat', returnMeta: true }
+            : { role: 'chat', returnMeta: true });
+          aiResponse = typeof r === 'string' ? r : r.text;
+          provider = (r && r.provider) || 'kernel';
+          activeModel = (r && r.model) || activeModel;
+        } catch (fatalErr) {
+          console.error('[AEON] chat: no provider could answer:', fatalErr);
+          aiResponse = fatalErr.message;
+          provider = 'none';
         }
 
         let runCost = 0;

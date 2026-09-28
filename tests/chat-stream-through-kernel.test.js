@@ -124,7 +124,7 @@ beforeAll(async () => {
   require(ENDPOINTS_PATH); // bound to tempSecrets — ai.js picks this instance up
   require.cache[LR_PATH] = { id: LR_PATH, filename: LR_PATH, loaded: true, exports: lrStub };
 
-  const loadSettings = () => ({ models: { chat: { provider: 'local', model: 'stub-model' } }, prefs: {} });
+  const loadSettings = () => ({ models: { chat: { provider: 'custom', model: 'fake-model' } }, prefs: {} });
   const ai = require(AI_PATH)({
     supabase: null,
     writeOSAudit: () => {},
@@ -273,7 +273,7 @@ describe('POST /api/chat/stream streams through kernelLLM.stream', () => {
     const ai = require(AI_PATH)({
       supabase: null, writeOSAudit: () => {},
       TOKEN_LEDGER_FILE: path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'aeon-chat-stream-ledger2-')), 'token_ledger.json'),
-      loadSettings: () => ({ models: { chat: { provider: 'local', model: 'stub-model' } }, prefs: {} }),
+      loadSettings: () => ({ models: { chat: { provider: 'custom', model: 'fake-model' } }, prefs: {} }),
       aeonTerminalStream: null,
     });
     expect(await ai.kernelLLM.describeRole('chat')).toEqual({ provider: 'custom', model: 'fake-model', contextTokens: 8192 });

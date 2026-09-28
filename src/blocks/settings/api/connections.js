@@ -224,7 +224,17 @@ module.exports = (app, deps) => {
       const { role, endpoint_id, model, cloud_fallback } = req.body || {};
       if (!role || !endpoint_id || !model)
         return res.status(400).json({ error: 'role, endpoint_id, model required' });
+      // Unknown connection is a 404, not a role that silently points nowhere.
+      const reg = await endpoints.load(supabase);
+      const ep = (reg.endpoints || []).find((e) => e.id === endpoint_id);
+      if (!ep) return res.status(404).json({ error: `Connection "${endpoint_id}" not found` });
       const mapping = await endpoints.assignRole(role, endpoint_id, model, cloud_fallback, supabase);
+      // settings.models is what the kernel routes by; keep it the same.
+      if (deps && deps.loadSettings && deps.saveSettings) {
+        const s = deps.loadSettings();
+        s.models = { ...(s.models || {}), [role]: { ...((s.models || {})[role] || {}), provider: ep.provider, model } };
+        deps.saveSettings(s);
+      }
       audit('CONN_ASSIGN', `${role} → ${endpoint_id}/${model}`, 200, 0);
       res.json({ ok: true, mapping });
     } catch (e) { res.status(500).json({ error: e.message }); }
