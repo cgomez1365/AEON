@@ -88,40 +88,7 @@
     "settings_keys": [
       "security_policy"
     ],
-    "settings": [
-      {
-        "key": "lockEveryLaunch",
-        "label": "Ask for password every time AEON opens",
-        "type": "boolean",
-        "default": true
-      },
-      {
-        "key": "idleMinutes",
-        "label": "Auto-lock after minutes away",
-        "type": "select",
-        "options": [
-          1,
-          5,
-          10,
-          15,
-          30,
-          60
-        ],
-        "default": 5
-      },
-      {
-        "key": "flushOnLock",
-        "label": "Sync data to my cloud when AEON locks",
-        "type": "boolean",
-        "default": true
-      },
-      {
-        "key": "shield",
-        "label": "Deployment shield (no-store caching)",
-        "type": "boolean",
-        "default": true
-      }
-    ]
+    "settings": []
   },
   "routes": [
     {

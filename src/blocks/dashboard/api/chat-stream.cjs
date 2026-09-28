@@ -19,6 +19,7 @@ const express = require('express');
 const router = express.Router();
 const tokens = require('../../../kernel/tokens.cjs');
 const kernelContext = require('../../../kernel/context.cjs');
+const blockSettings = require('../../../kernel/blockSettings.cjs');
 
 module.exports = function ({ kernelLLM, loadSettings: loadSettingsDep, VAULT_ROOT }) {
   // Settings come from the kernel's own authority, injected — never a
@@ -74,6 +75,8 @@ module.exports = function ({ kernelLLM, loadSettings: loadSettingsDep, VAULT_ROO
    */
   function buildMemoryContext(message, settings, contextTokens = 8192) {
     const prefs = settings.prefs?.brain_settings || {};
+    // Memory controls are memory_core's declared settings (Settings → Blocks).
+    const mem = blockSettings.get('memory_core', settings);
     const wake = WAKE_RE.test(message || '');
     const budgets = tokens.inputBudgets(contextTokens, { wake });
 
@@ -101,9 +104,9 @@ module.exports = function ({ kernelLLM, loadSettings: loadSettingsDep, VAULT_ROO
       // 200 leaves the token budget as the real constraint (32,000 tokens is
       // roughly 180 average memories) while staying a rail against a runaway
       // store. An operator who set this value explicitly still wins.
-      maxCount: wake ? 0 : Math.max(prefs.memory_max_context || 200, 0),
-      enabled: prefs.memory_in_context !== false,
-      autoMemoryEnabled: !!prefs.auto_memory,
+      maxCount: wake ? 0 : Math.max(Number(mem.memory_max_context) || 200, 0),
+      enabled: mem.memory_in_context !== false,
+      autoMemoryEnabled: !!mem.auto_memory,
     });
 
     return { ...out, budgets };
@@ -266,8 +269,7 @@ module.exports = function ({ kernelLLM, loadSettings: loadSettingsDep, VAULT_ROO
       // Settings come from the injected authority, not a hand-built path
       // re-read per request.
       try {
-        const brainPrefs = loadSettings()?.prefs?.brain_settings;
-        if (brainPrefs?.auto_memory && message && fullText && !result.cancelled) {
+        if (blockSettings.get('memory_core', loadSettings()).auto_memory && message && fullText && !result.cancelled) {
           setImmediate(async () => {
             try {
               // D2a #10 — the extractor is told whose voice to write in.

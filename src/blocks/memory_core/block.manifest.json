@@ -120,16 +120,25 @@
     "settings_keys": [],
     "settings": [
       {
-        "key": "injection_budget",
-        "label": "Injection budget (chars)",
-        "type": "number",
-        "default": 4500
+        "key": "memory_in_context",
+        "label": "Use memories in chat",
+        "type": "boolean",
+        "default": true,
+        "desc": "Inject saved memories into every chat turn. Off = the model sees none."
       },
       {
-        "key": "auto_distill",
-        "label": "Auto-distill sessions",
+        "key": "auto_memory",
+        "label": "Save memories automatically",
         "type": "boolean",
-        "default": true
+        "default": false,
+        "desc": "After each chat turn, extract facts worth keeping into memory."
+      },
+      {
+        "key": "memory_max_context",
+        "label": "Most memories per turn",
+        "type": "number",
+        "default": 200,
+        "desc": "Upper limit on memories considered per turn; the model's context budget still decides what fits."
       }
     ]
   },

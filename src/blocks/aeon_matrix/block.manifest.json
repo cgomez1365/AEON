@@ -230,33 +230,7 @@
     "settings_keys": [
       "aeon_matrix_settings"
     ],
-    "settings": [
-      {
-        "key": "nodeStyle",
-        "label": "Node style",
-        "type": "select",
-        "options": [
-          "Solid orbs",
-          "Fuzzy glow"
-        ],
-        "default": "Solid orbs",
-        "scope": "browser"
-      },
-      {
-        "key": "autoRotate",
-        "label": "Auto rotate camera",
-        "type": "boolean",
-        "default": false,
-        "scope": "browser"
-      },
-      {
-        "key": "focusMode",
-        "label": "Focus mode on hover",
-        "type": "boolean",
-        "default": false,
-        "scope": "browser"
-      }
-    ]
+    "settings": []
   },
   "routes": [
     {

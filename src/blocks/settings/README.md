@@ -375,20 +375,27 @@ metadata could have effects on tooling that reads this field that a
 settings-only audit can't fully verify — flagging for a follow-up pass
 with wider context.
 
-## Known dead backend surface (safe leftover, not urgent)
+## Dead surface — removed 2026-09-28
 
-`api/settings.js` still implements `GET`/`POST /api/settings/block-config`
-and `POST /api/settings/block-config/auto`, reading and writing
-`settings.blockConfig`. Nothing in `index.jsx` calls any of them — no
-`fetch('/api/settings/block-config...')` anywhere in this file — and the
-CSS classes that used to style that panel (`.block-config-panel`,
-`.block-config-row`, etc., still present near the end of the `<style>`
-block) have no matching JSX either. This matches the project skill's own
-note that `settings.blockConfig` was "DELETED, was a placebo nothing
-read" from the *UI* side; the *backend* routes were simply never removed
-in the same pass. They're inert — nothing calls them, they can't corrupt
-the live `settings.models`/endpoint-registry path — but a future cleanup
-could delete both the two backend routes and the dead CSS rules together.
+Deleted with no caller anywhere in src/, server/, services/ or the terminal
+(verified by grep, including template-string forms): `GET`/`POST
+/api/settings/block-config`, `POST /api/settings/block-config/auto`,
+`DELETE /api/settings/cloud-provider/:provider`, `GET
+/api/settings/resolve-endpoint`, `POST /api/settings/env`, `GET
+/api/connections/resolve/:role`, `POST
+/api/settings/connectivity/supabase/sync`, and the `.block-config-*` CSS.
+Also removed: the Vision model picker and "Auto-detect images" toggle (wrote
+prefs nothing read; the Vision role card is the control), and the block
+settings nothing implemented — aeon_matrix's three visual toggles, memory_core's
+`injection_budget`/`auto_distill`, and security's four toggles, which duplicated
+the Security block's own policy (`/api/security/policy`) and changed nothing.
+
+**Block settings have one reader:** `src/kernel/blockSettings.cjs` —
+manifest default, then a legacy location, then the operator's saved value.
+Server blocks call `deps.blockSettings()`; the UI receives resolved values in
+`GET /api/settings`. memory_core now declares the three memory controls chat
+actually uses. `tests/settings-declared-is-used.test.js` fails when a block
+declares a setting no code reads.
 
 ## Cross-platform note (fixed 2026-09-20 — kept for the history)
 

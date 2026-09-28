@@ -1465,28 +1465,6 @@ function ConnectionsPanel({ nervousSystem }) {
   );
 }
 
-// ── Vision Model Select ──────────────────────────────────────────────
-function VisionModelSelect() {
-  const [model, setModel] = useState('auto');
-  useEffect(() => { loadPref('vision_model', 'auto').then(v => setModel(v || 'auto')); }, []);
-  const change = async (v) => { setModel(v); await savePref('vision_model', v); showToast(`Vision model: ${v}`); };
-  return (
-    <select className="settings-select" style={{ width: '180px' }} value={model} onChange={e => change(e.target.value)}>
-      <option value="auto">Auto-detect</option>
-      <optgroup label="Cloud">
-        <option value="gpt-4o">GPT-4o</option>
-        <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
-        <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
-        <option value="claude-sonnet-4-6">Claude Sonnet</option>
-        <option value="grok-2-vision">Grok 2 Vision</option>
-      </optgroup>
-      <optgroup label="Local">
-        <option value="llava">LLaVA (local)</option>
-      </optgroup>
-    </select>
-  );
-}
-
 // ── Appearance Panel ─────────────────────────────────────────────────
 function AppearancePanel() {
   const [theme, setTheme] = useState('dark');
@@ -3465,21 +3443,9 @@ export default function SystemSettings() {
             onMsg="Vision enabled"
             offMsg="Vision disabled"
           />
-          <div className="pref-toggle-row">
-            <div className="pref-toggle-info">
-              <span className="pref-toggle-label">Vision model</span>
-              <span className="pref-toggle-desc">Select which model handles image analysis. Auto-detect picks the best available.</span>
-            </div>
-            <VisionModelSelect />
+          <div className="agent-tools-desc" style={{ marginTop: 6 }}>
+            The model that reads images is the <b>Vision</b> role above.
           </div>
-          <PrefToggle
-            label="Auto-detect images"
-            desc="Automatically analyze images pasted or uploaded in the terminal"
-            prefKey="vision_auto_detect"
-            defaultVal={true}
-            onMsg="Auto-detect on"
-            offMsg="Auto-detect off"
-          />
           </div>
         </div>
       )}
@@ -3802,37 +3768,8 @@ export default function SystemSettings() {
         .role-card-count { font-size: 9px; color: var(--accent); background: var(--accent-dim); padding: 3px 8px; border-radius: 4px; font-weight: 600; margin-left: auto; white-space: nowrap; }
 
         /* ── Block Config Panel ── */
-        .block-config-panel { display: flex; flex-direction: column; gap: 8px; }
-        .block-config-header { display: flex; flex-direction: column; gap: 8px; margin-bottom: 4px; }
-        .block-config-stats { display: flex; gap: 12px; }
-        .block-config-stat { font-size: 10px; color: var(--text-dim); }
-        .block-config-actions { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
-        .block-config-filters { display: flex; gap: 4px; }
-        .block-config-filter { font-size: 10px; padding: 3px 10px; border-radius: 12px; border: 1px solid var(--border); background: transparent; color: var(--text-dim); cursor: pointer; transition: all 0.15s; }
-        .block-config-filter:hover { border-color: var(--accent); color: var(--accent); }
-        .block-config-filter--on { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); font-weight: 600; }
-        .block-config-list { display: flex; flex-direction: column; gap: 2px; }
-        .block-config-row { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: rgba(255,255,255,0.015); border-radius: 6px; border: 1px solid transparent; transition: all 0.15s; }
-        .block-config-row:hover { background: rgba(255,255,255,0.03); }
-        .block-config-row--ok { border-color: rgba(0,255,64,0.06); }
-        .block-config-row--noai { opacity: 0.4; }
-        .block-config-info { display: flex; align-items: center; gap: 7px; min-width: 180px; flex-shrink: 0; }
-        .block-config-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
-        .block-config-dot--on { background: #00ff40; box-shadow: 0 0 5px rgba(0,255,64,0.4); }
-        .block-config-dot--needs { background: #ffaa00; }
-        .block-config-dot--noai { background: #333; }
-        .block-config-icon { font-size: 13px; }
-        .block-config-label { font-size: 11px; color: var(--text); font-weight: 500; }
-        .block-config-tag { font-size: 8px; padding: 1px 6px; border-radius: 3px; background: rgba(255,255,255,0.05); color: var(--text-dim); }
-        .block-config-tag--needs { background: rgba(255,170,0,0.1); color: #ffaa00; }
-        .block-config-tag--warn { background: rgba(255,68,102,0.1); color: #ff4466; }
-        .block-config-tag--svc { display: flex; gap: 4px; background: none; padding: 0; }
         .block-dep-ok { font-size: 8px; padding: 1px 6px; border-radius: 3px; background: rgba(0,255,64,0.08); color: rgba(0,255,64,0.7); }
         .block-dep-missing { font-size: 8px; padding: 1px 6px; border-radius: 3px; background: rgba(255,68,102,0.08); color: rgba(255,68,102,0.6); }
-        .block-config-selects { display: flex; gap: 6px; flex: 1; align-items: center; }
-        .block-config-select { flex: 1; padding: 5px 8px; font-size: 10px; }
-        .block-config-clear { background: none; border: none; color: var(--text-dim); cursor: pointer; font-size: 14px; padding: 2px 6px; border-radius: 4px; transition: all 0.15s; }
-        .block-config-clear:hover { color: #ff4466; background: rgba(255,68,102,0.1); }
 
         /* ── Role Defaults (collapsed) ── */
         .role-defaults-details { margin-top: 12px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }

@@ -109,13 +109,6 @@
     "settings_keys": [],
     "settings": [
       {
-        "key": "widget_enabled",
-        "label": "Dashboard widget",
-        "desc": "Show this block's quick-view card on the dashboard",
-        "type": "toggle",
-        "default": true
-      },
-      {
         "key": "example_note",
         "label": "Example text setting",
         "desc": "Reference for the settings contract — blocks read this via blockSettings.master.example_note",

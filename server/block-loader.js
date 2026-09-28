@@ -50,6 +50,9 @@ module.exports = ({ app, ROOT, isVercel, loadSettings, baseDeps }) => {
   // ── Block sandbox — scope deps per manifest permissions ──
   function createScopedDeps(base, manifest, blockId) {
     const scoped = { ...base };
+    // A block reads its own declared settings (contract.settings) here —
+    // manifest default, then the operator's value from Settings → Blocks.
+    scoped.blockSettings = () => require('../src/kernel/blockSettings.cjs').get(blockId, loadSettings());
     const perms = manifest?.contract?.permissions || {};
     const usesScopedStorage = manifest?.contract?.storage?.access === 'scoped';
 

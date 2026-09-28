@@ -1,6 +1,7 @@
 const express = require('express');
 
 const kernelContext = require('../context.cjs');
+const blockSettings = require('../blockSettings.cjs');
 
 // The identity, then how it is laid out on screen — one voice, in that order.
 // kernelContext.FORMATTING is shared with the streaming path so the terminal
@@ -42,9 +43,11 @@ module.exports = function createAIRouter(deps) {
 
     let prefs = {};
     let skills = [];
+    let mem = blockSettings.get('memory_core', {});
     try {
       const settings = _loadSettings ? _loadSettings() : null;
       prefs = settings?.prefs?.brain_settings || {};
+      mem = blockSettings.get('memory_core', settings || {});
       skills = (settings?.prefs?.brain_skills || [])
         .filter(sk => sk.status === 'approved' && sk.body)
         .slice(0, prefs.skill_max_injected || 30);
@@ -61,9 +64,10 @@ module.exports = function createAIRouter(deps) {
       // model is told) rather than overflowing.
       contextTokens: Number(contextTokens) || 8192,
       wake,
-      memoryEnabled: prefs.memory_in_context !== false,
-      autoMemoryEnabled: !!prefs.auto_memory,
-      maxCount: wake ? 0 : Math.max(prefs.memory_max_context || 25, 0),
+      memoryEnabled: mem.memory_in_context !== false,
+      autoMemoryEnabled: !!mem.auto_memory,
+      // Same default as the streaming route: two chats, one memory rule.
+      maxCount: wake ? 0 : Math.max(Number(mem.memory_max_context) || 200, 0),
       skills,
     });
 

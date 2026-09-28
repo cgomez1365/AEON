@@ -230,13 +230,7 @@ module.exports = (app, deps) => {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
-  // ── GET /api/connections/resolve/:role — debug what the kernel picks ─
-  app.get('/api/connections/resolve/:role', async (req, res) => {
-    const r = await endpoints.resolveForRole(req.params.role, supabase);
-    // Never leak the key to the client — report presence only.
-    if (r.apiKey) { r.hasKey = true; delete r.apiKey; }
-    res.json(r);
-  });
+
 
   // ── POST /api/connections/sync — force desktop → cloud mirror ───────
   app.post('/api/connections/sync', async (req, res) => {

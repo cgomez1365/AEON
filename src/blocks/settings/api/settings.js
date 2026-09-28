@@ -56,12 +56,8 @@ module.exports = (app, deps) => {
   // <install>/secrets found nothing once the roots left the install.
   const SECRETS_DIR = require(path.join(__dirname, '..', '..', '..', 'kernel', 'aeonHome.cjs'))
     .roots({ appRoot: APP_ROOT }).secrets;
-  // Coinbase CDP key lives in the secrets dir, not on the user's Desktop —
-  // that was a hardcoded personal convention. Desktop kept as a legacy
-  // fallback so existing setups don't break.
-  const cdpKeyExists = () =>
-    fs.existsSync(path.join(SECRETS_DIR, 'cdp_api_key.json')) ||
-    fs.existsSync(path.join(process.env.USERPROFILE || process.env.HOME || '', 'Desktop', 'cdp_api_key.json')); // aeon-path-authority-allow
+  // Coinbase CDP key lives in the secrets dir — the one path authority.
+  const cdpKeyExists = () => fs.existsSync(path.join(SECRETS_DIR, 'cdp_api_key.json'));
 
   // ── Settings file I/O ──────────────────────────────────────────────
   function loadSettings() {
@@ -74,14 +70,12 @@ module.exports = (app, deps) => {
   // settings file went missing. Local-first: env key order mirrors the
   // nervous-system fallback chain, local runtime is the always-there floor.
   function _liveDefault() {
-    if (process.env.OPENROUTER_API_KEY) return { provider: 'openrouter', model: 'meta-llama/llama-3.3-70b-instruct:free' };
-    // llama-3.3-70b-versatile 404'd live, 2026-09-20 — Groq retired it
-    // outright (verified against the real /openai/v1/models list; it is not
-    // a rename, the whole Llama 3.3 lineup is gone from their catalogue).
-    // openai/gpt-oss-120b is Groq's current largest general-purpose hosted
-    // model, the closest analog to what 70b-versatile served as the default.
-    if (process.env.GROQ_API_KEY) return { provider: 'groq', model: 'openai/gpt-oss-120b' };
-    if (process.env.GEMINI_FREE_KEY_1 || process.env.GEMINI_PAID_KEY) return { provider: 'gemini', model: 'gemini-2.0-flash' };
+    // The kernel's one env-provider table names models each provider serves
+    // today; a second copy here kept naming retired ones (gemini-2.0-flash).
+    try {
+      const d = require(path.join(__dirname, '..', '..', '..', 'kernel', 'endpoints.cjs')).describeRoleFromEnv();
+      if (d && d.ok) return { provider: d.provider, model: d.model };
+    } catch (e) { console.error('[SETTINGS] default role did not resolve:', e.message); }
     const local = firstLocalModel();
     if (local) return { provider: 'local', model: local };
     return { provider: 'none', model: '' };
@@ -124,7 +118,18 @@ module.exports = (app, deps) => {
 
   // ── GET /api/settings — full settings + env key status ─────────────
   app.get('/api/settings', async (req, res) => {
-    const settings = settingsService.sanitizeSettings(loadSettings());
+    const raw = loadSettings();
+    const settings = settingsService.sanitizeSettings(raw);
+    // The panel shows what blocks actually read — resolved values, not only
+    // what was saved (a value can still come from its pre-declaration home).
+    try {
+      const bs = require(path.join(__dirname, '..', '..', '..', 'kernel', 'blockSettings.cjs'));
+      const blocksDir = path.join(__dirname, '..', '..');
+      settings.blockSettings = { ...(settings.blockSettings || {}) };
+      for (const id of fs.readdirSync(blocksDir)) {
+        if (Object.keys(bs.defaults(id)).length) settings.blockSettings[id] = bs.get(id, raw);
+      }
+    } catch (e) { console.error('[SETTINGS] block settings did not resolve:', e.message); }
     const cloudProviders = cloudCredentials.metadata();
     const envKeys = {};
     if (fs.existsSync(ENV_FILE)) {
@@ -212,15 +217,6 @@ module.exports = (app, deps) => {
     res.json({ ok: true });
   });
 
-  app.delete('/api/settings/cloud-provider/:provider', (req, res) => {
-    try {
-      const metadata = cloudCredentials.remove(req.params.provider);
-      res.json({ ok: true, cloudProviders: metadata });
-    } catch (error) {
-      res.status(error.statusCode || 500).json({ error: error.message });
-    }
-  });
-
   app.post('/api/settings/secrets', (req, res) => {
     try {
       const written = providerCredentials.save(req.body?.vars);
@@ -257,7 +253,7 @@ module.exports = (app, deps) => {
     const m = phrase.match(/^(?:set\s+)?([a-z_]+)\s+(?:to\s+|=\s*)?(.+)$/i);
     if (!m) {
       return res.status(400).json({
-        error: 'Try: <role> to <provider> <model>  —  e.g. chat to gemini gemini-2.0-flash',
+        error: 'Try: <role> to <provider> <model>  —  e.g. chat to groq openai/gpt-oss-120b',
         roles,
       });
     }
@@ -351,15 +347,7 @@ module.exports = (app, deps) => {
   // shape follows the block wherever it's installed (modularity).
   app.get('/api/settings/block/:id', (req, res) => {
     const id = req.params.id;
-    const settings = loadSettings();
-    const saved = (settings.blockSettings || {})[id] || {};
-    let defaults = {};
-    try {
-      const manifestPath = path.join(__dirname, '..', '..', id, 'block.manifest.json');
-      const m = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-      for (const def of (m.contract?.settings || [])) defaults[def.key] = def.default;
-    } catch { /* block gone or no manifest — saved values still returned */ }
-    res.json({ id, values: { ...defaults, ...saved } });
+    res.json({ id, values: require(path.join(__dirname, '..', '..', '..', 'kernel', 'blockSettings.cjs')).get(id, loadSettings()) });
   });
 
   // ── GET /api/capabilities — what each toggle governs, and whether
@@ -895,42 +883,6 @@ module.exports = (app, deps) => {
     }
   });
 
-  // ── GET /api/settings/block-config — per-block provider/model assignments ──
-  // Returns every block's AI config: what it declared, what's assigned, status.
-  app.get('/api/settings/block-config', (req, res) => {
-    const settings = loadSettings();
-    const blockOverrides = settings.blockConfig || {};
-    const srcBlocks = path.join(__dirname, '..', '..');
-    const result = [];
-
-    if (fs.existsSync(srcBlocks)) {
-      for (const folder of fs.readdirSync(srcBlocks)) {
-        const mp = path.join(srcBlocks, folder, 'block.manifest.json');
-        if (!fs.existsSync(mp)) continue;
-        try {
-          const m = JSON.parse(fs.readFileSync(mp, 'utf8'));
-          const apis = (m.requires && m.requires.apis) || [];
-          const aiCapable = apis.some(a => ['groq', 'gemini', 'openai', 'claude', 'local', 'openrouter', 'grok', 'lmstudio'].includes(a));
-          const hasAnyDep = apis.length > 0;
-          const override = blockOverrides[m.id] || null;
-
-          result.push({
-            id: m.id,
-            label: m.label || m.id,
-            icon: m.icon || '📦',
-            category: (m.nav && m.nav.group) || m.category || 'other',
-            requires: apis,
-            aiCapable,
-            hasAnyDep: hasAnyDep,
-            config: override || null,
-          });
-        } catch {}
-      }
-    }
-    result.sort((a, b) => (a.hasAnyDep === b.hasAnyDep ? 0 : a.hasAnyDep ? -1 : 1));
-    res.json(result);
-  });
-
   // ── POST /api/settings/block-layout — Dashboard's block grid layout ──
   // Full replace of settings.blockLayout (NOT the generic /api/settings
   // patch, which deep-merges and can never delete a key — the Dashboard's
@@ -943,185 +895,6 @@ module.exports = (app, deps) => {
     saveSettings(settings);
     res.json({ ok: true, blockLayout: settings.blockLayout });
   });
-
-  // ── POST /api/settings/block-config — save per-block provider/model ──
-  app.post('/api/settings/block-config', (req, res) => {
-    const { blockId, provider, model } = req.body || {};
-    if (!blockId) return res.status(400).json({ error: 'blockId required' });
-    const settings = loadSettings();
-    if (!settings.blockConfig) settings.blockConfig = {};
-    if (provider && model) {
-      settings.blockConfig[blockId] = { provider, model };
-    } else {
-      delete settings.blockConfig[blockId];
-    }
-    saveSettings(settings);
-    res.json({ ok: true, blockConfig: settings.blockConfig });
-  });
-
-  // ── POST /api/settings/block-config/auto — auto-assign all blocks ──
-  // Assigns the best available provider to each AI-capable block based on
-  // what's configured. Reads manifests, checks provider status, assigns.
-  app.post('/api/settings/block-config/auto', async (req, res) => {
-    const { force } = req.body || {};
-    const env = process.env;
-    const available = [];
-    if (env.GROQ_API_KEY) available.push('groq');
-    if (env.GEMINI_FREE_KEY_1 || env.GEMINI_PAID_KEY) available.push('gemini');
-    if (env.OPENAI_API_KEY) available.push('openai');
-    if (env.ANTHROPIC_API_KEY) available.push('claude');
-    if (env.GROK_API_KEY) available.push('grok');
-    if (env.OPENROUTER_API_KEY) available.push('openrouter');
-    // Local runtime availability — check native LR registry
-    {
-      try {
-        const lr = require(path.join(__dirname, '..', '..', '..', '..', 'services', 'local-runtime', 'index.cjs'));
-        if (lr.isAvailable()) available.push('local');
-      } catch {}
-    }
-
-    // Also check endpoint registry (vault-stored keys)
-    try {
-      const endpoints = require(path.join(__dirname, '..', '..', '..', 'kernel', 'endpoints.cjs'));
-      const supabase = deps && deps.supabase ? deps.supabase : null;
-      const reg = await endpoints.load(supabase);
-      for (const ep of (reg.endpoints || [])) {
-        if (!available.includes(ep.provider)) available.push(ep.provider);
-      }
-    } catch {}
-
-    // Prefer cloud providers over local — assign best available
-    const priority = ['gemini', 'groq', 'openai', 'claude', 'grok', 'openrouter', 'local', 'lmstudio'];
-    // groq default: Groq retired the Llama 3.x lineup this named — see
-    // _liveDefault above for the full note.
-    const defaultModels = {
-      groq: 'openai/gpt-oss-120b',
-      gemini: 'gemini-2.5-flash',
-      openai: 'gpt-4o',
-      claude: 'claude-sonnet-4-6',
-      grok: 'grok-3',
-      openrouter: 'openai/gpt-4o-mini',
-      local: firstLocalModel() || '',
-    };
-
-    const settings = loadSettings();
-    if (!settings.blockConfig) settings.blockConfig = {};
-    const srcBlocks = path.join(__dirname, '..', '..');
-    let assigned = 0;
-
-    if (fs.existsSync(srcBlocks)) {
-      for (const folder of fs.readdirSync(srcBlocks)) {
-        const mp = path.join(srcBlocks, folder, 'block.manifest.json');
-        if (!fs.existsSync(mp)) continue;
-        try {
-          const m = JSON.parse(fs.readFileSync(mp, 'utf8'));
-          const apis = (m.requires && m.requires.apis) || [];
-          const llmProviders = apis.filter(a => ['groq', 'gemini', 'openai', 'claude', 'local', 'grok', 'openrouter', 'lmstudio'].includes(a));
-          if (llmProviders.length === 0) continue;
-          if (!force && settings.blockConfig[m.id]) continue;
-
-          // Pick best available provider by priority
-          const match = priority.find(p => available.includes(p) && llmProviders.includes(p))
-                     || llmProviders.find(p => available.includes(p))
-                     || available.find(p => priority.includes(p))
-                     || available[0];
-          if (match === 'local' && !defaultModels.local) continue; // runtime present but zero models installed
-          if (match) {
-            settings.blockConfig[m.id] = { provider: match, model: defaultModels[match] || match };
-            assigned++;
-          }
-        } catch {}
-      }
-    }
-    saveSettings(settings);
-    res.json({ ok: true, assigned, blockConfig: settings.blockConfig });
-  });
-
-  // ── Endpoint Resolver — Odysseus-style fallback chain ──────────────
-  // task → utility → default, used by kernelLLM and blocks
-  app.get('/api/settings/resolve-endpoint', (req, res) => {
-    const role = req.query.role || 'chat';
-    const settings = loadSettings();
-    const models = settings.models || {};
-
-    // Fallback chain: requested role → chat → first available
-    const chain = [role, 'chat', Object.keys(models)[0]].filter(Boolean);
-    let resolved = null;
-    for (const r of chain) {
-      if (models[r] && models[r].provider && models[r].model) {
-        resolved = { role: r, provider: models[r].provider, model: models[r].model };
-        break;
-      }
-    }
-
-    if (!resolved) return res.status(400).json({ error: 'No model configured — set one in Settings' });
-    res.json(resolved);
-  });
-
-  // ════════════════════════════════════════════════════════════════════
-  //  ONBOARDING / CONFIG-FROM-UI — provider credentials go to encrypted
-  //  Vault storage; this legacy env route only accepts non-secret settings.
-  // ════════════════════════════════════════════════════════════════════
-
-  // The setup groups, in the operator's flow order. Secret groups are saved
-  // through /api/settings/secrets or the cloud-provider branch above.
-  const ENV_GROUPS = {
-    apiKeys: {
-      label: 'API keys',
-      vars: ['GROQ_API_KEY', 'GEMINI_FREE_KEY_1', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'GROK_API_KEY', 'OPENROUTER_API_KEY'],
-      anyOf: ['GROQ_API_KEY', 'GEMINI_FREE_KEY_1', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY'], // at least one
-    },
-    firebase: {
-      label: 'Firebase',
-      vars: ['VITE_FIREBASE_API_KEY', 'VITE_FIREBASE_AUTH_DOMAIN', 'VITE_FIREBASE_PROJECT_ID',
-             'VITE_FIREBASE_STORAGE_BUCKET', 'VITE_FIREBASE_MESSAGING_SENDER_ID', 'VITE_FIREBASE_APP_ID'],
-      allOf: ['VITE_FIREBASE_API_KEY', 'VITE_FIREBASE_PROJECT_ID', 'VITE_FIREBASE_APP_ID'],
-    },
-    supabase: {
-      label: 'Supabase',
-      vars: ['SUPABASE_URL', 'SUPABASE_ANON_KEY', 'SUPABASE_SERVICE_ROLE_KEY'],
-      allOf: ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY'],
-    },
-  };
-  // Keys whose value should also be written with a VITE_ prefix for the frontend.
-  // Only publishable keys (Supabase anon, URL) — never secret API keys.
-  const VITE_MIRROR = {
-    SUPABASE_URL: 'VITE_SUPABASE_URL',
-    SUPABASE_ANON_KEY: 'VITE_SUPABASE_ANON_KEY',
-  };
-
-  function parseEnvFile() {
-    const map = {};
-    if (fs.existsSync(ENV_FILE)) {
-      for (const line of fs.readFileSync(ENV_FILE, 'utf8').split('\n')) {
-        const m = line.match(/^\s*([A-Z0-9_]+)\s*=(.*)$/);
-        if (m) map[m[1]] = m[2];
-      }
-    }
-    return map;
-  }
-
-  /** Update/insert keys in .env without disturbing comments or unrelated lines.
-   *  Atomic write (tmp → rename). Returns the keys touched. */
-  function writeEnvVars(updates) {
-    let lines = fs.existsSync(ENV_FILE) ? fs.readFileSync(ENV_FILE, 'utf8').split('\n') : [];
-    const seen = new Set();
-    lines = lines.map(line => {
-      const m = line.match(/^\s*([A-Z0-9_]+)\s*=/);
-      if (m && updates[m[1]] !== undefined) {
-        seen.add(m[1]);
-        return `${m[1]}=${updates[m[1]]}`;
-      }
-      return line;
-    });
-    for (const [k, v] of Object.entries(updates)) {
-      if (!seen.has(k)) lines.push(`${k}=${v}`);
-    }
-    const tmp = ENV_FILE + '.tmp';
-    fs.writeFileSync(tmp, lines.join('\n'), { mode: 0o600 });
-    fs.renameSync(tmp, ENV_FILE);
-    return Object.keys(updates);
-  }
 
   // ── GET /api/settings/setup-status — wizard progress (no secrets) ──
   app.get('/api/settings/setup-status', (req, res) => {
@@ -1154,32 +927,6 @@ module.exports = (app, deps) => {
       complete,
       restartPending: !!global.__AEON_RESTART_PENDING,
     });
-  });
-
-  // ── POST /api/settings/env — non-secret runtime config only ─────────
-  app.post('/api/settings/env', (req, res) => {
-    if (!isLocalRequest(req) && !process.env.AEON_ALLOW_REMOTE_ENV)
-      return res.status(403).json({ error: 'Env writes are local-only (the desktop is the source of truth).' });
-    const { vars } = req.body || {};
-    if (!vars || typeof vars !== 'object') return res.status(400).json({ error: 'vars object required' });
-    if (Object.keys(vars).some((key) => /(?:KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL)/.test(key))) {
-      return res.status(400).json({ error: 'Credentials are Vault-only; save provider keys through POST /api/settings/secrets.' });
-    }
-
-    const updates = {};
-    for (const [k, v] of Object.entries(vars)) {
-      if (!/^[A-Z0-9_]+$/.test(k)) continue;            // ignore malformed keys
-      if (v === undefined || v === null || v === '') continue; // skip blanks (don't wipe)
-      updates[k] = String(v);
-      if (VITE_MIRROR[k]) updates[VITE_MIRROR[k]] = String(v); // mirror for frontend
-      process.env[k] = String(v);                        // live-update so status reflects immediately
-    }
-    if (!Object.keys(updates).length) return res.json({ ok: true, written: [], note: 'nothing to write' });
-    try {
-      const written = writeEnvVars(updates);
-      global.__AEON_RESTART_PENDING = true;              // VITE_ vars need a rebuild/restart
-      res.json({ ok: true, written, restartRequired: true });
-    } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
   // ── POST /api/settings/restart — apply config by restarting AEON ──

@@ -417,40 +417,7 @@ module.exports = (app, deps) => {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
-  // ── Sync now — push local JSON data to Supabase aeon_blocks ────────
-  app.post('/api/settings/connectivity/supabase/sync', async (req, res) => {
-    try {
-      const saved = cloudCredentials.credentials('supabase');
-      const url = saved?.url;
-      const key = saved?.serviceRoleKey;
-      if (!url || !key) return res.status(400).json({ error: 'A Vault-stored Supabase service role is required for sync.' });
 
-      const { createClient } = require('@supabase/supabase-js');
-      const db = createClient(url, key);
-      // Runtime state (the *.json) lives in the AEON home's db/, not beside
-      // the tracked schema files in the install.
-      const dbDir = require('../../../kernel/aeonHome.cjs').roots({ appRoot: ROOT }).db;
-
-      const jsonFiles = fs.existsSync(dbDir)
-        ? fs.readdirSync(dbDir).filter(f => f.endsWith('.json') && !f.startsWith('block.schema') && !f.startsWith('.'))
-        : [];
-
-      let synced = 0;
-      for (const file of jsonFiles) {
-        const tag = file.replace('.json', '');
-        try {
-          const payload = JSON.parse(fs.readFileSync(path.join(dbDir, file), 'utf8'));
-          const { error } = await db.from('aeon_blocks').upsert(
-            { block_tag: tag, payload, updated_at: new Date().toISOString() },
-            { onConflict: 'block_tag' }
-          );
-          if (!error) synced++;
-        } catch {}
-      }
-
-      res.json({ ok: true, synced, total: jsonFiles.length, message: `Synced ${synced}/${jsonFiles.length} block(s) to cloud.` });
-    } catch (e) { res.status(500).json({ error: e.message }); }
-  });
 
   // Block teardown/rescan must not orphan the tunnel process.
   if (deps.lifecycle) deps.lifecycle.onCleanup(() => {

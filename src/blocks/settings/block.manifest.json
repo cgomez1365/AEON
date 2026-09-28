@@ -137,11 +137,6 @@
     },
     {
       "method": "GET",
-      "path": "/api/connections/resolve/:role",
-      "auth": true
-    },
-    {
-      "method": "GET",
       "path": "/api/connections/scan-all",
       "auth": true
     },
@@ -171,21 +166,6 @@
       "auth": true
     },
     {
-      "method": "GET",
-      "path": "/api/settings/block-config",
-      "auth": true
-    },
-    {
-      "method": "POST",
-      "path": "/api/settings/block-config",
-      "auth": true
-    },
-    {
-      "method": "POST",
-      "path": "/api/settings/block-config/auto",
-      "auth": true
-    },
-    {
       "method": "POST",
       "path": "/api/settings/block-layout",
       "auth": true
@@ -198,11 +178,6 @@
     {
       "method": "GET",
       "path": "/api/settings/blocks",
-      "auth": true
-    },
-    {
-      "method": "DELETE",
-      "path": "/api/settings/cloud-provider/:provider",
       "auth": true
     },
     {
@@ -237,11 +212,6 @@
     },
     {
       "method": "POST",
-      "path": "/api/settings/connectivity/supabase/sync",
-      "auth": true
-    },
-    {
-      "method": "POST",
       "path": "/api/settings/connectivity/supabase/test",
       "auth": true
     },
@@ -253,11 +223,6 @@
     {
       "method": "POST",
       "path": "/api/settings/connectivity/tunnel/stop",
-      "auth": true
-    },
-    {
-      "method": "POST",
-      "path": "/api/settings/env",
       "auth": true
     },
     {
@@ -303,11 +268,6 @@
     {
       "method": "GET",
       "path": "/api/settings/providers",
-      "auth": true
-    },
-    {
-      "method": "GET",
-      "path": "/api/settings/resolve-endpoint",
       "auth": true
     },
     {
