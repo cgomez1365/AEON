@@ -465,7 +465,7 @@ function RoleCard({ role, config, providers, liveModels, freeModels, onUpdate, p
             onChange={e => onUpdate(role.key, 'provider', e.target.value)}
           >
             {(providerRegistry || []).filter(p => providers[p.id]).map(p => (
-              <option key={p.id} value={p.id}>{p.icon} {p.label}</option>
+              <option key={p.id} value={p.id}>{p.icon} {p.label}{p.accounts && p.accounts.length > 1 ? ` (${p.accounts.length} keys pooled)` : ''}</option>
             ))}
             {(providerRegistry || []).filter(p => !providers[p.id]).length > 0 && (
               <optgroup label="Not configured">

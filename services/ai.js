@@ -855,8 +855,10 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
    * reached the operator, a silent second attempt would show them two answers.
    */
   const _withCredentials = async (r, attempt) => {
-    const total = r.credential_count || (r.credential_ref ? 1 : 0);
-    let apiKey = r.apiKey;
+    const poolCount = KEY_POOLS[r.provider]?.length || 0;
+    const regCount = r.credential_count || (r.credential_ref ? 1 : 0);
+    const total = Math.max(regCount, poolCount, r.credential_ref ? 1 : 0);
+    let apiKey = r.apiKey || _legacyKeyFor(r.provider);
     let ref = r.credential_ref || null;
     let tries = 0;
 
@@ -868,21 +870,37 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       } catch (e) {
         tries++;
         const status = _statusOf(e);
-        const rotatable = ref && total > 1 && tries < total
+        const rotatable = total > 1 && tries < total
           && !e.streamStarted
-          && aeonEndpoints?.isCredentialFault?.(status);
+          && (aeonEndpoints?.isCredentialFault?.(status) || status === 429 || status === 402 || /429|402|rate limit|quota/i.test(e.message || ''));
         if (!rotatable) throw e;
 
-        const next = await aeonEndpoints.rotateCredential(
-          r.endpoint_id, ref, { status, retryAfterMs: e.retryAfterMs, message: e.message }, supabase,
-        );
-        if (!next) throw e;
-        notify(
-          `🔁 ${r.provider}: key ${ref} answered ${status} — switching to key ${next.credential_index + 1} of ${next.credential_count}`,
-          { provider: r.provider },
-        );
-        apiKey = next.apiKey;
-        ref = next.credential_ref;
+        if (ref && regCount > 1 && aeonEndpoints) {
+          const next = await aeonEndpoints.rotateCredential(
+            r.endpoint_id, ref, { status, retryAfterMs: e.retryAfterMs, message: e.message }, supabase,
+          ).catch(() => null);
+          if (next) {
+            notify(
+              `🔁 ${r.provider}: key ${ref} answered ${status} — switching to key ${next.credential_index + 1} of ${next.credential_count}`,
+              { provider: r.provider },
+            );
+            apiKey = next.apiKey;
+            ref = next.credential_ref;
+            continue;
+          }
+        }
+
+        if (poolCount > 1) {
+          rotateKeyPool(r.provider);
+          apiKey = nextKey(r.provider);
+          notify(
+            `🔁 ${r.provider}: rotated to key ${(keyPoolIdx[r.provider] || 0) + 1} of ${poolCount} in pool (${status || 'rate limit'})`,
+            { provider: r.provider },
+          );
+          continue;
+        }
+
+        throw e;
       }
     }
   };
@@ -1303,17 +1321,32 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     }
     candidates.push(primary);
 
-    const availableProviders = opts._vercelStrict
-      ? ['groq', 'gemini', 'openrouter']
-      : ['groq', 'gemini', 'openrouter', 'local'];
-    const priority = settings.prefs?.provider_priority;
-    const fallbacks = Array.isArray(priority) && priority.length
-      ? priority.filter(p => availableProviders.includes(p))
-      : availableProviders;
-    for (const p of fallbacks) {
-      if (candidates.some(c => c.provider === p)) continue;
-      if (!isConfigured(p) || !isHealthy(p)) continue;
-      candidates.push({ provider: p, model: _STREAM_FALLBACK_MODELS[p], source: 'fallback' });
+    if (settings.roulette && !opts.provider) {
+      // Roulette mode: collect all configured, healthy cloud providers and
+      // shuffle them so streaming calls cycle through all free tiers before local.
+      const cloudP = ['groq', 'gemini', 'openrouter'].filter(p => isConfigured(p) && isHealthy(p));
+      for (let i = cloudP.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [cloudP[i], cloudP[j]] = [cloudP[j], cloudP[i]];
+      }
+      candidates.length = 0;
+      for (const p of cloudP) {
+        const m = p === primary.provider ? primary.model : _STREAM_FALLBACK_MODELS[p];
+        candidates.push({ provider: p, model: m, source: 'roulette' });
+      }
+    } else {
+      const availableProviders = opts._vercelStrict
+        ? ['groq', 'gemini', 'openrouter']
+        : ['groq', 'gemini', 'openrouter', 'local'];
+      const priority = settings.prefs?.provider_priority;
+      const fallbacks = Array.isArray(priority) && priority.length
+        ? priority.filter(p => availableProviders.includes(p))
+        : availableProviders;
+      for (const p of fallbacks) {
+        if (candidates.some(c => c.provider === p)) continue;
+        if (!isConfigured(p) || !isHealthy(p)) continue;
+        candidates.push({ provider: p, model: _STREAM_FALLBACK_MODELS[p], source: 'fallback' });
+      }
     }
     // Local is the floor, never a rung in the middle: a local answer is a
     // noticeable change in quality and speed, so every configured cloud
