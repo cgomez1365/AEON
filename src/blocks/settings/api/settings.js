@@ -108,6 +108,9 @@ module.exports = (app, deps) => {
 
   function deepMerge(target, patch) {
     for (const k of Object.keys(patch)) {
+      // JSON.parse makes "__proto__" an own key; merging it would write to
+      // Object.prototype for the whole process.
+      if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
       const v = patch[k];
       if (v && typeof v === 'object' && !Array.isArray(v)
         && target[k] && typeof target[k] === 'object' && !Array.isArray(target[k])) {
@@ -512,12 +515,15 @@ module.exports = (app, deps) => {
           const existing = registryProviders[ep.provider].models;
           for (const m of (ep.models || [])) { if (!existing.includes(m)) existing.push(m); }
         }
-        registryProviders[ep.provider].accounts.push({
-          label: ep.label || ep.provider,
-          authRef: ep.auth_ref || null,
-        });
+        // One entry per key, not per connection: a connection pools its
+        // keys in auth_refs, and the picker counts what will rotate.
+        for (const ref of endpointsMod.credentialRefs(ep)) {
+          registryProviders[ep.provider].accounts.push({ label: ep.label || ep.provider, authRef: ref });
+        }
       }
-    } catch {}
+    } catch (e) {
+      console.error('[SETTINGS] endpoint registry did not load for the nervous system:', e.message);
+    }
 
     // ── 3. Build unified provider list ──
     const allProviderIds = new Set([...Object.keys(ENV_PROVIDER_MAP), ...manifestProviders, ...Object.keys(registryProviders)]);

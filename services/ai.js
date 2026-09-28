@@ -1324,15 +1324,16 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     if (settings.roulette && !opts.provider) {
       // Roulette mode: collect all configured, healthy cloud providers and
       // shuffle them so streaming calls cycle through all free tiers before local.
-      const cloudP = ['groq', 'gemini', 'openrouter'].filter(p => isConfigured(p) && isHealthy(p));
+      // The assigned primary stays first, with its endpoint and key pool —
+      // the same order the non-stream path uses (registry, then roulette).
+      const cloudP = ['groq', 'gemini', 'openrouter']
+        .filter(p => p !== primary.provider && isConfigured(p) && isHealthy(p));
       for (let i = cloudP.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [cloudP[i], cloudP[j]] = [cloudP[j], cloudP[i]];
       }
-      candidates.length = 0;
       for (const p of cloudP) {
-        const m = p === primary.provider ? primary.model : _STREAM_FALLBACK_MODELS[p];
-        candidates.push({ provider: p, model: m, source: 'roulette' });
+        candidates.push({ provider: p, model: _STREAM_FALLBACK_MODELS[p], source: 'roulette' });
       }
     } else {
       const availableProviders = opts._vercelStrict

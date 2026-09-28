@@ -85,7 +85,15 @@ const isProviderSecretKey = (name) =>
 
 const loadSettings = () => {
   try { return JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')); }
-  catch {
+  catch (e) {
+    // A file that exists but does not parse is moved aside before defaults
+    // are returned — the next save would otherwise write defaults over every
+    // role assignment in it.
+    if (e.code !== 'ENOENT') {
+      const aside = `${SETTINGS_FILE}.corrupt-${Date.now()}`;
+      try { fs.renameSync(SETTINGS_FILE, aside); console.error(`[SETTINGS] ${path.basename(SETTINGS_FILE)} did not parse (${e.message}); kept as ${path.basename(aside)}, using defaults`); }
+      catch (re) { console.error(`[SETTINGS] ${path.basename(SETTINGS_FILE)} did not parse and could not be moved aside: ${re.message}`); }
+    }
     let m = null;
     try {
       const rt = JSON.parse(fs.readFileSync(path.join(storage.DATA_ROOT, 'local-runtime.json'), 'utf8'));

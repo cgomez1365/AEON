@@ -984,9 +984,23 @@ async function credentialReport(supabase) {
   );
 }
 
+// Every mutation is load → change → save across awaits. Two at once (a role
+// assigned while a key is added) each read the same snapshot and the second
+// save dropped the first's change. One queue per process runs them in turn.
+let _registryQueue = Promise.resolve();
+function serialized(fn) {
+  return (...args) => {
+    const run = _registryQueue.then(() => fn(...args));
+    _registryQueue = run.catch(() => {});
+    return run;
+  };
+}
+
 module.exports = {
   PROVIDER_TRANSPORT, load, save,
-  addEndpoint, removeEndpoint, assignRole,
+  addEndpoint: serialized(addEndpoint),
+  removeEndpoint: serialized(removeEndpoint),
+  assignRole: serialized(assignRole),
   discoverModels, discoverModelCatalogue, resolveForRole, resolveForProvider, isVercel,
   lmStudioHost, isPortable, describeRoleLocal, describeRoleFromEnv,
   // Exported so the gate tests the REAL predicate rather than re-implementing it.
@@ -1000,6 +1014,8 @@ module.exports = {
   // Credential pools. isCredentialFault is re-exported so the transports
   // classify a failure with the same predicate the pool cools keys by.
   credentialRefs, rotateCredential, markCredentialOk,
-  addCredential, removeCredential, credentialReport,
+  addCredential: serialized(addCredential),
+  removeCredential: serialized(removeCredential),
+  credentialReport,
   isCredentialFault: keyPool.isCredentialFault,
 };
