@@ -262,7 +262,7 @@ const baseDeps = {
   registerEarlyMiddleware,
   isVercel, addRunCost: ai.addRunCost, getDailyCost: ai.getDailyCost,
   getProviderHealth: ai.getProviderHealth, getKeyPoolInfo: ai.getKeyPoolInfo,
-  dehydrateProvider: ai.dehydrateProvider,
+  dehydrateProvider: ai.dehydrateProvider, forgetKey: ai.forgetKey,
   // A key added in Settings joins the running process's pools immediately,
   // rather than on the next boot.
   hydrateEnvFromVault: ai.hydrateEnvFromVault,

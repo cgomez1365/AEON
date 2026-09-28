@@ -370,10 +370,27 @@ module.exports = function createCompareRouter(deps) {
         const ep = byId[m.endpoint_id];
         if (ep && m.model) add(m.model, m.model, ep.provider);
       }
+      // A role seat is served by kernelLLM({role}), which routes by what
+      // Settings declares — so its label comes from settings.models too, not
+      // the registry's older copy of the role map.
+      // Same rule as the kernel: a role Settings declares, else the
+      // registry's mapping (a registry-only install declares nothing).
+      let settingsModels = {};
+      try { settingsModels = loadSettings().models || {}; } catch {}
+      const declared = {};
       for (const [role, m] of Object.entries(reg.roles || {})) {
-        if (NON_CHAT_ROLE.test(role)) continue;
         const ep = byId[m?.endpoint_id];
-        if (!ep || !m.model) continue;
+        if (ep && m.model) declared[role] = { provider: ep.provider, model: m.model, ep };
+      }
+      for (const [role, m] of Object.entries(settingsModels)) {
+        if (!m?.provider || !m.model) continue;
+        const ep = (reg.endpoints || []).find((e) => e.provider === m.provider);
+        if (ep) declared[role] = { provider: m.provider, model: m.model, ep };
+        else delete declared[role];
+      }
+      for (const [role, m] of Object.entries(declared)) {
+        if (NON_CHAT_ROLE.test(role)) continue;
+        const ep = m.ep;
         const k = `role:${role}|${m.model}`;
         if (seen.has(k)) continue;
         seen.add(k);

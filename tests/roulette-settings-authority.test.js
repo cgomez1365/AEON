@@ -107,7 +107,7 @@ beforeAll(async () => {
     supabase: null,
     writeOSAudit: () => {},
     TOKEN_LEDGER_FILE: path.join(ledgerDir, 'token_ledger.json'),
-    loadSettings: () => ({ models: { chat: declaredChat }, roulette, prefs: {} }),
+    loadSettings: () => ({ models: { chat: declaredChat, naming: { provider: '', model: '' } }, roulette, prefs: {} }),
     aeonTerminalStream: { emit: (_e, ev) => notices.push(ev.message) },
   });
 });
@@ -196,5 +196,24 @@ describe('Settings, not the registry, decides which provider a role uses', () =>
     const r = await ai.kernelLLM('hello', { role: 'chat', returnMeta: true });
     expect(r).toMatchObject({ provider: 'openai', text: 'from-backup' });
     expect(hits.primary).toBe(0);
+  });
+});
+
+describe('a role left as "Same as Chat" uses Chat', () => {
+  it('an empty provider does not fall through to the registry auto-pick', async () => {
+    declaredChat = { provider: 'openai', model: 'backup-model' };
+    const r = await ai.kernelLLMStream([{ role: 'user', content: 'hi' }], { role: 'naming', onToken() {} });
+    expect(r.provider).toBe('openai');
+  });
+});
+
+describe('a key removed in Settings stops serving immediately', () => {
+  it('forgetKey clears every runtime copy of that key and nothing else', () => {
+    process.env.AEON_TEST_KEY_A = 'sk-remove-me';
+    process.env.AEON_TEST_KEY_B = 'sk-keep-me';
+    expect(ai.forgetKey('sk-remove-me')).toBe(1);
+    expect(process.env.AEON_TEST_KEY_A).toBeUndefined();
+    expect(process.env.AEON_TEST_KEY_B).toBe('sk-keep-me');
+    delete process.env.AEON_TEST_KEY_B;
   });
 });

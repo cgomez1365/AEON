@@ -599,6 +599,24 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     return { ok: true, cleared };
   };
 
+  // Forget ONE key everywhere the running process holds it — env slots and
+  // pools — so a key removed in Settings stops serving now. Narrower than
+  // dehydrateProvider, which would also drop the provider's .env keys.
+  const forgetKey = (value) => {
+    if (!value) return 0;
+    let cleared = 0;
+    for (const name of Object.keys(process.env)) {
+      if (process.env[name] === value) { delete process.env[name]; cleared++; }
+    }
+    for (const [p, pool] of Object.entries(KEY_POOLS)) {
+      const i = pool.indexOf(value);
+      if (i !== -1) { pool.splice(i, 1); keyPoolIdx[p] = pool.length ? (keyPoolIdx[p] || 0) % pool.length : 0; }
+    }
+    const g = GEMINI_KEY_POOL.indexOf(value);
+    if (g !== -1) GEMINI_KEY_POOL.splice(g, 1);
+    return cleared;
+  };
+
   // ── Endpoint registry + resolver (runtime-aware, defensive load) ──
   let aeonEndpoints = null;
   try { aeonEndpoints = require('../src/kernel/endpoints.cjs'); }
@@ -1304,11 +1322,17 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   // registry's own role map won, falling back to ITS chat entry, so a role set
   // to local — or to any provider the UI's best-effort mirror missed — was
   // served by whatever the registry last held.
+  // A role with no provider set ("Same as Chat" in Settings) uses Chat.
+  const _declaredFor = (models, role) => {
+    const own = models?.[role];
+    if (own && own.provider) return own;
+    return role === 'embed' ? null : (models?.chat || null);
+  };
   const _resolveDeclared = async (role, settings) => {
     if (!aeonEndpoints) return null;
     if (aeonEndpoints.isPortable?.()) return aeonEndpoints.resolveForRole(role, supabase);
     const models = settings?.models || {};
-    const d = models[role] || (role === 'embed' ? null : models.chat);
+    const d = _declaredFor(models, role);
     // Nothing usable declared (no entry, "none", or the install default of
     // local with no local model): the registry's auto-pick, so adding a key
     // still just works.
@@ -1405,7 +1429,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       // The settings file, with the same offline floor the terminal used to
       // build for itself: no chat role at all still resolves to a local model.
       const models = settings.models || {};
-      const roleConfig = models[role] || models.chat || { provider: 'local', model: defaultLocalModel() };
+      const roleConfig = _declaredFor(models, role) || { provider: 'local', model: defaultLocalModel() };
       primary = { provider: roleConfig.provider || 'local', model: roleConfig.model, source: 'settings' };
     }
     candidates.push(primary);
@@ -1713,7 +1737,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
 
     // ── Legacy settings path (fallback / explicit override) ──
     const settings = loadSettings();
-    const roleConfig = settings.models[role] || settings.models.chat;
+    const roleConfig = _declaredFor(settings.models, role) || { provider: 'local', model: undefined };
     const provider = opts.provider || roleConfig.provider;
     const model = opts.model || roleConfig.model;
 
@@ -1863,7 +1887,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     GEMINI_KEY_POOL, _trackLLM, _llmTelemetry, setActivityRecorder,
     getDailyCost, addRunCost,
     KILL_SWITCH_THRESHOLD, GEMINI_PRICE_PER_TOKEN, GROQ_PRICE_PER_TOKEN,
-    getProviderHealth, _resetProviderHealth, _chainExhaustedError, getKeyPoolInfo, dehydrateProvider, hydrateEnvFromVault,
+    getProviderHealth, _resetProviderHealth, _chainExhaustedError, getKeyPoolInfo, dehydrateProvider, forgetKey, hydrateEnvFromVault,
     defaultLocalModel, localRuntimePresent,
     envHydrated,
   };

@@ -193,7 +193,14 @@ module.exports = (app, deps) => {
       while (existing.includes(ref)) { n++; ref = `${ep.id}-key-${n}`; }
 
       await vault.setSecret(ref, String(apiKey).trim(), supabase);
-      const updated = await endpoints.addCredential(ep.id, ref, supabase);
+      let updated;
+      try { updated = await endpoints.addCredential(ep.id, ref, supabase); }
+      catch (e) {
+        // Registry refused: the secret just written is referenced by nothing.
+        try { await vault.removeSecret(ref, supabase); }
+        catch (ve) { console.error(`[CONNECTIONS] key ${ref} left in vault after a failed add: ${ve.message}`); }
+        throw e;
+      }
       // A new account is new capacity: let the running process use it without
       // a restart, the same way hydration does on boot.
       if (deps.hydrateEnvFromVault) { try { await deps.hydrateEnvFromVault(); } catch {} }
@@ -211,10 +218,18 @@ module.exports = (app, deps) => {
       if (!ep) return res.status(404).json({ error: 'Connection not found' });
       // Registry first: it is the one that refuses to empty the pool. Removing
       // the secret first would leave a ref pointing at nothing if it did.
+      const secretValue = await vault.getSecret(ref, supabase).catch(() => null);
       const updated = await endpoints.removeCredential(id, ref, supabase);
-      try { await vault.removeSecret(ref, supabase); } catch {}
+      let warning = null;
+      try { await vault.removeSecret(ref, supabase); }
+      catch (e) {
+        warning = `The key was removed from the connection but its secret stayed in the vault: ${e.message}`;
+        console.error(`[CONNECTIONS] ${warning}`);
+      }
+      // The removed key stops serving now, not at the next restart.
+      if (deps.forgetKey && secretValue) deps.forgetKey(secretValue);
       audit('CONN_KEY_REMOVE', `Endpoint ${id} key ${ref}`, 200, 0);
-      res.json({ ok: true, endpoint: updated, keyPool: await endpoints.credentialReport(supabase) });
+      res.json({ ok: true, endpoint: updated, keyPool: await endpoints.credentialReport(supabase), ...(warning ? { warning } : {}) });
     } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
   });
 

@@ -33,11 +33,15 @@ const ROLE_DEFAULTS = {
   agent_final: { label: 'Agent — Final Output', desc: 'Set this to Claude for the polished final answer while worker/planner stay on free tiers.', icon: '🎯' },
   agent_final_advisor: { label: 'Agent — Final Advisor (optional)', desc: 'Only used when Agent — Final Output is Claude. Set a stronger Claude model here (e.g. claude-opus-4-8) and it can consult that model mid-answer for hard judgment calls. Leave the model blank to disable.', icon: '🧭' },
   embed: { label: 'Embedding (semantic search)', desc: 'Turns documents into vectors so the Aeon Matrix can search by meaning. An installed local embedder (Cookbook → nomic-embed-text, ~150 MB, CPU) serves this on its own; assign an endpoint here only to override it.', icon: '🧭' },
+  analyst: { label: 'Analyst', desc: 'Second Brain analysis and background summaries in the terminal. Uses your Chat model until you set one.', icon: '🧠' },
+  naming: { label: 'Chat naming', desc: 'Titles saved chats. A small, fast model is plenty. Uses your Chat model until you set one.', icon: '🏷️' },
   vision: { label: 'Vision (image reading)', desc: 'Reads images for the terminal upload and the agent\'s read_image tool. Needs a vision-capable model — Groq Llama 4 Scout (free), Gemini, or Claude.', icon: '👁️' },
 };
 function deriveRoles(settingsModels) {
   if (!settingsModels) return [];
-  return Object.keys(settingsModels).map(key => ({
+  // Every role code asks for is offered, set or not — an unset role uses Chat.
+  const keys = [...new Set([...Object.keys(settingsModels), ...Object.keys(ROLE_DEFAULTS)])];
+  return keys.map(key => ({
     key,
     label: ROLE_DEFAULTS[key]?.label || fieldLabel(key),
     desc: ROLE_DEFAULTS[key]?.desc || '',
@@ -461,9 +465,10 @@ function RoleCard({ role, config, providers, liveModels, freeModels, onUpdate, p
           <select
             id={`role-provider-${role.key}`}
             className="settings-select"
-            value={config?.provider || 'groq'}
+            value={config?.provider || ''}
             onChange={e => onUpdate(role.key, 'provider', e.target.value)}
           >
+            {role.key !== 'chat' && <option value="">↳ Same as Chat</option>}
             {(providerRegistry || []).filter(p => providers[p.id]).map(p => (
               <option key={p.id} value={p.id}>{p.icon} {p.label}{p.accounts && p.accounts.length > 1 ? ` (${p.accounts.length} keys pooled)` : ''}</option>
             ))}
