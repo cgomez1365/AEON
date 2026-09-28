@@ -1294,6 +1294,47 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   const LEGACY_CHAIN_PROVIDERS = new Set(['groq', 'gemini', 'openrouter', 'local', 'claude']);
 
   const _STREAM_FALLBACK_MODELS = { groq: 'openai/gpt-oss-120b', gemini: 'gemini-flash-latest', openrouter: 'openai/gpt-4o-mini', local: undefined };
+  // Every provider Settings declares, as fallback candidates after the
+  // primary. Registry connections come first-class (their own model, address
+  // and key pool — custom, openai, claude, lmstudio included); env-only
+  // groq/gemini/openrouter keys still count. Roulette shuffles this list;
+  // otherwise prefs.provider_priority orders it. One builder for the stream
+  // and non-stream chains, so the two cannot route the same role differently.
+  const _ENV_CHAIN = ['groq', 'gemini', 'openrouter'];
+  const _fallbackCandidates = async (settings, exclude = [], opts = {}) => {
+    let registryPs = [];
+    try { registryPs = (aeonEndpoints?.configuredProviders?.() || []).filter((p) => p !== 'local'); } catch {}
+    let ps = [...new Set([...registryPs, ..._ENV_CHAIN])]
+      .filter((p) => !exclude.includes(p) && isHealthy(p) && (registryPs.includes(p) || isConfigured(p)));
+    if (settings.roulette && !opts.provider) {
+      for (let i = ps.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [ps[i], ps[j]] = [ps[j], ps[i]];
+      }
+    } else {
+      const priority = Array.isArray(settings.prefs?.provider_priority) ? settings.prefs.provider_priority : [];
+      const rank = (p) => { const i = priority.indexOf(p); return i === -1 ? priority.length : i; };
+      ps = ps.map((p, i) => [p, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map(([p]) => p);
+    }
+    const source = settings.roulette && !opts.provider ? 'roulette' : 'fallback';
+    const out = [];
+    for (const p of ps) {
+      if (registryPs.includes(p)) {
+        const r = await aeonEndpoints.resolveForProvider(p, null, supabase).catch(() => null);
+        if (r && r.ok && r.via !== 'relay') {
+          out.push({
+            provider: r.provider, model: r.model, base_url: r.base_url, apiKey: r.apiKey,
+            rpm_limit: r.rpm_limit, source, resolved: r,
+            endpoint_id: r.endpoint_id, credential_ref: r.credential_ref, credential_count: r.credential_count,
+          });
+          continue;
+        }
+      }
+      if (_ENV_CHAIN.includes(p) && isConfigured(p)) out.push({ provider: p, model: _STREAM_FALLBACK_MODELS[p], source });
+    }
+    return out;
+  };
+
   const _streamCandidates = async (role, opts = {}) => {
     const settings = loadSettings() || {};
     const candidates = [];
@@ -1341,34 +1382,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     }
     candidates.push(primary);
 
-    if (settings.roulette && !opts.provider) {
-      // Roulette mode: collect all configured, healthy cloud providers and
-      // shuffle them so streaming calls cycle through all free tiers before local.
-      // The assigned primary stays first, with its endpoint and key pool —
-      // the same order the non-stream path uses (registry, then roulette).
-      const cloudP = ['groq', 'gemini', 'openrouter']
-        .filter(p => p !== primary.provider && isConfigured(p) && isHealthy(p));
-      for (let i = cloudP.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [cloudP[i], cloudP[j]] = [cloudP[j], cloudP[i]];
-      }
-      for (const p of cloudP) {
-        candidates.push({ provider: p, model: _STREAM_FALLBACK_MODELS[p], source: 'roulette' });
-      }
-    } else {
-      const availableProviders = opts._vercelStrict
-        ? ['groq', 'gemini', 'openrouter']
-        : ['groq', 'gemini', 'openrouter', 'local'];
-      const priority = settings.prefs?.provider_priority;
-      const fallbacks = Array.isArray(priority) && priority.length
-        ? priority.filter(p => availableProviders.includes(p))
-        : availableProviders;
-      for (const p of fallbacks) {
-        if (candidates.some(c => c.provider === p)) continue;
-        if (!isConfigured(p) || !isHealthy(p)) continue;
-        candidates.push({ provider: p, model: _STREAM_FALLBACK_MODELS[p], source: 'fallback' });
-      }
-    }
+    candidates.push(...await _fallbackCandidates(settings, [primary.provider], opts));
     // Local is the floor, never a rung in the middle: a local answer is a
     // noticeable change in quality and speed, so every configured cloud
     // provider gets its turn first.
@@ -1690,90 +1704,50 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       }
     }
 
-    if (settings.roulette && !opts.provider) {
-      // Build the candidate list from every cloud provider that is currently
-      // configured AND healthy. Include openrouter (previously missing) so
-      // that multiple OpenRouter accounts registered in the vault all join
-      // the rotation. Shuffle so no single provider is always tried first.
-      const rouletteCandidates = [
-        { id: 'groq',        ready: () => KEY_POOLS.groq.length > 0 && isHealthy('groq'),        call: (p, m, o) => groqRequest(p, m || 'openai/gpt-oss-120b', 0, o),       fallbackModel: 'openai/gpt-oss-120b' },
-        { id: 'gemini',      ready: () => GEMINI_KEY_POOL.length > 0 && isHealthy('gemini'),      call: (p, m, o) => geminiRequest(p, m || 'gemini-flash-latest', 0, o),     fallbackModel: 'gemini-flash-latest' },
-        { id: 'openrouter',  ready: () => KEY_POOLS.openrouter.length > 0 && isHealthy('openrouter'), call: (p, m, o) => openRouterRequest(p, m || 'openai/gpt-4o-mini', o), fallbackModel: 'openai/gpt-4o-mini' },
-      ].filter(c => c.ready());
-
-      // Fisher-Yates shuffle so roulette lives up to its name
-      for (let i = rouletteCandidates.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [rouletteCandidates[i], rouletteCandidates[j]] = [rouletteCandidates[j], rouletteCandidates[i]];
-      }
-
-      for (const c of rouletteCandidates) {
-        try {
-          const usedModel = c.id === provider ? model : c.fallbackModel;
-          const text = await c.call(prompt, usedModel, opts);
-          if (text !== undefined) {
-            noteProviderSuccess(c.id);
-            return opts.returnMeta ? { text, provider: c.id, model: usedModel } : text;
-          }
-        } catch (e) {
-          const status = _failureStatus(e);
-          if (status) markUnhealthy(c.id, Number(status), e.message);
-          else noteProviderFailure(c.id, e);
-          notify(`⚠ Roulette: ${c.id} failed (${e.message.slice(0, 80)}), trying next`, { provider: c.id });
-        }
-      }
-      // All roulette candidates exhausted — fall through to local below.
-    }
-
-    const availableProviders = opts._vercelStrict
-      ? ['groq', 'gemini', 'openrouter']
-      : ['groq', 'gemini', 'openrouter', 'local'];
-    const priority = settings.prefs?.provider_priority;
-    const fallbacks = Array.isArray(priority) && priority.length
-      ? priority.filter(p => availableProviders.includes(p))
-      : availableProviders;
-    const chain = [provider, ...fallbacks].filter((p, i, a) => a.indexOf(p) === i);
+    // A caller that named a provider with no connection asked for THAT
+    // provider; answering from another would hide the missing connection.
+    if (namedRegistryProvider && registryAttempt && registryAttempt.configured === false) throw registryErr;
+    // The settings-named provider first (when the chain can call it), then
+    // every other provider Settings declares, then local as the floor.
+    const tried = registryAttempt ? [registryAttempt.provider] : [];
+    const chain = [];
+    if (_ENV_CHAIN.includes(provider) && !tried.includes(provider)) chain.push({ provider, model, source: 'settings' });
+    chain.push(...await _fallbackCandidates(settings, [...tried, provider], opts));
+    if (!opts._vercelStrict) chain.push({ provider: 'local', model: provider === 'local' ? model : undefined, source: 'fallback' });
     let lastErr = null;
     // Every failure in the chain, so the thrown error can name the real cause
     // rather than whichever provider happened to be tried last. See P8c below.
     const attempts = registryAttempt ? [registryAttempt] : [];
-    for (const p of chain) {
+    let prev = registryAttempt ? registryAttempt.provider : null;
+    for (const c of chain) {
+      const p = c.provider;
       if (!isHealthy(p)) continue;
+      if (p === 'local' && !localRuntimePresent()) {
+        // Not a failure of a provider: nothing is installed to try.
+        continue;
+      }
       try {
         let text;
-        let usedModel = model;
-        if (p === 'groq' && KEY_POOLS.groq.length > 0) {
-          usedModel = p === provider ? model : 'openai/gpt-oss-120b';
-          text = await groqRequest(prompt, usedModel, 0, opts);
-        } else if (p === 'gemini' && GEMINI_KEY_POOL.length > 0) {
-          usedModel = p === provider ? model : 'gemini-flash-latest';
-          text = await geminiRequest(prompt, usedModel, 0, opts);
-        } else if (p === 'openrouter' && KEY_POOLS.openrouter.length > 0) {
-          usedModel = p === provider ? model : 'openai/gpt-4o-mini';
-          text = await openRouterRequest(prompt, usedModel, opts);
-        } else if (p === 'local') {
-          // Pre-check: if no local runtime is installed, skip this rung
-          // rather than throwing — a "no local model" throw is not a failure
-          // of the provider, and its error message incorrectly replaced the
-          // real upstream failure (e.g. Groq 413) as the chain's root cause.
-          if (!localRuntimePresent()) {
-            notify('⏭ Local runtime not installed — skipping local fallback rung', { provider: 'local' });
-            continue;
-          }
-          usedModel = p === provider ? model : undefined;
-          text = await localNativeRequest(prompt, usedModel, opts);
-        } else continue;
+        let usedModel = c.model;
+        if (c.resolved) text = await _dispatchResolved(prompt, c.resolved, opts);
+        else if (p === 'groq') text = await groqRequest(prompt, usedModel || 'openai/gpt-oss-120b', 0, opts);
+        else if (p === 'gemini') text = await geminiRequest(prompt, usedModel || 'gemini-flash-latest', 0, opts);
+        else if (p === 'openrouter') text = await openRouterRequest(prompt, usedModel || 'openai/gpt-4o-mini', opts);
+        else if (p === 'local') text = await localNativeRequest(prompt, usedModel, opts);
+        else continue;
         if (text !== undefined) {
           noteProviderSuccess(p);
-          if (p !== provider) notify(`↪ Fallback: ${role} routed to ${p}/${usedModel} (configured: ${provider})`, { provider: p });
+          if (p !== provider) notify(`↪ ${role} answered by ${p}/${usedModel || 'default'}`, { provider: p });
           return opts.returnMeta ? { text, provider: p, model: usedModel, fallback: p !== provider } : text;
         }
       } catch (e) {
         lastErr = e;
         const status = _failureStatus(e);
-        if (status) markUnhealthy(p, Number(status), e.message);
+        if (status === 429 || status === 402) markUnhealthy(p, status, e.message);
         else noteProviderFailure(p, e);
         attempts.push({ provider: p, status: status ? Number(status) : null, message: e.message });
+        if (prev !== p) notify(`↪ ${p} ${_plainReason(e)} — trying the next provider`, { provider: p });
+        prev = p;
         console.warn(`[KERNEL] ${p} failed (${e.message.slice(0, 120)}), trying next provider`);
       }
     }
@@ -1812,7 +1786,8 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
         + `retry in a few seconds. Other providers in the chain could not serve either: `
         // Parenthesised: the || used to bind to the whole (never-empty) string,
         // so the message ended on "either: " (agent C2, 2026-09-23).
-        + (attempts.filter((a) => a !== throttled).map((a) => a.provider).join(', ') || 'none configured')
+        + (attempts.filter((a) => a !== throttled)
+          .map((a) => `${a.provider} ${_plainReason(a.status || { message: a.message })}`).join(', ') || 'none configured')
       );
       err.rateLimited = true;
       err.provider = throttled.provider;
