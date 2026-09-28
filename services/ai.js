@@ -82,12 +82,32 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
 
   const isHealthy = (p) => Date.now() > (providerHealth[p]?.blockedUntil || 0);
 
+  // What the operator reads when a provider steps aside: a phrase, never the
+  // provider's raw error body. The raw text stays in the server log.
+  const _plainReason = (e) => {
+    const status = typeof e === 'number' ? e : _failureStatus(e);
+    const msg = typeof e === 'number' ? '' : String(e?.message || '');
+    if (status === 402 || /credit|insufficient.?(funds|balance)|billing/i.test(msg)) return 'out of credits';
+    if (status === 401 || status === 403) return 'key rejected';
+    if (status === 429 || /rate.?limit|quota/i.test(msg)) return 'rate-limited';
+    if (status === 404) return 'model not available';
+    if (status === 413 || /too large|context length|maximum context/i.test(msg)) return 'request too large for it';
+    if (status >= 500) return 'provider error';
+    if (/timeout|timed out|ETIMEDOUT|ECONNRE|ENOTFOUND|fetch failed|network/i.test(msg)) return 'unreachable';
+    if (/failures in a row/.test(msg)) return 'failing repeatedly';
+    return 'unavailable';
+  };
+
   const markUnhealthy = (p, status, message = '') => {
-    let ms = status === 402 ? 10 * 60 * 1000 : 60 * 1000; // credits: 10min, rate limit: 60s default
+    // No credits does not fix itself in a minute; rest it long enough that
+    // the next turns go straight to a provider that can answer.
+    let ms = status === 402 ? 30 * 60 * 1000 : 60 * 1000;
     const retrySec = /try again in ([\d.]+)s/i.exec(message)?.[1];
     if (retrySec) ms = Math.ceil(parseFloat(retrySec) * 1000) + 2000;
-    providerHealth[p] = { blockedUntil: Date.now() + ms, reason: message.slice(0, 160) };
-    notify(`⏸ ${p} in cooldown ${Math.round(ms / 1000)}s: ${message.slice(0, 120)}`, { provider: p });
+    const plain = _plainReason(status || { message });
+    providerHealth[p] = { blockedUntil: Date.now() + ms, reason: message.slice(0, 160), plain };
+    console.warn(`[KERNEL] ${p} resting ${Math.round(ms / 1000)}s: ${message.slice(0, 160)}`);
+    notify(`⏸ ${p} ${plain} — resting ${Math.round(ms / 60000) || 1} min`, { provider: p });
   };
 
   // A provider that fails WITHOUT a 429/402 (an empty body, a budget spent
@@ -1404,14 +1424,14 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       // Say why the configured provider was not tried first.
       opts.onFallback?.({
         from: primary.provider, to: candidates[0].provider, model: candidates[0].model,
-        reason: `resting after failures: ${providerHealth[primary.provider]?.reason || 'in cooldown'}`,
+        reason: providerHealth[primary.provider]?.plain || 'resting',
       });
     }
 
     for (const c of candidates) {
       const fallback = c !== primary;
       if (fallback && lastFailed) {
-        opts.onFallback?.({ from: lastFailed.provider, to: c.provider, model: c.model, reason: lastErr?.message || 'unavailable' });
+        opts.onFallback?.({ from: lastFailed.provider, to: c.provider, model: c.model, reason: _plainReason(lastErr) });
       }
       opts.onAttempt?.({ provider: c.provider, model: c.model, fallback });
 
@@ -1656,8 +1676,18 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     const model = opts.model || roleConfig.model;
 
     if (provider === 'claude') {
-      const text = await claudeRequest(prompt, model, undefined, opts.advisorModel, opts);
-      return opts.returnMeta ? { text, provider: 'claude', model } : text;
+      try {
+        const text = await claudeRequest(prompt, model, undefined, opts.advisorModel, opts);
+        noteProviderSuccess('claude');
+        return opts.returnMeta ? { text, provider: 'claude', model } : text;
+      } catch (e) {
+        // Claude assigned is not Claude or nothing: the chain below still runs.
+        const status = _failureStatus(e);
+        if (status === 429 || status === 402) markUnhealthy('claude', status, e.message);
+        else noteProviderFailure('claude', e);
+        if (!registryErr) { registryErr = e; registryAttempt = { provider: 'claude', status: status || null, message: e.message, configured: true }; }
+        notify(`↪ claude ${_plainReason(e)} — trying the next provider`, { provider: 'claude' });
+      }
     }
 
     if (settings.roulette && !opts.provider) {
@@ -1797,7 +1827,17 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     // keys and no local chat model lands here on the very first request. The
     // router turns this flag into a 503 so the caller gets an actionable
     // "nothing is configured" instead of a bare 500.
-    const exhausted = lastErr || new Error('No LLM provider available (check API keys in Settings)');
+    let exhausted = lastErr || new Error('No LLM provider available (check API keys in Settings)');
+    // Only runtime failures of configured providers are summarised; "no such
+    // connection" is already the actionable sentence and keeps its words.
+    if (attempts.some((a) => a.configured !== false)) {
+      // One line per provider, in words — the raw bodies are in the server log.
+      const summary = attempts.map((a) => `${a.provider} ${_plainReason(a.status || { message: a.message })}`).join(', ');
+      const plain = new Error(`No provider could answer right now — ${summary}. Add a key or credits in Settings, or try again shortly.`);
+      plain.cause = exhausted;
+      if (exhausted.partialText) plain.partialText = exhausted.partialText;
+      exhausted = plain;
+    }
     // A configured provider that ran and failed is not "nothing is configured":
     // the router turns that flag into "assign a model in Settings", which is the
     // wrong remedy for a provider that answered with an error or ran out of

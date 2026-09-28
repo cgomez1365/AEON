@@ -751,9 +751,7 @@ const Terminal2 = ({ onUsageUpdate }) => {
           else if (eventType === 'meta') {
             if (payload.streamId) activeChatRef.current = { ...activeChatRef.current, streamId: payload.streamId };
             // Fallback narrative: show degradation inline, strikethrough style
-            if (payload.fallbackFrom && meta.provider) {
-              push({ type: 'msg', role: 'system', content: `~~${meta.provider}~~ → ${payload.provider} (${payload.fallbackFrom})` });
-            }
+            if (payload.notice) push({ type: 'msg', role: 'system', content: `↪ ${payload.notice}` });
             meta = { ...meta, ...payload };
           }
           else if (eventType === 'warning') push({ type: 'msg', role: 'warning', content: payload.message });
@@ -779,6 +777,10 @@ const Terminal2 = ({ onUsageUpdate }) => {
         // A deliberate stop is not a failure. Keep what was generated.
         patch(msgId, { content: streamed, streaming: false, meta: { ...meta, cancelled: true } });
         push({ type: 'msg', role: 'system', content: 'Generation stopped.' });
+      } else if (streamed) {
+        // Keep what already arrived; say it broke underneath it.
+        patch(msgId, { content: streamed, streaming: false, meta: { ...meta, truncated: true } });
+        push({ type: 'msg', role: 'warning', content: failure.text });
       } else {
         patch(msgId, { role: 'error', content: failure.text, streaming: false });
       }

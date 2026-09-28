@@ -235,8 +235,8 @@ module.exports = function ({ kernelLLM, loadSettings: loadSettingsDep, VAULT_ROO
         },
         onFallback: ({ from, to, model: m, reason }) => {
           announced = to;
-          sseWrite(res, 'warning', { message: `⚠ ${from} unavailable — falling back to ${to}` });
-          sseWrite(res, 'meta', { provider: to, model: m, role, fallbackFrom: `${from}: ${String(reason).slice(0, 140)}` });
+          // One quiet line, in words: a switch is a notice, not a failure.
+          sseWrite(res, 'meta', { provider: to, model: m, role, notice: `${from} ${reason} → ${to}` });
         },
       });
 

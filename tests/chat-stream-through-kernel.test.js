@@ -208,13 +208,10 @@ describe('POST /api/chat/stream streams through kernelLLM.stream', () => {
     const names = events.map(e => e.event);
 
     expect(events[0].data).toMatchObject({ provider: 'custom', model: 'fake-model' });
-    const warning = events.find(e => e.event === 'warning');
-    expect(warning.data.message).toMatch(/custom unavailable — falling back to local/);
-    const corrected = events.find(e => e.event === 'meta' && e.data.fallbackFrom);
-    expect(corrected.data).toMatchObject({ provider: 'local' });
-    expect(corrected.data.fallbackFrom).toMatch(/^custom: /);
-    // The warning precedes the corrected label, which precedes any token.
-    expect(names.indexOf('warning')).toBeLessThan(events.indexOf(corrected));
+    // A switch is ONE quiet notice, in words — no warning event, no raw body.
+    expect(names).not.toContain('warning');
+    const corrected = events.find(e => e.event === 'meta' && e.data.notice);
+    expect(corrected.data).toMatchObject({ provider: 'local', notice: 'custom provider error → local' });
     expect(events.indexOf(corrected)).toBeLessThan(names.indexOf('token'));
 
     expect(events.filter(e => e.event === 'token').map(e => e.data.t)).toEqual(['local-']);
