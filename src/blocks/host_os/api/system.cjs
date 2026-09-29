@@ -136,7 +136,9 @@ module.exports = function createSystemRouter(deps) {
           child.on('error', (e) => console.error('[AEON SYSTEM] restart.bat spawn failed:', e.message));
           child.unref();
         }
-      } finally { process.exit(0); }
+      // 75 = "restart me" to the AEON launchers' loop (any other exit ends
+      // it); pm2/nodemon restart on any exit; restart.bat relaunches itself.
+      } finally { process.exit(cap.via === 'restart.bat' ? 0 : 75); }
     }, 500);
   });
 

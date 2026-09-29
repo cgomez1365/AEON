@@ -1014,8 +1014,10 @@ module.exports = (app, deps) => {
           // server-side path.join constant, never request-derived.
           spawn('cmd.exe', ['/c', bat], { detached: true, stdio: 'ignore', windowsHide: false }).unref();
         }
-        process.exit(0); // a supervisor is present, or the script above relaunches
-      } catch { process.exit(0); }
+        // 75 = "restart me": the AEON launchers loop on it (any other exit
+        // ends them); pm2/nodemon restart on any exit.
+        process.exit(hasRelauncher ? 0 : 75);
+      } catch { process.exit(hasRelauncher ? 0 : 75); }
     }, 400);
   });
 };

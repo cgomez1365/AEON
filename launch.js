@@ -341,7 +341,17 @@ async function main() {
   p('  ────────────────────────────────────────────────────────────', DG);
   p('');
 
-  const server = spawn('node', ['server/server.js'], { cwd: ROOT, stdio: 'inherit' });
+  // AEON_SUPERVISED: Settings → RESTART exits with 75 and startServer()
+  // below brings it back; any other exit ends the launcher.
+  const startServer = () => {
+    const child = spawn('node', ['server/server.js'], { cwd: ROOT, stdio: 'inherit', env: { ...process.env, AEON_SUPERVISED: '1' } });
+    child.on('exit', (code) => {
+      if (code === 75) { p('   Restarting AEON...', GR); startServer(); return; }
+      process.exit(code || 0);
+    });
+    return child;
+  };
+  const server = startServer();
   const url = `http://localhost:${PORT}`;
 
   // Open the browser only AFTER the kernel is actually listening. A fixed
@@ -368,7 +378,6 @@ async function main() {
   };
   setTimeout(() => waitForServer(), 600); // small head start before first probe
 
-  server.on('exit', (code) => process.exit(code || 0));
 }
 
 main().catch((e) => { fail(e.message); process.exit(1); });

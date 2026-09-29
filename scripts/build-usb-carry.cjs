@@ -472,7 +472,15 @@ echo "  data            $AEON_HOME"
 echo "  Close this window to stop AEON. Eject the drive before unplugging it."
 echo
 ( sleep 3; open "http://localhost:$PORT" >/dev/null 2>&1 ) &
-exec "$NODE" server.cjs
+# Settings → RESTART exits with 75 and this loop starts AEON again. Any other
+# exit — closing the window, Ctrl+C, a crash — ends here, so a crash can
+# never spin. (exec used to end this script: nothing could bring AEON back.)
+export AEON_SUPERVISED=1
+while :; do
+  "$NODE" server.cjs; rc=$?
+  [ "$rc" -eq 75 ] || exit "$rc"
+  echo "  Restarting AEON..."
+done
 `;
 }
 
@@ -518,7 +526,15 @@ echo "  AEON (carried)  http://localhost:$PORT"
 echo "  data            $AEON_HOME"
 echo
 ( sleep 3; xdg-open "http://localhost:$PORT" >/dev/null 2>&1 || true ) &
-exec "$NODE" server.cjs
+# Settings → RESTART exits with 75 and this loop starts AEON again. Any other
+# exit — closing the window, Ctrl+C, a crash — ends here, so a crash can
+# never spin. (exec used to end this script: nothing could bring AEON back.)
+export AEON_SUPERVISED=1
+while :; do
+  "$NODE" server.cjs; rc=$?
+  [ "$rc" -eq 75 ] || exit "$rc"
+  echo "  Restarting AEON..."
+done
 `;
 }
 
@@ -565,7 +581,11 @@ echo   data            %AEON_HOME%
 echo   Close this window to stop AEON. Eject the drive before unplugging it.
 echo.
 start "" /b cmd /c "ping -n 4 127.0.0.1 >nul & start "" http://localhost:%PORT%"
+REM Settings -^> RESTART exits with 75 and AEON starts again; any other exit ends here.
+set AEON_SUPERVISED=1
+:run
 "%NODE%" server.cjs
+if "%errorlevel%"=="75" (echo   Restarting AEON... & goto run)
 echo.
 pause
 endlocal

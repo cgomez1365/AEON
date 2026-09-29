@@ -85,7 +85,8 @@ describe('POST /api/system/restart', () => {
     expect(body.restarting).toBe(true);
     expect(body.via).toBe('supervisor');
     await sleep(700);
-    expect(exitSpy).toHaveBeenCalledWith(0);
+    // 75 = "restart me" to the launcher loop (AEON_SUPERVISED); pm2/nodemon restart on any exit.
+    expect(exitSpy).toHaveBeenCalledWith(75);
   });
 });
 
