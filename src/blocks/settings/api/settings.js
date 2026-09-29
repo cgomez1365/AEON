@@ -902,6 +902,38 @@ module.exports = (app, deps) => {
     res.json({ ok: true, blockLayout: settings.blockLayout });
   });
 
+  // The setup groups, in the operator's flow order. Keys are saved through
+  // /api/settings/secrets (vault) and hydrated into process.env at boot.
+  const ENV_GROUPS = {
+    apiKeys: {
+      label: 'API keys',
+      vars: ['GROQ_API_KEY', 'GEMINI_FREE_KEY_1', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'GROK_API_KEY', 'OPENROUTER_API_KEY'],
+      anyOf: ['GROQ_API_KEY', 'GEMINI_FREE_KEY_1', 'GEMINI_PAID_KEY', 'GEMINI_API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY'], // at least one
+    },
+    firebase: {
+      label: 'Firebase',
+      vars: ['VITE_FIREBASE_API_KEY', 'VITE_FIREBASE_AUTH_DOMAIN', 'VITE_FIREBASE_PROJECT_ID',
+             'VITE_FIREBASE_STORAGE_BUCKET', 'VITE_FIREBASE_MESSAGING_SENDER_ID', 'VITE_FIREBASE_APP_ID'],
+      allOf: ['VITE_FIREBASE_API_KEY', 'VITE_FIREBASE_PROJECT_ID', 'VITE_FIREBASE_APP_ID'],
+    },
+    supabase: {
+      label: 'Supabase',
+      vars: ['SUPABASE_URL', 'SUPABASE_ANON_KEY', 'SUPABASE_SERVICE_ROLE_KEY'],
+      allOf: ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY'],
+    },
+  };
+
+  function parseEnvFile() {
+    const map = {};
+    if (fs.existsSync(ENV_FILE)) {
+      for (const line of fs.readFileSync(ENV_FILE, 'utf8').split('\n')) {
+        const m = line.match(/^\s*([A-Z0-9_]+)\s*=(.*)$/);
+        if (m) map[m[1]] = m[2];
+      }
+    }
+    return map;
+  }
+
   // ── GET /api/settings/setup-status — wizard progress (no secrets) ──
   app.get('/api/settings/setup-status', (req, res) => {
     const env = { ...process.env, ...parseEnvFile() }; // live + file (covers not-yet-restarted)
