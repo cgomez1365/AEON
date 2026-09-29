@@ -13,13 +13,16 @@ const path = require('path');
 const ROOT = path.join(__dirname, '..');
 const blocksDir = path.join(ROOT, 'src', 'blocks');
 const outFile = path.join(ROOT, 'docs', 'BLOCKS.md');
+const { isOsJunk } = require('../src/kernel/osJunk.cjs');
 
 function apiFiles(dir) {
   const out = [];
   const walk = (d, prefix = '') => {
     if (!fs.existsSync(d)) return;
     for (const e of fs.readdirSync(d, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
-      if (e.name.startsWith('_')) continue;
+      // OS junk too: on exFAT, macOS leaves an AppleDouble ._name beside every
+      // file it touches, and they were listed as API files.
+      if (e.name.startsWith('_') || isOsJunk(e.name)) continue;
       if (e.isDirectory()) walk(path.join(d, e.name), `${prefix}${e.name}/`);
       else if (/\.(js|cjs)$/.test(e.name)) out.push(prefix + e.name);
     }
