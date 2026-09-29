@@ -14,6 +14,22 @@ const clampCount = (n) => {
   return Number.isFinite(v) && v > 0 ? Math.min(v, MAX_COUNT) : DEFAULT_COUNT;
 };
 
+// A search key is printable ASCII with no spaces. Anything else (an inline
+// .env comment, a pasted newline, quotes) cannot go in a header — Node throws
+// "Invalid character in header content" and the whole web leg failed. Treat
+// it as unset, once in the log, and let the next provider answer.
+const _warnedKeys = new Set();
+function searchKey(name) {
+  const v = process.env[name];
+  if (!v) return null;
+  if (/^[\x21-\x7e]+$/.test(v)) return v;
+  if (!_warnedKeys.has(name)) {
+    _warnedKeys.add(name);
+    console.warn(`[SEARCH] ${name} is set but is not a usable key (spaces or non-ASCII) — skipped. Re-enter it in Settings → Keys.`);
+  }
+  return null;
+}
+
 // DuckDuckGo Lite's result page → [{ title, url, snippet }], or null when the
 // page carries no results (a block page, a layout change, an empty answer).
 function parseDuckDuckGoLite(html, count = DEFAULT_COUNT) {
@@ -102,7 +118,7 @@ module.exports = ({ writeOSAudit, kernelLLM }) => {
 
   // ── Brave Search API ────────────────────────────────────────────────────
   const fetchBraveSearch = (query, correlationId, count = DEFAULT_COUNT) => {
-    const apiKey = process.env.BRAVE_API_KEY;
+    const apiKey = searchKey('BRAVE_API_KEY');
     if (!apiKey) return Promise.resolve(null);
     return new Promise((resolve) => {
       const options = {
@@ -135,7 +151,7 @@ module.exports = ({ writeOSAudit, kernelLLM }) => {
 
   // ── Serper (Google via serper.dev) ──────────────────────────────────
   const fetchSerperSearch = (query, correlationId, count = DEFAULT_COUNT) => {
-    const apiKey = process.env.SERPER_API_KEY;
+    const apiKey = searchKey('SERPER_API_KEY');
     if (!apiKey) return Promise.resolve(null);
     return new Promise((resolve) => {
       const body = JSON.stringify({ q: query, num: count });
@@ -169,7 +185,7 @@ module.exports = ({ writeOSAudit, kernelLLM }) => {
 
   // ── Tavily ──────────────────────────────────────────────────────────
   const fetchTavilySearch = (query, correlationId, count = DEFAULT_COUNT) => {
-    const apiKey = process.env.TAVILY_API_KEY;
+    const apiKey = searchKey('TAVILY_API_KEY');
     if (!apiKey) return Promise.resolve(null);
     return new Promise((resolve) => {
       const body = JSON.stringify({ api_key: apiKey, query, max_results: Math.min(count, 20), search_depth: 'basic' });
@@ -211,17 +227,14 @@ module.exports = ({ writeOSAudit, kernelLLM }) => {
   // Default stays 5 for callers that never asked.
   const fetchWebSearch = async (query, correlationId, count = DEFAULT_COUNT) => {
     count = clampCount(count);
-    if (process.env.TAVILY_API_KEY) {
-      const r = await fetchTavilySearch(query, correlationId, count);
-      if (r) return r;
-    }
-    if (process.env.SERPER_API_KEY) {
-      const r = await fetchSerperSearch(query, correlationId, count);
-      if (r) return r;
-    }
-    if (process.env.BRAVE_API_KEY) {
-      const r = await fetchBraveSearch(query, correlationId, count);
-      if (r) return r;
+    // A keyed provider that fails hands off to the next, down to DuckDuckGo —
+    // one bad key must not take the whole web leg with it.
+    for (const [name, fetcher] of [['TAVILY_API_KEY', fetchTavilySearch], ['SERPER_API_KEY', fetchSerperSearch], ['BRAVE_API_KEY', fetchBraveSearch]]) {
+      if (!searchKey(name)) continue;
+      try {
+        const r = await fetcher(query, correlationId, count);
+        if (r) return r;
+      } catch (e) { console.warn(`[SEARCH] ${name.split('_')[0].toLowerCase()} failed (${e.message}) — trying the next provider`); }
     }
     return fetchDuckDuckGo(query, correlationId, count);
   };

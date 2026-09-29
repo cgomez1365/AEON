@@ -360,7 +360,15 @@ function createProviderCredentialStore(options = {}) {
     return Object.fromEntries(Object.keys(r.data.secrets).map((key) => [key, 'vault']));
   }
 
-  return { save, hydrate, metadata, file };
+  function remove(names) {
+    const data = loadForWrite();
+    const removed = (names || []).filter((k) => k in data.secrets);
+    for (const k of removed) delete data.secrets[k];
+    if (removed.length) write(data);
+    return removed;
+  }
+
+  return { save, hydrate, metadata, remove, file };
 }
 
 /**
@@ -374,31 +382,57 @@ function createProviderCredentialStore(options = {}) {
  * changes; anything that cannot be verified is left exactly where it was.
  * Skipped when the vault is locked or the store is unreadable. Idempotent.
  */
-function migrateEnvKeysToVault(envFile, { store = createProviderCredentialStore(), date = new Date() } = {}) {
-  if (!envFile || !fs.existsSync(envFile)) return { moved: [], skipped: 'no-env-file' };
-  if (!vault.isUnlocked()) return { moved: [], skipped: 'vault-locked' };
-  const meta = store.metadata();
-  if (meta.__unreadable) return { moved: [], skipped: 'store-unreadable' };
+// The line a moved key leaves behind in .env.
+const MOVED_LINE_RE = /^#\s*([A-Z0-9_]+) moved to the encrypted vault \d{4}-\d{2}-\d{2} — manage it in Settings\s*$/;
 
-  const text = fs.readFileSync(envFile, 'utf8');
+function migrateEnvKeysToVault(envFile, { store = createProviderCredentialStore(), date = new Date() } = {}) {
+  if (!envFile || !fs.existsSync(envFile)) return { moved: [], healed: [], skipped: 'no-env-file' };
+  if (!vault.isUnlocked()) return { moved: [], healed: [], skipped: 'vault-locked' };
+  const meta = store.metadata();
+  if (meta.__unreadable) return { moved: [], healed: [], skipped: 'store-unreadable' };
+
+  let text = fs.readFileSync(envFile, 'utf8');
+
+  // Repair (2026-09-28): the first version of this move read .env with its own
+  // parser, which kept inline comments. Placeholder lines such as
+  //   SERPER_API_KEY=   # optional — get one at serper.dev
+  // — empty to dotenv — were stored as the key "# optional — …", and Orion's
+  // web search then failed on an invalid header. A stored "key" that is a
+  // comment is never a key: take it out of the vault and put the line back.
+  const healed = [];
+  {
+    const held = {};
+    store.hydrate(held);
+    const bogus = Object.keys(held).filter((k) => /^\s*#/.test(held[k]));
+    if (bogus.length) {
+      text = text.split(/(\r?\n)/).map((part) => {
+        const m = MOVED_LINE_RE.exec(part);
+        return m && bogus.includes(m[1]) ? `${m[1]}=   ${held[m[1]].trim()}` : part;
+      }).join('');
+      writeFileAtomic(envFile, text);
+      healed.push(...store.remove(bogus));
+    }
+  }
+
+  // dotenv's own parser: the same reading the server gives this file at boot
+  // (inline comments, quotes, export, CRLF), so an empty placeholder stays empty.
+  const parsed = require('dotenv').parse(text);
   const found = {};
-  for (const line of text.split(/\r?\n/)) {
-    const m = /^\s*(?:export\s+)?([A-Z0-9_]+)\s*=\s*(.*?)\s*$/.exec(line);
-    if (!m || !isProviderSecretKey(m[1])) continue;
-    const value = m[2].replace(/^(['"])(.*)\1$/, '$2');
-    if (value) found[m[1]] = value;
+  for (const [name, value] of Object.entries(parsed)) {
+    if (isProviderSecretKey(name) && value && !/^\s*#/.test(value)) found[name] = value;
   }
   const names = Object.keys(found);
-  if (!names.length) return { moved: [], skipped: null };
+  if (!names.length) return { moved: [], healed, skipped: null };
 
   // The vault already wins at boot (hydrate runs after dotenv), so a key it
   // holds is not overwritten; only keys it lacks are imported.
-  const toImport = Object.fromEntries(names.filter((n) => !meta[n]).map((n) => [n, found[n]]));
+  const current = store.metadata();
+  const toImport = Object.fromEntries(names.filter((n) => !current[n]).map((n) => [n, found[n]]));
   if (Object.keys(toImport).length) store.save(toImport);
   const check = {};
   store.hydrate(check);
   const verified = names.filter((n) => typeof check[n] === 'string' && check[n].length > 0);
-  if (!verified.length) return { moved: [], skipped: 'not-verified' };
+  if (!verified.length) return { moved: [], healed, skipped: 'not-verified' };
 
   const stamp = date.toISOString().slice(0, 10);
   const out = text.split(/(\r?\n)/).map((part) => {
@@ -409,7 +443,7 @@ function migrateEnvKeysToVault(envFile, { store = createProviderCredentialStore(
   }).join('');
   writeFileAtomic(envFile, out);
   try { fs.chmodSync(envFile, 0o600); } catch { /* not supported here */ }
-  return { moved: verified, imported: Object.keys(toImport), skipped: null };
+  return { moved: verified, imported: Object.keys(toImport), healed, skipped: null };
 }
 
 function hydrateProviderSecrets(target = process.env) {

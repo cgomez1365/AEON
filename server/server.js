@@ -141,6 +141,7 @@ const { loadSettings, hydrateProviderSecrets } = settingsService;
 // cloud, so there it does nothing).
 try {
   const mig = settingsService.migrateEnvKeysToVault(ENV_FILE);
+  if (mig.healed && mig.healed.length) console.log(`[VAULT] Removed ${mig.healed.length} placeholder comment(s) stored as keys, .env lines restored: ${mig.healed.join(', ')}`);
   if (mig.moved.length) console.log(`[VAULT] Moved ${mig.moved.length} key(s) from .env into the encrypted vault: ${mig.moved.join(', ')}`);
 } catch (e) { console.error('[VAULT] .env key move failed — keys left in .env:', e.message); }
 hydrateProviderSecrets(process.env);
@@ -297,7 +298,7 @@ const baseDeps = {
         windowsHide: true,
       }).unref();
     } else {
-      process.exit(0);
+      process.exit(75); // "restart me" to the launcher loop (AEON_SUPERVISED)
     }
   },
   defaultLocalModel: ai.defaultLocalModel,

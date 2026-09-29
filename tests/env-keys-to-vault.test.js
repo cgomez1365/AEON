@@ -78,3 +78,34 @@ describe('migrateEnvKeysToVault', () => {
     } finally { process.env.AEON_VAULT_MASTER_KEY = 'env-move-suite-key'; vault.__resetForTest(); }
   });
 });
+
+describe('placeholder lines and the repair (2026-09-28)', () => {
+  const envFile = path.join(tmp, '.env-heal');
+  const store = settings.createProviderCredentialStore({ file: path.join(tmp, 'provider-heal.json') });
+
+  it('a placeholder with only an inline comment is empty, as dotenv reads it — not moved', () => {
+    fs.writeFileSync(envFile, 'SERPER_API_KEY=   # optional — get one at serper.dev\n');
+    expect(settings.migrateEnvKeysToVault(envFile, { store }).moved).toEqual([]);
+    expect(fs.readFileSync(envFile, 'utf8')).toBe('SERPER_API_KEY=   # optional — get one at serper.dev\n');
+  });
+
+  it('a real key followed by an inline comment moves without the comment', () => {
+    fs.writeFileSync(envFile, 'BRAVE_API_KEY=BSA-real-key   # privacy-first\n');
+    settings.migrateEnvKeysToVault(envFile, { store });
+    const env = {};
+    store.hydrate(env);
+    expect(env.BRAVE_API_KEY).toBe('BSA-real-key');
+  });
+
+  it('a comment the first version stored as a key is removed and its line restored', () => {
+    store.save({ TAVILY_API_KEY: '# optional — AI-native search' });
+    fs.writeFileSync(envFile, '# TAVILY_API_KEY moved to the encrypted vault 2026-09-28 — manage it in Settings\n');
+    const r = settings.migrateEnvKeysToVault(envFile, { store });
+    expect(r.healed).toEqual(['TAVILY_API_KEY']);
+    const env = {};
+    store.hydrate(env);
+    expect(env.TAVILY_API_KEY).toBeUndefined();
+    expect(env.BRAVE_API_KEY).toBe('BSA-real-key'); // real keys untouched
+    expect(fs.readFileSync(envFile, 'utf8')).toBe('TAVILY_API_KEY=   # optional — AI-native search\n');
+  });
+});
