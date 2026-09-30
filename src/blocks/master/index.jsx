@@ -124,7 +124,10 @@ const RULES = [
   ['A command that needs something says so', 'contract.commands entries take `when`: "supabase", "runtime == local", "!ready". The terminal refuses with the reason instead of running a no-op.'],
 ];
 
-export default function Master() {
+// onBlockLayoutChange comes from the shell (DesktopLayout / MobileLayout), the
+// same setter the Dashboard's drag uses, so a section chosen after an install
+// reaches the sidebar's copy of the layout instead of being overwritten by it.
+export default function Master({ onBlockLayoutChange }) {
   const [registry, setRegistry] = useState(null);
   const [kernel, setKernel] = useState('checking');
   // Build is what Master already was; Install is the other half of the same
@@ -179,7 +182,7 @@ export default function Master() {
 
       {tab === 'build'
         ? <ReferencePanel registry={registry} onRefresh={loadRegistry} />
-        : <InstallPanel onInstalled={loadRegistry} />}
+        : <InstallPanel onInstalled={loadRegistry} onBlockLayoutChange={onBlockLayoutChange} />}
     </div>
   );
 }

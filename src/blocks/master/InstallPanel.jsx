@@ -1,26 +1,39 @@
 /**
  * Master → Install. Paste a link, get a block, choose where it lives.
  *
- * Everything under this panel already existed as kernel routes: POST
- * /blocks/store/install takes { url } (https only), { name } (from the
+ * Everything under this panel already existed as kernel routes
+ * (src/kernel/routers/store.cjs, mounted at /api/store): POST
+ * /api/store/install takes { url } (https only), { name } (from the
  * configured store, verified against its catalog's SHA-256) or { base64 };
- * POST /blocks/store/update swaps a version only if the new one goes live and
+ * POST /api/store/update swaps a version only if the new one goes live and
  * rolls back if it does not. What was missing was a surface. This is the
  * surface, and nothing more — the kernel decides, this reports.
  *
+ * 2026-09-28 — this panel shipped calling /blocks/store/source and
+ * /blocks/store/install. Nothing has ever been mounted there: /blocks serves
+ * only /registry, /widgets and /state. The GET fell through to the SPA
+ * fallback (index.html, 200), so the panel said "the store could not be
+ * reached" with AEON_STORE set; every install was an Express 404. The paths
+ * below are the ones Settings → Blocks (settings/blockLifecycle.js) and the
+ * CLI already use, and tests/sweep-master-install-panel.test.js checks every
+ * path this file fetches against what the server mounts.
+ *
  * TWO THINGS IT DELIBERATELY DOES NOT DO.
  *
- * It does not validate a licence. A key checked in the browser is a key anyone
- * skips with devtools, so when the store is gated the check belongs on the
- * install route, against the store, server-side. The field below carries a key
- * to the kernel and takes the kernel's word for the answer.
+ * It asks for no licence. A key checked in the browser is a key anyone skips
+ * with devtools, so a gated store's check belongs on the install route,
+ * server-side — and /api/store/install has none (installCartridge reads name,
+ * url or base64, nothing else). The key field this panel had went nowhere: it
+ * told the operator a key had been judged when nothing read it. It comes back
+ * with the server check, not before.
  *
  * It does not decide where a block goes. It asks, because the operator is the
  * only one who knows whether a thing is a tool or an agent, and a block that
  * silently lands in Unsorted is a block they have to go hunting for.
  */
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Download, FolderInput, Check, AlertTriangle, Loader } from 'lucide-react';
+import { getEffectiveBlockGroups } from '../../kernel/blockRegistry.js';
 
 const DIM = { fontSize: 12.5, color: 'var(--dim, #9aa3b2)' };
 const FIELD = {
@@ -48,11 +61,76 @@ export function classifySource(raw) {
   return { kind: 'unknown' };
 }
 
-export default function InstallPanel({ onInstalled }) {
+/**
+ * What an accepted POST /api/store/install answered, in the panel's terms.
+ *
+ * The route returns the pipeline's verdict plus { blockId, purchase:
+ * { id, label, version } } (store.cjs installCartridge). The panel used to read
+ * d.id / d.label / d.version, none of which exist, so an install by link
+ * reported id null and never asked where the block should live. A queued
+ * install is not an installed block — it waits for the operator's approval.
+ */
+export function installOutcome(d, cls) {
+  const p = (d && d.purchase) || {};
+  const id = d?.blockId || p.id || cls?.body?.name || null;
+  return { id, label: p.label || id, detail: p.version ? `v${p.version}` : '', queued: d?.stage === 'queued' };
+}
+
+/**
+ * The operator's saved block layout from a GET /api/settings reply, or null
+ * when the reply is not one.
+ *
+ * The route answers { settings, envKeys, cloudProviders }; the layout is
+ * settings.blockLayout (DesktopLayout and MobileLayout read it there). This
+ * read body.blockLayout, always undefined, so it started from an empty layout
+ * and the save below — a full replace — erased every section the operator had
+ * made. null is the answer for anything else (a 401, a failed read), and a
+ * null layout is never written back.
+ */
+export function layoutFromSettings(body) {
+  const s = body && typeof body === 'object' ? body.settings : null;
+  if (!s || typeof s !== 'object' || Array.isArray(s)) return null;
+  const bl = s.blockLayout || {};
+  return {
+    overrides: { ...(bl.overrides || {}) },
+    customGroups: { ...(bl.customGroups || {}) },
+    groupOverrides: { ...(bl.groupOverrides || {}) },
+  };
+}
+
+/**
+ * The whole layout with one block filed under one section. POST
+ * /api/settings/block-layout replaces the layout outright, so everything the
+ * operator already had is carried over here — this adds, it never drops. A
+ * section named here that already exists is reused, not reset.
+ */
+export function placeBlock(layout, blockId, groupId, customLabel) {
+  const next = {
+    overrides: { ...(layout?.overrides || {}), [blockId]: groupId },
+    customGroups: { ...(layout?.customGroups || {}) },
+    groupOverrides: { ...(layout?.groupOverrides || {}) },
+  };
+  if (customLabel && !next.customGroups[groupId]) next.customGroups[groupId] = { label: customLabel, icon: 'custom', order: 50 };
+  return next;
+}
+
+/**
+ * The sections to offer: the sidebar's own (getEffectiveBlockGroups, the
+ * computation the sidebar and the Dashboard share), so renames and custom
+ * sections appear and hidden ones do not. This used to read `group` off
+ * /blocks/registry entries — raw manifests, whose group is nav.group — so no
+ * default section was ever offered. Unsorted is the safety net, not a choice.
+ */
+export function sectionChoices(layout) {
+  return getEffectiveBlockGroups(layout)
+    .filter((g) => !g.safetyNet)
+    .map((g) => ({ id: g.id, name: g.meta.label || labelise(g.id) }));
+}
+
+export default function InstallPanel({ onInstalled, onBlockLayoutChange }) {
   const [source, setSource] = useState('');
-  const [licence, setLicence] = useState('');
   const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState(null);   // { ok, id, label, error }
+  const [result, setResult] = useState(null);   // { ok, id, label, detail, queued, error }
   const [store, setStore] = useState(null);     // configured store catalog
 
   // What the configured store offers, if one is configured at all. A panel
@@ -60,8 +138,14 @@ export default function InstallPanel({ onInstalled }) {
   // AEON_STORE is simply unset.
   useEffect(() => {
     let alive = true;
-    fetch('/blocks/store/source')
-      .then((r) => r.json())
+    fetch('/api/store/source')
+      .then(async (r) => {
+        const d = await r.json();
+        // A store that is set but unreadable answers 502 with its reason.
+        // That is not "Store connected — 0 blocks".
+        if (!r.ok && !d.error) d.error = `HTTP ${r.status}`;
+        return d;
+      })
       .then((d) => { if (alive) setStore(d); })
       .catch(() => { if (alive) setStore({ configured: false, items: [], hint: 'The store could not be reached.' }); });
     return () => { alive = false; };
@@ -78,25 +162,21 @@ export default function InstallPanel({ onInstalled }) {
 
     setBusy(true); setResult(null);
     try {
-      const body = { ...cls.body };
-      // The key travels to the kernel and is judged there. Nothing about it is
-      // decided in this page.
-      if (licence.trim()) body.licenceKey = licence.trim();
-      const r = await fetch('/blocks/store/install', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      const r = await fetch('/api/store/install', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cls.body),
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok || d.ok === false) {
         setResult({ ok: false, error: d.error || `The install was refused (HTTP ${r.status}).` });
       } else {
-        const id = d.id || d.block?.id || cls.body.name || null;
-        setResult({ ok: true, id, label: d.label || d.block?.label || id, detail: d.version ? `v${d.version}` : '' });
-        if (onInstalled) onInstalled(id);
+        const out = installOutcome(d, cls);
+        setResult({ ok: true, ...out });
+        if (onInstalled) onInstalled(out.id);
       }
     } catch (e) {
       setResult({ ok: false, error: `The install could not run: ${e.message}` });
     } finally { setBusy(false); }
-  }, [source, licence, onInstalled]);
+  }, [source, onInstalled]);
 
   return (
     <div>
@@ -112,25 +192,23 @@ export default function InstallPanel({ onInstalled }) {
         onChange={(e) => setSource(e.target.value)}
         onKeyDown={(e) => { if (e.key === 'Enter' && !busy) install(); }} />
 
-      <label style={{ ...DIM, display: 'block', margin: '10px 0 4px' }} htmlFor="ip-key">
-        Licence key <span style={{ opacity: 0.7 }}>— only if the store asks for one</span>
-      </label>
-      <input id="ip-key" style={FIELD} value={licence} spellCheck={false} autoComplete="off"
-        placeholder="leave empty for a free or local block"
-        onChange={(e) => setLicence(e.target.value)} />
-
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 12 }}>
         <button className="btn primary" onClick={install} disabled={busy}
           style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
           {busy ? <Loader size={13} aria-hidden="true" /> : <Download size={13} aria-hidden="true" />}
           {busy ? 'Installing…' : 'Install'}
         </button>
-        {store && !store.configured && (
+        {store && store.error && (
+          <span style={{ ...DIM, flex: 1 }}>
+            The store could not be read ({store.error}), so only a direct https link will work.
+          </span>
+        )}
+        {store && !store.error && !store.configured && (
           <span style={{ ...DIM, flex: 1 }}>
             No store is set up yet, so only a direct https link will work. {store.hint}
           </span>
         )}
-        {store && store.configured && (
+        {store && !store.error && store.configured && (
           <span style={{ ...DIM, flex: 1 }}>
             Store connected — {store.items?.length || 0} block{(store.items?.length || 0) === 1 ? '' : 's'} available by name.
           </span>
@@ -146,8 +224,8 @@ export default function InstallPanel({ onInstalled }) {
       )}
 
       {result && result.ok && (
-        <SectionChooser blockId={result.id} label={result.label} detail={result.detail}
-          onDone={() => setResult(null)} />
+        <SectionChooser blockId={result.id} label={result.label} detail={result.detail} queued={result.queued}
+          onBlockLayoutChange={onBlockLayoutChange} onDone={() => setResult(null)} />
       )}
     </div>
   );
@@ -161,63 +239,55 @@ export default function InstallPanel({ onInstalled }) {
  * choice they see everywhere. Writing it is a full replace of blockLayout,
  * which is what POST /api/settings/block-layout expects: the Dashboard needs
  * real removal when a block is dragged back to its default, and a deep merge
- * can never delete a key.
+ * can never delete a key. A full replace is only safe from the full layout,
+ * so this writes nothing until it has read the saved one.
  */
-function SectionChooser({ blockId, label, detail, onDone }) {
+function SectionChooser({ blockId, label, detail, queued, onBlockLayoutChange, onDone }) {
   const [layout, setLayout] = useState(null);
-  const [groups, setGroups] = useState([]);
+  const [readErr, setReadErr] = useState('');
   const [chosen, setChosen] = useState('');
   const [newName, setNewName] = useState('');
   const [saved, setSaved] = useState(false);
   const [err, setErr] = useState('');
 
+  // Read from the server, not the shell's copy: the shell falls back to an
+  // empty layout when its own read fails, and writing from that is the same
+  // erasure this reads around.
   useEffect(() => {
     let alive = true;
-    Promise.all([
-      fetch('/api/settings').then((r) => r.json()).catch(() => ({})),
-      fetch('/blocks/registry').then((r) => r.json()).catch(() => []),
-    ]).then(([settings, reg]) => {
-      if (!alive) return;
-      const bl = settings?.blockLayout || { overrides: {}, customGroups: {}, groupOverrides: {} };
-      setLayout(bl);
-      // Every section a block currently sits in, plus the operator's custom
-      // ones. Derived rather than hardcoded: a list of sections that does not
-      // include the ones they made is a list they will not recognise.
-      const blocks = Array.isArray(reg) ? reg : (reg.blocks || []);
-      const seen = new Map();
-      for (const b of blocks) {
-        const g = bl.overrides?.[b.id] || b.group;
-        if (g && !seen.has(g)) seen.set(g, bl.groupOverrides?.[g]?.label || labelise(g));
-      }
-      for (const [gid, cg] of Object.entries(bl.customGroups || {})) {
-        if (!seen.has(gid)) seen.set(gid, bl.groupOverrides?.[gid]?.label || cg.label || labelise(gid));
-      }
-      setGroups([...seen].map(([id, name]) => ({ id, name })));
-    });
+    fetch('/api/settings')
+      .then((r) => r.json())
+      .then((d) => {
+        if (!alive) return;
+        const bl = layoutFromSettings(d);
+        if (bl) setLayout(bl); else setReadErr(d?.error || 'the reply had no settings in it');
+      })
+      .catch((e) => { if (alive) setReadErr(e.message); });
     return () => { alive = false; };
   }, []);
 
+  const groups = useMemo(() => (layout ? sectionChoices(layout) : []), [layout]);
+
   const save = useCallback(async (groupId, customLabel) => {
     setErr('');
-    const next = {
-      overrides: { ...(layout?.overrides || {}) },
-      customGroups: { ...(layout?.customGroups || {}) },
-      groupOverrides: { ...(layout?.groupOverrides || {}) },
-    };
-    next.overrides[blockId] = groupId;
-    if (customLabel) next.customGroups[groupId] = { label: customLabel, icon: 'custom', order: 50 };
+    if (!layout) return;
+    const next = placeBlock(layout, blockId, groupId, customLabel);
     try {
       const r = await fetch('/api/settings/block-layout', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(next),
       });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       setLayout(next); setSaved(true);
+      // The shell (sidebar + Dashboard) holds its own copy and writes it back
+      // whole on the next drag; left stale, that write would drop this
+      // placement. Its setter also saves — the same layout, a second time.
+      if (onBlockLayoutChange) onBlockLayoutChange(next);
     } catch (e) {
       // The block IS installed. Only its placement failed, and saying
       // otherwise would send the operator looking for a block that is there.
-      setErr(`${label} is installed, but its section could not be saved (${e.message}). Drag it in Settings → Blocks instead.`);
+      setErr(`${label} is installed, but its section could not be saved (${e.message}). Drag it on the Home dashboard instead.`);
     }
-  }, [layout, blockId, label]);
+  }, [layout, blockId, label, onBlockLayoutChange]);
 
   if (!blockId) return null;
 
@@ -225,13 +295,20 @@ function SectionChooser({ blockId, label, detail, onDone }) {
     <div style={{ marginTop: 14, padding: '12px 14px', borderRadius: 8,
       background: 'rgba(12,163,12,0.08)', border: '1px solid rgba(12,163,12,0.38)' }}>
       <div style={{ fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 7 }}>
-        <Check size={14} aria-hidden="true" /> {label} is installed{detail ? ` (${detail})` : ''}.
+        <Check size={14} aria-hidden="true" />
+        {queued
+          ? `${label} is waiting for your approval — its permissions need a review. Approve it in Settings → Agent, then start it.`
+          : `${label} is installed${detail ? ` (${detail})` : ''}. It lands stopped: start it in Settings → Blocks.`}
       </div>
 
-      {saved ? (
+      {readErr ? (
+        <p role="alert" style={{ ...DIM, color: 'var(--warning, #fab219)', margin: '8px 0 0' }}>
+          Your sections could not be read ({readErr}), so none were changed. Drag {label} on the Home dashboard instead.
+        </p>
+      ) : saved ? (
         <p style={{ ...DIM, margin: '8px 0 0' }}>
           Filed under <strong>{groups.find((g) => g.id === chosen)?.name || newName || chosen}</strong>.
-          You can drag it somewhere else any time from Settings → Blocks.{' '}
+          You can drag it somewhere else any time on the Home dashboard.{' '}
           <button className="link" onClick={onDone} style={{ padding: 0 }}>Install another</button>
         </p>
       ) : (
@@ -249,11 +326,11 @@ function SectionChooser({ blockId, label, detail, onDone }) {
             <input style={{ ...FIELD, flex: 1 }} value={newName} placeholder="…or name a new section"
               onChange={(e) => setNewName(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key !== 'Enter' || !newName.trim()) return;
+                if (e.key !== 'Enter' || !newName.trim() || !layout) return;
                 const id = slug(newName);
                 setChosen(id); save(id, newName.trim());
               }} />
-            <button className="btn" disabled={!newName.trim()}
+            <button className="btn" disabled={!newName.trim() || !layout}
               onClick={() => { const id = slug(newName); setChosen(id); save(id, newName.trim()); }}>
               Create
             </button>
