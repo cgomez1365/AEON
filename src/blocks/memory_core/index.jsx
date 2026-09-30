@@ -44,13 +44,19 @@ export default function MemoryCore() {
   const [note, setNote] = useState('');
   const [editingId, setEditingId] = useState(null);
   const [editText, setEditText] = useState('');
+  const [loadError, setLoadError] = useState('');
 
+  // A store the server cannot read answers 503 with the reason. Read as
+  // `d.memories || []`, that rendered "0 MEMORIES · No memories match." —
+  // the very lie the server now refuses to tell.
   const load = useCallback(async () => {
     try {
       const r = await fetch('/api/memory');
-      const d = await r.json();
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { setLoadError(d.error || `the memory store did not load (server answered ${r.status})`); return; }
+      setLoadError('');
       setMemories(d.memories || []);
-    } catch {}
+    } catch (e) { setLoadError(`the memory store did not load: ${e.message}`); }
   }, []);
   useEffect(() => { load(); }, [load]);
 
@@ -114,6 +120,9 @@ export default function MemoryCore() {
     const r = await fetch('/api/memory/distill', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
     const d = await r.json();
     if (d.error) throw new Error(d.error);
+    // A repeat is refused, not searched: "nothing durable found" here was
+    // also what a chat that had already yielded five memories showed.
+    if (d.alreadyDistilled) { setNote(d.message || 'already distilled — nothing new since'); return; }
     const from = d.session ? ` from "${d.session}"` : '';
     const n = d.added?.length || 0;
     setNote(n
@@ -137,7 +146,7 @@ export default function MemoryCore() {
         <Brain size={20} style={{ color: 'var(--accent, #00ff40)' }} />
         <h2 style={{ margin: 0, fontSize: 18 }}>Memory Core</h2>
         <span style={{ fontSize: 11, color: 'var(--text-dim, #8aa)', border: '1px solid var(--border, #223)', padding: '2px 8px', borderRadius: 4 }}>
-          {memories.length} MEMORIES · {memories.filter(m => m.pinned).length} PINNED
+          {loadError ? 'NOT LOADED' : `${memories.length} MEMORIES · ${memories.filter(m => m.pinned).length} PINNED`}
         </span>
         <button type="button" onClick={() => load()} title="refresh" aria-label="Refresh memories"
           style={{ ...chip(false), marginLeft: 'auto' }}><RefreshCw size={11} /></button>
@@ -146,6 +155,7 @@ export default function MemoryCore() {
         What VP knows across sessions — pinned memories ride on every terminal chat, the rest by relevance. Each one is a vault file.
       </div>
 
+      {loadError && <div role="alert" style={{ fontSize: 12, color: 'var(--danger, #ff4466)', marginBottom: 8 }}>{loadError}</div>}
       {note && <div role="status" style={{ fontSize: 12, color: 'var(--accent, #00ff40)', marginBottom: 8 }}>{note}</div>}
 
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 }} role="group" aria-label="Filter memories by type or category">
@@ -189,7 +199,7 @@ export default function MemoryCore() {
           style={{ ...chip(false), display: 'flex', alignItems: 'center', gap: 4 }}><Sparkles size={12} /> distill session</button>
       </div>
 
-      {shown.length === 0 && <div style={{ color: 'var(--text-dim, #8aa)', fontSize: 13, padding: 20 }}>No memories match.</div>}
+      {shown.length === 0 && !loadError && <div style={{ color: 'var(--text-dim, #8aa)', fontSize: 13, padding: 20 }}>No memories match.</div>}
       {shown.map(m => (
         <div key={m.id} style={{ border: '1px solid var(--border, #223)', borderLeft: m.pinned ? '3px solid var(--accent, #00ff40)' : '1px solid var(--border, #223)', borderRadius: 6, padding: '10px 12px', marginBottom: 8, display: 'flex', gap: 10, alignItems: 'flex-start' }}>
           <div style={{ flex: 1 }}>

@@ -76,10 +76,48 @@ module.exports = function createMemoryRouter(deps) {
   };
   try { if (!fs.existsSync(MEM_DIR)) fs.mkdirSync(MEM_DIR, { recursive: true }); } catch {}
 
+  // Unreadable is not empty — the rule vault.cjs and endpoints.cjs already
+  // follow (kernel audit, 2026-09-28). A memories.json cut short by an unplug
+  // mid-write, or left with a trailing comma by a hand edit in Matrix Edit
+  // Mode, read as [] with no log: Memory Core showed "0 memories" as if that
+  // were true, and the next add, edit or distill wrote a store holding only
+  // that one memory over every other. Only a MISSING file is an empty store.
+  // Anything else throws, the file stays exactly as it is, and the log and
+  // the route both say where it is and what to do.
   const load = () => {
-    try { return JSON.parse(fs.readFileSync(STORE, 'utf8')); } catch { return []; }
+    let why;
+    try {
+      const all = JSON.parse(fs.readFileSync(STORE, 'utf8'));
+      if (Array.isArray(all)) return all;
+      why = 'not a list of memories';
+    } catch (e) {
+      if (e.code === 'ENOENT') return [];
+      why = e.message;
+    }
+    const err = new Error(`The memory store ${STORE} is unreadable (${why}). It was left untouched and nothing was saved — `
+      + 'fix or restore that file (every memory also has an <id>.md copy beside it), then try again.');
+    err.status = 503;
+    console.error(`[MEMORY] ${err.message}`);
+    throw err;
   };
-  const save = (all) => fs.writeFileSync(STORE, JSON.stringify(all, null, 2));
+  // Read for a route: a damaged store answers 503 with the reason, never a
+  // list that looks empty. Returns null once it has answered.
+  const loadFor = (res) => {
+    try { return load(); }
+    catch (e) { res.status(e.status || 500).json({ ok: false, error: e.message }); return null; }
+  };
+  // Atomic: a crash or an unplug mid-write leaves the previous file whole,
+  // not half of a new one. The store lives on an exFAT drive on carried installs.
+  const save = (all) => {
+    const tmp = `${STORE}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+    try {
+      fs.writeFileSync(tmp, JSON.stringify(all, null, 2));
+      fs.renameSync(tmp, STORE);
+    } catch (e) {
+      try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {}
+      throw e;
+    }
+  };
 
   const mdMirror = (m) => {
     const fm = [
@@ -103,7 +141,8 @@ module.exports = function createMemoryRouter(deps) {
 
   // ── GET /memory — full list (newest first, pinned float) ────────────
   router.get('/memory', (req, res) => {
-    const all = load().sort((a, b) => (b.pinned - a.pinned) || (b.timestamp - a.timestamp));
+    const stored = loadFor(res); if (!stored) return;
+    const all = stored.sort((a, b) => (b.pinned - a.pinned) || (b.timestamp - a.timestamp));
     const { type, category, q } = req.query;
     let out = all;
     if (type) out = out.filter(m => m.type === type);
@@ -150,7 +189,7 @@ module.exports = function createMemoryRouter(deps) {
     // its own §08 defect — the record has to show both.
     const normalized = memoryPolicy.normalizeFactPerson(text);
 
-    const all = load();
+    const all = loadFor(res); if (!all) return;
     // Dedupe: identical text is a no-op, not a second copy
     const dupe = all.find(m => m.text.trim().toLowerCase() === normalized.text.toLowerCase());
     // `text` is what the terminal chip prints. Without it /remember showed the
@@ -183,7 +222,7 @@ module.exports = function createMemoryRouter(deps) {
 
   // ── PUT /memory/:id — edit ──────────────────────────────────────────
   router.put('/memory/:id', (req, res) => {
-    const all = load();
+    const all = loadFor(res); if (!all) return;
     const m = all.find(x => x.id === req.params.id);
     if (!m) return res.status(404).json({ error: 'not found' });
     for (const k of ['text', 'category', 'type', 'title', 'tags', 'pinned']) {
@@ -196,7 +235,7 @@ module.exports = function createMemoryRouter(deps) {
 
   // ── POST /memory/:id/pin — toggle ───────────────────────────────────
   router.post('/memory/:id/pin', (req, res) => {
-    const all = load();
+    const all = loadFor(res); if (!all) return;
     const m = all.find(x => x.id === req.params.id);
     if (!m) return res.status(404).json({ error: 'not found' });
     m.pinned = !m.pinned;
@@ -206,7 +245,7 @@ module.exports = function createMemoryRouter(deps) {
 
   // ── DELETE /memory/:id ──────────────────────────────────────────────
   router.delete('/memory/:id', (req, res) => {
-    const all = load();
+    const all = loadFor(res); if (!all) return;
     const idx = all.findIndex(x => x.id === req.params.id);
     if (idx === -1) return res.status(404).json({ error: 'not found' });
     const [gone] = all.splice(idx, 1);
@@ -237,8 +276,9 @@ module.exports = function createMemoryRouter(deps) {
     // that is the default carried over — the unit is now stated rather than
     // assumed (D1f).
     const budgetTokens = Math.min(Number(req.query.budget) || 1100, 6000);
+    const memories = loadFor(res); if (!memories) return;
     const selection = memoryPolicy.selectForInjection({
-      memories: load(),
+      memories,
       budgetTokens,
       query: String(req.query.q || ''),
     });
@@ -361,14 +401,47 @@ Return ONLY a JSON array: [{"text":"...","type":"outline|algorithm|decision|mile
 
 TRANSCRIPT:
 ${String(transcript).slice(0, 8000)}`;
+    // A store that cannot be read cannot be added to — say so before paying
+    // for a model call whose results would have nowhere to go.
+    if (!loadFor(res)) return;
     try {
       const out = await kernelLLM(prompt, { role: 'chat', background: true, max_tokens: 2048 });
       const raw = (typeof out === 'string' ? out : out?.text || '') + '';
-      const arr = JSON.parse(raw.match(/\[[\s\S]*\]/)?.[0] || '[]');
+      // No list in the reply is a failed run, not an empty one. It read as
+      // "[]", the transcript was recorded as distilled, and every later click
+      // answered "already distilled" — the memories in a reply written as
+      // prose or a numbered list were lost, and the conversation could never
+      // be distilled again without `force`, which no button sends. Not
+      // recorded, so the next click asks again.
+      const list = raw.match(/\[[\s\S]*\]/);
+      if (!list) {
+        return res.status(502).json({
+          ok: false,
+          error: 'distill failed: the model did not answer with the list of memories it was asked for, so nothing was saved. '
+            + 'Try again, or assign a different model to the chat role.',
+        });
+      }
+      const arr = JSON.parse(list[0]);
+      // A list with nothing usable in it is the same failed run. A small model
+      // that answered ["fact one","fact two"] (strings, not {text} objects) had
+      // every item skipped, the transcript recorded, and the conversation
+      // locked. A plain string is taken as the memory's text; a list where no
+      // entry carries text at all is refused unrecorded. "[]", and entries that
+      // are only too short or already known, stay the real "nothing durable".
+      const usable = arr
+        .map(c => (typeof c === 'string' ? { text: c } : c))
+        .filter(c => c && typeof c === 'object' && typeof c.text === 'string' && c.text.trim());
+      if (arr.length && !usable.length) {
+        return res.status(502).json({
+          ok: false,
+          error: `distill failed: the model answered with ${arr.length} item(s) but none carried the memory text it was asked for, so nothing was saved. `
+            + 'Try again, or assign a different model to the chat role.',
+        });
+      }
       const all = load();
       const added = [];
-      for (const c of arr.slice(0, 5)) {
-        if (!c.text || c.text.length < 10) continue;
+      for (const c of usable.slice(0, 5)) {
+        if (c.text.trim().length < 10) continue;
         if (all.find(m => m.text.trim().toLowerCase() === c.text.trim().toLowerCase())) continue;
 
         const m = {
@@ -386,8 +459,8 @@ ${String(transcript).slice(0, 8000)}`;
       rememberDistilled(transcriptSha, added.length);
       // Name the session that was read. A button that silently distils
       // something is a button nobody trusts twice.
-      res.json({ ok: true, added, candidates: arr.length, session: usedSession });
-    } catch (e) { res.status(500).json({ error: 'distill failed: ' + e.message }); }
+      res.json({ ok: true, added, candidates: usable.length, session: usedSession });
+    } catch (e) { res.status(e.status || 500).json({ error: 'distill failed: ' + e.message }); }
   });
 
   return router;

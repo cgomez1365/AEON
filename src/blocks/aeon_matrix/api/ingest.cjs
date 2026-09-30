@@ -173,10 +173,21 @@ function deriveTags(relPosix) {
 // another, so two "singletons" held two copies of the index and the scan's
 // checkpoint erased the ingested document. A closure-scoped singleton is only
 // a singleton if the factory is called once, which nothing guarantees.
-const STORES = new Map();
+//
+// And a module-scoped one is only a singleton if the MODULE loads once, which
+// nothing guarantees either: every block rescan (Settings ▸ Blocks remove,
+// restore or start, a store install or update, a build approve) purges this
+// folder from require.cache and the host re-requires this file, while the
+// kernel's liveBlockModule keeps the instance it built at boot. A plain
+// `new Map()` here gave the re-required HTTP copy a second index, manifest and
+// scan mutex beside the kernel's — two scans at once, and whichever wrote last
+// dropped the other's documents from vault_index.json. The map lives on the
+// process instead, under a registry symbol a re-required copy finds again.
+const STORES_KEY = Symbol.for('aeon.matrix.ingest.stores');
+const STORES = globalThis[STORES_KEY] || (globalThis[STORES_KEY] = new Map());
 function storesFor(dataRoot) {
   const key = path.resolve(dataRoot);
-  if (!STORES.has(key)) STORES.set(key, { index: null, manifest: null, chunks: null, inFlight: null });
+  if (!STORES.has(key)) STORES.set(key, { index: null, manifest: null, chunks: null, inFlight: null, rescan: false, nightly: null });
   return STORES.get(key);
 }
 
@@ -362,6 +373,13 @@ module.exports = function ingestFactory(deps) {
   // A second caller joins the run in flight and gets its result.
   async function runScan(onEvent = () => {}) {
     if (shared.inFlight) {
+      // The run in flight listed the Vault when it started, so a file written
+      // since — a memory saved while the boot sync, a /scan or the previous
+      // save's scan was running — is not in its list, and joining it alone
+      // left that memory out of /recall until the next boot or nightly run.
+      // Joining also asks for one more incremental pass once this run ends,
+      // if the Vault has changed since that list was taken.
+      shared.rescan = true;
       onEvent({ joined: true, message: 'a scan is already running — waiting for it to finish' });
       // The joiner gets the run's result too. Only the first caller's onEvent
       // ever saw {done}, so Matrix ▸ Index, opened while the boot sync or a
@@ -371,11 +389,53 @@ module.exports = function ingestFactory(deps) {
       shared.inFlight.then((r) => { try { onEvent({ done: true, joined: true, ...r }); } catch { /* caller gone */ } }, () => {});
       return shared.inFlight;
     }
-    shared.inFlight = _runScan(onEvent).finally(() => { shared.inFlight = null; });
+    const listed = new Map();
+    shared.inFlight = _runScan(onEvent, listed).finally(() => {
+      shared.inFlight = null;
+      if (!shared.rescan) return;
+      shared.rescan = false;
+      // Every request that arrived during the run shares this one follow-up,
+      // and only when something was written after the run listed the Vault:
+      // a join with nothing new costs a walk, not an embedder call.
+      if (!vaultChangedSince(listed)) return;
+      runScan().catch((e) => console.error('[SECOND BRAIN] Follow-up scan failed:', e.message));
+    });
     return shared.inFlight;
   }
 
-  async function _runScan(onEvent = () => {}) {
+  // Every indexable file under `dir`. With `hashes`, also records each file's
+  // size-mtime hash as it was when listed.
+  function walkVault(dir, hashes) {
+    if (!fs.existsSync(dir)) return [];
+    const files = [];
+    for (const name of fs.readdirSync(dir)) {
+      // Hidden names are never documents: macOS writes a binary "._note.md"
+      // sidecar beside every file on exFAT/FAT volumes, and apps keep their
+      // own state in hidden folders (.obsidian, .trash, .git). Indexed, the
+      // sidecar became a document made of attribute metadata.
+      if (name.startsWith('.')) continue;
+      const full = path.join(dir, name);
+      const relPosix = vaultRelative(full).replace(/\\/g, '/');
+      if (NON_INDEXED_VAULT_PATHS.has(relPosix)) continue;
+      const stat = fs.statSync(full);
+      if (stat.isDirectory()) { files.push(...walkVault(full, hashes)); continue; }
+      if (INDEXABLE_EXT.test(name)) { files.push(full); hashes?.set(full, fileHash(stat)); }
+    }
+    return files;
+  }
+
+  /** Has any indexable file appeared, gone or changed since `listed` was taken? */
+  function vaultChangedSince(listed) {
+    try {
+      const now = new Map();
+      walkVault(BRAIN_DIR, now);
+      if (now.size !== listed.size) return true;
+      for (const [full, hash] of now) if (listed.get(full) !== hash) return true;
+      return false;
+    } catch { return true; } // cannot tell — let the scan decide
+  }
+
+  async function _runScan(onEvent = () => {}, listed = new Map()) {
     // embedded counts vectors WRITTEN this run — first ingest, backfill, or space
     // migration. ingested alone could not say whether a model was involved.
     const results = { ingested: 0, embedded: 0, skipped: 0, deleted: 0, errors: [] };
@@ -387,27 +447,9 @@ module.exports = function ingestFactory(deps) {
 
     loadExtractors();
 
-    const walk = (dir) => {
-      if (!fs.existsSync(dir)) return [];
-      const files = [];
-      for (const name of fs.readdirSync(dir)) {
-        // Hidden names are never documents: macOS writes a binary "._note.md"
-        // sidecar beside every file on exFAT/FAT volumes, and apps keep their
-        // own state in hidden folders (.obsidian, .trash, .git). Indexed, the
-        // sidecar became a document made of attribute metadata.
-        if (name.startsWith('.')) continue;
-        const full = path.join(dir, name);
-        const relPosix = vaultRelative(full).replace(/\\/g, '/');
-        if (NON_INDEXED_VAULT_PATHS.has(relPosix)) continue;
-        if (fs.statSync(full).isDirectory()) { files.push(...walk(full)); continue; }
-        if (INDEXABLE_EXT.test(name)) files.push(full);
-      }
-      return files;
-    };
-
     const manifest = readManifest();
     const index = readIndex();
-    const files = walk(BRAIN_DIR);
+    const files = walkVault(BRAIN_DIR, listed);
     const seen = new Set();
 
     // The space the active embedder writes into. Vectors tagged with any other
@@ -583,17 +625,26 @@ module.exports = function ingestFactory(deps) {
 
   // ── Nightly auto re-index — self-contained, no external scheduler needed.
   //    Checked hourly; runs once per calendar day at NIGHTLY_HOUR local time.
+  //    One timer per data root, like the index: each factory call used to add
+  //    an interval nothing cleared, one more per block rescan. The timer runs
+  //    whichever instance registered last, so a store update's code is the
+  //    code that runs tonight.
   if (!isVercel) {
-    const nightlyTimer = setInterval(() => {
-      const now = new Date();
-      if (now.getHours() !== NIGHTLY_HOUR) return;
-      const status = readStatus();
-      const today = now.toISOString().slice(0, 10);
-      if (status.lastRun && status.lastRun.slice(0, 10) === today) return;
-      console.log('[SECOND BRAIN] Nightly auto-index starting...');
-      runScan().then(r => console.log(`[SECOND BRAIN] Nightly auto-index done: ${r.ingested} ingested, ${r.skipped} skipped, ${r.deleted} deleted.`));
-    }, 60 * 60 * 1000);
-    nightlyTimer.unref?.();
+    shared.nightlyRun = { runScan, readStatus };
+    if (!shared.nightly) {
+      shared.nightly = setInterval(() => {
+        const now = new Date();
+        if (now.getHours() !== NIGHTLY_HOUR) return;
+        const { runScan: run, readStatus: readLatestStatus } = shared.nightlyRun;
+        const status = readLatestStatus();
+        const today = now.toISOString().slice(0, 10);
+        if (status.lastRun && status.lastRun.slice(0, 10) === today) return;
+        console.log('[SECOND BRAIN] Nightly auto-index starting...');
+        run().then(r => console.log(`[SECOND BRAIN] Nightly auto-index done: ${r.ingested} ingested, ${r.skipped} skipped, ${r.deleted} deleted.`))
+          .catch(e => console.error('[SECOND BRAIN] Nightly auto-index failed:', e.message));
+      }, 60 * 60 * 1000);
+      shared.nightly.unref?.();
+    }
   }
 
   if (isVercel) return router; // vault lives on the local filesystem — routes below are local-only
@@ -1014,6 +1065,9 @@ module.exports = function ingestFactory(deps) {
 module.exports.chunkText = chunkText;
 // Test seam: forget every in-memory store so the next factory reloads from
 // disk — the only way to simulate "an index written by an older AEON".
-module.exports._resetStores = () => STORES.clear();
+module.exports._resetStores = () => {
+  for (const s of STORES.values()) if (s.nightly) clearInterval(s.nightly);
+  STORES.clear();
+};
 module.exports.CHUNK_CHARS = CHUNK_CHARS;
 module.exports.CHUNK_CAP = CHUNK_CAP;
