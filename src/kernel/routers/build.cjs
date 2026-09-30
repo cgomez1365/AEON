@@ -132,6 +132,39 @@ module.exports = function createBuildRouter(deps) {
   };
   const UI_NOTE = 'The block\'s screen changes after `npm run build` (then reload the tab); no restart is needed.';
 
+  // Does git track this block's folder? Remove moves the folder out of the
+  // working tree, and the drive's app — like ~/Desktop/AEON — is a checkout
+  // that is committed and pushed from (sweep C32, 2026-09-28). Moving a
+  // shipped block out showed every file of it as deleted: a later `git add -A`
+  // or `git commit -a` commits a core block's deletion, and a `git pull`
+  // succeeds while writing back only the files it changed — a half block that
+  // Restore then cannot move over. A store-installed block is untracked and
+  // moves as before. When the folder is in a checkout and git cannot answer
+  // (not installed on this host), the answer is "tracked": the safe direction.
+  // Refused by default, not forbidden: the gate runbook removes shipped blocks
+  // on purpose to walk the "not installed" paths, and Stop cannot stand in for
+  // that (a stopped block answers 503; its screen stays in the build). The
+  // operator says so with `tracked: true` (`aeon block remove <id> --yes
+  // --tracked`), and the answer names what git will see until it is restored.
+  const { execFileSync } = require('child_process');
+  const inGitCheckout = (dir) => {
+    for (let d = path.resolve(dir); ; d = path.dirname(d)) {
+      if (fs.existsSync(path.join(d, '.git'))) return true;
+      if (path.dirname(d) === d) return false;
+    }
+  };
+  const gitTracked = (dir) => {
+    if (!inGitCheckout(dir)) return { tracked: false };
+    try {
+      const out = execFileSync('git', ['ls-files', '-z', '--', '.'], {
+        cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 15000, maxBuffer: 16 << 20, windowsHide: true,
+      });
+      return { tracked: out.length > 0 };
+    } catch (e) {
+      return { tracked: true, why: e.code === 'ENOENT' ? 'git is not installed here, so it cannot say whether git tracks it' : `git could not say whether it tracks it (${String(e.stderr || e.message).trim()})` };
+    }
+  };
+
   router.get('/blocks', (_req, res) => res.json({ blocks: runState.listManual() }));
   router.get('/blocks/removed', (_req, res) => res.json({ removed: removedCopies() }));
   router.get('/blocks/:id/state', (req, res) => res.json({ blockId: req.params.id, ...runState.getState(req.params.id) }));
@@ -159,6 +192,20 @@ module.exports = function createBuildRouter(deps) {
     const id = req.params.id;
     if (NEVER_STOP.has(id)) return refuse(res, 409, `"${id}" cannot be uninstalled: without it the operator is locked out of every guarded route.`);
     if (!isInstalled(id)) return refuse(res, 404, `no installed block "${id}"`);
+    const git = gitTracked(blockPath(id));
+    const gitHazard = 'a `git add -A` or `git commit -a` would commit the deletion, and a `git pull` would bring back only the files it changed';
+    if (git.tracked && req.body?.tracked !== true) {
+      return res.status(409).json({
+        ok: false,
+        code: 'git_tracked',
+        error: `"${id}" ships with this AEON's git checkout${git.why ? ` (${git.why})` : ''}. Removing it deletes tracked files from the working tree: `
+          + `until it is restored, ${gitHazard}. `
+          + `Stop it instead — its files stay, and its routes answer 503 until you start it again. `
+          + `To remove it anyway, confirm that git tracks it: \`aeon block remove ${id} --yes --tracked\`.`,
+        stop: `POST /api/build/blocks/${id}/stop`,
+        override: { tracked: true },
+      });
+    }
     const dependents = dependentsOf(id);
     const movedTo = path.join(removedDir, aside.asideName(id));
     try { move(blockPath(id), movedTo); }
@@ -166,9 +213,15 @@ module.exports = function createBuildRouter(deps) {
     try { runState.forget(id); } catch { /* state file unavailable; a reinstall resets anyway */ }
     const rescan = rescanAll(`uninstall:${id}`);
     try { global.broadcastTerminalEvent?.('BLOCK-LIFECYCLE', `${id} UNINSTALLED by ${operator(req)}`); } catch {}
+    // Both clients print `warning` as-is, so the git consequence rides there.
+    const warnings = [
+      ...(dependents.length ? [`${dependents.join(', ')} declare${dependents.length === 1 ? 's' : ''} a dependency on ${id} and will be degraded until it is restored.`] : []),
+      ...(git.tracked ? [`git sees ${id}'s tracked files as deleted: restore it before any \`git add -A\`, \`git commit -a\` or \`git pull\` in this checkout.`] : []),
+    ];
     res.json({
       ok: true, removed: id, movedTo, dependents, rescan, ui: UI_NOTE,
-      ...(dependents.length ? { warning: `${dependents.join(', ')} declare${dependents.length === 1 ? 's' : ''} a dependency on ${id} and will be degraded until it is restored.` } : {}),
+      ...(warnings.length ? { warning: warnings.join(' ') } : {}),
+      ...(git.tracked ? { gitTracked: true } : {}),
       restore: `POST /api/build/blocks/${id}/restore`,
     });
   });

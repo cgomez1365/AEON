@@ -56,15 +56,62 @@ function cloudflaredTarget(plat = os.platform(), arch = os.arch()) {
   return null; // no published build for this platform (e.g. FreeBSD)
 }
 
+/**
+ * The name the binary is stored under: the release asset's own name, which
+ * carries the platform AND the CPU (a .tgz loses only its extension).
+ *
+ * macOS and Linux used to share one arch-less `tools/bin/cloudflared`,
+ * downloaded only when missing. tools/bin lives in the app folder, and on the
+ * carried drive the app travels between hosts: a first tunnel started on the
+ * Intel iMac would store darwin-amd64, and the drive's Linux x64 host would
+ * then spawn it (ENOEXEC), as would an Apple Silicon Mac without Rosetta (Bad
+ * CPU type) — forever, since the file existed. Both errors were measured by
+ * spawning the drive's own Linux and arm64 Node the same way (sweep C29,
+ * 2026-09-28). One name per build means every host finds, or fetches, its own.
+ */
+function cloudflaredBinName(target) {
+  return target ? target.filename.replace(/\.tgz$/, '') : null;
+}
+
 const CLOUDFLARED_TARGET = cloudflaredTarget();
 // The binary spawn() actually runs, whatever it took to get there.
-const CLOUDFLARED = CLOUDFLARED_TARGET ? path.join(BIN_DIR, os.platform() === 'win32' ? CLOUDFLARED_TARGET.filename : 'cloudflared') : null;
+const CLOUDFLARED = CLOUDFLARED_TARGET ? path.join(BIN_DIR, cloudflaredBinName(CLOUDFLARED_TARGET)) : null;
 // The kernel's actual port. A literal 3001 pointed the tunnel at whatever else
 // held 3001 whenever this AEON ran elsewhere — beside a host's own AEON, that
 // meant exposing the host's AEON.
 const PORT = Number(process.env.PORT) || 3001;
 
-const _tunnel = { proc: null, url: null, startedAt: null };
+/**
+ * The tunnel belongs to the PROCESS, not to this module instance.
+ *
+ * Every block rescan (Remove, Restore or Start of any block, a store install or
+ * update, an approve) tears Settings down, purges this file from the require
+ * cache and runs it again. With the state at module scope the old cleanup
+ * killed cloudflared on every rescan — an operator working through the tunnel
+ * who removed an unrelated block cut off their own session, and the new
+ * trycloudflare URL could only be started from a request that no longer
+ * reached AEON. So the state lives on globalThis, keyed by this file's folder
+ * (a staged copy of the block, mounted by the boot proof, is a different
+ * folder and never touches the live tunnel), and a remount adopts it.
+ *
+ * And process.exit runs no block cleanup: Settings → RESTART exits 75 on the
+ * drive, the launcher starts AEON again on the same port, and an orphaned
+ * cloudflared would go on proxying the public URL to it while Settings said no
+ * tunnel was running and Stop did nothing. An 'exit' hook stops it, as
+ * services/local-runtime/server-session.cjs does for llama-server. It is
+ * synchronous and kill() only signals, which is all this needs. A SIGKILLed
+ * AEON runs no handler at all; nothing here covers that.
+ */
+const TUNNELS_KEY = Symbol.for('aeon.settings.tunnels');
+const TUNNELS = globalThis[TUNNELS_KEY] || (globalThis[TUNNELS_KEY] = new Map());
+if (!TUNNELS.exitHook) {
+  TUNNELS.exitHook = true;
+  process.on('exit', () => {
+    for (const t of TUNNELS.values()) { if (t.proc) { try { t.proc.kill(); } catch { /* already gone */ } } }
+  });
+}
+if (!TUNNELS.has(__dirname)) TUNNELS.set(__dirname, { proc: null, url: null, startedAt: null, mounts: 0 });
+const _tunnel = TUNNELS.get(__dirname);
 
 async function pingSupabase(url, key, fallbackKey) {
   const probe = (k) => fetch(`${url.replace(/\/$/, '')}/rest/v1/`, {
@@ -115,6 +162,7 @@ async function pingFirebase(apiKey) {
 
 module.exports = (app, deps) => {
   const supabase = deps && deps.supabase ? deps.supabase : null;
+  const mount = ++_tunnel.mounts;
   // Injectable like the Security block's own routes; lazy so a test can set
   // VAULT_PATH before the validator resolves its store.
   const sessions = () => (deps && deps.sessionValidator)
@@ -309,17 +357,24 @@ module.exports = (app, deps) => {
           // macOS ships the binary inside a .tgz — download, extract with the
           // system tar (present on macOS/Linux by default; no new dependency
           // for the one platform that needs this step), then discard the
-          // archive. The extracted name is always `cloudflared`.
+          // archive. The extracted name is always `cloudflared`, so it is
+          // extracted into a folder of its own and renamed to this build's name.
           const tgzPath = path.join(BIN_DIR, CLOUDFLARED_TARGET.filename);
+          const unpack = fs.mkdtempSync(path.join(BIN_DIR, 'unpack-'));
           fs.writeFileSync(tgzPath, bytes);
           try {
-            execFileSync('tar', ['-xzf', tgzPath, '-C', BIN_DIR], { stdio: 'pipe' });
-          } catch (e) {
-            throw new Error(`Downloaded Cloudflare Tunnel but could not extract it (${e.message}). Is 'tar' on PATH?`);
+            try {
+              execFileSync('tar', ['-xzf', tgzPath, '-C', unpack], { stdio: 'pipe' });
+            } catch (e) {
+              throw new Error(`Downloaded Cloudflare Tunnel but could not extract it (${e.message}). Is 'tar' on PATH?`);
+            }
+            const extracted = path.join(unpack, 'cloudflared');
+            if (!fs.existsSync(extracted)) throw new Error('Extracted the Cloudflare Tunnel archive but the cloudflared binary was not where expected.');
+            fs.renameSync(extracted, CLOUDFLARED);
           } finally {
             try { fs.unlinkSync(tgzPath); } catch {}
+            try { fs.rmSync(unpack, { recursive: true, force: true }); } catch {}
           }
-          if (!fs.existsSync(CLOUDFLARED)) throw new Error('Extracted the Cloudflare Tunnel archive but the cloudflared binary was not where expected.');
         } else {
           fs.writeFileSync(CLOUDFLARED, bytes);
         }
@@ -346,19 +401,21 @@ module.exports = (app, deps) => {
         // A spawn that never starts emits 'error', not 'exit'. Without this the
         // event is unhandled — it throws past this promise and takes the server
         // down instead of failing the request.
+        // The state is shared (see TUNNELS): an old process's late event must
+        // never clear a newer tunnel's entry.
         proc.on('error', (err) => {
           clearTimeout(timer);
-          _tunnel.proc = null;
+          if (_tunnel.proc === proc) _tunnel.proc = null;
           reject(new Error(`Could not start cloudflared: ${err.message}`));
         });
         proc.on('exit', (code) => {
           clearTimeout(timer);
-          _tunnel.proc = null;
+          if (_tunnel.proc === proc) _tunnel.proc = null;
           if (!_tunnel.url) reject(new Error(`Tunnel exited (code ${code}) before starting.`));
         });
       });
 
-      proc.on('exit', () => { _tunnel.proc = null; _tunnel.url = null; });
+      proc.on('exit', () => { if (_tunnel.proc === proc || !_tunnel.proc) { _tunnel.proc = null; _tunnel.url = null; } });
 
       res.json({
         ok: true, url, ...tunnelProtection(),
@@ -419,12 +476,23 @@ module.exports = (app, deps) => {
 
 
 
-  // Block teardown/rescan must not orphan the tunnel process.
-  if (deps.lifecycle) deps.lifecycle.onCleanup(() => {
-    if (_tunnel.proc) { try { _tunnel.proc.kill(); } catch {} _tunnel.proc = null; _tunnel.url = null; }
+  // Teardown must not orphan the tunnel — and a rescan must not kill it. A
+  // rescan tears every block down and mounts them again synchronously, so by
+  // the next turn of the event loop a remounted Settings has claimed the
+  // tunnel (mounts moved on). Only when nothing did — Settings removed, or its
+  // remount failed — is there no route left to stop it, so it stops here, and
+  // says so.
+  if (deps && deps.lifecycle) deps.lifecycle.onCleanup(() => {
+    setImmediate(() => {
+      if (_tunnel.mounts !== mount || !_tunnel.proc) return;
+      try { _tunnel.proc.kill(); } catch {}
+      _tunnel.proc = null; _tunnel.url = null;
+      console.warn('[CONNECTIVITY] Cloudflare tunnel stopped: the Settings block is no longer mounted, so nothing could stop it later.');
+    });
   });
 };
 
 // Exposed for tests — platform/arch resolution must be provable without
 // downloading a real binary for every OS this runs on.
 module.exports.cloudflaredTarget = cloudflaredTarget;
+module.exports.cloudflaredBinName = cloudflaredBinName;

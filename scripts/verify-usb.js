@@ -290,6 +290,12 @@ function verifyCarried() {
     [path.join(T, 'launch.sh'), 'launch.sh'],
     [path.join(T, 'README_DRIVE.txt'), 'README_DRIVE.txt'],
   ]) fs.existsSync(p) ? PASS(label) : FAIL(`${label} missing`);
+  // Not a defect — the drive's app can be a real checkout, committed and pushed
+  // from. Said here because the drive README's "re-run the builder" is not the
+  // update for one: build-usb --carry-home refuses to replace a checkout.
+  if (fs.existsSync(path.join(A, '.git'))) {
+    PASS('AEON/ is a git checkout', 'update it in place: cd AEON && git pull && npm ci && npm run build');
+  }
 
   section('2. AEON finds its data on the drive');
   let marker = null;

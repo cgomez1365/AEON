@@ -18,6 +18,59 @@ const {
 const SESSION_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const REPO_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
+// ── Task registries — one per data root, for the whole PROCESS ──────────────
+//
+// Downloads and serves are detached children that outlive this module. Every
+// block rescan (Remove, Restore or Start of any block, a store install or
+// update, an approve) purges this file from the require cache and calls the
+// factory again, and the registry used to be a `{}` in the factory closure: the
+// remounted Cookbook started empty while a download or a llama-server holding
+// gigabytes kept running. /cookbook/tasks/status stopped listing it, Stop
+// answered 404 "may have belonged to an earlier AEON session", and kill-pid no
+// longer recognised the pid as Cookbook's (sweep C27, 2026-09-28). A module-
+// level map would be purged with the module, so the map lives on globalThis,
+// keyed by the Cookbook data folder; a remount picks up the same tasks, and
+// their exit handlers — closures of the old instance — keep updating them.
+const TASKS_KEY = Symbol.for('aeon.cookbook.activeTasks');
+const TASK_REGISTRIES = globalThis[TASKS_KEY] || (globalThis[TASKS_KEY] = new Map());
+function tasksFor(dir) {
+  const key = path.resolve(dir);
+  if (!TASK_REGISTRIES.has(key)) TASK_REGISTRIES.set(key, {});
+  return TASK_REGISTRIES.get(key);
+}
+
+// ── A model server listens on this computer only ────────────────────────────
+//
+// AEON binds loopback. Serve (sweep C18, 2026-09-28) sent `--host 0.0.0.0`, so
+// a llama-server or vLLM with no login answered anyone on the network. An
+// explicit non-loopback --host is refused by name; vLLM, which listens on every
+// interface when no --host is given, gets --host 127.0.0.1.
+const LOOPBACK_HOST_RE = /^(?:127(?:\.\d{1,3}){3}|localhost|::1|\[::1\])$/i;
+function bindLoopback(bin, args) {
+  const out = args.slice();
+  let seen = false;
+  for (let i = 0; i < out.length; i++) {
+    let host;
+    if (out[i] === '--host') host = out[i + 1];
+    else if (out[i].startsWith('--host=')) host = out[i].slice('--host='.length);
+    else continue;
+    seen = true;
+    if (!host || !LOOPBACK_HOST_RE.test(host)) return { ok: false, host: host || '' };
+  }
+  const isVllm = /^vllm(\.exe)?$/i.test(bin) || out.some(a => /^vllm\./.test(a));
+  if (!seen && isVllm) out.push('--host', '127.0.0.1');
+  return { ok: true, args: out };
+}
+
+/** Where llama-server's model argument sits: `--model X`, `-m X` or `--model=X`. */
+function modelArg(args) {
+  for (let i = 0; i < args.length; i++) {
+    if ((args[i] === '--model' || args[i] === '-m') && i + 1 < args.length) return { at: i + 1, prefix: '' };
+    if (args[i].startsWith('--model=')) return { at: i, prefix: '--model=' };
+  }
+  return null;
+}
+
 module.exports = function createCookbookRouter(deps) {
   const router = express.Router();
   const { getLocalFile, getDataFile, writeOSAudit } = deps;
@@ -153,6 +206,34 @@ module.exports = function createCookbookRouter(deps) {
     return [...ids];
   }
 
+  // The .gguf builds llama-server can open for a Hugging Face cache entry, by
+  // exact repo id — or null when no cache holds that repo. A vision projector
+  // (mmproj) is not a model, a split model opens from its first shard, and a
+  // file present in several snapshot revisions counts once (the newest). Each
+  // build is named by its file name: unique in a repo, and what Serve sends
+  // back to choose one (`gguf`), so no path crosses the command filter.
+  function cachedGgufBuilds(repoId) {
+    const caches = [defaultHfCache(), legacyHfCache()];
+    for (const cache of caches) {
+      let entry;
+      try { entry = scanHfCache(cache).find(m => m.repo_id === repoId); } catch { entry = null; }
+      if (!entry) continue;
+      const byName = new Map();
+      for (const g of entry.gguf_files || []) {
+        if (/mmproj/i.test(g.name)) continue;
+        const shard = /-(\d{5})-of-\d{5}\.gguf$/i.exec(g.name);
+        if (shard && shard[1] !== '00001') continue;
+        const full = path.join(entry.dir, 'snapshots', g.rel_path);
+        let mtime = 0;
+        try { mtime = fs.statSync(full).mtimeMs; } catch { continue; }
+        const prev = byName.get(g.name);
+        if (!prev || mtime > prev.mtime) byName.set(g.name, { file: g.name, quant: g.quant || '', size_bytes: g.size_bytes, full, mtime });
+      }
+      return [...byName.values()].sort((a, b) => a.file.localeCompare(b.file));
+    }
+    return null;
+  }
+
   // ── GET /cookbook/models — THE local model inventory ────────────
   //
   // One surface, two states. Hardware's "N models ready" and the Models tab
@@ -192,7 +273,8 @@ module.exports = function createCookbookRouter(deps) {
 
   // ── In-memory task registry ─────────────────────────────────────
   // Tasks survive in memory while running; finished tasks are persisted to state.
-  const activeTasks = {};
+  // Shared with every other mount of this block on the same data (tasksFor).
+  const activeTasks = tasksFor(COOKBOOK_DIR);
 
   function readState() {
     if (!fs.existsSync(STATE_FILE)) return {};
@@ -434,6 +516,7 @@ module.exports = function createCookbookRouter(deps) {
         has_incomplete: hasIncomplete,
         status: hasIncomplete ? 'downloading' : 'ready',
         path: cacheDir,
+        dir: path.join(cacheDir, d),
         is_diffusion: isDiffusion,
         is_gguf: isGguf,
         gguf_files: ggufFiles,
@@ -843,7 +926,54 @@ module.exports = function createCookbookRouter(deps) {
     if (!parsed.ok) {
       return res.status(parsed.status || 400).json({ ok: false, error: parsed.error });
     }
-    const { cleaned, env: envAssignments, file: execFileName, args: serveArgs } = parsed;
+    const { cleaned, env: envAssignments, file: execFileName, bin: execBin } = parsed;
+
+    const bound = bindLoopback(execBin, parsed.args);
+    if (!bound.ok) {
+      return res.status(400).json({
+        ok: false,
+        code: 'host_not_loopback',
+        error: `AEON serves models on this computer only. --host ${bound.host || '(empty)'} would put a model server with no login on your network, where anyone could use it. Use --host 127.0.0.1.`,
+      });
+    }
+    let serveArgs = bound.args;
+
+    // The Serve button names a Hugging Face cache entry by its repo id, and
+    // llama-server's --model takes a FILE. `--model Org/Repo-GGUF` loaded
+    // nothing (sweep C18). Resolve a cached repo id to its .gguf here; a path,
+    // or a name no cache knows, passes through to the checks below as before.
+    // Cookbook's own Download fetches every *.gguf in a repo, so several builds
+    // (quants) in one repo is the usual case: they are listed for the operator
+    // to choose from, and the choice comes back as `gguf` (a file name) —
+    // never guessed between, since the wrong quant can overflow the card.
+    const wantBuild = req.body.gguf == null || req.body.gguf === '' ? null : String(req.body.gguf);
+    const marg = /^llama[-_]server(\.exe)?$/i.test(execBin) ? modelArg(serveArgs) : null;
+    const value = marg ? serveArgs[marg.at].slice(marg.prefix.length) : null;
+    const builds = marg && !fs.existsSync(value) ? cachedGgufBuilds(value) : null;
+    if (wantBuild && !builds) {
+      return res.status(400).json({
+        ok: false,
+        code: 'gguf_not_applicable',
+        error: `gguf "${wantBuild}" names a build of a cached Hugging Face repo, and this command's --model is not one${marg ? ` (${value})` : ''}.`,
+      });
+    }
+    if (builds) {
+      const listed = builds.map(({ file, quant, size_bytes }) => ({ file, quant, size_bytes }));
+      const pick = wantBuild ? builds.find(b => b.file === wantBuild) : (builds.length === 1 ? builds[0] : null);
+      if (!pick) {
+        const code = wantBuild ? 'gguf_not_found' : (builds.length ? 'gguf_ambiguous' : 'gguf_missing');
+        return res.status(409).json({
+          ok: false, code, repo_id: value, builds: listed,
+          error: code === 'gguf_missing'
+            ? `${value} is in the Hugging Face cache but holds no GGUF model file llama-server can open.`
+            : code === 'gguf_not_found'
+              ? `${value} has no GGUF build named "${wantBuild}". It holds: ${builds.map(b => b.file).join(', ') || 'none'}.`
+              : `${value} holds ${builds.length} GGUF builds (${builds.map(b => b.quant || b.file).join(', ')}). Choose the one to serve.`,
+        });
+      }
+      serveArgs = serveArgs.slice();
+      serveArgs[marg.at] = marg.prefix + pick.full;
+    }
 
     // Serving a model that is not on disk was previously a spawn away: the
     // route validated the COMMAND and never the SUBJECT. On a machine with zero
@@ -937,7 +1067,11 @@ module.exports = function createCookbookRouter(deps) {
       const emitter = new EventEmitter();
       activeTasks[sessionId] = {
         type: 'serve', status: 'running', query: repo_id,
-        started_at: Date.now(), pid: proc.pid, logFile, cmd: cleaned,
+        started_at: Date.now(), pid: proc.pid, logFile,
+        // What actually runs — it differs from what was sent when a repo id
+        // was resolved to its file or vLLM was given --host 127.0.0.1.
+        cmd: serveArgs.join('\u0000') === parsed.args.join('\u0000') ? cleaned
+          : [execFileName, ...serveArgs].map(a => (/\s/.test(a) ? `"${a}"` : a)).join(' '),
         _emitter: emitter, _proc: proc,
       };
 

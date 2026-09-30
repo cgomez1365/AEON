@@ -241,9 +241,15 @@ function unparseableJson(dataDir) {
   return bad;
 }
 
+/** Same folder, however it was spelled (a symlink, /tmp vs /private/tmp, a trailing slash). */
+function samePath(a, b) {
+  try { return fs.realpathSync(a) === fs.realpathSync(b); } catch { return path.resolve(a) === path.resolve(b); }
+}
+
 /**
- * What to do with the target: the app is always replaced, the data only on
- * request. Installed store blocks inside the old app are kept.
+ * What to do with the target: the app is replaced (unless carryRefusal says
+ * no), the data only on request. Installed store blocks inside the old app
+ * are kept.
  */
 function planCarry(target, { replaceData = false } = {}) {
   const app = path.join(target, APP_FOLDER);
@@ -261,7 +267,37 @@ function planCarry(target, { replaceData = false } = {}) {
     app, data,
     dataAction: !dataExists ? 'create' : replaceData ? 'replace' : 'keep',
     extraBlocks,
+    // A folder, or a worktree's ".git" file — either way, git owns this app.
+    checkout: fs.existsSync(path.join(app, '.git')),
+    self: fs.existsSync(app) && samePath(app, ROOT),
   };
+}
+
+/**
+ * Why the app on the drive must not be replaced, or null.
+ *
+ * Replacing it is rmSync + rename, and only tracked files, dist/ and
+ * node_modules travel. That was safe while AEON/ was only ever this builder's
+ * output. The drive's AEON/ is now a git checkout (found 2026-09-28: cloned
+ * from GitHub, committed and pushed from, two stashes), and the documented update
+ * step — re-run this builder — would have deleted its .git, the stashes,
+ * every uncommitted edit and every untracked store block. Run from the drive
+ * itself, ROOT is that folder, so extraBlocks was empty and no untracked block
+ * survived. buildCarried's running-AEON ping only warns, and only for port
+ * 3001. So refuse, and name the command that updates a checkout in place.
+ */
+function carryRefusal(plan) {
+  if (plan.checkout) {
+    return `${plan.app} is a git checkout. Replacing it would delete its .git (history, branches, stashes) `
+      + 'and every uncommitted or untracked file in it, so this builder refuses. Update it in place instead:\n'
+      + `    cd "${plan.app}" && git pull && npm ci && npm run build\n`
+      + '  To rebuild it as a plain carried copy anyway, move that folder aside first — nothing here deletes it.';
+  }
+  if (plan.self) {
+    return `this builder is running from ${plan.app}, the app it would replace. Run it from another AEON `
+      + `(for example ~/Desktop/AEON): node scripts/build-usb.js --target "${path.dirname(plan.app)}" --carry-home`;
+  }
+  return null;
 }
 
 // ── Node runtimes ────────────────────────────────────────────────────────────
@@ -645,6 +681,10 @@ UPDATING THE APP
 Re-run the builder from an updated AEON. It refreshes AEON/ and runtime/
 and never touches AEON-Data unless you pass --replace-data (which moves
 the old copy aside rather than deleting it).
+
+If AEON/ is a git checkout (it has a .git folder), the builder refuses to
+replace it. Update it in place instead:
+  cd AEON && git pull && npm ci && npm run build
 `);
 }
 
@@ -655,6 +695,10 @@ async function buildCarried(args, { download, log = console.log } = {}) {
   const target = path.resolve(args.target);
   if (!fs.existsSync(target)) throw new Error(`target does not exist: ${target}`);
   const plan = planCarry(target, { replaceData: !!args.replaceData });
+  // Before anything is written — and on a dry run too, which would otherwise
+  // report a plan the real run cannot carry out.
+  const refusal = carryRefusal(plan);
+  if (refusal) throw new Error(refusal);
   const t0 = Date.now();
 
   log(`\nAEON — carry this install and its home`);
@@ -726,7 +770,7 @@ async function buildCarried(args, { download, log = console.log } = {}) {
 }
 
 module.exports = {
-  buildCarried, planCarry, copyFileData, copyTreeMaterialized, sweepOsJunk, sweepDriveRoot, installFileList,
+  buildCarried, planCarry, carryRefusal, copyFileData, copyTreeMaterialized, sweepOsJunk, sweepDriveRoot, installFileList,
   copyHome, driveRoots, writeCarriedMarker, unparseableJson, isUniversalMachO, parseShasums, stageRuntimes,
   writeCarriedLaunchers, writeDriveReadme, macLauncher, linuxLauncher, windowsLauncher, APP_FOLDER, DATA_FOLDER,
   LEGACY_MAC_NODE,

@@ -23,14 +23,47 @@ module.exports = function createCompareRouter(deps) {
   const HISTORY_FILE = path.join(COMPARE_DIR, 'history.json');
   try { if (!fs.existsSync(COMPARE_DIR)) fs.mkdirSync(COMPARE_DIR, { recursive: true }); } catch {}
 
-  function readHistory() {
-    if (!fs.existsSync(HISTORY_FILE)) return [];
-    try { return JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf8')); } catch { return []; }
+  // ── This block's two JSON lists: the roster and the compare history ─────
+  //
+  // Both reads and both writes swallowed errors (sweep C46, 2026-09-28). A
+  // write that failed — a read-only file, a full or ejected drive — still
+  // answered ok: the councilor just added, or the vote just cast, was gone on
+  // the next load with no reason given. And a file that would not parse read
+  // as "none": GET /council/members re-seeded over a hand-built roster with one
+  // trailing comma, and an add rewrote the file holding only the new member.
+  // Now a write throws and its route answers 500 with the reason. A file that
+  // exists but is not a readable list is moved aside, named and said out loud
+  // (as blockStorage.readJSON does), and the block starts from empty — nothing
+  // is written over it. One that cannot even be moved aside throws: the next
+  // write would destroy it.
+  function readList(file) {
+    let text;
+    try { text = fs.readFileSync(file, 'utf8'); }
+    catch (e) {
+      if (e.code === 'ENOENT') return { list: null };
+      throw new Error(`${path.basename(file)} could not be read (${e.message}).`);
+    }
+    let why = null, list = null;
+    try { list = JSON.parse(text); if (!Array.isArray(list)) why = 'it is not a list'; }
+    catch (e) { why = e.message.replace(/\s+/g, ' '); } // V8 quotes the text, newlines and all
+    if (!why) return { list };
+    const aside = `${file}.unreadable-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+    try { fs.renameSync(file, aside); }
+    catch (e) {
+      throw new Error(`${path.basename(file)} could not be read (${why}) and could not be moved aside (${e.message}), so it is left as it is.`);
+    }
+    const notice = `${path.basename(file)} could not be read (${why}); kept as ${path.basename(aside)} and started from empty.`;
+    console.warn(`[COUNCIL] ${notice}`);
+    return { list: null, notice };
   }
+  function writeList(file, list) {
+    try { fs.writeFileSync(file, JSON.stringify(list, null, 2), 'utf8'); }
+    catch (e) { throw new Error(`${path.basename(file)} could not be saved (${e.message}), so nothing changed.`); }
+  }
+  const failed = (res, e) => res.status(500).json({ ok: false, error: e.message });
 
-  function writeHistory(data) {
-    try { fs.writeFileSync(HISTORY_FILE, JSON.stringify(data, null, 2), 'utf8'); } catch {}
-  }
+  const readHistory = () => readList(HISTORY_FILE).list || [];
+  const writeHistory = (data) => writeList(HISTORY_FILE, data);
 
   // ── Council roster — persistent members the operator builds/edits ──────
   const DATA_DIR = getDataFile ? getDataFile('council') : path.join(__dirname, '..', 'data');
@@ -75,11 +108,9 @@ module.exports = function createCompareRouter(deps) {
     if (picks[0]) seed.push({ id: 'chair', label: 'The Chair', persona: 'The chair — synthesizes the debate into a verdict.', provider: picks[0].engine, model: picks[0].id, color: COLORS[seed.length % COLORS.length], chair: true });
     return seed;
   }
-  const loadMembers = () => {
-    try { return JSON.parse(fs.readFileSync(MEMBERS_FILE, 'utf8')); }
-    catch { return null; }
-  };
-  const saveMembers = (m) => { try { fs.writeFileSync(MEMBERS_FILE, JSON.stringify(m, null, 2)); } catch {} };
+  // { list, notice } — notice set when an unreadable roster was just moved aside.
+  const loadMembers = () => readList(MEMBERS_FILE);
+  const saveMembers = (m) => writeList(MEMBERS_FILE, m);
 
   // GET /council/members — seeds from live models on first run
   //
@@ -90,12 +121,15 @@ module.exports = function createCompareRouter(deps) {
   // delete below two members, so an empty roster is never the operator's own
   // choice.
   router.get('/council/members', async (_req, res) => {
-    let members = loadMembers();
-    if (!Array.isArray(members) || members.length === 0) {
-      members = await buildSeed();
-      if (members.length) saveMembers(members);
-    }
-    res.json({ members });
+    try {
+      const { list, notice } = loadMembers();
+      let members = list;
+      if (!Array.isArray(members) || members.length === 0) {
+        members = await buildSeed();
+        if (members.length) saveMembers(members);
+      }
+      res.json({ members, ...(notice ? { notice } : {}) });
+    } catch (e) { failed(res, e); }
   });
 
   // GET /council/models — what AEON can actually reach (alias of live scan)
@@ -105,10 +139,13 @@ module.exports = function createCompareRouter(deps) {
   router.post('/council/members', (req, res) => {
     const { label, persona, provider, model, chair } = req.body || {};
     if (!label || !provider || !model) return res.status(400).json({ error: 'label, provider, model required' });
-    const members = loadMembers() || [];
-    const m = { id: crypto.randomBytes(4).toString('hex'), label, persona: persona || '', provider, model, color: COLORS[members.length % COLORS.length], chair: !!chair };
-    members.push(m); saveMembers(members);
-    res.json({ ok: true, member: m });
+    try {
+      const { list, notice } = loadMembers();
+      const members = list || [];
+      const m = { id: crypto.randomBytes(4).toString('hex'), label, persona: persona || '', provider, model, color: COLORS[members.length % COLORS.length], chair: !!chair };
+      members.push(m); saveMembers(members);
+      res.json({ ok: true, member: m, ...(notice ? { notice } : {}) });
+    } catch (e) { failed(res, e); }
   });
 
   // PUT /council/members/:id — edit
@@ -119,9 +156,10 @@ module.exports = function createCompareRouter(deps) {
   // whichever `find()` reached first, silently, with the operator believing
   // they had chosen.
   router.put('/council/members/:id', (req, res) => {
-    const members = loadMembers() || [];
+    let members, notice;
+    try { ({ list: members, notice } = loadMembers()); members = members || []; } catch (e) { return failed(res, e); }
     const m = members.find(x => x.id === req.params.id);
-    if (!m) return res.status(404).json({ error: 'not found' });
+    if (!m) return res.status(404).json({ error: notice ? `not found — ${notice}` : 'not found' });
 
     for (const k of ['label', 'persona', 'provider', 'model']) {
       if (req.body[k] !== undefined) m[k] = req.body[k];
@@ -141,7 +179,7 @@ module.exports = function createCompareRouter(deps) {
       }
     }
 
-    saveMembers(members);
+    try { saveMembers(members); } catch (e) { return failed(res, e); }
     res.json({ ok: true, member: m });
   });
 
@@ -153,9 +191,10 @@ module.exports = function createCompareRouter(deps) {
   // blocking the delete: the operator asked to remove a member, and refusing
   // would trap them just as badly when the chair is the one they want gone.
   router.delete('/council/members/:id', (req, res) => {
-    let members = loadMembers() || [];
+    let members, notice;
+    try { ({ list: members, notice } = loadMembers()); members = members || []; } catch (e) { return failed(res, e); }
     const target = members.find(x => x.id === req.params.id);
-    if (!target) return res.status(404).json({ error: 'not found' });
+    if (!target) return res.status(404).json({ error: notice ? `not found — ${notice}` : 'not found' });
 
     members = members.filter(x => x.id !== req.params.id);
 
@@ -165,7 +204,7 @@ module.exports = function createCompareRouter(deps) {
       newChair = members[0].label || members[0].id;
     }
 
-    saveMembers(members);
+    try { saveMembers(members); } catch (e) { return failed(res, e); }
     res.json({ ok: true, ...(newChair ? { newChair } : {}) });
   });
 
@@ -538,10 +577,15 @@ module.exports = function createCompareRouter(deps) {
       voted_at: null,
     };
 
-    const history = readHistory();
-    history.unshift(comparison);
-    if (history.length > 200) history.length = 200;
-    writeHistory(history);
+    // The answers were paid for either way, so they are returned even when the
+    // record cannot be kept — with the reason, since a vote on it will 404.
+    let saveError = null;
+    try {
+      const history = readHistory();
+      history.unshift(comparison);
+      if (history.length > 200) history.length = 200;
+      writeHistory(history);
+    } catch (e) { saveError = `${e.message} A vote on this comparison cannot be recorded.`; }
 
     if (writeOSAudit) {
       writeOSAudit('COMPARE', `Started comparison: ${models.length} models, blind=${blind}`);
@@ -552,6 +596,7 @@ module.exports = function createCompareRouter(deps) {
       panes,
       is_blind: blind,
       models: blind ? null : comparison.model_names,
+      ...(saveError ? { saved: false, saveError } : {}),
     });
   });
 
@@ -561,14 +606,15 @@ module.exports = function createCompareRouter(deps) {
     const { winner } = req.body;
     if (!winner) return res.status(400).json({ error: 'winner is required (pane index or "tie")' });
 
-    const history = readHistory();
+    let history;
+    try { history = readHistory(); } catch (e) { return failed(res, e); }
     const comp = history.find(c => c.id === compId);
     if (!comp) return res.status(404).json({ error: 'Comparison not found' });
     if (comp.winner) return res.status(400).json({ error: 'Already voted' });
 
     comp.winner = winner;
     comp.voted_at = new Date().toISOString();
-    writeHistory(history);
+    try { writeHistory(history); } catch (e) { return failed(res, e); }
 
     res.json({
       winner: comp.winner,
@@ -600,17 +646,20 @@ module.exports = function createCompareRouter(deps) {
       created_at: new Date().toISOString(),
     };
 
-    const history = readHistory();
-    history.unshift(comparison);
-    if (history.length > 200) history.length = 200;
-    writeHistory(history);
+    try {
+      const history = readHistory();
+      history.unshift(comparison);
+      if (history.length > 200) history.length = 200;
+      writeHistory(history);
+    } catch (e) { return failed(res, e); }
 
     res.json({ status: 'ok', id: compId });
   });
 
   // GET /compare/history — list past comparisons
   router.get('/compare/history', (req, res) => {
-    const history = readHistory();
+    let history;
+    try { history = readHistory(); } catch (e) { return failed(res, e); }
     const limit = parseInt(req.query.limit) || 50;
     res.json(history.slice(0, limit).map(c => ({
       id: c.id,
@@ -626,17 +675,19 @@ module.exports = function createCompareRouter(deps) {
   // DELETE /compare/:compId — delete a comparison
   router.delete('/compare/:compId', (req, res) => {
     const { compId } = req.params;
-    const history = readHistory();
+    let history;
+    try { history = readHistory(); } catch (e) { return failed(res, e); }
     const idx = history.findIndex(c => c.id === compId);
     if (idx < 0) return res.status(404).json({ error: 'Comparison not found' });
     history.splice(idx, 1);
-    writeHistory(history);
+    try { writeHistory(history); } catch (e) { return failed(res, e); }
     res.json({ status: 'deleted' });
   });
 
   // GET /compare/scoreboard — aggregated model stats
   router.get('/compare/scoreboard', (req, res) => {
-    const history = readHistory().filter(c => c.winner);
+    let history;
+    try { history = readHistory().filter(c => c.winner); } catch (e) { return failed(res, e); }
     const stats = {};
 
     for (const comp of history) {

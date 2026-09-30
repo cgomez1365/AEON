@@ -225,6 +225,9 @@ export default function CookbookHardware() {
   const [searchFilter, setSearchFilter] = useState('');
   const [copied, setCopied] = useState(null);
   const [scanning, setScanning] = useState(false);
+  // A cached GGUF repo holding several builds, waiting for the operator to
+  // choose one: { model, repo, builds: [{file, quant, size_bytes}], note }.
+  const [servePick, setServePick] = useState(null);
 
   // What Fits state
   const [hwSystem, setHwSystem] = useState(null);
@@ -500,24 +503,33 @@ export default function CookbookHardware() {
   }
 
   // ── Serve (Quick launch) ──
-  async function quickServe(model) {
+  async function quickServe(model, gguf) {
     const repo = model.repo_id || model.name;
+    // Loopback, like AEON itself: 0.0.0.0 put a model server with no login on
+    // the network, and the server now refuses it. A cached repo id is resolved
+    // to its .gguf file by /model/serve — llama-server's --model takes a path.
+    // Download fetches every *.gguf in a repo, so a repo usually holds several
+    // builds: the server lists them (gguf_ambiguous) instead of guessing, the
+    // chooser above the tabs shows them, and the pick comes back as `gguf`.
     let cmd;
     if (model.is_gguf) {
-      cmd = `llama-server --model "${repo}" --host 0.0.0.0 --port 8080 -ngl 99 -c 8192`;
+      cmd = `llama-server --model "${repo}" --host 127.0.0.1 --port 8080 -ngl 99 -c 8192`;
     } else {
-      cmd = `vllm serve ${repo} --host 0.0.0.0 --port 8000 --dtype auto --trust-remote-code`;
+      cmd = `vllm serve ${repo} --host 127.0.0.1 --port 8000 --dtype auto --trust-remote-code`;
     }
     try {
       const res = await fetch('/api/model/serve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ repo_id: repo, cmd }),
+        body: JSON.stringify({ repo_id: repo, cmd, ...(gguf ? { gguf } : {}) }),
       });
       const data = await res.json();
       if (data.ok) {
+        setServePick(null);
         setTab('running');
         pollTasks();
+      } else if ((data.code === 'gguf_ambiguous' || data.code === 'gguf_not_found') && data.builds?.length) {
+        setServePick({ model, repo, builds: data.builds, note: data.error });
       } else {
         alert('Serve failed: ' + (data.error || ''));
       }
@@ -614,6 +626,26 @@ export default function CookbookHardware() {
       <p style={{ fontSize: '12px', color: 'var(--text-dim, #888)', margin: '0 0 16px 0' }}>
         Probe hardware, rank models by fit, download from HuggingFace, serve locally
       </p>
+
+      {/* Which build to serve — a cached GGUF repo holding several (C18). */}
+      {servePick && (
+        <div role="group" aria-label={`Choose a GGUF build of ${servePick.repo} to serve`} style={{ ...cardStyle, marginBottom: '16px' }}>
+          <div style={{ fontSize: '12px', fontWeight: 600, marginBottom: '4px' }}>Serve {servePick.repo} — which build?</div>
+          <div style={{ fontSize: '11px', color: 'var(--text-dim, #888)', marginBottom: '8px', lineHeight: 1.5 }}>
+            {servePick.note} A smaller file needs less memory; a larger one answers better.
+          </div>
+          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+            {servePick.builds.map(b => (
+              <button key={b.file} title={b.file} onClick={() => quickServe(servePick.model, b.file)}
+                style={{ ...tinyBtn, border: '1px solid var(--border, #2a2a2a)', padding: '4px 8px', color: 'var(--color-primary, #00f2ff)' }}>
+                <Play size={11} /> {b.file.replace(/\.gguf$/i, '')}
+                {b.size_bytes ? <span style={{ color: 'var(--text-dim, #888)' }}>&middot; {b.size_bytes >= 1024 ** 3 ? `${(b.size_bytes / 1024 ** 3).toFixed(1)} GB` : `${Math.max(1, Math.round(b.size_bytes / 1024 ** 2))} MB`}</span> : null}
+              </button>
+            ))}
+            <button onClick={() => setServePick(null)} style={{ ...tinyBtn, padding: '4px 8px' }}>Cancel</button>
+          </div>
+        </div>
+      )}
 
       {/* Tab Bar */}
       <div style={{ display: 'flex', gap: '4px', marginBottom: '16px', flexWrap: 'wrap' }}>
