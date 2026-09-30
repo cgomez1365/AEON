@@ -270,6 +270,15 @@ module.exports = function ({ kernelLLM, loadSettings: loadSettingsDep, VAULT_ROO
       // re-read per request.
       try {
         if (blockSettings.get('memory_core', loadSettings()).auto_memory && message && fullText && !result.cancelled) {
+          // Both internal calls below are guarded routes, and a loopback fetch
+          // carries no session unless one is forwarded — the recall call above
+          // learned this already. Without it the guard 401'd /api/ai, the 401
+          // body has no `text`, and the whole extraction was skipped without a
+          // word: Memory Core sat at 0 auto-extracted memories with the toggle
+          // on. Captured here, while the request is in hand.
+          const internalHeaders = kernelContext.forwardedAuth({
+            authorization: req.headers.authorization, cookie: req.headers.cookie,
+          });
           setImmediate(async () => {
             try {
               // D2a #10 — the extractor is told whose voice to write in.
@@ -291,10 +300,16 @@ Return ONLY a JSON array of objects like [{"text":"fact","category":"fact|identi
 User said: ${message.slice(0, 500)}
 Assistant replied: ${fullText.slice(0, 1000)}`;
               const kernelBase = process.env.AEON_KERNEL_URL || `http://localhost:${process.env.PORT || 3001}`;
-              const extractResult = await fetch(`${kernelBase}/api/ai`, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
+              const aiRes = await fetch(`${kernelBase}/api/ai`, {
+                method: 'POST', headers: internalHeaders,
                 body: JSON.stringify({ prompt: extractPrompt, role: 'chat', background: true }),
-              }).then(r => r.json());
+              });
+              const extractResult = await aiRes.json().catch(() => ({}));
+              if (!aiRes.ok) {
+                console.warn('[AUTO-MEMORY] /api/ai refused the extraction:', aiRes.status,
+                  String(extractResult.error || extractResult.message || '').slice(0, 160));
+                return;
+              }
               if (extractResult.text) {
                 // R-05 — this whole block used to end in a bare `catch {}`.
                 // Extraction could fail on every single turn and the only
@@ -311,7 +326,7 @@ Assistant replied: ${fullText.slice(0, 1000)}`;
                   if (!fact?.text || fact.text.length <= 5) continue;
                   try {
                     const r = await fetch(`${kernelBase}/api/memory/add`, {
-                      method: 'POST', headers: { 'Content-Type': 'application/json' },
+                      method: 'POST', headers: internalHeaders,
                       body: JSON.stringify({ text: fact.text, category: fact.category || 'fact', source: 'auto-extract' }),
                     });
                     if (r.ok) saved++;
@@ -323,6 +338,8 @@ Assistant replied: ${fullText.slice(0, 1000)}`;
                 if (facts.length && !saved) {
                   console.warn(`[AUTO-MEMORY] extracted ${facts.length} fact(s) and saved none.`);
                 }
+              } else {
+                console.warn('[AUTO-MEMORY] /api/ai answered with no text to extract from.');
               }
             } catch (e) { console.warn('[AUTO-MEMORY] extraction failed:', e.message); }
           });

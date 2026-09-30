@@ -234,6 +234,123 @@ function shortReason(reason) {
   return r.replace(/^\/\S+ /, '').split(/[.—]/)[0].trim() || 'unavailable';
 }
 
+// ── Pure pieces of the component below, exported so the node suite can hold
+// them to account (tests/sweep-terminal-*.test.js). Nothing else imports them.
+
+const isTurn = (e) => e && e.type === 'msg' && (e.role === 'user' || e.role === 'assistant');
+
+/**
+ * Split an SSE buffer into complete frames and keep the unfinished tail.
+ *
+ * The chat reader used to split on lines and pair each `event:` line with the
+ * NEXT line of the same read. A read that ended between the two — nothing in
+ * HTTP stops that, and the `done` frame, which carries the whole answer, is the
+ * likeliest to be cut — threw the event line away, and its data line arrived
+ * next read with nothing in front of it and was skipped too. A lost `done`
+ * loses the truncation flag (a cut-off answer read as finished) and the token
+ * count; a lost `error` left a blank turn. A frame ends at a blank line — the
+ * server writes `event: X\ndata: …\n\n` — so that is the only boundary trusted.
+ */
+export function takeSSEFrames(buffer) {
+  const parts = String(buffer).split('\n\n');
+  const rest = parts.pop();
+  const frames = [];
+  for (const part of parts) {
+    let event = 'message';
+    const data = [];
+    for (const line of part.split('\n')) {
+      if (line.startsWith('event:')) event = line.slice(6).trim();
+      else if (line.startsWith('data:')) data.push(line.slice(5).replace(/^ /, ''));
+    }
+    if (data.length) frames.push({ event, data: data.join('\n') });
+  }
+  return { frames, rest };
+}
+
+/**
+ * The part of the feed that is the conversation.
+ *
+ * A pending VAULT PLACEMENT card carries the dropped file itself as base64 (up
+ * to 25 MB). It is a question waiting on the operator, not part of the chat, and
+ * it rode along in every save: a 5–7 MB drop pushed each save body past the
+ * server's 10 MB limit, and smaller ones were copied into every saved chat file.
+ */
+export function sessionEntries(feed) {
+  return (Array.isArray(feed) ? feed : []).filter(e => e && e.type !== 'filedrop');
+}
+
+/**
+ * What a save response means.
+ *
+ * The route answers its failures as JSON too, so "a body arrived" is not
+ * success. A 404/500 body is { error } and was read as a saved chat — the
+ * button printed "Saved: undefined" — and the 404 echoes the id it could not
+ * find, which was then adopted as this chat's id, so every later save 404'd.
+ * 'gone' is that 404 for an id we sent: the record was deleted elsewhere or no
+ * longer parses, and the conversation has to be kept as a new one. Only the
+ * route's own answer counts (it names the id it looked for) — a 404 because
+ * the Dashboard block is not mounted must not fork the chat into a new record.
+ */
+export function readSaveResponse({ ok, status, body, sentId }) {
+  if (ok && body && body.id) return { kind: 'saved', id: body.id, name: body.name, nameSetBy: body.nameSetBy };
+  if (status === 404 && sentId && body && body.id === sentId) return { kind: 'gone' };
+  return { kind: 'failed', error: (body && body.error) || `HTTP ${status}` };
+}
+
+// Chromium and WebKit refuse a beacon (and a keepalive fetch) whose payload is
+// over 64 KiB: sendBeacon returns false and sends nothing. Headroom is left for
+// the request's own framing.
+export const BEACON_MAX_BYTES = 60 * 1024;
+
+/**
+ * What the page can still send as it closes.
+ *
+ * The beacon used to post the whole feed every time and ignore the answer, so
+ * once a chat passed 64 KiB — a few long answers — a refresh or close sent
+ * nothing, silently. Turns are now saved as they finish, so a close usually has
+ * nothing left to send ('saved'); when it does and it is too big for a beacon,
+ * the caller is told so instead of guessing.
+ */
+export function unloadSave({ feed, savedFeed, sessionId }) {
+  if (!(feed || []).some(isTurn)) return { send: false, reason: 'empty' };
+  if (feed === savedFeed) return { send: false, reason: 'saved' };
+  const body = JSON.stringify({ id: sessionId || null, messages: sessionEntries(feed), autoSaved: true });
+  const bytes = new TextEncoder().encode(body).length;
+  if (bytes > BEACON_MAX_BYTES) return { send: false, reason: 'too_large', bytes };
+  return { send: true, body, bytes };
+}
+
+/**
+ * /clear lets a chat go — and must let go of its saved record too.
+ *
+ * It used to empty the feed and keep the id, so the next turn's save posted
+ * the new conversation under the old id: the route replaces messages whole,
+ * and the saved chat was overwritten under its old title without a word. New
+ * chat has always dropped the id; /clear now does the same. The reset is done
+ * now AND queued behind any save still in flight, because a save that lands
+ * after /clear adopts the old id again.
+ */
+export function forgetSavedChat({ currentSessionId, savedFeedRef, saveChain }) {
+  const forget = () => { currentSessionId.current = null; savedFeedRef.current = null; };
+  forget();
+  saveChain.current = saveChain.current.then(forget);
+}
+
+/**
+ * The line the terminal prints after a distil.
+ *
+ * A repeat of an unchanged chat is refused before any model is asked, and the
+ * server says so in `message`. Printing "nothing durable found — 0 candidates"
+ * over that told the operator the chat held nothing worth keeping, when it had
+ * simply been distilled already.
+ */
+export function distillSummary(d) {
+  const n = d?.added?.length || 0;
+  if (n) return `🧠 Added ${n} ${n === 1 ? 'memory' : 'memories'} to Memory Core from this chat.`;
+  if (d?.alreadyDistilled || d?.message) return `🧠 ${d.message || 'Nothing new — this chat was already distilled.'}`;
+  return `🧠 Nothing durable found in this chat — ${d?.candidates || 0} candidates, none new.`;
+}
+
 const Terminal2 = ({ onUsageUpdate }) => {
   const [input, setInput] = useState('');
   const [pendingImage, setPendingImage] = useState(null); // { dataUri, name }
@@ -278,12 +395,30 @@ const Terminal2 = ({ onUsageUpdate }) => {
   const feedRef = useRef(feed); // always-fresh ref for unload handlers
   useEffect(() => { feedRef.current = feed; }, [feed]);
   const sessionIdRef = currentSessionId;
+  // The feed exactly as the server last confirmed it saved. The same array
+  // means nothing has changed since, so a hide or a close has nothing to send.
+  const savedFeedRef = useRef(null);
+  // Saves run one at a time. Two in flight for a chat that has no id yet would
+  // each mint a record — the fork currentSessionId exists to prevent — and a
+  // save after every turn makes that overlap ordinary rather than rare.
+  const saveChain = useRef(Promise.resolve());
+  // Session ids this page has already asked the model to title (see saveSession).
+  const namingAsked = useRef(new Set());
+  // Bumped when an operator action finishes; the effect below saves on it.
+  const [turnsDone, setTurnsDone] = useState(0);
+  const [sessionsError, setSessionsError] = useState(null);
 
   const fetchSessions = useCallback(async () => {
+    // The list used to be whatever a 200 carried, and the server answered 200
+    // [] for a folder it could not read — so the panel said "No saved sessions
+    // yet" about chats that were all still on disk. A failure is now shown as
+    // one.
     try {
       const r = await fetch('/api/terminal/sessions');
-      if (r.ok) setSessions(await r.json());
-    } catch {}
+      const d = await r.json().catch(() => null);
+      if (r.ok && Array.isArray(d)) { setSessions(d); setSessionsError(null); }
+      else setSessionsError(d?.error || `HTTP ${r.status}`);
+    } catch (e) { setSessionsError(e.message); }
   }, []);
 
   useEffect(() => { fetchSessions(); }, [fetchSessions]);
@@ -318,41 +453,64 @@ const Terminal2 = ({ onUsageUpdate }) => {
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok || d.error) throw new Error(d.error || `HTTP ${r.status}`);
-      const n = d.added?.length || 0;
-      push({ type: 'msg', role: 'system',
-        content: n
-          ? `🧠 Added ${n} ${n === 1 ? 'memory' : 'memories'} to Memory Core from this chat.`
-          : `🧠 Nothing durable found in this chat — ${d.candidates || 0} candidates, none new.` });
+      push({ type: 'msg', role: 'system', content: distillSummary(d) });
     } catch (e) {
       push({ type: 'msg', role: 'error', content: `[DISTILL] ${e.message}` });
     } finally { setDistilling(false); }
   }, []);
 
-  const saveSession = useCallback(async ({ name, autoSaved = false } = {}) => {
-    const msgs = feedRef.current.filter(e => e.type === 'msg' && (e.role === 'user' || e.role === 'assistant'));
-    if (msgs.length === 0) return null;
-    setSessionSaving(true);
-    try {
-      const r = await fetch('/api/terminal/sessions', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: currentSessionId.current, name, messages: feedRef.current, autoSaved }),
-      });
-      const d = await r.json();
-      if (d?.id) {
-        currentSessionId.current = d.id;
-        // Ask the model for a better title, once, in the background. The
+  // Resolves to { id, name, … } once the server has the chat, or null when
+  // there was nothing to save or the save failed — and a failure is said in the
+  // feed, never swallowed: every caller used to read a { error } body as saved.
+  const saveSession = useCallback(({ name, autoSaved = false } = {}) => {
+    const run = saveChain.current.then(async () => {
+      const snapshot = feedRef.current;
+      if (!snapshot.some(isTurn)) return null;
+      setSessionSaving(true);
+      const post = async (id) => {
+        const r = await fetch('/api/terminal/sessions', {
+          // The outcome is reported in the feed below, so the global banner
+          // stays out of it (a 5xx still raises it — interceptorPolicy).
+          method: 'POST', headers: { 'Content-Type': 'application/json', [SELF_REPORTED_HEADER]: '1' },
+          body: JSON.stringify({ id, name, messages: sessionEntries(snapshot), autoSaved }),
+        });
+        const body = await r.json().catch(() => null);
+        return readSaveResponse({ ok: r.ok, status: r.status, body, sentId: id });
+      };
+      try {
+        let out = await post(currentSessionId.current);
+        if (out.kind === 'gone') {
+          // The record this chat was saved to is gone — deleted in another tab
+          // or device, or its file no longer parses. Holding on to its id made
+          // every later save 404 and the conversation was never written again.
+          currentSessionId.current = null;
+          out = await post(null);
+          if (out.kind === 'saved') push({ type: 'msg', role: 'system', content: `💾 The saved copy of this chat was gone, so it was saved again as a new chat: ${out.name}` });
+        }
+        if (out.kind !== 'saved') throw new Error(out.error);
+        currentSessionId.current = out.id;
+        savedFeedRef.current = snapshot;
+        // Ask the model for a better title in the background. The
         // deterministic title is already in place, so this never blocks and a
         // failure changes nothing. The server refuses if the operator has
-        // renamed this chat (R10), which is why it is safe to call on any save.
-        if (d.nameSetBy === 'auto') {
-          fetch(`/api/terminal/sessions/${d.id}/name`, { method: 'POST' })
+        // renamed this chat (R10). Once per chat per page: a title the model
+        // could not improve stays 'auto', and chats now save after every turn,
+        // so asking on every save would be a model call per turn.
+        if (out.nameSetBy === 'auto' && !namingAsked.current.has(out.id)) {
+          namingAsked.current.add(out.id);
+          fetch(`/api/terminal/sessions/${out.id}/name`, { method: 'POST' })
             .then(() => fetchSessions())
             .catch(() => {});
         }
-      }
-      await fetchSessions();
-      return d;
-    } catch { return null; } finally { setSessionSaving(false); }
+        await fetchSessions();
+        return out;
+      } catch (e) {
+        push({ type: 'msg', role: 'error', content: `[SESSION] This chat was not saved — ${e.message}` });
+        return null;
+      } finally { setSessionSaving(false); }
+    });
+    saveChain.current = run;   // never rejects: the body catches its own failures
+    return run;
   }, [fetchSessions]);
 
   const loadSession = useCallback(async (id) => {
@@ -421,7 +579,15 @@ const Terminal2 = ({ onUsageUpdate }) => {
 
   // New chat — save current, start fresh
   const newChat = useCallback(async () => {
-    await saveSession({ autoSaved: true });
+    const hasTurns = feedRef.current.some(isTurn);
+    const saved = await saveSession({ autoSaved: true });
+    // The result used to be ignored: a failed save was followed by a fresh
+    // console anyway, and the only copy of the conversation left the screen.
+    // saveSession has already said why it failed; the chat stays.
+    if (hasTurns && !saved) {
+      push({ type: 'msg', role: 'system', content: 'New chat not started — this one is not saved yet, so it stays on screen. Try again, or /clear it to let it go.' });
+      return;
+    }
     setFeed([{ ...BOOT_MSG, content: 'AEON Operator Console — new session started.' }]);
     feedId.current = 1;
     currentSessionId.current = null;   // the next save is a NEW record, on purpose
@@ -443,19 +609,25 @@ const Terminal2 = ({ onUsageUpdate }) => {
   // response and adopts the id, so the second hide updates instead of
   // forking. sendBeacon stays, but only for beforeunload, the one case where
   // the page really may not survive long enough for a normal fetch to land.
+  //
+  // Neither was ever enough on its own: a beacon over 64 KiB is refused, and
+  // the hide save that fires during a close is an ordinary fetch the browser
+  // cancels. So a chat is also saved each time a turn finishes (the effect
+  // after this one) and a close only has to carry what changed since.
   useEffect(() => {
     const handleBeforeUnload = () => {
-      const msgs = feedRef.current.filter(e => e.type === 'msg' && (e.role === 'user' || e.role === 'assistant'));
-      if (msgs.length === 0) return;
+      const plan = unloadSave({ feed: feedRef.current, savedFeed: savedFeedRef.current, sessionId: sessionIdRef.current });
+      if (plan.reason === 'too_large') {
+        console.warn(`[SESSION] ${plan.bytes} bytes is over the browser's beacon limit — the turns since the last save were not sent on close.`);
+        return;
+      }
+      if (!plan.send) return;
       // Must use a Blob with application/json so the express JSON parser picks it up.
-      const blob = new Blob(
-        [JSON.stringify({ id: sessionIdRef.current, messages: feedRef.current, autoSaved: true })],
-        { type: 'application/json' }
-      );
-      navigator.sendBeacon('/api/terminal/sessions', blob);
+      const sent = navigator.sendBeacon('/api/terminal/sessions', new Blob([plan.body], { type: 'application/json' }));
+      if (!sent) console.warn('[SESSION] the browser refused the closing save — the turns since the last save were not sent.');
     };
     const handleVisibility = () => {
-      if (document.visibilityState === 'hidden') saveSession({ autoSaved: true });
+      if (document.visibilityState === 'hidden' && feedRef.current !== savedFeedRef.current) saveSession({ autoSaved: true });
     };
     window.addEventListener('beforeunload', handleBeforeUnload);
     document.addEventListener('visibilitychange', handleVisibility);
@@ -464,6 +636,14 @@ const Terminal2 = ({ onUsageUpdate }) => {
       document.removeEventListener('visibilitychange', handleVisibility);
     };
   }, [saveSession]);
+
+  // Save once each operator action has finished. An effect rather than a call
+  // at the end of dispatch: the turn's last patch (the final text, streaming
+  // off) is only in feedRef after it commits, and effects run in order, so the
+  // feedRef effect above has already run by the time this one does.
+  useEffect(() => {
+    if (turnsDone) saveSession({ autoSaved: true });
+  }, [turnsDone, saveSession]);
 
   const push = useCallback((entry) => {
     const id = feedId.current++;
@@ -729,23 +909,19 @@ const Terminal2 = ({ onUsageUpdate }) => {
       let buffer = '';
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop();
-        for (let i = 0; i < lines.length; i++) {
-          if (!lines[i].startsWith('event: ')) continue;
-          const eventType = lines[i].slice(7).trim();
-          const dataLine = lines[i + 1];
-          if (!dataLine?.startsWith('data: ')) continue;
-
+        // Frames are read whole (takeSSEFrames); at the end the decoder is
+        // flushed and the tail closed, so a last frame is never left unread.
+        buffer += done ? `${decoder.decode()}\n\n` : decoder.decode(value, { stream: true });
+        const { frames, rest } = takeSSEFrames(buffer);
+        buffer = rest;
+        for (const { event: eventType, data } of frames) {
           // Parse and handle are separate steps on purpose. They used to
           // share one try/catch that swallowed anything whose message
           // contained "JSON" — so a server error mentioning JSON vanished and
           // the turn ended blank, which is R-05's silent failure exactly.
-          // Only a genuine parse failure on a partial frame is ignorable.
+          // Only a frame that is not JSON is skipped.
           let payload;
-          try { payload = JSON.parse(dataLine.slice(6)); } catch { continue; }
+          try { payload = JSON.parse(data); } catch { continue; }
 
           if (eventType === 'token') { streamed += payload.t; patch(msgId, { content: streamed }); }
           else if (eventType === 'meta') {
@@ -763,6 +939,7 @@ const Terminal2 = ({ onUsageUpdate }) => {
             throw err;
           }
         }
+        if (done) break;
       }
 
       // D1d — a truncated answer must not read as a finished one.
@@ -816,7 +993,7 @@ const Terminal2 = ({ onUsageUpdate }) => {
     const arg = rest.join(' ');
 
     // UI-only commands short-circuit
-    if (cmdToken === '/clear') { setFeed([]); return; }
+    if (cmdToken === '/clear') { setFeed([]); forgetSavedChat({ currentSessionId, savedFeedRef, saveChain }); return; }
     if (cmdToken === '/help') {
       push({ type: 'msg', role: 'system', content: commands.map(c =>
         c.available === false
@@ -987,6 +1164,7 @@ const Terminal2 = ({ onUsageUpdate }) => {
       }
     } finally {
       setIsLoading(false);
+      setTurnsDone(n => n + 1);
     }
   };
 
@@ -996,7 +1174,7 @@ const Terminal2 = ({ onUsageUpdate }) => {
   const approveIntercept = (entry) => {
     setFeed(prev => prev.filter(e => e.id !== entry.id));
     setIsLoading(true);
-    runCommand(entry.command, true, entry.chipId).finally(() => setIsLoading(false));
+    runCommand(entry.command, true, entry.chipId).finally(() => { setIsLoading(false); setTurnsDone(n => n + 1); });
   };
 
   // Denial is an outcome the operator chose, not an error the system hit —
@@ -1172,16 +1350,27 @@ const Terminal2 = ({ onUsageUpdate }) => {
               <Plus size={10} /> NEW CHAT
             </button>
           </div>
-          {sessions.length === 0 && (
-            <div style={{ padding: '12px 14px', fontSize: 11, color: '#3a4f66' }}>No saved sessions yet — chats auto-save on refresh or close.</div>
+          {sessionsError && (
+            <div style={{ padding: '12px 14px', fontSize: 11, color: '#ff4455' }}>Chat history could not be read — {sessionsError}</div>
           )}
+          {!sessionsError && sessions.length === 0 && (
+            <div style={{ padding: '12px 14px', fontSize: 11, color: '#3a4f66' }}>No saved sessions yet — chats save after every turn.</div>
+          )}
+          {/* An unreadable file is listed, not hidden: it cannot be opened,
+              renamed or remembered (each would 404), only seen and deleted. */}
           {sessions.map(s => (
-            <div key={s.id} onClick={() => loadSession(s.id)}
-              style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 14px', cursor: 'pointer', borderBottom: '1px solid #111a28' }}
+            <div key={s.id} onClick={() => { if (!s.unreadable) loadSession(s.id); }}
+              title={s.unreadable ? `This saved chat cannot be read: ${s.error}` : undefined}
+              style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 14px', cursor: s.unreadable ? 'default' : 'pointer', borderBottom: '1px solid #111a28' }}
               onMouseEnter={e => e.currentTarget.style.background = 'rgba(0,242,255,0.04)'}
               onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
               <div style={{ flex: 1, minWidth: 0 }}>
-                {renaming?.id === s.id ? (
+                {s.unreadable ? (
+                  <>
+                    <div style={{ fontSize: 11.5, color: '#ffaa00', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>⚠ {s.id}</div>
+                    <div style={{ fontSize: 9.5, color: '#3a5070', marginTop: 1, overflowWrap: 'anywhere' }}>UNREADABLE · {s.error}</div>
+                  </>
+                ) : renaming?.id === s.id ? (
                   <input
                     autoFocus
                     value={renaming.value}
@@ -1199,11 +1388,14 @@ const Terminal2 = ({ onUsageUpdate }) => {
                 ) : (
                   <div style={{ fontSize: 11.5, color: '#c8d6e8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</div>
                 )}
-                <div style={{ fontSize: 9.5, color: '#3a5070', marginTop: 1 }}>
-                  {s.autoSaved ? 'AUTO · ' : 'SAVED · '}{s.messageCount} msgs · {new Date(s.savedAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
-                  {s.inRecord && <span style={{ color: '#00f2ff' }}> · IN RECORD</span>}
-                </div>
+                {!s.unreadable && (
+                  <div style={{ fontSize: 9.5, color: '#3a5070', marginTop: 1 }}>
+                    {s.autoSaved ? 'AUTO · ' : 'SAVED · '}{s.messageCount} msgs · {new Date(s.savedAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                    {s.inRecord && <span style={{ color: '#00f2ff' }}> · IN RECORD</span>}
+                  </div>
+                )}
               </div>
+              {!s.unreadable && (<>
               <button onClick={(e) => { e.stopPropagation(); setRenaming({ id: s.id, value: s.name }); }}
                 aria-label="Rename chat"
                 title="Rename — your title is never overwritten"
@@ -1220,6 +1412,7 @@ const Terminal2 = ({ onUsageUpdate }) => {
                 onMouseLeave={e => e.currentTarget.style.color = s.inRecord ? '#00f2ff' : '#3a5070'}>
                 {s.inRecord ? <Check size={12} /> : <BookmarkPlus size={12} />}
               </button>
+              </>)}
               <button onClick={(e) => deleteSession(s.id, e)}
                 aria-label="Delete session"
                 style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#3a5070', padding: 2, lineHeight: 1 }}

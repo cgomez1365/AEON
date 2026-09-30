@@ -83,14 +83,33 @@ module.exports = function createChatRouter(deps) {
   };
 
   // GET /api/terminal/sessions — list saved sessions, newest first
+  //
+  // Both failures here used to read as data. A folder that could not be read
+  // (EIO on the carried drive) answered 200 [], and the panel told the
+  // operator there were no saved chats; a file that no longer parsed — a
+  // write cut off part-way, since writeSession rewrites in place on every
+  // save — was dropped from the list without a word. The first is now an
+  // error, and the second is listed as unreadable rather than hidden.
   router.get('/terminal/sessions', (req, res) => {
+    let names;
     try {
       ensureSessionsDir();
-      const files = fs.readdirSync(SESSIONS_DIR)
+      names = fs.readdirSync(SESSIONS_DIR);
+    } catch (e) {
+      console.error(`[SESSIONS] could not list ${SESSIONS_DIR}: ${e.message}`);
+      return res.status(500).json({ error: `Saved chats could not be listed: ${e.message}` });
+    }
+    try {
+      const files = names
         .filter(f => f.endsWith('.json') && !f.startsWith('.'))
         .map(f => {
+          const id = f.slice(0, -'.json'.length);
           try {
             const raw = JSON.parse(fs.readFileSync(path.join(SESSIONS_DIR, f), 'utf8'));
+            // readSession's rule: a record whose id disagrees with its filename
+            // cannot be opened, saved or deleted by the id it would be listed
+            // under.
+            if (!raw || raw.id !== id) throw new Error('its id does not match its file name');
             return {
               id: raw.id, name: raw.name, savedAt: raw.savedAt,
               updatedAt: raw.updatedAt || raw.savedAt,
@@ -102,13 +121,16 @@ module.exports = function createChatRouter(deps) {
               inRecord: !!raw.inRecord,
               messageCount: raw.messageCount || 0,
             };
-          } catch { return null; }
+          } catch (e) {
+            let savedAt = null;
+            try { savedAt = fs.statSync(path.join(SESSIONS_DIR, f)).mtime.toISOString(); } catch { /* sorts last */ }
+            return { id, name: id, savedAt, unreadable: true, error: e.message };
+          }
         })
-        .filter(Boolean)
         .sort((a, b) => new Date(b.savedAt) - new Date(a.savedAt));
       res.json(files);
     } catch (e) {
-      res.json([]);
+      res.status(500).json({ error: `Saved chats could not be listed: ${e.message}` });
     }
   });
 
