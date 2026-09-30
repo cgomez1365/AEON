@@ -49,6 +49,49 @@ require('dotenv').config({ path: ENV_FILE });
 
 const isVercel = require('../src/kernel/runtime.cjs').isCloud();
 
+// Respect PORT env (test boots, alternate deploys); default stays 3001. Read
+// here, after the .env load, because the home lock below records it.
+const PORT = Number(process.env.PORT) || 3001;
+
+// ── One AEON per home — before anything below writes to it ──────────────
+// The drive's launchers pick the first free port, so a second double-click
+// started a second AEON on 3002 over the same AEON-Data, and its Guardian
+// boot-revoke signed the operator out of the first (2026-09-28). The lock
+// names the running AEON's port; see src/kernel/runtime.cjs.
+const HOME_LOCK = require('../src/kernel/runtime.cjs').holdHome({ home: HOME_BOOT.roots.home, port: PORT, bind: bind.resolveBind(), app: ROOT });
+if (HOME_LOCK.ok === false) {
+  console.error(HOME_LOCK.message);
+  // The launcher opens its browser tab on the port it picked for THIS
+  // process. For a minute that port sends the tab to the AEON that is
+  // running; then this process ends. Nothing else of this AEON starts — no
+  // vault, no blocks, no Guardian.
+  const running = Number(HOME_LOCK.holder.port);
+  if (Number.isInteger(running) && running > 0 && running !== PORT) {
+    require('http').createServer((req, res) => {
+      const to = String(req.url || '').startsWith('/') ? req.url : '/';
+      res.writeHead(307, { Location: `http://localhost:${running}${to}` });
+      res.end();
+    }).on('error', () => process.exit(1))
+      .listen(PORT, bind.resolveBind(), () => setTimeout(() => process.exit(1), 60 * 1000));
+  } else {
+    process.exit(1);
+  }
+  return; // CommonJS: ends this module; the server below never starts
+}
+if (HOME_LOCK.held) {
+  process.on('exit', HOME_LOCK.release);
+  // Closing the launcher's window is how AEON is stopped. The terminal hangs
+  // up (SIGHUP; Windows delivers a closed console as SIGHUP, Ctrl+Break as
+  // SIGBREAK), and Node's default for those ends the process without 'exit' —
+  // the lock stayed behind and the next launch was refused. Give the home back
+  // first, synchronously (Windows ends a closed console's processes seconds
+  // later), then stop as SIGINT does. Registered here, not beside SIGINT
+  // below, so a window closed mid-boot gives the home back too.
+  for (const sig of process.platform === 'win32' ? ['SIGHUP', 'SIGBREAK'] : ['SIGHUP']) {
+    process.on(sig, () => { HOME_LOCK.release(); shutdown(sig); });
+  }
+} else console.warn(`[HOME] Could not write ${HOME_LOCK.lockFile} (${HOME_LOCK.error}) — starting without the one-AEON-per-home lock.`);
+
 // ── Vault first-run guard — the vault must ALWAYS be usable out of the box ──
 // If no master key exists (user skipped the launcher wizard or booted via npm),
 // generate one, persist it to .env, and inject it into the live process.
@@ -186,7 +229,17 @@ const app = express();
 app.use(security.correlationId);
 app.use(security.corsMiddleware);
 app.use(security.helmetMiddleware);
-app.use(express.json({ limit: '10mb' }));
+// 10 MB app-wide, except the routes that parse their own larger body — the
+// app-wide parser used to refuse those first (server/earlyware.cjs).
+const { createAppJsonParser, bodyTooLargeReply } = require('./earlyware.cjs');
+app.use(createAppJsonParser({ json: express.json }));
+// An interface older than its source is served, never refused — but every
+// response says so, for the UI to show and the operator to rebuild.
+const _uiFreshness = require('../src/kernel/runtime.cjs').watchUiFreshness({ appRoot: ROOT });
+app.use((req, res, next) => {
+  try { const ui = _uiFreshness(); if (ui.stale) res.setHeader('X-AEON-UI-Stale', ui.header); } catch { /* never block a request */ }
+  next();
+});
 app.use(['/api', '/core', '/block'], security.apiLimiter);
 
 // Root health check
@@ -560,6 +613,15 @@ try {
 // ── Serve the built SPA (tunnel + production) ──
 const DIST = path.join(ROOT, 'dist');
 if (fs.existsSync(path.join(DIST, 'index.html'))) {
+  // dist/ is gitignored and no launcher rebuilds it: after a pull, the old
+  // interface is served against the new routes (R-05 — say so at boot).
+  try {
+    const ui = _uiFreshness();
+    if (ui.stale) {
+      console.warn(`[UI] The interface in dist/ was built ${ui.builtAt}, before ${ui.newest.file} changed (${ui.newest.changedAt}).`);
+      console.warn('[UI] The browser gets the older interface until you run: npm run build');
+    }
+  } catch (e) { console.warn('[UI] Could not compare the interface with its source:', e.message); }
   app.use(express.static(DIST));
   app.get('*', (req, res, next) => {
     if (req.path.startsWith('/api/') || req.path.startsWith('/events') || req.path.startsWith('/ws') || req.path.startsWith('/core') || req.path.startsWith('/block/')) return next();
@@ -569,6 +631,13 @@ if (fs.existsSync(path.join(DIST, 'index.html'))) {
 
 // ── Global error handler (zero-trust) ──
 app.use((err, req, res, next) => {
+  // A body over its route's limit is the sender's size, not a core fault:
+  // name the limit, and keep the CRIT channel for real faults.
+  const tooLarge = bodyTooLargeReply(err);
+  if (tooLarge) {
+    console.warn(`[BODY] ${req.method} ${req.path} — ${tooLarge.body.error}`);
+    return res.status(tooLarge.status).json({ correlation_id: req.correlationId || 'AEON-SYS', ...tooLarge.body });
+  }
   console.error('[CRITICAL] Unhandled Middleware Error:', err);
   if (typeof global.broadcastTerminalEvent === 'function') {
     global.broadcastTerminalEvent('CRIT', `Internal Router Fault: ${err.message}`);
@@ -582,8 +651,7 @@ app.use((err, req, res, next) => {
 });
 
 // ── Startup with port-conflict handling ──
-// Respect PORT env (test boots, alternate deploys); default stays 3001.
-const PORT = Number(process.env.PORT) || 3001;
+// PORT is read at the top, beside the home lock that records it.
 
 // Every mode binds loopback only — see src/kernel/server-utils/bind.cjs for
 // why (the argument written for portable applies verbatim to a desktop
@@ -688,8 +756,9 @@ process.on('uncaughtException', (err) => {
   if (fatal) process.exit(1);
 });
 
-// Graceful shutdown hooks
-const shutdown = async (sig) => {
+// Graceful shutdown hooks. A declaration, not a const: the home lock's
+// hang-up handlers near the top call it.
+async function shutdown(sig) {
   console.log(`${sig} signal received: closing server.`);
   // Phase 6: shut down native local runtime (llama.cpp worker thread) before exit.
   try {
@@ -697,6 +766,6 @@ const shutdown = async (sig) => {
     await lr.shutdown();
   } catch {}
   process.exit(0);
-};
+}
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
