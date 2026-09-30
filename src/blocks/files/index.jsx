@@ -29,6 +29,33 @@ const formatSize = (bytes) => {
 
 const folderPrefix = (folder) => folder ? folder + '/' : '';
 
+// What the editor may open from a /api/fs/read answer. Only a raw read
+// ({raw:true}) is the file itself; the default answer is an 8,000-character
+// preview with a marker line (and HTML with its tags stripped), and Save used
+// to write that preview back over the real file. Anything that is not a whole
+// raw read is refused here, so the textarea can never hold part of a file.
+export function editableFrom(data) {
+  if (!data || data.raw !== true || data.truncated !== false || typeof data.content !== 'string') {
+    return { ok: false, error: 'The server did not return the whole file, so it will not be opened for editing (a save would cut it short). Restart AEON so the server and this screen match, then try again.' };
+  }
+  return { ok: true, content: data.content, eol: data.eol === '\r\n' ? '\r\n' : '\n', mixed: data.eol === 'mixed' };
+}
+
+// A textarea hands back every line break as \n. A file that was CRLF on disk
+// (a Windows .bat) goes back as CRLF, so an edit changes only what was edited.
+export function toDiskText(text, eol) {
+  return eol === '\r\n' ? String(text).replace(/\r?\n/g, '\r\n') : text;
+}
+
+// The lock answer, as the screen should show it. The server answers with the
+// state enforcement reads (500 + `error` when the change did not persist), so
+// the badge follows `locked` and a failure says so instead of a success line.
+export function lockOutcome(ok, d) {
+  const locked = !d || d.locked !== false;
+  if (!ok || (d && d.ok === false)) return { locked, status: `❌ ${(d && d.error) || 'The lock did not change.'}` };
+  return { locked, status: locked ? '🔒 Add-only mode: browse and add files; editing and deleting are off.' : '🔓 Full edit mode: changes here affect the real files on this computer.' };
+}
+
 // Local paths are always the absolute paths the SERVER reports — see
 // localPaths.js for why the build-time WORKSPACE constant was the wrong source
 // (it is '' on every install, so New folder and Upload at the landing view
@@ -70,11 +97,12 @@ function FilePane({ mode, onPreview, onEdit }) {
     }
     try {
       const r = await fetch('/api/fs/lock', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ locked: !fsLocked }) });
-      const d = await r.json();
-      setFsLocked(d.locked !== false);
-      setUploadStatus(d.locked !== false ? '🔒 Add-only mode: browse and add files; editing and deleting are off.' : '🔓 Full edit mode: changes here affect the real files on this computer.');
+      const d = await r.json().catch(() => null);
+      const out = lockOutcome(r.ok, d);
+      setFsLocked(out.locked);
+      setUploadStatus(out.status);
       setTimeout(() => setUploadStatus(''), 6000);
-    } catch {}
+    } catch (e) { setUploadStatus(`❌ Could not change the lock: ${e.message}`); }
   };
 
   const loadDir = async (folder = currentFolder) => {
@@ -299,11 +327,15 @@ function FilePane({ mode, onPreview, onEdit }) {
     } else {
       if (editable.includes(ext)) {
         try {
-          const body = JSON.stringify({ filePath: entry.storagePath });
+          // raw: the file's own bytes, whole or refused — never the preview.
+          const body = JSON.stringify({ filePath: entry.storagePath, raw: true });
           const res = await fetch(`${LOCAL_API}/read`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
-          if (!res.ok) throw new Error(await res.text());
-          const data = await res.json();
-          onEdit(data.content, entry.storagePath, entry.name);
+          const data = await res.json().catch(() => null);
+          if (!res.ok) throw new Error([data?.error, data?.remedy].filter(Boolean).join(' ') || `HTTP ${res.status}`);
+          const opened = editableFrom(data);
+          if (!opened.ok) throw new Error(opened.error);
+          if (opened.mixed && !window.confirm(`${entry.name} mixes Windows (CRLF) and Unix (LF) line endings. Saving from this editor writes every line ending as LF.\n\nOpen it anyway?`)) return;
+          onEdit(opened.content, entry.storagePath, entry.name, opened.eol);
         } catch (e) { alert('Could not open file: ' + e.message); }
       } else if (previewable.includes(ext)) {
         onPreview(`/api/fs/serve?path=${encodeURIComponent(entry.storagePath)}`, entry.name, mode);
@@ -453,19 +485,23 @@ export default function FileManager() {
   const [previewMode, setPreviewMode] = useState('cloud');
   const [editContent, setEditContent] = useState(null);
   const [editPath, setEditPath]       = useState(null);
+  const [editEol, setEditEol]         = useState('\n');
   const [saveStatus, setSaveStatus]   = useState('');
 
   const handlePreview = (url, name, mode) => { setPreviewUrl(url); setPreviewName(name); setPreviewMode(mode); };
-  const handleEdit = (content, path, name) => { setEditContent(content); setEditPath(path); setPreviewName(name); };
+  const handleEdit = (content, path, name, eol = '\n') => { setEditContent(content); setEditPath(path); setPreviewName(name); setEditEol(eol); };
 
   const handleLocalSave = async () => {
     try {
       setSaveStatus('Saving...');
-      const res = await fetch(`${LOCAL_API}/write`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filePath: editPath, content: editContent }) });
-      if (!res.ok) throw new Error(await res.text());
+      const res = await fetch(`${LOCAL_API}/write`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filePath: editPath, content: toDiskText(editContent, editEol) }) });
+      if (!res.ok) {
+        const d = await res.json().catch(() => null);
+        throw new Error([d?.error, d?.remedy].filter(Boolean).join(' ') || `HTTP ${res.status}`);
+      }
       setSaveStatus('✅ Saved!');
       setTimeout(() => { setSaveStatus(''); setEditContent(null); }, 1500);
-    } catch (e) { alert('Save failed: ' + e.message); }
+    } catch (e) { setSaveStatus(''); alert('Save failed: ' + e.message); }
   };
 
   return (

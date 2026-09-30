@@ -144,19 +144,37 @@ module.exports = function createFsRouter(deps) {
     try { return JSON.parse(fs.readFileSync(LOCK_FILE, 'utf8')).locked !== false; }
     catch { return true; } // no file = locked (safe default)
   }
+  // Throws. This used to end in `catch {}`, and POST /fs/lock then answered
+  // with the value it was ASKED for: a failed write (read-only mount, a drive
+  // error on the carried exFAT volume) showed "Add-only" while rename/delete
+  // stayed allowed, or "Full edit" while the next delete came back 423.
   function writeLock(locked) {
-    try {
-      fs.mkdirSync(path.dirname(LOCK_FILE), { recursive: true });
-      fs.writeFileSync(LOCK_FILE, JSON.stringify({ locked: !!locked, changedAt: new Date().toISOString() }, null, 2));
-    } catch {}
+    if (!LOCK_FILE) throw new Error('this install has no data folder to keep the lock in');
+    fs.mkdirSync(path.dirname(LOCK_FILE), { recursive: true });
+    fs.writeFileSync(LOCK_FILE, JSON.stringify({ locked: !!locked, changedAt: new Date().toISOString() }, null, 2));
   }
+  const lockLabel = (l) => (l ? 'locked (add-only)' : 'UNLOCKED (full edit)');
 
   router.get('/fs/lock', (_req, res) => res.json({ ok: true, locked: readLock() }));
   router.post('/fs/lock', (req, res) => {
     const locked = !!(req.body && req.body.locked);
-    writeLock(locked);
-    if (deps.writeOSAudit) { try { deps.writeOSAudit('FS_LOCK', locked ? 'locked (add-only)' : 'UNLOCKED (full edit)', 200, 0); } catch {} }
-    res.json({ ok: true, locked });
+    let failure = null;
+    try { writeLock(locked); } catch (e) { failure = e.message; }
+    // Answer with what enforcement will read — readLock(), the same call every
+    // guarded route makes — never with the request echoed back.
+    const actual = readLock();
+    if (!failure && actual !== locked) failure = `the lock file reads back as ${lockLabel(actual)}`;
+    if (failure) {
+      if (deps.writeOSAudit) { try { deps.writeOSAudit('FS_LOCK_FAILED', `${lockLabel(locked)} requested: ${failure}`, 500, 0); } catch {} }
+      return res.status(500).json({
+        correlation_id: req.correlationId || 'AEON-SYS',
+        ok: false,
+        locked: actual,
+        error: `Could not ${locked ? 'lock' : 'unlock'} the File Manager: ${failure}. It is still ${lockLabel(actual)}.`,
+      });
+    }
+    if (deps.writeOSAudit) { try { deps.writeOSAudit('FS_LOCK', lockLabel(actual), 200, 0); } catch {} }
+    res.json({ ok: true, locked: actual });
   });
 
   // POST /api/fs/list
@@ -202,8 +220,57 @@ module.exports = function createFsRouter(deps) {
   // Relative paths now resolve against the workspace, which makes that
   // description true. Absolute paths are untouched: the File Manager
   // deliberately browses the whole disk (see /fs/list).
+  //
+  // `{raw: true}` is the File Manager's editor, and it is a different read.
+  // The default answer is for a person or an agent to READ: extracted text
+  // (HTML with its tags stripped), cut to an 8,000-character preview with a
+  // marker line, after a model summary. The editor used to open that answer
+  // and Save wrote it back through /fs/write — a 20 KB notes.md lost its tail
+  // and gained the marker, an .html file lost its markup, and every open
+  // waited on the model. Raw returns the file's own bytes as UTF-8, whole or
+  // not at all: above EDIT_MAX_BYTES, or when the bytes are not UTF-8 text
+  // that decodes and re-encodes to itself, it refuses instead of handing the
+  // editor something a Save would write back short or changed. No summary.
+  const EDIT_MAX_BYTES = 1024 * 1024; // the JSON body limit is 10 MB; escaping can grow text ~6x
+  const PREVIEW_CHARS = 8000;
+  const previewTail = (more) => `\n\n[… ${more} more characters — ask about it, or open the file]`;
+  const PREVIEW_TAIL_RE = /\r?\n\r?\n\[… \d+ more characters — ask about it, or open the file\]\s*$/;
+
+  function readForEdit(req, res, resolved) {
+    const stat = fs.statSync(resolved); // ENOENT → the route's own not-found answer
+    if (!stat.isFile()) {
+      return res.status(400).json({ correlation_id: req.correlationId || 'AEON-SYS', error: `${path.basename(resolved)} is not a regular file, so there is nothing to edit.`, path: resolved });
+    }
+    const refuseTooBig = (bytes) => res.status(413).json({
+      correlation_id: req.correlationId || 'AEON-SYS',
+      error: `${path.basename(resolved)} is ${(bytes / 1048576).toFixed(1)} MB (${bytes.toLocaleString('en-US')} bytes) — over the ${EDIT_MAX_BYTES / 1048576} MB the editor opens whole. It will not open part of a file: saving part would cut the real file short.`,
+      remedy: 'Download it and edit it in a text editor on this computer.',
+      path: resolved, bytes, limit: EDIT_MAX_BYTES,
+    });
+    if (stat.size > EDIT_MAX_BYTES) return refuseTooBig(stat.size);
+    const buf = fs.readFileSync(resolved);
+    if (buf.length > EDIT_MAX_BYTES) return refuseTooBig(buf.length); // grew since the stat
+    const content = buf.toString('utf8');
+    if (buf.includes(0) || !Buffer.from(content, 'utf8').equals(buf)) {
+      return res.status(415).json({
+        correlation_id: req.correlationId || 'AEON-SYS',
+        error: `${path.basename(resolved)} is not UTF-8 text, so the editor cannot show it without changing bytes you never touched.`,
+        remedy: 'Download it and open it in an application made for that format.',
+        path: resolved,
+      });
+    }
+    // A browser textarea turns every line break into \n. Say which ending the
+    // file uses so the editor can put CRLF back on a Windows file (.bat), and
+    // flag a file that mixes them — its endings cannot all survive an edit.
+    const crlf = (content.match(/\r\n/g) || []).length;
+    const lf = (content.match(/\n/g) || []).length;
+    const cr = (content.match(/\r/g) || []).length;
+    const eol = crlf && crlf === lf && crlf === cr ? '\r\n' : (cr ? 'mixed' : '\n');
+    return res.json({ success: true, raw: true, path: resolved, content, bytes: buf.length, eol, truncated: false });
+  }
+
   router.post('/fs/read', async (req, res) => {
-    const { filePath, summarize } = req.body || {};
+    const { filePath, summarize, raw } = req.body || {};
     const requested = typeof filePath === 'string' ? filePath.trim() : '';
     if (!requested) {
       return res.status(400).json({
@@ -218,6 +285,7 @@ module.exports = function createFsRouter(deps) {
     const resolved = verdict.path;
 
     try {
+      if (raw === true) return readForEdit(req, res, resolved);
       // A document is read through the kernel's extractor — a PDF comes back
       // as its words, not as decoded binary reported as success. A format the
       // extractor cannot read is refused with a remedy rather than "read".
@@ -257,7 +325,7 @@ module.exports = function createFsRouter(deps) {
       // command: the operator gets the point of the file first, and the text
       // behind it. Absent a model the text alone is still the answer, and the
       // response says why there is no summary.
-      const PREVIEW = 8000, SUMMARY_INPUT = 14000;
+      const PREVIEW = PREVIEW_CHARS, SUMMARY_INPUT = 14000;
       let summary = null, summaryReason = null;
       if (summarize !== false && typeof kernelLLM === 'function' && content.trim()) {
         try {
@@ -274,7 +342,7 @@ module.exports = function createFsRouter(deps) {
         summaryReason = typeof kernelLLM === 'function' ? 'the document is empty' : 'no model is assigned to the chat role';
       }
 
-      const preview = content.length > PREVIEW ? `${content.slice(0, PREVIEW)}\n\n[… ${content.length - PREVIEW} more characters — ask about it, or open the file]` : content;
+      const preview = content.length > PREVIEW ? `${content.slice(0, PREVIEW)}${previewTail(content.length - PREVIEW)}` : content;
       res.json({
         success: true,
         path: resolved,
@@ -314,6 +382,20 @@ module.exports = function createFsRouter(deps) {
     // one is editing the real disk — that needs the hub unlocked.
     if (readLock() && fs.existsSync(target)) {
       return res.status(423).json({ locked: true, error: 'File Manager is in add-only mode. Unlock it (🔓) to edit existing files — changes affect the real files on this computer.' });
+    }
+    // Backstop for the preview round-trip /fs/read's raw mode exists to end:
+    // text that still ends in the preview marker is the first 8,000 characters
+    // of some file, and writing it over an existing file cuts that file short.
+    // A screen built before the raw read (the UI needs `npm run build`, the
+    // server only a restart) or an agent that /read then /writefile would
+    // otherwise still do it. Saving a preview as a NEW file stays allowed.
+    if (typeof content === 'string' && PREVIEW_TAIL_RE.test(content) && fs.existsSync(target)) {
+      return res.status(409).json({
+        correlation_id: req.correlationId || 'AEON-SYS',
+        error: `This text ends in "[… more characters — ask about it, or open the file]": it is the ${PREVIEW_CHARS.toLocaleString('en-US')}-character preview /read returns, not the whole file. Writing it would cut ${path.basename(target)} short, so nothing was written.`,
+        remedy: 'Reopen the file in the File Manager (rebuild AEON with npm run build if the screen is older than this server) and save from there, or remove the marker line if this text is really meant to replace the file.',
+        path: target,
+      });
     }
     try {
       const dir = path.dirname(target);
