@@ -610,7 +610,15 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     }
     for (const [p, pool] of Object.entries(KEY_POOLS)) {
       const i = pool.indexOf(value);
-      if (i !== -1) { pool.splice(i, 1); keyPoolIdx[p] = pool.length ? (keyPoolIdx[p] || 0) % pool.length : 0; }
+      if (i === -1) continue;
+      pool.splice(i, 1);
+      keyPoolIdx[p] = pool.length ? (keyPoolIdx[p] || 0) % pool.length : 0;
+      // A pool of one is read through its base name (nextKey steps aside
+      // below two keys). Removing the key that sat there left the base empty
+      // with a good key still pooled: every env-only path — openRouterRequest,
+      // _legacyKeyFor, vision — said "key missing" until a restart (C34).
+      const base = DEHYDRATE_BASES[p]?.[0];
+      if (base && pool.length && !process.env[base]) process.env[base] = pool[0];
     }
     const g = GEMINI_KEY_POOL.indexOf(value);
     if (g !== -1) GEMINI_KEY_POOL.splice(g, 1);
@@ -952,7 +960,9 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       const o = { ...base, credential_ref };
       if (provider === 'gemini') return genericGeminiRequest(prompt, model, base_url, apiKey, o);
       if (provider === 'claude') return claudeRequest(prompt, model, apiKey, undefined, o);
-      if (provider === 'local') return localNativeRequest(prompt, model, o);
+      // Text only: the caller wraps it. With returnMeta the local transport
+      // answers {text, model} itself, which came back wrapped a second time.
+      if (provider === 'local') return localNativeRequest(prompt, model, { ...o, returnMeta: false });
       return genericOpenAIRequest(prompt, model, base_url, apiKey, o);
     });
   };
@@ -1349,6 +1359,19 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   // otherwise prefs.provider_priority orders it. One builder for the stream
   // and non-stream chains, so the two cannot route the same role differently.
   const _ENV_CHAIN = ['groq', 'gemini', 'openrouter'];
+  // The models a fallback rung asks provider p for, best first: one Settings
+  // declares for p (the serving role's, then Chat's, then any other role's —
+  // never Embedding's, an embedder cannot chat), then the model this chain has
+  // always used for p. The connection's auto-pick comes only after these: it
+  // is the provider's own list order, and Groq lists a text-to-speech model
+  // first, so failover to Groq asked for speech and never answered (C09).
+  const _fallbackModelsFor = (p, settings, role) => {
+    const models = settings?.models || {};
+    const roles = [role, 'chat', ...Object.keys(models)].filter((r, i, a) => r && r !== 'embed' && a.indexOf(r) === i);
+    const declared = roles.map((r) => models[r]).filter((m) => m && m.provider === p && m.model).map((m) => m.model);
+    const nonChat = aeonEndpoints?.NON_CHAT_MODEL_RE;
+    return [...new Set([...declared, _STREAM_FALLBACK_MODELS[p]].filter((m) => m && !(nonChat && nonChat.test(m))))];
+  };
   const _fallbackCandidates = async (settings, exclude = [], opts = {}) => {
     let registryPs = [];
     try { registryPs = (aeonEndpoints?.configuredProviders?.() || []).filter((p) => p !== 'local'); } catch {}
@@ -1367,8 +1390,9 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     const source = settings.roulette && !opts.provider ? 'roulette' : 'fallback';
     const out = [];
     for (const p of ps) {
+      const prefer = _fallbackModelsFor(p, settings, opts.role || 'chat');
       if (registryPs.includes(p)) {
-        const r = await aeonEndpoints.resolveForProvider(p, null, supabase).catch(() => null);
+        const r = await aeonEndpoints.resolveForProvider(p, null, supabase, prefer).catch(() => null);
         if (r && r.ok && r.via !== 'relay') {
           out.push({
             provider: r.provider, model: r.model, base_url: r.base_url, apiKey: r.apiKey,
@@ -1378,7 +1402,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
           continue;
         }
       }
-      if (_ENV_CHAIN.includes(p) && isConfigured(p)) out.push({ provider: p, model: _STREAM_FALLBACK_MODELS[p], source });
+      if (_ENV_CHAIN.includes(p) && isConfigured(p)) out.push({ provider: p, model: prefer[0], source });
     }
     return out;
   };
@@ -1430,7 +1454,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     }
     candidates.push(primary);
 
-    candidates.push(...await _fallbackCandidates(settings, [primary.provider], opts));
+    candidates.push(...await _fallbackCandidates(settings, [primary.provider], { ...opts, role }));
     // Local is the floor, never a rung in the middle: a local answer is a
     // noticeable change in quality and speed, so every configured cloud
     // provider gets its turn first.
@@ -1595,7 +1619,11 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       throw new Error('Vision is disabled in Settings (toggle it on under Vision).');
     }
     const _visionFallback = { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct' };
-    const roleConfig = opts.provider ? opts : (settings.models?.vision || _visionFallback);
+    // Vision never borrows Chat (a chat model need not read images): a role
+    // with no provider uses its own default. A saved {provider: ''} used to
+    // reach the dispatch below as provider "" and fail every upload (C33).
+    const declaredVision = settings.models?.vision;
+    const roleConfig = opts.provider ? opts : (declaredVision?.provider ? declaredVision : _visionFallback);
     const provider = roleConfig.provider;
     const model = roleConfig.model;
     const _t0 = Date.now();
@@ -1733,7 +1761,8 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
 
     // ── Legacy settings path (fallback / explicit override) ──
     const settings = loadSettings();
-    const roleConfig = _declaredFor(settings.models, role) || { provider: 'local', model: undefined };
+    const declared = _declaredFor(settings.models, role);
+    const roleConfig = declared || { provider: 'local', model: undefined };
     const provider = opts.provider || roleConfig.provider;
     const model = opts.model || roleConfig.model;
 
@@ -1743,10 +1772,13 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
         noteProviderSuccess('claude');
         return opts.returnMeta ? { text, provider: 'claude', model } : text;
       } catch (e) {
-        // Claude assigned is not Claude or nothing: the chain below still runs.
         const status = _failureStatus(e);
         if (status === 429 || status === 402) markUnhealthy('claude', status, e.message);
         else noteProviderFailure('claude', e);
+        // A caller that NAMED Claude (a Council seat) asked for Claude; another
+        // provider's text would be shown and credited as Claude's (C35). Only
+        // Claude assigned in Settings hands over to the chain below.
+        if (opts.provider === 'claude') throw e;
         if (!registryErr) { registryErr = e; registryAttempt = { provider: 'claude', status: status || null, message: e.message, configured: true }; }
         notify(`↪ claude ${_plainReason(e)} — trying the next provider`, { provider: 'claude' });
       }
@@ -1759,9 +1791,18 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     // every other provider Settings declares, then local as the floor.
     const tried = registryAttempt ? [registryAttempt.provider] : [];
     const chain = [];
-    if (_ENV_CHAIN.includes(provider) && !tried.includes(provider)) chain.push({ provider, model, source: 'settings' });
+    // Local named on purpose — by the caller (a Council local seat, the
+    // kill-switch) or by Settings (a role kept on-device) — is the provider,
+    // not the floor. It went last, so every configured cloud provider answered
+    // prompts the operator kept local, while the stream path kept it first
+    // (C10). The install default ("nothing declared") stays the floor.
+    const localChosen = provider === 'local' && !opts._vercelStrict
+      && (opts.provider === 'local' || declared?.provider === 'local');
+    if ((_ENV_CHAIN.includes(provider) || localChosen) && !tried.includes(provider)) chain.push({ provider, model, source: 'settings' });
     chain.push(...await _fallbackCandidates(settings, [...tried, provider], opts));
-    if (!opts._vercelStrict) chain.push({ provider: 'local', model: provider === 'local' ? model : undefined, source: 'fallback' });
+    if (!opts._vercelStrict && !chain.some((c) => c.provider === 'local')) {
+      chain.push({ provider: 'local', model: provider === 'local' ? model : undefined, source: 'fallback' });
+    }
     let lastErr = null;
     // Every failure in the chain, so the thrown error can name the real cause
     // rather than whichever provider happened to be tried last. See P8c below.
@@ -1781,7 +1822,14 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
         else if (p === 'groq') text = await groqRequest(prompt, usedModel || 'openai/gpt-oss-120b', 0, opts);
         else if (p === 'gemini') text = await geminiRequest(prompt, usedModel || 'gemini-flash-latest', 0, opts);
         else if (p === 'openrouter') text = await openRouterRequest(prompt, usedModel || 'openai/gpt-4o-mini', opts);
-        else if (p === 'local') text = await localNativeRequest(prompt, usedModel, opts);
+        else if (p === 'local') {
+          // The runtime names the model it loaded. Asked with the caller's
+          // returnMeta it answered {text, model}, returned below as the text
+          // of a second wrapper — the kill-switch's local answer was an object.
+          const r = await localNativeRequest(prompt, usedModel, { ...opts, returnMeta: true });
+          text = r.text;
+          usedModel = r.model || usedModel;
+        }
         else continue;
         if (text !== undefined) {
           noteProviderSuccess(p);

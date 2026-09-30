@@ -429,7 +429,23 @@ function EmbedReadiness() {
 }
 
 // ── Role Card ────────────────────────────────────────────────────────
-function RoleCard({ role, config, providers, liveModels, freeModels, onUpdate, providerBlocks, providerRegistry }) {
+// What a role left unset actually runs on, as its empty option says it. Most
+// roles use Chat (the kernel's _declaredFor). Vision and Embedding never do —
+// a chat model need not read images or make vectors — so "Same as Chat" there
+// named something the kernel would not do, and Vision saved that way failed
+// every image upload (C33). Chat itself has no empty option.
+const UNSET_ROLE_OPTION = {
+  vision: '↳ Default — Groq Llama 4 Scout',
+  embed: '↳ Automatic — see Semantic search above',
+};
+function unsetRoleOption(roleKey) {
+  if (roleKey === 'chat') return null;
+  return UNSET_ROLE_OPTION[roleKey] || '↳ Same as Chat';
+}
+
+// Exported for tests/sweep-routing-rolecard.test.js (a component export keeps
+// Fast Refresh working; the helper above stays private).
+export function RoleCard({ role, config, providers, liveModels, freeModels, onUpdate, providerBlocks, providerRegistry }) {
   const providerReg = (providerRegistry || []).find(p => p.id === config?.provider);
   // `?.length ?` not `||` — an empty array is truthy, so a provider that
   // answered with zero models short-circuited the fallback and rendered a
@@ -443,6 +459,7 @@ function RoleCard({ role, config, providers, liveModels, freeModels, onUpdate, p
   const isLocal = config?.provider === 'local';
   const isConfigured = providers[config?.provider];
   const poweredBlocks = providerBlocks?.[config?.provider] || [];
+  const unsetOption = unsetRoleOption(role.key);
 
   return (
     <div className="admin-card role-card">
@@ -468,7 +485,7 @@ function RoleCard({ role, config, providers, liveModels, freeModels, onUpdate, p
             value={config?.provider || ''}
             onChange={e => onUpdate(role.key, 'provider', e.target.value)}
           >
-            {role.key !== 'chat' && <option value="">↳ Same as Chat</option>}
+            {unsetOption && <option value="">{unsetOption}</option>}
             {(providerRegistry || []).filter(p => providers[p.id]).map(p => (
               <option key={p.id} value={p.id}>{p.icon} {p.label}{p.accounts && p.accounts.length > 1 ? ` (${p.accounts.length} keys pooled)` : ''}</option>
             ))}

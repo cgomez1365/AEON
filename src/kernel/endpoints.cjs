@@ -534,7 +534,10 @@ function configuredProviders() {
  * Fixing one and not the other would make the badge promise what the router
  * will not deliver — the precise defect class BO-F3 exists to remove.
  */
-const NON_CHAT_MODEL_RE = /whisper|(^|[-_/])tts([-_]|$)|text-to-speech|embed|guard|moderation|rerank|stable-diffusion|sdxl|flux|dall-?e/i;
+// `orpheus`: Groq's text-to-speech family (canopylabs/orpheus-*) says neither
+// "tts" nor "speech" in its name, and Groq lists it FIRST — so auto-pick handed
+// failover to Groq a speech model and Groq never answered (sweep C09).
+const NON_CHAT_MODEL_RE = /whisper|(^|[-_/])tts([-_]|$)|text-to-speech|orpheus|embed|guard|moderation|rerank|stable-diffusion|sdxl|flux|dall-?e/i;
 
 /**
  * Is this model name an embedding model?
@@ -733,7 +736,7 @@ async function resolveForRole(role, supabase) {
  * by agent C2, 2026-09-23). Same shape as resolveForRole, so one dispatcher
  * serves both.
  */
-async function resolveForProvider(provider, model, supabase) {
+async function resolveForProvider(provider, model, supabase, prefer = []) {
   if (!provider) return { ok: false, error: 'provider required' };
   const runtime = RUNTIME;
   const reg = await load(supabase);
@@ -741,7 +744,15 @@ async function resolveForProvider(provider, model, supabase) {
   if (!eps.length) return { ok: false, error: `No "${provider}" connection is configured — add one in Settings → Connections.` };
   const ep = (model && eps.find(e => (e.models || []).includes(model)))
     || eps.find(e => credentialRefs(e).length) || eps[0];
-  const useModel = model || pickChatModel(ep.models);
+  // A caller with no model may name the ones it would rather have, best first
+  // (a fallback rung passes what Settings declares for this provider). The
+  // first this connection serves wins — any of them when discovery never ran —
+  // and only then the auto-pick, which is the provider's own list order.
+  const listed = Array.isArray(ep.models) ? ep.models : [];
+  const preferred = model ? null : (Array.isArray(prefer) ? prefer : []).find(
+    m => typeof m === 'string' && m && !NON_CHAT_MODEL_RE.test(m) && (!listed.length || listed.includes(m)),
+  );
+  const useModel = model || preferred || pickChatModel(ep.models);
   if (!useModel) return { ok: false, error: `The "${provider}" connection lists no model to use.` };
   const refs = credentialRefs(ep);
   const pick = refs.length ? keyPool.acquire(ep.id, refs) : null;
@@ -815,6 +826,86 @@ function describeRoleFromEnv() {
   return null;
 }
 
+/**
+ * Which provider and model Settings declares for a role: its own entry when it
+ * names a provider, else Chat's ("Same as Chat"); embed never borrows Chat.
+ * The same rule as services/ai.js _declaredFor — the router's authority since
+ * 3efff20. (ai.js cannot be required from here: it is a factory over the
+ * server's deps.)
+ */
+function declaredForRole(models, role) {
+  const own = models?.[role];
+  if (own && own.provider) return own;
+  return role === EMBED_ROLE ? null : (models?.chat || null);
+}
+
+/**
+ * Readiness for a role Settings declares, decided the way services/ai.js
+ * _resolveDeclared routes it — or null when Settings declares nothing usable,
+ * which is when the router, too, falls back to the registry's role map.
+ *
+ * Readiness read the registry map alone after routing stopped doing so (S01):
+ * a role set to Local showed "ready via openrouter", and a role whose declared
+ * model the provider no longer serves showed ready from a stale mapping and
+ * failed at call time.
+ */
+function describeDeclaredRole(role, models) {
+  if (models === undefined) {
+    try { models = require('../../services/settings.js').loadSettings()?.models; } catch { models = null; }
+  }
+  const d = declaredForRole(models || {}, role);
+  let lr = null;
+  try { lr = require('../../services/local-runtime/index.cjs'); } catch { /* runtime absent */ }
+  const localPresent = (() => { try { return !!lr?.isAvailable?.(); } catch { return false; } })();
+  // Nothing usable declared (no entry, "none", or the install default of local
+  // with no local model): the router uses the registry's auto-pick, and so do we.
+  if (!d || !d.provider || d.provider === 'none' || (d.provider === 'local' && !localPresent)) return null;
+
+  if (d.provider === 'local') {
+    let ready = [];
+    try { ready = lr.status?.()?.readyModels || []; } catch { /* unknown — do not refuse on it */ }
+    if (d.model && ready.length && !ready.some(m => m.id === d.model)) {
+      return {
+        ok: false, provider: 'local', model: d.model, reason: 'model_not_on_endpoint',
+        detail: `"${d.model}" is not installed. Pick an installed model in Settings → Model Assignment, or install it in Cookbook.`,
+      };
+    }
+    let model = d.model || null;
+    if (!model) { try { model = lr.defaultModel?.() || null; } catch { /* none */ } }
+    return { ok: true, provider: 'local', model };
+  }
+
+  // A connection for that provider serves it — resolveForProvider's choice.
+  const reg = readLocalOrNull();
+  const eps = ((reg && reg.endpoints) || []).filter(e => e.provider === d.provider && (e.reachable_from || []).includes(RUNTIME));
+  if (eps.length) {
+    const ep = (d.model && eps.find(e => (e.models || []).includes(d.model)))
+      || eps.find(e => credentialRefs(e).length) || eps[0];
+    const model = d.model || pickChatModel(ep.models);
+    if (!model) return { ok: false, provider: ep.provider, reason: 'no_model_on_endpoint' };
+    // BO-A5b, below: an assignment must name a model the endpoint serves.
+    const known = Array.isArray(ep.models) ? ep.models : [];
+    if (known.length && !known.includes(model)) {
+      return {
+        ok: false, provider: ep.provider, model, reason: 'model_not_on_endpoint',
+        detail: `${ep.provider} does not serve "${model}". Pick a model this provider offers in Settings → Model Assignment, or re-scan the provider's model list.`,
+      };
+    }
+    return { ok: true, provider: ep.provider, model };
+  }
+
+  // No connection: the router's env-key chain serves it, if the key is there.
+  const env = ENV_PROVIDER_FALLBACK.find(c => c.provider === d.provider);
+  const keyed = env && env.vars.some((base) => Object.keys(process.env).some(
+    (k) => (k === base || k.startsWith(`${base}_`)) && !!process.env[k]
+  ));
+  if (keyed) return { ok: true, provider: d.provider, model: d.model || env.model, source: 'env' };
+  return {
+    ok: false, provider: d.provider, model: d.model || null, reason: 'provider_not_configured',
+    detail: `${d.provider} is assigned in Settings but has no key. Add one under Connections, or assign another provider in Settings → Model Assignment.`,
+  };
+}
+
 function describeRoleLocal(role) {
   if (isPortable()) {
     const st = (() => {
@@ -831,6 +922,12 @@ function describeRoleLocal(role) {
     return model
       ? { ok: true, provider: 'local', model }
       : { ok: false, provider: 'local', reason: 'no_local_model' };
+  }
+
+  // Settings first, as the router does; the registry answers only after it.
+  if (role !== EMBED_ROLE) {
+    const declared = describeDeclaredRole(role);
+    if (declared) return declared;
   }
 
   const reg = readLocalOrNull();
