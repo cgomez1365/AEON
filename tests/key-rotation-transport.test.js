@@ -164,3 +164,46 @@ describe('a 429 moves the turn to the next key, inside the same call', () => {
     refuseAll = false;
   });
 });
+
+// Sweep C05: a key holding a character a header cannot carry (a zero-width
+// space from a copy) makes fetch throw a TypeError before any request exists.
+// No status came back, so the turn failed while the next key sat unused.
+// Stored straight into the vault here — the way keys saved before the shape
+// check existed are still held.
+describe('a key that cannot be sent is the key\'s fault, not the turn\'s', () => {
+  const writeRefs = (refs) => {
+    const reg = JSON.parse(fs.readFileSync(REG_FILE, 'utf8'));
+    reg.endpoints[0].auth_ref = refs[0];
+    reg.endpoints[0].auth_refs = refs;
+    fs.writeFileSync(REG_FILE, JSON.stringify(reg, null, 2));
+  };
+  afterAll(() => writeRefs(['pool-exhausted', 'pool-good']));
+
+  it('rests that key and answers with the next one, in the same call', async () => {
+    const vault = require(VAULT_PATH);
+    await vault.setSecret('pool-unsendable', 'KEY​PASTED');
+    writeRefs(['pool-unsendable', 'pool-good']);
+    keyPool._reset();
+    bearers = []; refuseAll = false;
+
+    const text = await ai.kernelLLM('hello', { role: 'chat' });
+    expect(text).toBe('answered');
+    expect(bearers).toEqual([GOOD]); // the bad key never reached the wire
+    const snap = keyPool.snapshot('pooled', ['pool-unsendable', 'pool-good']);
+    expect(snap.keys.find(k => k.ref === 'pool-unsendable').cooling).toBe(true);
+  });
+
+  it('with no other key, the failure is a rejected key that names itself and the remedy, not a ByteString', async () => {
+    writeRefs(['pool-unsendable']);
+    keyPool._reset();
+    bearers = [];
+    const err = await ai.kernelLLM('hello', { role: 'chat', provider: 'custom' }).catch((e) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).toMatch(/custom key rejected/);
+    const attempt = (err.attempts || []).find((a) => a.provider === 'custom');
+    expect(attempt).toMatchObject({ status: 401 });
+    expect(attempt.message).toMatch(/pool-unsendable cannot be sent: it holds a character a request header cannot carry.*Settings → Keys/);
+    expect(attempt.message).not.toMatch(/ByteString/);
+    expect(bearers).toEqual([]);
+  });
+});

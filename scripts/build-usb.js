@@ -29,6 +29,8 @@
  *                      vault) instead of a blank bundle — see build-usb-carry.cjs
  *   --replace-data     with --carry-home: overwrite AEON-Data already on the
  *                      drive (the old copy is moved aside, never deleted)
+ *   --keep-app         with --carry-home: leave the drive's AEON/ as it is (a
+ *                      git checkout, say) and refresh runtime/, launchers, README
  */
 'use strict';
 
@@ -65,6 +67,7 @@ function parseArgs(argv) {
       case '--force':        out.force = true; break;
       case '--carry-home':   out.carryHome = true; break;
       case '--replace-data': out.replaceData = true; break;
+      case '--keep-app':     out.keepApp = true; break;
       case '-h': case '--help': out.help = true; break;
       default: fail(`unknown flag: ${a}`);
     }
@@ -231,6 +234,8 @@ ${C.bold('aeon build-usb')} — assemble a portable AEON drive
   --force            overwrite a non-empty target
   --carry-home       carry THIS install and its home (your Vault and keys)
   --replace-data     with --carry-home: replace AEON-Data already on the drive
+  --keep-app         with --carry-home: leave the drive's AEON/ as it is (a git
+                     checkout, say); refresh runtime/, launchers and README only
 `);
     process.exit(args.help ? 0 : 1);
   }

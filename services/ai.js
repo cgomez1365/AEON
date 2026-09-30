@@ -117,7 +117,14 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   // way a 429 does; one success clears the count.
   const FAIL_STREAK_LIMIT = 3;
   const _failStreak = {};
+  // A local model that is not installed is the ROLE's configuration, not
+  // Local failing. settings.default.json ships one for four roles; three such
+  // calls rested Local for every role — those whose model works included. The
+  // error still reaches the caller (and readiness reports it); it is not
+  // counted toward the streak.
+  const _roleConfigFault = (p, e) => p === 'local' && /^Model ".*" is not ready$/.test(String(e?.message || ''));
   const noteProviderFailure = (p, e) => {
+    if (_roleConfigFault(p, e)) return;
     const n = (_failStreak[p] || 0) + 1;
     _failStreak[p] = n;
     if (n >= FAIL_STREAK_LIMIT) {
@@ -361,7 +368,10 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
         catch (groqErr) { console.warn('[GEMINI FAILOVER] Groq fallback failed:', groqErr.message); }
       }
       console.warn('[GEMINI FAILOVER] Falling back to native local runtime...');
-      return await localNativeRequest(prompt, undefined, opts);
+      // Text only, like _dispatchResolved: the caller wraps it. With the
+      // caller's returnMeta the local transport answered {text, model}, and the
+      // chain returned that object AS the text under provider 'gemini'.
+      return await localNativeRequest(prompt, undefined, { ...opts, returnMeta: false });
     }
     const apiKey = getActiveKey();
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
@@ -889,6 +899,16 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   const _statusOf = (e) =>
     e?.status || Number(/error (\d{3})/i.exec(e?.message || '')?.[1]) || null;
 
+  // A key that cannot go into a request header — a zero-width space from a
+  // copy, a line break, an em-dash note — makes fetch throw a TypeError before
+  // any request exists ("Cannot convert argument to a ByteString", "… is an
+  // invalid header value"). No status came back, so the pool never learned it
+  // was the key's fault: the turn failed while the next key sat unused (sweep
+  // C05). Keys saved before the shape check existed can still hold one. It is
+  // the credential's fault, rested like a refused key (401).
+  const _isHeaderFault = (e) => e instanceof TypeError
+    && /ByteString|header value|invalid character in header|Headers\.(append|set)/i.test(e?.message || '');
+
   /**
    * Run `attempt(apiKey, credentialRef)` against the endpoint's credential
    * pool. Single-credential endpoints take exactly the path they always did.
@@ -913,12 +933,19 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
         const out = await attempt(apiKey, ref);
         if (ref) aeonEndpoints?.markCredentialOk?.(r.endpoint_id, ref);
         return out;
-      } catch (e) {
+      } catch (caught) {
         tries++;
+        let e = caught;
+        if (_isHeaderFault(caught)) {
+          e = new Error(`${r.provider} key${ref ? ` ${ref}` : ''} cannot be sent: it holds a character a request header cannot carry (a space, a line break, or an invisible character from a copy). Re-enter it in Settings → Keys.`);
+          e.status = 401;
+          e.keyUnsendable = true;
+          e.cause = caught;
+        }
         const status = _statusOf(e);
         const rotatable = total > 1 && tries < total
           && !e.streamStarted
-          && (aeonEndpoints?.isCredentialFault?.(status) || status === 429 || status === 402 || /429|402|rate limit|quota/i.test(e.message || ''));
+          && (e.keyUnsendable || aeonEndpoints?.isCredentialFault?.(status) || status === 429 || status === 402 || /429|402|rate limit|quota/i.test(e.message || ''));
         if (!rotatable) throw e;
 
         if (ref && regCount > 1 && aeonEndpoints) {
@@ -927,7 +954,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
           ).catch(() => null);
           if (next) {
             notify(
-              `🔁 ${r.provider}: key ${ref} answered ${status} — switching to key ${next.credential_index + 1} of ${next.credential_count}`,
+              `🔁 ${r.provider}: key ${ref} ${e.keyUnsendable ? 'cannot be sent (not a valid header value)' : `answered ${status}`} — switching to key ${next.credential_index + 1} of ${next.credential_count}`,
               { provider: r.provider },
             );
             apiKey = next.apiKey;
@@ -1370,7 +1397,12 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     const roles = [role, 'chat', ...Object.keys(models)].filter((r, i, a) => r && r !== 'embed' && a.indexOf(r) === i);
     const declared = roles.map((r) => models[r]).filter((m) => m && m.provider === p && m.model).map((m) => m.model);
     const nonChat = aeonEndpoints?.NON_CHAT_MODEL_RE;
-    return [...new Set([...declared, _STREAM_FALLBACK_MODELS[p]].filter((m) => m && !(nonChat && nonChat.test(m))))];
+    // OpenRouter's free router before its paid default when no role declares
+    // an OpenRouter model: on a free-only key the paid default answered 402,
+    // and markUnhealthy then rested OpenRouter for every caller — roles on
+    // :free models included. A connection that does not list it moves on.
+    const floor = p === 'openrouter' ? ['openrouter/free', _STREAM_FALLBACK_MODELS[p]] : [_STREAM_FALLBACK_MODELS[p]];
+    return [...new Set([...declared, ...floor].filter((m) => m && !(nonChat && nonChat.test(m))))];
   };
   const _fallbackCandidates = async (settings, exclude = [], opts = {}) => {
     let registryPs = [];
@@ -1764,7 +1796,11 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     const declared = _declaredFor(settings.models, role);
     const roleConfig = declared || { provider: 'local', model: undefined };
     const provider = opts.provider || roleConfig.provider;
-    const model = opts.model || roleConfig.model;
+    // A caller that names a provider but no model (the kill-switch's
+    // {provider:'local'}) gets that provider's default, not the model the
+    // role declares for a DIFFERENT provider — Local was asked to load the
+    // chat role's cloud model and answered "not ready".
+    const model = opts.model || (opts.provider && opts.provider !== roleConfig.provider ? undefined : roleConfig.model);
 
     if (provider === 'claude') {
       try {
@@ -1778,7 +1814,13 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
         // A caller that NAMED Claude (a Council seat) asked for Claude; another
         // provider's text would be shown and credited as Claude's (C35). Only
         // Claude assigned in Settings hands over to the chain below.
-        if (opts.provider === 'claude') throw e;
+        if (opts.provider === 'claude') {
+          // Rethrown raw, a Claude 429 reached POST /api/ai as a plain 500:
+          // tagged the way the chain's own exhaustion error is, so the route
+          // answers 429 and a caller can tell "wait" from "broken".
+          if (status === 429) { e.rateLimited = true; e.provider = 'claude'; }
+          throw e;
+        }
         if (!registryErr) { registryErr = e; registryAttempt = { provider: 'claude', status: status || null, message: e.message, configured: true }; }
         notify(`↪ claude ${_plainReason(e)} — trying the next provider`, { provider: 'claude' });
       }
@@ -1798,7 +1840,11 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     // (C10). The install default ("nothing declared") stays the floor.
     const localChosen = provider === 'local' && !opts._vercelStrict
       && (opts.provider === 'local' || declared?.provider === 'local');
-    if ((_ENV_CHAIN.includes(provider) || localChosen) && !tried.includes(provider)) chain.push({ provider, model, source: 'settings' });
+    // OpenAI assigned in Settings with only OPENAI_API_KEY (no connection):
+    // readiness called it ready and the stream path served it, but this chain
+    // could not dispatch it, so every non-stream call went to a fallback.
+    const openaiFromEnv = provider === 'openai' && !!_legacyKeyFor('openai');
+    if ((_ENV_CHAIN.includes(provider) || localChosen || openaiFromEnv) && !tried.includes(provider)) chain.push({ provider, model, source: 'settings' });
     chain.push(...await _fallbackCandidates(settings, [...tried, provider], opts));
     if (!opts._vercelStrict && !chain.some((c) => c.provider === 'local')) {
       chain.push({ provider: 'local', model: provider === 'local' ? model : undefined, source: 'fallback' });
@@ -1808,9 +1854,17 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     // rather than whichever provider happened to be tried last. See P8c below.
     const attempts = registryAttempt ? [registryAttempt] : [];
     let prev = registryAttempt ? registryAttempt.provider : null;
+    // A caller that NAMED Local — a Council local seat, the /api/chat
+    // kill-switch past its spend threshold — asked for this computer. Handing
+    // its turn to the cloud showed a cloud model's words as the local model's,
+    // or spent exactly what the kill-switch exists to stop: C35's rule, for
+    // Local. Local declared in Settings still hands over; Local asked for by
+    // name is tried even while resting, and its failure is the answer.
+    const namedLocal = opts.provider === 'local' && !opts._vercelStrict;
     for (const c of chain) {
       const p = c.provider;
-      if (!isHealthy(p)) continue;
+      if (namedLocal && p !== 'local') continue;
+      if (!isHealthy(p) && !namedLocal) continue;
       if (p === 'local' && !localRuntimePresent()) {
         // Not a failure of a provider: nothing is installed to try.
         continue;
@@ -1822,6 +1876,10 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
         else if (p === 'groq') text = await groqRequest(prompt, usedModel || 'openai/gpt-oss-120b', 0, opts);
         else if (p === 'gemini') text = await geminiRequest(prompt, usedModel || 'gemini-flash-latest', 0, opts);
         else if (p === 'openrouter') text = await openRouterRequest(prompt, usedModel || 'openai/gpt-4o-mini', opts);
+        else if (p === 'openai') {
+          usedModel = usedModel || 'gpt-4o-mini';
+          text = await genericOpenAIRequest(prompt, usedModel, aeonEndpoints?.PROVIDER_TRANSPORT?.openai?.base || 'https://api.openai.com/v1', _legacyKeyFor('openai'), opts);
+        }
         else if (p === 'local') {
           // The runtime names the model it loaded. Asked with the caller's
           // returnMeta it answered {text, model}, returned below as the text
@@ -1848,6 +1906,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       }
     }
 
+    if (namedLocal) throw lastErr || _noLocalModelError();
     // The configured (registry) provider's failure is the cause; a later rung
     // that could not even start ("no local model is installed") is not.
     throw _chainExhaustedError(attempts, registryErr || lastErr);

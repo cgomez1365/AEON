@@ -129,3 +129,35 @@ describe('Remove in a git checkout', () => {
     expect(trackedChanges()).toBe('');
   });
 });
+
+// The route change alone left every client unable to send the override: the
+// CLI posted {} whatever its flags, Settings' change() took no body, and the
+// Remove button had no confirm-and-retry — so the 409's own remedy looped.
+describe('Settings → Blocks → Remove carries the confirmation (C32)', () => {
+  const UI = path.join(path.dirname(ROUTER_PATH), '..', '..', 'blocks', 'settings', 'index.jsx');
+
+  it('the lifecycle client forwards {tracked:true}, and the answer names the git consequence', async () => {
+    const lc = await import('../src/blocks/settings/blockLifecycle.js');
+    const client = lc.createLifecycleClient({ base: new URL(base).origin });
+    const refused = await client.remove('council');
+    expect(refused.ok).toBe(false);
+    expect(refused.data.code).toBe('git_tracked');
+    expect(fs.existsSync(path.join(blocksDir, 'council', 'block.manifest.json'))).toBe(true);
+
+    const ok = await client.remove('council', { tracked: true });
+    expect(ok.ok, ok.error).toBe(true);
+    expect(ok.message).toMatch(/moved aside/);
+    expect(ok.message).toMatch(/git sees council's tracked files as deleted/);
+    expect(fs.existsSync(path.join(blocksDir, 'council'))).toBe(false);
+    expect((await client.restore('council')).ok).toBe(true);
+    expect(trackedChanges()).toBe('');
+  });
+
+  it('the Remove button asks again on git_tracked and re-sends with {tracked:true}', () => {
+    const ui = fs.readFileSync(UI, 'utf8');
+    const act = ui.slice(ui.indexOf('let r = await client[action](id);'), ui.indexOf('setNotes(n => ({ ...n, [id]: { ok: r.ok'));
+    expect(act.length).toBeGreaterThan(0);
+    expect(act).toMatch(/r\.data\?\.code === 'git_tracked' && window\.confirm\(/);
+    expect(act).toMatch(/r = await client\.remove\(id, \{ tracked: true \}\)/);
+  });
+});

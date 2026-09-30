@@ -50,9 +50,15 @@ export function toDiskText(text, eol) {
 // The lock answer, as the screen should show it. The server answers with the
 // state enforcement reads (500 + `error` when the change did not persist), so
 // the badge follows `locked` and a failure says so instead of a success line.
+// A 200 that carries no lock state (an HTML page from a fallback, say) is a
+// failure too: the badge goes to locked, the safe side, and says why — an
+// unlock the operator asked for must not end in a quiet "Add-only mode".
 export function lockOutcome(ok, d) {
   const locked = !d || d.locked !== false;
-  if (!ok || (d && d.ok === false)) return { locked, status: `❌ ${(d && d.error) || 'The lock did not change.'}` };
+  if (ok && (!d || (d.ok !== false && typeof d.locked !== 'boolean'))) {
+    return { locked: true, status: '❌ The server gave no lock state; treating it as locked.' };
+  }
+  if (!ok || !d || d.ok === false) return { locked, status: `❌ ${(d && d.error) || 'The lock did not change.'}` };
   return { locked, status: locked ? '🔒 Add-only mode: browse and add files; editing and deleting are off.' : '🔓 Full edit mode: changes here affect the real files on this computer.' };
 }
 

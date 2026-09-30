@@ -403,6 +403,16 @@ async function main() {
     const child = spawn('node', ['server/server.js'], { cwd: ROOT, stdio: 'inherit', env: { ...process.env, AEON_SUPERVISED: '1' } });
     child.on('exit', (code) => {
       if (code === 75) { p('   Restarting AEON...', GR); startServer(); return; }
+      // A second double-click while AEON runs: this server refuses at once
+      // (one AEON per home, src/kernel/runtime.cjs) and exits before the
+      // probe below first fires, so the icon only printed a message where it
+      // used to open the running AEON. Open that one, then end.
+      if (code && !opened) {
+        let holder = null;
+        try { holder = require('./src/kernel/runtime.cjs').homeHolder(homeBoot.roots.home); } catch { /* no lock to read */ }
+        const running = holder && Number(holder.port);
+        if (Number.isInteger(running) && running > 0) { opened = true; openBrowser(`http://localhost:${running}`); }
+      }
       process.exit(code || 0);
     });
     return child;
@@ -415,9 +425,9 @@ async function main() {
   // server bound it and flashed "can't reach this site" before recovering.
   // We poll the health endpoint and open exactly once it answers.
   const http = require('http');
-  const openBrowser = () => {
-    const cmd = os.platform() === 'win32' ? `start "" "${url}"`
-              : os.platform() === 'darwin' ? `open "${url}"` : `xdg-open "${url}"`;
+  const openBrowser = (to = url) => {
+    const cmd = os.platform() === 'win32' ? `start "" "${to}"`
+              : os.platform() === 'darwin' ? `open "${to}"` : `xdg-open "${to}"`;
     try { execSync(cmd, { stdio: 'ignore', shell: true }); } catch {}
     ok('Opened in your browser.');
   };

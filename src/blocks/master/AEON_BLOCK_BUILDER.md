@@ -110,7 +110,7 @@ Then open the console in a browser: the block must appear in the sidebar (in its
 npm run aeon block stop <id>      # its API answers 503 ("block is stopped") until started
 npm run aeon block start <id>     # answers again
 ```
-(`aeon block remove <id> --yes` moves it aside to `<data>/removed-blocks/`, `aeon block restore <id>` brings it back; over HTTP: `POST /api/build/blocks/:id/{stop,start,uninstall,restore}`.)
+(`aeon block remove <id> --yes` moves it aside to `<data>/removed-blocks/`, `aeon block restore <id>` brings it back; over HTTP: `POST /api/build/blocks/:id/{stop,start,uninstall,restore}`. A block git tracks — a shipped block in a checkout — also needs `--tracked` (over HTTP, the body `{"tracked":true}`); restore it before any `git add -A` / `git commit -a` / `git pull`.)
 - **Exit check:** stopped → 503; started → your JSON again.
 - **On failure:** a route still answering while stopped is mounted outside your api/ router — find it and move it in.
 

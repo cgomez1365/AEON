@@ -103,3 +103,38 @@ describe('ensure() for a key the vault holds', () => {
     expect(filled).toBeGreaterThan(asked);
   });
 });
+
+// Server-only boots — the drive's launchers run `node server.cjs`, and
+// `npm run server` — never ran launch.js, so the vault's copy was never
+// checked there. The server now runs the same pass right after hydrating.
+describe('the server rotates the vault\'s copy at boot', () => {
+  const quiet = () => { const lines = []; return { lines, log: (m) => lines.push(m), warn: (m) => lines.push(m) }; };
+
+  it('rotates an exposed AEON_MOBILE_SECRET, puts the new value in the env, and names what it cannot mint', () => {
+    withMaster(() => settings.createProviderCredentialStore().save({ AEON_MOBILE_SECRET: EXPOSED, GROQ_API_KEY: 'gsk_exposed_fixture' }));
+    const env = { AEON_MOBILE_SECRET: EXPOSED };
+    const log = quiet();
+    const r = withMaster(() => settings.rotateCompromisedAtBoot({ listFile, target: env, log }));
+    expect(r.rotated).toEqual(['AEON_MOBILE_SECRET']);
+    const now = heldNow().AEON_MOBILE_SECRET;
+    expect(now).not.toBe(EXPOSED);
+    expect(now).toMatch(/^[0-9a-f]{48}$/);
+    expect(env.AEON_MOBILE_SECRET).toBe(now);
+    expect(log.lines.join('\n')).toMatch(/AEON_MOBILE_SECRET in the encrypted vault was a known-exposed value — rotated automatically/);
+    expect(log.lines.join('\n')).toMatch(/GROQ_API_KEY in the encrypted vault is a known-exposed credential — replace it in Settings/);
+
+    const again = quiet();
+    expect(withMaster(() => settings.rotateCompromisedAtBoot({ listFile, target: {}, log: again })).rotated).toEqual([]);
+    expect(heldNow().AEON_MOBILE_SECRET).toBe(now);
+  });
+
+  it('server.js runs it right after hydrating the vault, before the rest of the boot reads the env', () => {
+    const src = fs.readFileSync(path.join(path.dirname(LAUNCH), 'server', 'server.js'), 'utf8');
+    const hydrate = src.indexOf('hydrateProviderSecrets(process.env);');
+    const rotate = src.indexOf('settingsService.rotateCompromisedAtBoot(');
+    expect(hydrate).toBeGreaterThan(-1);
+    expect(rotate).toBeGreaterThan(hydrate);
+    expect(rotate).toBeLessThan(src.indexOf("require('../security/security.js')"));
+    expect(src.slice(rotate, rotate + 200)).toMatch(/security', 'compromised-credentials\.json'/);
+  });
+});

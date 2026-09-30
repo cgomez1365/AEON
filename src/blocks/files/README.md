@@ -28,8 +28,10 @@ is the screen.
   file, 20 per upload, into the folder on screen.
 - **New folder**, **Rename / move** (unlocked), **Delete** (unlocked).
 - **Open** — text-like files (`.txt .md .json .js .jsx .html .css .py .bat`)
-  open in an editor and save back through `/api/fs/write` (overwriting needs the
-  hub unlocked); images, PDF and video open in a viewer via `/api/fs/serve`.
+  open whole (raw read, up to 1 MB of UTF-8 text; larger or non-UTF-8 files
+  are refused, never opened in part) in an editor and save back through
+  `/api/fs/write`, with CRLF files kept CRLF (overwriting needs the hub
+  unlocked); images, PDF and video open in a viewer via `/api/fs/serve`.
 - **Download** — `/api/fs/serve?download=1`.
 
 Uploads do not index anything themselves. The Vault is re-indexed on every

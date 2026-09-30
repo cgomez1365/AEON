@@ -88,6 +88,13 @@ describe('POST /api/fs/lock when the lock file cannot be written', () => {
     expect(r.body.locked).toBe(false);
     expect(r.body.error).toMatch(/Could not lock.*still UNLOCKED/);
     expect(JSON.parse(fs.readFileSync(lockFile, 'utf8')).locked).toBe(false);
+    // …and the hub acts on it: a delete still goes through.
+    vi.restoreAllMocks();
+    const doomed = path.join(root, 'doomed.txt');
+    fs.writeFileSync(doomed, 'x');
+    const del = await call('delete', { targetPath: doomed });
+    expect(del.status, JSON.stringify(del.body)).toBe(200);
+    expect(fs.existsSync(doomed)).toBe(false);
   });
 
   it('a lock change that persisted answers with the state read back from disk', async () => {
@@ -112,5 +119,9 @@ describe('the Files screen shows the lock it was told, and a failure as a failur
   });
   it('an unreadable answer is treated as locked (the safe default)', () => {
     expect(ui.lockOutcome(false, null)).toMatchObject({ locked: true, status: expect.stringMatching(/^❌/) });
+  });
+  it('a 200 with no lock state in it is a failure, not a quiet "Add-only mode"', () => {
+    expect(ui.lockOutcome(true, null)).toMatchObject({ locked: true, status: expect.stringMatching(/^❌ The server gave no lock state/) });
+    expect(ui.lockOutcome(true, { ok: true })).toMatchObject({ locked: true, status: expect.stringMatching(/^❌/) });
   });
 });

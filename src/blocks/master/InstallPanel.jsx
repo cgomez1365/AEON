@@ -36,6 +36,14 @@ import { Download, FolderInput, Check, AlertTriangle, Loader } from 'lucide-reac
 import { getEffectiveBlockGroups } from '../../kernel/blockRegistry.js';
 
 const DIM = { fontSize: 12.5, color: 'var(--dim, #9aa3b2)' };
+// This panel shows every refusal inline. The header keeps the global
+// forensics banner (interceptorPolicy.shouldBannerResponse) from ALSO firing
+// on an expected refusal — a lint stop, an already-installed block, an
+// unreadable store — the same header Settings → Blocks sends on these routes.
+const SELF_REPORTED = { 'x-aeon-self-reported': '1' };
+// Said with every install that lands: the block list and nav are compiled into
+// the screen bundle (Settings → Blocks says the same).
+const UI_NOTE = 'Its screen appears after `npm run build` and a reload of this tab — no restart needed.';
 const FIELD = {
   width: '100%', padding: '8px 10px', borderRadius: 6, fontSize: 13,
   background: 'rgba(255,255,255,0.04)', color: 'var(--fg, #e8f0fa)',
@@ -110,6 +118,15 @@ export function placeBlock(layout, blockId, groupId, customLabel) {
     customGroups: { ...(layout?.customGroups || {}) },
     groupOverrides: { ...(layout?.groupOverrides || {}) },
   };
+  // A section the operator hid (Delete on a default section hides it) and
+  // now names again is shown again. Left hidden, getEffectiveBlockGroups sent
+  // the block to Unsorted while this card said "Filed under" that section.
+  const ov = next.groupOverrides[groupId];
+  if (ov && ov.hidden) {
+    const rest = { ...ov };
+    delete rest.hidden;
+    if (Object.keys(rest).length) next.groupOverrides[groupId] = rest; else delete next.groupOverrides[groupId];
+  }
   if (customLabel && !next.customGroups[groupId]) next.customGroups[groupId] = { label: customLabel, icon: 'custom', order: 50 };
   return next;
 }
@@ -138,7 +155,7 @@ export default function InstallPanel({ onInstalled, onBlockLayoutChange }) {
   // AEON_STORE is simply unset.
   useEffect(() => {
     let alive = true;
-    fetch('/api/store/source')
+    fetch('/api/store/source', { headers: SELF_REPORTED })
       .then(async (r) => {
         const d = await r.json();
         // A store that is set but unreadable answers 502 with its reason.
@@ -163,7 +180,7 @@ export default function InstallPanel({ onInstalled, onBlockLayoutChange }) {
     setBusy(true); setResult(null);
     try {
       const r = await fetch('/api/store/install', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cls.body),
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...SELF_REPORTED }, body: JSON.stringify(cls.body),
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok || d.ok === false) {
@@ -182,8 +199,9 @@ export default function InstallPanel({ onInstalled, onBlockLayoutChange }) {
     <div>
       <p style={{ ...DIM, marginTop: 0 }}>
         Paste a link from the AEON block store, or type the name of a block the store offers.
-        AEON downloads it, checks it is what the store said it was, starts it, and opens its screens
-        to confirm they work. If any of that fails, nothing is installed and you are told why.
+        AEON downloads it, checks it is what the store said it was, and boots it once to prove it runs.
+        It then lands stopped — you start it in Settings → Blocks. If any of that fails, nothing is
+        installed and you are told why.
       </p>
 
       <label style={{ ...DIM, display: 'block', marginBottom: 4 }} htmlFor="ip-src">Store link or block name</label>
@@ -255,7 +273,7 @@ function SectionChooser({ blockId, label, detail, queued, onBlockLayoutChange, o
   // erasure this reads around.
   useEffect(() => {
     let alive = true;
-    fetch('/api/settings')
+    fetch('/api/settings', { headers: SELF_REPORTED })
       .then((r) => r.json())
       .then((d) => {
         if (!alive) return;
@@ -274,14 +292,15 @@ function SectionChooser({ blockId, label, detail, queued, onBlockLayoutChange, o
     const next = placeBlock(layout, blockId, groupId, customLabel);
     try {
       const r = await fetch('/api/settings/block-layout', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(next),
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...SELF_REPORTED }, body: JSON.stringify(next),
       });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       setLayout(next); setSaved(true);
       // The shell (sidebar + Dashboard) holds its own copy and writes it back
       // whole on the next drag; left stale, that write would drop this
-      // placement. Its setter also saves — the same layout, a second time.
-      if (onBlockLayoutChange) onBlockLayoutChange(next);
+      // placement. `saved` tells it this layout is already on the server:
+      // adopt it, do not write it again.
+      if (onBlockLayoutChange) onBlockLayoutChange(next, { saved: true });
     } catch (e) {
       // The block IS installed. Only its placement failed, and saying
       // otherwise would send the operator looking for a block that is there.
@@ -298,7 +317,7 @@ function SectionChooser({ blockId, label, detail, queued, onBlockLayoutChange, o
         <Check size={14} aria-hidden="true" />
         {queued
           ? `${label} is waiting for your approval — its permissions need a review. Approve it in Settings → Agent, then start it.`
-          : `${label} is installed${detail ? ` (${detail})` : ''}. It lands stopped: start it in Settings → Blocks.`}
+          : `${label} is installed${detail ? ` (${detail})` : ''}. It lands stopped: start it in Settings → Blocks. ${UI_NOTE}`}
       </div>
 
       {readErr ? (

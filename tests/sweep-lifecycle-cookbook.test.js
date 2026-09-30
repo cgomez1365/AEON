@@ -204,9 +204,39 @@ describe.skipIf(process.platform === 'win32')('Serve runs a model file, on loopb
       expect(r.body.code).toBe('host_not_loopback');
       expect(r.body.error).toMatch(/127\.0\.0\.1/);
     }
+    // llama-server reads the same address from LLAMA_ARG_HOST.
+    const viaEnv = await cb.post('/model/serve', {
+      repo_id: 'aeon-sweep/Tiny-GGUF', cmd: `LLAMA_ARG_HOST=0.0.0.0 ${bin} --model "${path.join(snap, 'tiny-Q4_K_M.gguf')}" --port 8080`, force: true,
+    });
+    expect(viaEnv.status).toBe(400);
+    expect(viaEnv.body.code).toBe('host_not_loopback');
+    expect(viaEnv.body.error).toMatch(/LLAMA_ARG_HOST=0\.0\.0\.0/);
     await sleep(300);
     expect(fs.existsSync(path.join(root, 'argv.json'))).toBe(false);
   });
+
+  it('drops a network LLAMA_ARG_HOST the server inherited, so llama-server binds loopback', async () => {
+    const snap = cachedRepo('aeon-sweep/Tiny-GGUF', ['tiny-Q4_K_M.gguf']);
+    const p = path.join(root, 'bin', 'llama-server');
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, [
+      `#!${process.execPath}`,
+      `require('fs').writeFileSync(${JSON.stringify(path.join(root, 'argv.json'))}, JSON.stringify({ host: process.env.LLAMA_ARG_HOST ?? null }));`,
+    ].join('\n'));
+    fs.chmodSync(p, 0o755);
+    const saved = process.env.LLAMA_ARG_HOST;
+    process.env.LLAMA_ARG_HOST = '0.0.0.0';
+    try {
+      const cb = await mount();
+      const r = await cb.post('/model/serve', {
+        repo_id: 'aeon-sweep/Tiny-GGUF', cmd: `${p} --model "${path.join(snap, 'tiny-Q4_K_M.gguf')}" --port 8080`, force: true,
+      });
+      expect(r.status, JSON.stringify(r.body)).toBe(200);
+      expect((await argvSeen()).host).toBe(null);
+    } finally {
+      if (saved === undefined) delete process.env.LLAMA_ARG_HOST; else process.env.LLAMA_ARG_HOST = saved;
+    }
+  }, 20000);
 
   it('gives vLLM --host 127.0.0.1 when none is set (its default is every interface)', async () => {
     const snap = cachedRepo('aeon-sweep/Tiny-GGUF', ['tiny-Q4_K_M.gguf']);
@@ -231,5 +261,94 @@ describe.skipIf(process.platform === 'win32')('Serve runs a model file, on loopb
     expect(quickServe).toMatch(/setServePick\(\{ model, repo, builds: data\.builds/);
     expect(quickServe).toMatch(/\.\.\.\(gguf \? \{ gguf \} : \{\}\)/);
     expect(ui).toMatch(/onClick=\{\(\) => quickServe\(servePick\.model, b\.file\)\}/);
+  });
+});
+
+// The VRAM gate judged the REPO id, and a GGUF repo id rarely names a quant: a
+// 4B repo read as fp16 (9.2 GB), so on a 4 GB card every build the chooser
+// offered was refused, the 2.8 GB Q4_K_M included, with a remedy (lower -ngl)
+// the Serve button cannot take. The pick is what loads, so the pick is judged.
+// A stand-in nvidia-smi on PATH reports one 4096 MB card; no `force`.
+describe.skipIf(process.platform === 'win32')('Serve judges the chosen build against the card (C18)', () => {
+  let savedPath;
+  beforeEach(() => {
+    const smi = path.join(root, 'gpu-bin', 'nvidia-smi');
+    fs.mkdirSync(path.dirname(smi), { recursive: true });
+    fs.writeFileSync(smi, [
+      `#!${process.execPath}`,
+      "if (process.argv.some(a => a.startsWith('--query-gpu'))) console.log('0, Stand-in GPU, 4000, 4096, 96, 0, GPU-aeon-sweep');",
+    ].join('\n'));
+    fs.chmodSync(smi, 0o755);
+    savedPath = process.env.PATH;
+    process.env.PATH = `${path.dirname(smi)}${path.delimiter}${savedPath}`;
+  });
+  afterEach(() => { process.env.PATH = savedPath; });
+
+  it('serves a Q4_K_M that fits, though its repo id reads as fp16', async () => {
+    const snap = cachedRepo('aeon-sweep/Qwen3-4B-GGUF', ['Qwen3-4B-Q4_K_M.gguf', 'Qwen3-4B-Q8_0.gguf']);
+    const bin = fakeBinary('llama-server');
+    const cb = await mount();
+    const cmd = `${bin} --model "aeon-sweep/Qwen3-4B-GGUF" --host 127.0.0.1 --port 8080 -ngl 99 -c 8192`;
+    const listed = await cb.post('/model/serve', { repo_id: 'aeon-sweep/Qwen3-4B-GGUF', cmd });
+    expect(listed.body.code).toBe('gguf_ambiguous');
+
+    const r = await cb.post('/model/serve', { repo_id: 'aeon-sweep/Qwen3-4B-GGUF', cmd, gguf: 'Qwen3-4B-Q4_K_M.gguf' });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    const argv = await argvSeen();
+    expect(argv[argv.indexOf('--model') + 1]).toBe(path.join(snap, 'Qwen3-4B-Q4_K_M.gguf'));
+  }, 20000);
+
+  it('still refuses a build too big for the card, and names that build', async () => {
+    cachedRepo('aeon-sweep/Qwen3-4B-GGUF', ['Qwen3-4B-Q4_K_M.gguf', 'Qwen3-4B-Q8_0.gguf']);
+    cachedRepo('aeon-sweep/Qwen3-8B-GGUF', ['Qwen3-8B-Q4_K_M.gguf', 'Qwen3-8B-F16.gguf']);
+    const bin = fakeBinary('llama-server');
+    const cb = await mount();
+    for (const [repo, gguf, re] of [
+      ['aeon-sweep/Qwen3-4B-GGUF', 'Qwen3-4B-Q8_0.gguf', /^Qwen3-4B-Q8_0\.gguf \(q8\) needs about 4\.9 GB of VRAM and this GPU has 4 GB/],
+      ['aeon-sweep/Qwen3-8B-GGUF', 'Qwen3-8B-Q4_K_M.gguf', /^Qwen3-8B-Q4_K_M\.gguf \(q4\) needs about 5\.5 GB/],
+      ['aeon-sweep/Qwen3-8B-GGUF', 'Qwen3-8B-F16.gguf', /^Qwen3-8B-F16\.gguf \(f16\) needs about 18\.4 GB/],
+    ]) {
+      const r = await cb.post('/model/serve', {
+        repo_id: repo, cmd: `${bin} --model "${repo}" --host 127.0.0.1 --port 8080 -ngl 99 -c 8192`, gguf,
+      });
+      expect(r.status, gguf).toBe(409);
+      expect(r.body.code).toBe('model_exceeds_vram');
+      expect(r.body.error).toMatch(re);
+    }
+    await sleep(300);
+    expect(fs.existsSync(path.join(root, 'argv.json'))).toBe(false);
+  }, 20000);
+
+  it('a build whose file name carries no parameter count borrows the repo\'s', async () => {
+    cachedRepo('aeon-sweep/Qwen3-8B-GGUF', ['model-q8_0.gguf', 'model-q2_k.gguf']);
+    const bin = fakeBinary('llama-server');
+    const cb = await mount();
+    const cmd = `${bin} --model "aeon-sweep/Qwen3-8B-GGUF" --host 127.0.0.1 --port 8080 -ngl 99`;
+    const big = await cb.post('/model/serve', { repo_id: 'aeon-sweep/Qwen3-8B-GGUF', cmd, gguf: 'model-q8_0.gguf' });
+    expect(big.status).toBe(409);
+    expect(big.body.error).toMatch(/^model-q8_0\.gguf \(q8\) needs about 9\.8 GB/);
+    const small = await cb.post('/model/serve', { repo_id: 'aeon-sweep/Qwen3-8B-GGUF', cmd, gguf: 'model-q2_k.gguf' });
+    expect(small.status, JSON.stringify(small.body)).toBe(200);
+  }, 20000);
+});
+
+// Review follow-up: the process-wide registry was never emptied — a rescan
+// used to do that by accident — so finished tasks, each holding its process
+// handle, piled up and every status poll re-read every one of their logs.
+describe('the task registry keeps what is running and the recent finished ones', () => {
+  it('drops the oldest finished tasks past the cap, never a running one', async () => {
+    const cb = await mount();
+    const key = path.resolve(path.join(root, 'data', 'cookbook'));
+    const tasks = globalThis[Symbol.for('aeon.cookbook.activeTasks')].get(key);
+    expect(tasks).toBeTruthy();
+    const t0 = Date.now() - 100000;
+    for (let i = 0; i < 30; i++) tasks[`old-${String(i).padStart(2, '0')}`] = { type: 'serve', status: 'done', exited: true, started_at: t0 + i, query: 'x' };
+    tasks['still-running'] = { type: 'serve', status: 'running', started_at: t0 - 1, query: 'y', pid: process.pid };
+    const listed = (await cb.get('/cookbook/tasks/status')).tasks.map((t) => t.session_id);
+    expect(listed).toContain('still-running');
+    const kept = Object.keys(tasks).filter((k) => k.startsWith('old-')).sort();
+    expect(kept).toHaveLength(20);
+    expect(kept[0]).toBe('old-10'); // the ten oldest went
+    delete tasks['still-running'];
   });
 });

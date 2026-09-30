@@ -359,10 +359,13 @@ module.exports = (app, deps) => {
           // for the one platform that needs this step), then discard the
           // archive. The extracted name is always `cloudflared`, so it is
           // extracted into a folder of its own and renamed to this build's name.
+          // Everything that can leave a file behind happens inside the try,
+          // so a failed write (a full disk) cleans up after itself too.
           const tgzPath = path.join(BIN_DIR, CLOUDFLARED_TARGET.filename);
-          const unpack = fs.mkdtempSync(path.join(BIN_DIR, 'unpack-'));
-          fs.writeFileSync(tgzPath, bytes);
+          let unpack = null;
           try {
+            unpack = fs.mkdtempSync(path.join(BIN_DIR, 'unpack-'));
+            fs.writeFileSync(tgzPath, bytes);
             try {
               execFileSync('tar', ['-xzf', tgzPath, '-C', unpack], { stdio: 'pipe' });
             } catch (e) {
@@ -373,7 +376,7 @@ module.exports = (app, deps) => {
             fs.renameSync(extracted, CLOUDFLARED);
           } finally {
             try { fs.unlinkSync(tgzPath); } catch {}
-            try { fs.rmSync(unpack, { recursive: true, force: true }); } catch {}
+            if (unpack) { try { fs.rmSync(unpack, { recursive: true, force: true }); } catch {} }
           }
         } else {
           fs.writeFileSync(CLOUDFLARED, bytes);
@@ -381,6 +384,14 @@ module.exports = (app, deps) => {
         // The download has no execute bit on macOS/Linux; Windows ignores this.
         if (os.platform() !== 'win32') { try { fs.chmodSync(CLOUDFLARED, 0o755); } catch {} }
         console.log('[CONNECTIVITY] Downloaded cloudflared for', `${os.platform()}/${os.arch()}`);
+        // The arch-less tools/bin/cloudflared earlier versions stored (sweep
+        // C29) is never run again — about 40 MB left in the app folder. It
+        // goes once this host's own build is in place.
+        const legacy = path.join(BIN_DIR, 'cloudflared');
+        if (os.platform() !== 'win32' && legacy !== CLOUDFLARED && fs.existsSync(legacy)) {
+          try { fs.unlinkSync(legacy); console.log('[CONNECTIVITY] Removed the arch-less tools/bin/cloudflared an earlier AEON stored; it is no longer used.'); }
+          catch (e) { console.warn(`[CONNECTIVITY] Could not remove the unused tools/bin/cloudflared: ${e.message}`); }
+        }
       }
 
       const proc = spawn(CLOUDFLARED, ['tunnel', '--url', `http://localhost:${PORT}`], {

@@ -42,6 +42,10 @@ const BLOCK_ROUTES = [...getRoutes(), ...EXTRA_ROUTES];
 // land on the first installed block instead.
 const HOME_ROUTE = BLOCK_ROUTES.some((r) => r.path === '/') ? '/' : (BLOCK_ROUTES[0]?.path || '/');
 
+// Said when a section change is refused because the saved layout was never
+// read (see saveBlockLayout). MobileLayout says the same.
+export const LAYOUT_NOT_READ = 'Section changes are not saved until AEON has read your saved layout: saving now would replace it with this partial one. Reload the page, then try again.';
+
 /**
  * The honest zero-block state. AEON's central claim is that it is a shell and
  * capability arrives as cartridges — which means booting with nothing
@@ -272,11 +276,23 @@ export default function DesktopLayout({ chatHistory, auditLogs }) {
   // sidebar AND every routed block (Dashboard's grid included) via props,
   // so dragging a block on the Dashboard updates the sidebar instantly
   // instead of only on next reload.
+  //
+  // A failed read leaves it null (sections show their defaults) instead of
+  // an empty layout: every save below replaces the saved layout whole, so a
+  // Dashboard drag built on an empty stand-in erased every section the
+  // operator had made. saveBlockLayout refuses while it is null.
   const [blockLayout, setBlockLayout] = useState(null);
+  // X-AEON-UI-Stale (server.js, sweep C31): this bundle was built before the
+  // UI source last changed — a pull and a restart without `npm run build`. It
+  // was only a line in the launcher window, so a button whose route had moved
+  // (Export backup) just failed in the browser with nothing said.
+  const [uiStale, setUiStale] = useState(null);
   useEffect(() => {
-    fetch('/api/settings').then(r => r.json()).then(d => {
-      setBlockLayout(d?.settings?.blockLayout || { overrides: {}, customGroups: {}, groupOverrides: {} });
-    }).catch(() => setBlockLayout({ overrides: {}, customGroups: {}, groupOverrides: {} }));
+    fetch('/api/settings').then(r => { setUiStale(r.headers.get('X-AEON-UI-Stale')); return r.json(); }).then(d => {
+      const s = d?.settings;
+      if (s && typeof s === 'object' && !Array.isArray(s)) setBlockLayout(s.blockLayout || { overrides: {}, customGroups: {}, groupOverrides: {} });
+      else console.warn('[LAYOUT] saved block layout not read:', d?.error || 'the reply had no settings in it');
+    }).catch((e) => console.warn('[LAYOUT] saved block layout not read:', e.message));
   }, []);
 
   // ── Live block icons (/api/blocks/nav) ────────────────────────────────
@@ -302,10 +318,17 @@ export default function DesktopLayout({ chatHistory, auditLogs }) {
   // Optimistic, then honest: a save the server refused (or never received)
   // reverts, instead of showing as saved until the next reload (2026-09-23).
   // A refused save also raises the global banner; a network failure is logged.
+  //
+  // `{ saved: true }`: the caller already wrote `next` itself, built on its
+  // own read of the server (Master's install panel). It is adopted, not
+  // written a second time — a second write that failed used to revert this
+  // copy to one without the placement, and the next drag wrote it away.
   const layoutRef = useRef(blockLayout);
   useEffect(() => { layoutRef.current = blockLayout; }, [blockLayout]);
-  const saveBlockLayout = useCallback((next) => {
+  const saveBlockLayout = useCallback((next, { saved = false } = {}) => {
     const previous = layoutRef.current;
+    if (saved) { setBlockLayout(next); return; }
+    if (!previous) { console.warn(`[LAYOUT] ${LAYOUT_NOT_READ}`); window.alert(LAYOUT_NOT_READ); return; }
     setBlockLayout(next);
     fetch('/api/settings/block-layout', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -413,6 +436,11 @@ export default function DesktopLayout({ chatHistory, auditLogs }) {
         </div>
         
         <div id="aeon-main" role="main" style={{ height: "100%", width: "100%", overflowY: "auto", paddingTop: "52px" }}>
+          {uiStale && (
+            <div role="alert" style={{ margin: '8px 16px', padding: '8px 12px', borderRadius: 6, fontSize: 12, lineHeight: 1.5, color: '#ffaa00', background: 'rgba(255,170,0,0.08)', border: '1px solid rgba(255,170,0,0.35)' }}>
+              This screen is older than AEON's code ({String(uiStale).replace(/built=/, 'built ').replace(/source=/, 'code changed ')}). Some buttons may not work until you run <code>npm run build</code> in the AEON folder and reload this tab.
+            </div>
+          )}
           <Suspense fallback={
             <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '60vh', color: 'rgba(0,242,255,0.6)', fontFamily: 'monospace', fontSize: '12px', letterSpacing: '2px' }}>
               LOADING BLOCK...

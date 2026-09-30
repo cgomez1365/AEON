@@ -275,8 +275,18 @@ export function takeSSEFrames(buffer) {
  * it rode along in every save: a 5–7 MB drop pushed each save body past the
  * server's 10 MB limit, and smaller ones were copied into every saved chat file.
  */
+//
+// A command chip's output is kept whole on screen but capped in the saved copy:
+// a few /doc or /read chips of long documents pushed a save past the same
+// limit, and then every per-turn save failed with 413 and New chat was refused
+// for that chat indefinitely.
+export const SAVED_CHIP_OUTPUT_MAX = 32 * 1024;
 export function sessionEntries(feed) {
-  return (Array.isArray(feed) ? feed : []).filter(e => e && e.type !== 'filedrop');
+  return (Array.isArray(feed) ? feed : []).filter(e => e && e.type !== 'filedrop').map((e) => {
+    if (e.type !== 'chip' || typeof e.output !== 'string' || e.output.length <= SAVED_CHIP_OUTPUT_MAX) return e;
+    const more = e.output.length - SAVED_CHIP_OUTPUT_MAX;
+    return { ...e, output: `${e.output.slice(0, SAVED_CHIP_OUTPUT_MAX)}\n[… ${more} more characters — shortened in the saved copy of this chat]` };
+  });
 }
 
 /**
@@ -291,9 +301,22 @@ export function sessionEntries(feed) {
  * route's own answer counts (it names the id it looked for) — a 404 because
  * the Dashboard block is not mounted must not fork the chat into a new record.
  */
+//
+// 'unavailable' is that other 404, and the 503 a STOPPED block answers: chat
+// history lives in the Dashboard block, and no save can land until it is back.
+// Every turn used to add "[SESSION] This chat was not saved — HTTP 404", and
+// New chat — the operator's way to reset the console — was refused for good.
 export function readSaveResponse({ ok, status, body, sentId }) {
   if (ok && body && body.id) return { kind: 'saved', id: body.id, name: body.name, nameSetBy: body.nameSetBy };
   if (status === 404 && sentId && body && body.id === sentId) return { kind: 'gone' };
+  if ((status === 404 || status === 503) && !(body && body.id)) {
+    return {
+      kind: 'unavailable',
+      error: status === 503
+        ? 'chat history is served by the Dashboard block, which is stopped. Start it: node tools/aeon-cli.cjs block start dashboard'
+        : 'chat history is served by the Dashboard block, which is not installed. Restore it: node tools/aeon-cli.cjs block restore dashboard',
+    };
+  }
   return { kind: 'failed', error: (body && body.error) || `HTTP ${status}` };
 }
 
@@ -301,6 +324,9 @@ export function readSaveResponse({ ok, status, body, sentId }) {
 // over 64 KiB: sendBeacon returns false and sends nothing. Headroom is left for
 // the request's own framing.
 export const BEACON_MAX_BYTES = 60 * 1024;
+
+// How many times one page asks the model to title one chat (see saveSession).
+const NAMING_TRIES = 3;
 
 /**
  * What the page can still send as it closes.
@@ -402,8 +428,12 @@ const Terminal2 = ({ onUsageUpdate }) => {
   // each mint a record — the fork currentSessionId exists to prevent — and a
   // save after every turn makes that overlap ordinary rather than rare.
   const saveChain = useRef(Promise.resolve());
-  // Session ids this page has already asked the model to title (see saveSession).
-  const namingAsked = useRef(new Set());
+  // Session id → how many times this page has asked the model to title it
+  // (see saveSession).
+  const namingAsked = useRef(new Map());
+  // Chat history unavailable (Dashboard block stopped or removed) has been said
+  // once; automatic saves do not repeat it every turn until a save lands.
+  const historyDownSaid = useRef(false);
   // Bumped when an operator action finishes; the effect below saves on it.
   const [turnsDone, setTurnsDone] = useState(0);
   const [sessionsError, setSessionsError] = useState(null);
@@ -479,6 +509,14 @@ const Terminal2 = ({ onUsageUpdate }) => {
       };
       try {
         let out = await post(currentSessionId.current);
+        if (out.kind === 'unavailable') {
+          if (!autoSaved || !historyDownSaid.current) {
+            historyDownSaid.current = true;
+            push({ type: 'msg', role: 'error', content: `[SESSION] This chat is not being saved — ${out.error}` });
+          }
+          return { unavailable: true };
+        }
+        historyDownSaid.current = false;
         if (out.kind === 'gone') {
           // The record this chat was saved to is gone — deleted in another tab
           // or device, or its file no longer parses. Holding on to its id made
@@ -493,13 +531,22 @@ const Terminal2 = ({ onUsageUpdate }) => {
         // Ask the model for a better title in the background. The
         // deterministic title is already in place, so this never blocks and a
         // failure changes nothing. The server refuses if the operator has
-        // renamed this chat (R10). Once per chat per page: a title the model
-        // could not improve stays 'auto', and chats now save after every turn,
-        // so asking on every save would be a model call per turn.
-        if (out.nameSetBy === 'auto' && !namingAsked.current.has(out.id)) {
-          namingAsked.current.add(out.id);
+        // renamed this chat (R10). Chats save after every turn, so this is
+        // bounded: from the second question on (after the first, the title
+        // covered one question), at most NAMING_TRIES times per chat per page,
+        // and not again once it is settled — a model title, a chat the
+        // operator named, or no model to ask. A failed or unusable answer
+        // used to end it for the page.
+        const asked = namingAsked.current.get(out.id) || 0;
+        const questions = snapshot.filter((m) => m.type === 'msg' && m.role === 'user').length;
+        if (out.nameSetBy === 'auto' && questions >= 2 && asked < NAMING_TRIES) {
+          namingAsked.current.set(out.id, asked + 1);
           fetch(`/api/terminal/sessions/${out.id}/name`, { method: 'POST' })
-            .then(() => fetchSessions())
+            .then((r) => r.json().catch(() => null))
+            .then((d) => {
+              if (d && (d.nameSetBy === 'model' || d.code === 'operator_named' || d.code === 'no_model')) namingAsked.current.set(out.id, NAMING_TRIES);
+              return fetchSessions();
+            })
             .catch(() => {});
         }
         await fetchSessions();
@@ -518,12 +565,26 @@ const Terminal2 = ({ onUsageUpdate }) => {
       const r = await fetch(`/api/terminal/sessions/${id}`);
       const d = await r.json();
       if (d.messages) {
-        const nextId = Math.max(...d.messages.map(m => m.id || 0), 0) + 1;
-        feedId.current = nextId;
-        setFeed([...d.messages, { id: nextId, type: 'msg', role: 'system', content: `📂 Loaded: ${d.name}` }]);
-        feedId.current = nextId + 1;
-        // Adopt the session so the next save updates it instead of forking.
-        currentSessionId.current = d.id;
+        // Swapped behind any save still in flight, and feedRef set now rather
+        // than on the next commit: a save of the previous chat that finished
+        // after this adopted ITS id over this one, and a save that started in
+        // the gap wrote the previous chat's feed into this record.
+        // The chain must never reject — every later save waits on it — so a
+        // record that will not load is caught inside and reported below.
+        let swapErr = null;
+        await (saveChain.current = saveChain.current.then(() => {
+          try {
+            const nextId = Math.max(...d.messages.map(m => m?.id || 0), 0) + 1;
+            const next = [...d.messages, { id: nextId, type: 'msg', role: 'system', content: `📂 Loaded: ${d.name}` }];
+            feedId.current = nextId + 1;
+            feedRef.current = next;
+            savedFeedRef.current = next; // as saved; the "Loaded" line is not a turn
+            // Adopt the session so the next save updates it instead of forking.
+            currentSessionId.current = d.id;
+            setFeed(next);
+          } catch (err) { swapErr = err; }
+        }));
+        if (swapErr) throw swapErr;
         setShowSessions(false);
       }
     } catch (e) {
@@ -531,13 +592,26 @@ const Terminal2 = ({ onUsageUpdate }) => {
     }
   }, []);
 
-  const deleteSession = useCallback(async (id, e) => {
+  // Delete is permanent (the route unlinks). A row listed as unreadable may
+  // still hold most of a conversation — a half-written file, or a record whose
+  // inner id does not match its file name — so it asks first. A refused
+  // delete is said in the feed; it used to vanish silently.
+  const deleteSession = useCallback(async (id, e, s = null) => {
     e.stopPropagation();
+    if (s?.unreadable && !window.confirm(
+      `"${id}.json" could not be opened as a saved chat (${s.error}), but the file may still hold most of the conversation.\n\nDelete it permanently? To keep it, cancel and open the file from the Vault's Agents/Aeon/chat_sessions folder.`)) return;
     try {
-      await fetch(`/api/terminal/sessions/${id}`, { method: 'DELETE' });
+      const r = await fetch(`/api/terminal/sessions/${id}`, { method: 'DELETE' });
+      if (!r.ok) {
+        const d = await r.json().catch(() => null);
+        push({ type: 'msg', role: 'error', content: `[SESSION] ${id} was not deleted — ${d?.error || `HTTP ${r.status}`}` });
+        return;
+      }
       if (currentSessionId.current === id) currentSessionId.current = null;
       await fetchSessions();
-    } catch {}
+    } catch (err) {
+      push({ type: 'msg', role: 'error', content: `[SESSION] ${id} was not deleted — ${err.message}` });
+    }
   }, [fetchSessions]);
 
   // Rename. The operator's word is final — the server marks the title
@@ -584,11 +658,21 @@ const Terminal2 = ({ onUsageUpdate }) => {
     // The result used to be ignored: a failed save was followed by a fresh
     // console anyway, and the only copy of the conversation left the screen.
     // saveSession has already said why it failed; the chat stays.
+    // With chat history unavailable (the Dashboard block is stopped or
+    // removed) no save can land until it is back, so the chat goes, and the
+    // console says it was not kept.
     if (hasTurns && !saved) {
       push({ type: 'msg', role: 'system', content: 'New chat not started — this one is not saved yet, so it stays on screen. Try again, or /clear it to let it go.' });
       return;
     }
-    setFeed([{ ...BOOT_MSG, content: 'AEON Operator Console — new session started.' }]);
+    const fresh = [{ ...BOOT_MSG, content: saved?.unavailable && hasTurns
+      ? 'AEON Operator Console — new session started. The last chat was not kept: chat history is unavailable until the Dashboard block is back.'
+      : 'AEON Operator Console — new session started.' }];
+    // feedRef now, not on the next commit: a hide-save queued behind the save
+    // above ran in that gap with the old feed and no id, and forked the chat
+    // into a duplicate record.
+    feedRef.current = fresh;
+    setFeed(fresh);
     feedId.current = 1;
     currentSessionId.current = null;   // the next save is a NEW record, on purpose
     setShowSessions(false);
@@ -858,7 +942,11 @@ const Terminal2 = ({ onUsageUpdate }) => {
       try { data = await res.json(); } catch { /* empty/non-JSON body — e.g. backend unreachable */ }
       if (res.ok && data?.text) return `\n\n[Attached image "${img.name}" — vision analysis]: ${data.text}`;
       if (!res.ok) {
-        push({ type: 'msg', role: 'error', content: `[VISION] Server unreachable or errored (${res.status || 'no response'}). Is the AEON backend running?` });
+        // A server that answered said why — a 413 names the size limit. Only
+        // no answer at all is "is the backend running?".
+        push({ type: 'msg', role: 'error', content: data?.error
+          ? `[VISION] ${data.error}${data.remedy ? ` — ${data.remedy}` : ''} (HTTP ${res.status})`
+          : `[VISION] Server unreachable or errored (${res.status || 'no response'}). Is the AEON backend running?` });
       } else {
         push({ type: 'msg', role: 'error', content: `[VISION] ${data?.error || 'Could not read the image.'}` });
       }
@@ -1108,12 +1196,17 @@ const Terminal2 = ({ onUsageUpdate }) => {
                 latencyMs: Date.now() - t0,
               },
             });
+            // This sentence lands after dispatch's own save has gone. Saved
+            // now, not at the next turn — or at a close, where a chat over
+            // the beacon limit sends nothing.
+            setTurnsDone(k => k + 1);
           }
         } catch {
           // The chip already carries the full result; a missing sentence is a
           // rendering gap, not a lost outcome.
           if (outcome.kind === 'ok' && outcome.text) {
             push({ type: 'msg', role: 'assistant', content: outcome.text, meta: { model: data.meta?.block, provider: 'Block Command', latencyMs: Date.now() - t0 } });
+            setTurnsDone(k => k + 1);
           }
         }
       })();
@@ -1202,7 +1295,7 @@ const Terminal2 = ({ onUsageUpdate }) => {
 
       {/* ── Session action strip — top of terminal, not in the input row ── */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 0, borderBottom: '1px solid #111a28', flexShrink: 0 }}>
-        <button onClick={() => saveSession().then(d => d && push({ type: 'msg', role: 'system', content: `💾 Saved: ${d.name}` }))}
+        <button onClick={() => saveSession().then(d => d && d.id && push({ type: 'msg', role: 'system', content: `💾 Saved: ${d.name}` }))}
           title="Keep this whole chat so you can reopen it later. To keep what it TAUGHT AEON, use Distil."
           style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'transparent', border: 'none', borderRight: '1px solid #111a28', color: sessionSaving ? '#39ff14' : '#3a5070', padding: '5px 12px', cursor: 'pointer', fontSize: 10, fontFamily: 'inherit', letterSpacing: '0.08em', whiteSpace: 'nowrap' }}
           onMouseEnter={e => e.currentTarget.style.color = '#00f2ff'}
@@ -1288,7 +1381,10 @@ const Terminal2 = ({ onUsageUpdate }) => {
                     {/* What this turn consulted. These counters were emitted on every
                         stream and read by nobody — the operator's answer to "did it
                         actually look?" existed only in the network tab (§08, R01, R03). */}
-                    {entry.meta.memory != null && (
+                    {entry.meta.memoryError && (
+                      <span style={{ color: '#ffaa00' }} title={entry.meta.memoryError}>🧠 memory store unreadable</span>
+                    )}
+                    {!entry.meta.memoryError && entry.meta.memory != null && (
                       <span title={`${entry.meta.memory} of ${entry.meta.memoryConsidered ?? '?'} memories injected${entry.meta.memoryDropped ? `, ${entry.meta.memoryDropped} dropped for space` : ''}`}>
                         🧠 {entry.meta.memory}{entry.meta.memoryConsidered != null ? `/${entry.meta.memoryConsidered}` : ''}
                       </span>
@@ -1368,7 +1464,7 @@ const Terminal2 = ({ onUsageUpdate }) => {
                 {s.unreadable ? (
                   <>
                     <div style={{ fontSize: 11.5, color: '#ffaa00', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>⚠ {s.id}</div>
-                    <div style={{ fontSize: 9.5, color: '#3a5070', marginTop: 1, overflowWrap: 'anywhere' }}>UNREADABLE · {s.error}</div>
+                    <div style={{ fontSize: 9.5, color: '#3a5070', marginTop: 1, overflowWrap: 'anywhere' }}>{s.mismatch ? 'ID DOES NOT MATCH FILE NAME' : 'UNREADABLE'} · {s.error}{s.deletable === false ? ' · delete it by hand from the Vault\'s Agents/Aeon/chat_sessions folder' : ''}</div>
                   </>
                 ) : renaming?.id === s.id ? (
                   <input
@@ -1413,13 +1509,13 @@ const Terminal2 = ({ onUsageUpdate }) => {
                 {s.inRecord ? <Check size={12} /> : <BookmarkPlus size={12} />}
               </button>
               </>)}
-              <button onClick={(e) => deleteSession(s.id, e)}
+              {s.deletable !== false && <button onClick={(e) => deleteSession(s.id, e, s)}
                 aria-label="Delete session"
                 style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#3a5070', padding: 2, lineHeight: 1 }}
                 onMouseEnter={e => e.currentTarget.style.color = '#ff4455'}
                 onMouseLeave={e => e.currentTarget.style.color = '#3a5070'}>
                 <Trash2 size={12} />
-              </button>
+              </button>}
             </div>
           ))}
         </div>

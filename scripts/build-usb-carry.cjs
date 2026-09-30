@@ -291,6 +291,8 @@ function carryRefusal(plan) {
     return `${plan.app} is a git checkout. Replacing it would delete its .git (history, branches, stashes) `
       + 'and every uncommitted or untracked file in it, so this builder refuses. Update it in place instead:\n'
       + `    cd "${plan.app}" && git pull && npm ci && npm run build\n`
+      + '  To refresh only the drive\'s Node runtimes, launchers and README_DRIVE.txt, keeping the checkout as it is:\n'
+      + `    node scripts/build-usb.js --target "${path.dirname(plan.app)}" --carry-home --keep-app\n`
       + '  To rebuild it as a plain carried copy anyway, move that folder aside first — nothing here deletes it.';
   }
   if (plan.self) {
@@ -685,6 +687,8 @@ the old copy aside rather than deleting it).
 If AEON/ is a git checkout (it has a .git folder), the builder refuses to
 replace it. Update it in place instead:
   cd AEON && git pull && npm ci && npm run build
+To refresh runtime/, the launchers and this file while keeping the
+checkout as it is, add --keep-app to the builder's command.
 `);
 }
 
@@ -697,13 +701,22 @@ async function buildCarried(args, { download, log = console.log } = {}) {
   const plan = planCarry(target, { replaceData: !!args.replaceData });
   // Before anything is written — and on a dry run too, which would otherwise
   // report a plan the real run cannot carry out.
-  const refusal = carryRefusal(plan);
+  //
+  // --keep-app leaves AEON/ exactly as it is and refreshes the rest: the
+  // refusal above stopped the WHOLE build for a checkout, so a launcher fix
+  // (a88694c) could never reach the drive, and its README kept telling the
+  // operator to re-run a builder that refused. Nothing in AEON/ is written.
+  const keepApp = !!args.keepApp;
+  if (keepApp && !fs.existsSync(plan.app)) {
+    throw new Error(`--keep-app: there is no ${plan.app} to keep. Run without --keep-app to carry this install onto the drive.`);
+  }
+  const refusal = keepApp ? null : carryRefusal(plan);
   if (refusal) throw new Error(refusal);
   const t0 = Date.now();
 
   log(`\nAEON — carry this install and its home`);
   log(`  target      ${target}`);
-  log(`  app         ${plan.app}  (replaced)`);
+  log(`  app         ${plan.app}  (${keepApp ? 'kept as it is — --keep-app' : 'replaced'})`);
   log(`  data        ${plan.data}  (${plan.dataAction === 'keep' ? 'KEPT — already on the drive; pass --replace-data to overwrite' : plan.dataAction})`);
   if (plan.extraBlocks.length) log(`  keeping installed blocks: ${plan.extraBlocks.join(', ')}`);
 
@@ -712,34 +725,38 @@ async function buildCarried(args, { download, log = console.log } = {}) {
     if (ping.status) log('  ! an AEON is running on this machine — its files are copied as they are now; close it first for a quiet snapshot');
   } catch { /* none running */ }
 
-  const files = installFileList(ROOT, buildUsb.EXCLUDE);
+  const files = keepApp ? [] : installFileList(ROOT, buildUsb.EXCLUDE);
   if (args.dryRun) {
     const src = aeonHome.roots({ appRoot: ROOT, env: process.env });
-    log(`\n  DRY RUN — nothing written. Would copy ${files.length} tracked files, dist/, node_modules,`);
+    log(keepApp
+      ? `\n  DRY RUN — nothing written. Would leave AEON/ as it is,`
+      : `\n  DRY RUN — nothing written. Would copy ${files.length} tracked files, dist/, node_modules,`);
     log(`  and${plan.dataAction === 'keep' ? ' NOT' : ''} the home at ${src.home}; then stage Node for macOS, Windows and Linux.\n`);
     return { plan, dryRun: true, files: files.length };
   }
 
   // 1. app
-  const staging = `${plan.app}.incoming`;
-  fs.rmSync(staging, { recursive: true, force: true });
-  let appBytes = 0;
-  for (const rel of files) appBytes += copyFileData(path.join(ROOT, rel), path.join(staging, rel));
-  log(`  ✓ source: ${files.length} tracked files`);
-  if (!fs.existsSync(path.join(ROOT, 'dist', 'index.html'))) throw new Error('dist/ is missing — run npm run build first');
-  const dist = copyTreeMaterialized(path.join(ROOT, 'dist'), path.join(staging, 'dist'));
-  log(`  ✓ interface: ${dist.files} files`);
-  const mods = copyTreeMaterialized(path.join(ROOT, 'node_modules'), path.join(staging, 'node_modules'), {
-    filter: (rel) => !/(^|\/)\.bin$/.test(rel) && !/^\.(cache|vite)(\/|$)/.test(rel),
-    onProgress: (s) => process.stdout.write(`\r      libraries: ${s.files} files   `),
-  });
-  process.stdout.write('\r');
-  log(`  ✓ libraries: ${mods.files} files, ${buildUsb.human(mods.bytes)} (${mods.links} links materialized${mods.broken ? `, ${mods.broken} broken skipped` : ''})`);
-  for (const b of plan.extraBlocks) {
-    copyTreeMaterialized(path.join(plan.app, 'src', 'blocks', b), path.join(staging, 'src', 'blocks', b));
+  if (!keepApp) {
+    const staging = `${plan.app}.incoming`;
+    fs.rmSync(staging, { recursive: true, force: true });
+    let appBytes = 0;
+    for (const rel of files) appBytes += copyFileData(path.join(ROOT, rel), path.join(staging, rel));
+    log(`  ✓ source: ${files.length} tracked files`);
+    if (!fs.existsSync(path.join(ROOT, 'dist', 'index.html'))) throw new Error('dist/ is missing — run npm run build first');
+    const dist = copyTreeMaterialized(path.join(ROOT, 'dist'), path.join(staging, 'dist'));
+    log(`  ✓ interface: ${dist.files} files`);
+    const mods = copyTreeMaterialized(path.join(ROOT, 'node_modules'), path.join(staging, 'node_modules'), {
+      filter: (rel) => !/(^|\/)\.bin$/.test(rel) && !/^\.(cache|vite)(\/|$)/.test(rel),
+      onProgress: (s) => process.stdout.write(`\r      libraries: ${s.files} files   `),
+    });
+    process.stdout.write('\r');
+    log(`  ✓ libraries: ${mods.files} files, ${buildUsb.human(mods.bytes)} (${mods.links} links materialized${mods.broken ? `, ${mods.broken} broken skipped` : ''})`);
+    for (const b of plan.extraBlocks) {
+      copyTreeMaterialized(path.join(plan.app, 'src', 'blocks', b), path.join(staging, 'src', 'blocks', b));
+    }
+    if (fs.existsSync(plan.app)) fs.rmSync(plan.app, { recursive: true, force: true });
+    fs.renameSync(staging, plan.app);
   }
-  if (fs.existsSync(plan.app)) fs.rmSync(plan.app, { recursive: true, force: true });
-  fs.renameSync(staging, plan.app);
 
   // 2. data
   if (plan.dataAction !== 'keep') {
@@ -762,7 +779,7 @@ async function buildCarried(args, { download, log = console.log } = {}) {
     : await stageRuntimes(target, { version: process.version, download, log });
   writeCarriedLaunchers(target);
   writeDriveReadme(target, { built: new Date().toISOString().slice(0, 10), runtimes });
-  const swept = sweepOsJunk(plan.app) + sweepOsJunk(plan.data) + sweepOsJunk(path.join(target, 'runtime'))
+  const swept = (keepApp ? 0 : sweepOsJunk(plan.app)) + sweepOsJunk(plan.data) + sweepOsJunk(path.join(target, 'runtime'))
     + sweepDriveRoot(target);
   log(`  ✓ launchers (macOS, Windows, Linux) and README_DRIVE.txt · ${swept} OS junk file(s) swept`);
   log(`\n  done in ${Math.round((Date.now() - t0) / 1000)}s.  Verify: node scripts/verify-usb.js --target ${target} --carry-home\n`);

@@ -109,7 +109,7 @@ module.exports = function createChatRouter(deps) {
             // readSession's rule: a record whose id disagrees with its filename
             // cannot be opened, saved or deleted by the id it would be listed
             // under.
-            if (!raw || raw.id !== id) throw new Error('its id does not match its file name');
+            if (!raw || raw.id !== id) throw Object.assign(new Error('its id does not match its file name'), { mismatch: !!raw });
             return {
               id: raw.id, name: raw.name, savedAt: raw.savedAt,
               updatedAt: raw.updatedAt || raw.savedAt,
@@ -124,7 +124,16 @@ module.exports = function createChatRouter(deps) {
           } catch (e) {
             let savedAt = null;
             try { savedAt = fs.statSync(path.join(SESSIONS_DIR, f)).mtime.toISOString(); } catch { /* sorts last */ }
-            return { id, name: id, savedAt, unreadable: true, error: e.message };
+            // `mismatch`: the content parsed and is intact — only its id and
+            // file name disagree — so the screen does not call it unreadable.
+            // `deletable`: DELETE refuses a name SESSION_ID_RE rejects (a
+            // Finder "copy (1)" duplicate), so the screen offers no Delete
+            // button that could only fail.
+            return {
+              id, name: id, savedAt, unreadable: true, error: e.message,
+              ...(e.mismatch ? { mismatch: true } : {}),
+              deletable: SESSION_ID_RE.test(id),
+            };
           }
         })
         .sort((a, b) => new Date(b.savedAt) - new Date(a.savedAt));

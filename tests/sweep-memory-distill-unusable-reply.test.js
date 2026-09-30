@@ -130,6 +130,20 @@ describe('a model reply with no JSON list in it', () => {
     expect(calls).toBe(1);
   });
 
+  // A provider's status is not the route's: a 401 from distil read as "your
+  // AEON session ended". Only the store's own 503 passes through.
+  it('a model error carrying a status answers 500, unrecorded', async () => {
+    const r = createMemoryRouter({
+      VAULT_ROOT: vault, TERMINAL_HISTORY_FILE: null,
+      kernelLLM: async () => { calls++; throw Object.assign(new Error('provider refused the key'), { status: 401 }); },
+    });
+    const first = await distill(r, { transcript: TRANSCRIPT });
+    expect(first.status).toBe(500);
+    expect(first.body.error).toMatch(/distill failed: provider refused the key/);
+    await distill(r, { transcript: TRANSCRIPT });
+    expect(calls).toBe(2); // not recorded as distilled
+  });
+
   it('a real empty list is still "nothing durable", and is remembered', async () => {
     const r = routerWith(['Nothing worth keeping: []']);
     const first = await distill(r, { transcript: TRANSCRIPT });

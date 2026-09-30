@@ -78,6 +78,30 @@ describe('POST /api/auth/reauth with no account yet', () => {
   });
 });
 
+// Review follow-up: loopback is only the socket. The Vite dev server
+// (host: true) forwards a LAN device from 127.0.0.1, and a cloudflared tunnel
+// arrives from localhost too — each with a tell the socket does not show.
+describe('POST /api/auth/reauth with no account, through a proxy on this machine', () => {
+  it('a browser on another device, through the dev server, is refused (its Origin is not this machine)', async () => {
+    const r = await post('/api/auth/reauth', { purpose: 'export-credentials' }, { Origin: 'http://192.168.1.20:3000' });
+    expect(r.status).toBe(401);
+    expect(r.body.token).toBeUndefined();
+  });
+
+  it('a tunnel is refused (its proxy headers)', async () => {
+    for (const h of [{ 'CF-Connecting-IP': '203.0.113.9' }, { Via: '1.1 cloudflared' }, { Forwarded: 'for=203.0.113.9' }, { 'X-Real-IP': '203.0.113.9' }]) {
+      const r = await post('/api/auth/reauth', { purpose: 'export-credentials' }, h);
+      expect(r.status, JSON.stringify(h)).toBe(401);
+    }
+  });
+
+  it('this machine\'s own browser still gets it', async () => {
+    const r = await post('/api/auth/reauth', { purpose: 'export-credentials' }, { Origin: 'http://localhost:3000' });
+    expect(r.status).toBe(200);
+    expect(r.body.noAccount).toBe(true);
+  });
+});
+
 describe('POST /api/auth/reauth once an account exists', () => {
   it('still needs a session and the password', async () => {
     expect((await post('/api/auth/setup', { username: 'operator', password: PASS, recoveryQuestions: QUESTIONS })).status).toBe(200);

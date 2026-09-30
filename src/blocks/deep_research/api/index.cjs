@@ -106,7 +106,8 @@ async function attachArchivedLinks(sources) {
 module.exports = function createResearchRouter(deps) {
   const router = express.Router();
   const { getLocalFile, getDataFile, geminiRequest, kernelLLM, writeOSAudit,
-          fetchDuckDuckGo, fetchBraveSearch, fetchSerperSearch, fetchTavilySearch, fetchWebSearch } = deps;
+          fetchDuckDuckGo, fetchBraveSearch, fetchSerperSearch, fetchTavilySearch, fetchWebSearch,
+          searchKeyStatus } = deps;
 
   // max_tokens must be explicit — every provider path in services/ai.js
   // defaults to a 4096-token output cap when none is passed, which is fine
@@ -164,7 +165,18 @@ module.exports = function createResearchRouter(deps) {
    * bare variable, because hydrateEnvFromVault numbers vault accounts — the
    * same defect that hid providers from Council's engineAlive.
    */
-  const hasKey = (base) => Object.keys(process.env)
+  //
+  // A key that is set is not yet a key that works (sweep C24). The search
+  // service remembers a provider refusing a key (401/403) and a key that
+  // cannot be sent at all; searchKeyStatus (from the server's deps — a block
+  // may not require services/) reports both. Such a provider is not "Active"
+  // and is not tried first on every round, only to fall to DuckDuckGo.
+  const keyRefused = (base) => {
+    if (typeof searchKeyStatus !== 'function') return null;
+    const st = searchKeyStatus(base) || {};
+    return st.state === 'rejected' || st.state === 'malformed' ? (st.reason || `${base} is not usable`) : null;
+  };
+  const hasKey = (base) => !keyRefused(base) && Object.keys(process.env)
     .some(k => (k === base || k.startsWith(`${base}_`)) && !!process.env[k]);
 
   const availableSearchProviders = () => {
@@ -1094,6 +1106,8 @@ Structure: # Title, ## Abstract, ## Findings (thematic, cited), ## Conclusion. D
     // hydrate as BASE, BASE_2, BASE_3, so a key added through Settings could
     // be present and still report "Set BRAVE_API_KEY in .env".
     const keyed = (base) => hasKey(base);
+    const note = (base, label) => keyRefused(base)
+      || (keyed(base) ? 'Active' : `Add a ${label} key in Settings → Connections`);
     res.json([
       {
         id: 'duckduckgo', label: 'DuckDuckGo', available: true,
@@ -1101,9 +1115,9 @@ Structure: # Title, ## Abstract, ## Findings (thematic, cited), ## Conclusion. D
         // multi-round runs come back thin.
         note: 'Free, no key — but blocks repeated automated queries, so long research runs lose rounds to it.',
       },
-      { id: 'brave',  label: 'Brave Search',     available: keyed('BRAVE_API_KEY'),  note: keyed('BRAVE_API_KEY')  ? 'Active' : 'Add a Brave key in Settings → Connections' },
-      { id: 'serper', label: 'Serper (Google)',  available: keyed('SERPER_API_KEY'), note: keyed('SERPER_API_KEY') ? 'Active' : 'Add a Serper key in Settings → Connections' },
-      { id: 'tavily', label: 'Tavily',           available: keyed('TAVILY_API_KEY'), note: keyed('TAVILY_API_KEY') ? 'Active' : 'Add a Tavily key in Settings → Connections' },
+      { id: 'brave',  label: 'Brave Search',     available: keyed('BRAVE_API_KEY'),  note: note('BRAVE_API_KEY', 'Brave') },
+      { id: 'serper', label: 'Serper (Google)',  available: keyed('SERPER_API_KEY'), note: note('SERPER_API_KEY', 'Serper') },
+      { id: 'tavily', label: 'Tavily',           available: keyed('TAVILY_API_KEY'), note: note('TAVILY_API_KEY', 'Tavily') },
     ]);
   });
 

@@ -1,11 +1,11 @@
-import React, { useState, useEffect, useCallback, useMemo, Suspense } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef, Suspense } from "react";
 import { Routes, Route, Navigate, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "../kernel/hooks/useAuth";
 import MobileNav from "./MobileNav";
 import GoogleSignIn from "./GoogleSignIn";
 import { Terminal } from 'lucide-react';
 import { getNavGroups, getRoutes, BLOCKS } from "../kernel/blockRegistry";
-import { RolodexNav } from "./DesktopLayout";
+import { RolodexNav, LAYOUT_NOT_READ } from "./DesktopLayout";
 import NeuralTerminal from "./Terminal2"; // Terminal 2.0. The local name is historical
 // — the old ./NeuralTerminal.jsx was DELETED 2026-08-16 (§21). It was NOT a working rollback — Terminal2
 // has since gained real stream cancellation (D1c), the challenge/outcome state machine
@@ -225,14 +225,22 @@ export default function MobileLayout({ chatHistory, auditLogs }) {
 
   // See DesktopLayout for why this can't be a static module constant: the
   // operator's section reclassification/renames live in settings.blockLayout.
+  // A failed read leaves it null, and saves are refused while it is: a save
+  // replaces the saved layout whole (see DesktopLayout).
   const [blockLayout, setBlockLayout] = useState(null);
   useEffect(() => {
     fetch('/api/settings').then(r => r.json()).then(d => {
-      setBlockLayout(d?.settings?.blockLayout || { overrides: {}, customGroups: {}, groupOverrides: {} });
-    }).catch(() => setBlockLayout({ overrides: {}, customGroups: {}, groupOverrides: {} }));
+      const s = d?.settings;
+      if (s && typeof s === 'object' && !Array.isArray(s)) setBlockLayout(s.blockLayout || { overrides: {}, customGroups: {}, groupOverrides: {} });
+      else console.warn('[LAYOUT] saved block layout not read:', d?.error || 'the reply had no settings in it');
+    }).catch((e) => console.warn('[LAYOUT] saved block layout not read:', e.message));
   }, []);
 
-  const saveBlockLayout = useCallback((next) => {
+  const layoutRef = useRef(blockLayout);
+  useEffect(() => { layoutRef.current = blockLayout; }, [blockLayout]);
+  const saveBlockLayout = useCallback((next, { saved = false } = {}) => {
+    if (saved) { setBlockLayout(next); return; }
+    if (!layoutRef.current) { console.warn(`[LAYOUT] ${LAYOUT_NOT_READ}`); window.alert(LAYOUT_NOT_READ); return; }
     setBlockLayout(next);
     fetch('/api/settings/block-layout', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },

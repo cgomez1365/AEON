@@ -39,6 +39,20 @@ function tasksFor(dir) {
   return TASK_REGISTRIES.get(key);
 }
 
+// A rescan used to empty the registry as a side effect; now nothing does, and
+// each finished task holds its process handle and emitter for the life of the
+// process while status re-reads its log on every poll. Finished tasks stay
+// listed (the Active tab shows how each ended), the newest FINISHED_KEPT of
+// them; running ones are never dropped.
+const FINISHED_KEPT = 20;
+const FINISHED_STATES = new Set(['done', 'completed', 'failed', 'error', 'stopped']);
+function pruneFinished(tasks) {
+  const finished = Object.entries(tasks)
+    .filter(([, t]) => t && (t.exited || FINISHED_STATES.has(t.status)))
+    .sort((a, b) => (b[1].started_at || 0) - (a[1].started_at || 0));
+  for (const [sid] of finished.slice(FINISHED_KEPT)) delete tasks[sid];
+}
+
 // ── A model server listens on this computer only ────────────────────────────
 //
 // AEON binds loopback. Serve (sweep C18, 2026-09-28) sent `--host 0.0.0.0`, so
@@ -929,14 +943,22 @@ module.exports = function createCookbookRouter(deps) {
     const { cleaned, env: envAssignments, file: execFileName, bin: execBin } = parsed;
 
     const bound = bindLoopback(execBin, parsed.args);
-    if (!bound.ok) {
+    // llama-server also takes its bind address from LLAMA_ARG_HOST, so
+    // `LLAMA_ARG_HOST=0.0.0.0 llama-server …` walked past the --host check.
+    const envHost = envAssignments.LLAMA_ARG_HOST;
+    if (!bound.ok || (envHost != null && !LOOPBACK_HOST_RE.test(envHost))) {
+      const named = !bound.ok ? `--host ${bound.host || '(empty)'}` : `LLAMA_ARG_HOST=${envHost || '(empty)'}`;
       return res.status(400).json({
         ok: false,
         code: 'host_not_loopback',
-        error: `AEON serves models on this computer only. --host ${bound.host || '(empty)'} would put a model server with no login on your network, where anyone could use it. Use --host 127.0.0.1.`,
+        error: `AEON serves models on this computer only. ${named} would put a model server with no login on your network, where anyone could use it. Use --host 127.0.0.1.`,
       });
     }
     let serveArgs = bound.args;
+    // What the VRAM check below judges, and names. A picked build replaces
+    // both with that file (see there).
+    let fitId = repo_id;
+    let fitName = repo_id;
 
     // The Serve button names a Hugging Face cache entry by its repo id, and
     // llama-server's --model takes a FILE. `--model Org/Repo-GGUF` loaded
@@ -973,6 +995,14 @@ module.exports = function createCookbookRouter(deps) {
       }
       serveArgs = serveArgs.slice();
       serveArgs[marg.at] = marg.prefix + pick.full;
+      // Judge the file that will load, not the repo. A GGUF repo id rarely
+      // names a quant (`…/Qwen3-4B-GGUF`), so it read as fp16: 9.2 GB for a 4B
+      // model, and every build — a 2.8 GB Q4_K_M included — was refused on a
+      // 4 GB card before the operator's own choice was looked at. A file name
+      // with no parameter count borrows the repo's: estimateVram reads the
+      // first count and the first quant, so the file goes first.
+      fitName = pick.file;
+      fitId = estimateVram(pick.file).paramsB ? pick.file : `${pick.file}-${String(repo_id).split('/').pop()}`;
     }
 
     // Serving a model that is not on disk was previously a spawn away: the
@@ -1015,7 +1045,7 @@ module.exports = function createCookbookRouter(deps) {
         vramGb = Math.max(0, ...(probe.gpus || []).map(g => (g.total_mb || 0) / 1024));
       } catch { /* no probe — checkVramFit returns fits:null and we proceed */ }
 
-      const fit = checkVramFit({ repoId: repo_id, args: serveArgs, vramGb });
+      const fit = checkVramFit({ repoId: fitId, args: serveArgs, vramGb });
       if (fit.fits === false && fit.fullOffload) {
         const fits = (installedModelIds() || [])
           .map(id => ({ id, est: estimateVram(id) }))
@@ -1026,7 +1056,7 @@ module.exports = function createCookbookRouter(deps) {
           code: 'model_exceeds_vram',
           repo_id,
           fit,
-          error: vramErrorMessage(fit, repo_id, fits?.id),
+          error: vramErrorMessage(fit, fitName, fits?.id),
         });
       }
     }
@@ -1036,6 +1066,10 @@ module.exports = function createCookbookRouter(deps) {
     const pidFile = path.join(LOGS_DIR, `${sessionId}.pid`);
 
     const env = { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8', ...envAssignments };
+    // The same address inherited from AEON's own environment is dropped, not
+    // refused: the operator never typed it, and llama-server then binds its
+    // loopback default. (One the command set was checked above.)
+    if (env.LLAMA_ARG_HOST != null && !LOOPBACK_HOST_RE.test(env.LLAMA_ARG_HOST)) delete env.LLAMA_ARG_HOST;
     if (hf_token) env.HF_TOKEN = hf_token;
     if (gpus) env.CUDA_VISIBLE_DEVICES = gpus;
 
@@ -1096,6 +1130,7 @@ module.exports = function createCookbookRouter(deps) {
   // ── Task Status ────────────────────────────────────────────────
 
   router.get('/cookbook/tasks/status', (req, res) => {
+    pruneFinished(activeTasks);
     const results = [];
     for (const [sid, task] of Object.entries(activeTasks)) {
       let outputTail = '';

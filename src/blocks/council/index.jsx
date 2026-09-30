@@ -70,13 +70,21 @@ export default function Council() {
   const councilors = members.filter(m => !m.chair);
   const chair = members.find(m => m.chair) || councilors[0];
 
+  // What the server said about the roster itself. A members.json that would
+  // not parse is moved aside and the seed roster takes its place (`notice`),
+  // and a roster that could not be read at all is a 500: both used to show as
+  // an ordinary roster (or "No council members yet") with no reason on screen.
+  const [rosterNote, setRosterNote] = useState('');
   const loadRoster = useCallback(async () => {
     try {
       const [m, mo] = await Promise.all([
-        fetch('/api/council/members').then(r => r.json()).catch(() => ({ members: [] })),
+        fetch('/api/council/members')
+          .then(async r => ({ ok: r.ok, status: r.status, d: await r.json().catch(() => ({})) }))
+          .catch(e => ({ ok: false, status: 0, d: { error: e.message } })),
         fetch('/api/council/models').then(r => r.json()).catch(() => ({ models: [] })),
       ]);
-      setMembers(m.members || []);
+      if (m.ok) setMembers(m.d.members || []);
+      setRosterNote(m.ok ? (m.d.notice || '') : `The roster could not be loaded — ${m.d.error || `HTTP ${m.status}`}`);
       setAvailModels(mo.models || []);
     } catch {}
   }, []);
@@ -150,7 +158,7 @@ export default function Council() {
       </div>
 
       {/* ── ROSTER ─────────────────────────────────────────────── */}
-      {tab === 'roster' && <div role="tabpanel" id="council-panel-roster" aria-labelledby="council-tab-roster"><RosterPanel members={members} availModels={availModels} onChange={loadRoster} /></div>}
+      {tab === 'roster' && <div role="tabpanel" id="council-panel-roster" aria-labelledby="council-tab-roster"><RosterPanel members={members} availModels={availModels} onChange={loadRoster} notice={rosterNote} /></div>}
 
       {/* ── HISTORY ────────────────────────────────────────────── */}
       {tab === 'history' && (
@@ -265,7 +273,7 @@ export default function Council() {
 }
 
 // ── Roster management: build / assign models / delete council members ──────
-function RosterPanel({ members, availModels, onChange }) {
+function RosterPanel({ members, availModels, onChange, notice = '' }) {
   const [adding, setAdding] = useState(false);
   const [form, setForm] = useState({ label: '', persona: '', model: '' });
   const [editingId, setEditingId] = useState(null);
@@ -287,7 +295,10 @@ function RosterPanel({ members, availModels, onChange }) {
     const [provider, model] = form.model.split('|');
     const r = await fetch('/api/council/members', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ label: form.label, persona: form.persona, provider, model }) }).catch(() => null);
     if (!r || !r.ok) { setErr((await r?.json().catch(() => ({})))?.error || 'Could not add that member.'); return; }
-    setErr('');
+    // An add that found the roster unreadable moved it aside and started a
+    // new one holding only this member — said, not left to be discovered.
+    const d = await r.json().catch(() => ({}));
+    setErr(d.notice || '');
     setForm({ label: '', persona: '', model: '' }); setAdding(false); onChange();
   };
 
@@ -338,6 +349,7 @@ function RosterPanel({ members, availModels, onChange }) {
           No council members yet — add one below.
         </div>
       )}
+      {notice && <div role="alert" style={{ fontSize: 11.5, color: 'var(--amber)', background: 'var(--amber-dim)', border: '1px solid var(--amber-dim)', borderRadius: 6, padding: '7px 11px', marginBottom: 8, lineHeight: 1.5 }}>{notice}</div>}
       {err && <div role="status" style={{ fontSize: 11.5, color: 'var(--amber)', background: 'var(--amber-dim)', border: '1px solid var(--amber-dim)', borderRadius: 6, padding: '7px 11px', marginBottom: 8, lineHeight: 1.5 }}>{err}</div>}
 
       {members.map(m => (

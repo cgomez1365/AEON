@@ -76,8 +76,11 @@ export function createLifecycleClient({ base = '', fetchImpl } = {}) {
   }
 
   const enc = (id) => encodeURIComponent(String(id || ''));
-  const change = (action) => async (id) => {
-    const r = await request('POST', `/api/build/blocks/${enc(id)}/${action}`);
+  // `body` carries the operator's confirmations. Remove of a block git tracks
+  // is refused (409 code 'git_tracked') until the body says {tracked:true};
+  // with no way to send it, Settings' Remove could only fail (sweep C32).
+  const change = (action) => async (id, body = {}) => {
+    const r = await request('POST', `/api/build/blocks/${enc(id)}/${action}`, body);
     return r.ok ? { ...r, message: describeChange(action, id, r.data) } : r;
   };
 
@@ -106,6 +109,6 @@ export function createLifecycleClient({ base = '', fetchImpl } = {}) {
 export function describeInstall(id, data = {}) {
   const sha = data.sha ? ` Verified against the store (SHA-256 ${String(data.sha).slice(0, 12)}…).` : '';
   if (data.stage === 'live') return `${id} installed and stopped, as every new block lands.${sha} Press Start to run it. ${UI_NOTE}`;
-  if (data.stage === 'queued') return `${id} is waiting for your approval (its permissions need a review) — approve it in Master → approvals, then Start it.${sha}`;
+  if (data.stage === 'queued') return `${id} is waiting for your approval (its permissions need a review) — approve it in Settings → Agent, then Start it.${sha}`;
   return `${id}: ${data.stage || 'installed'}.${sha} ${UI_NOTE}`;
 }

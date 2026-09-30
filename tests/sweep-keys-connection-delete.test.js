@@ -26,6 +26,7 @@ const express = require('express');
 const mountConnections = require('../src/blocks/settings/api/connections.js');
 
 const forgotten = [];
+const storeHolds = new Set(); // what Settings' key store holds, for this test
 const dehydrated = [];
 let server;
 let base;
@@ -36,6 +37,7 @@ beforeAll(async () => {
   mountConnections(app, {
     forgetKey: (v) => { forgotten.push(v); return 1; },
     dehydrateProvider: (p) => { dehydrated.push(p); return { ok: true }; },
+    providerSecretHeld: (v) => storeHolds.has(v),
   });
   server = await new Promise((r) => { const s = app.listen(0, '127.0.0.1', () => r(s)); });
   base = `http://127.0.0.1:${server.address().port}`;
@@ -71,5 +73,42 @@ describe('DELETE /api/connections/:id', () => {
     const r = await del('/api/connections/sha');
     expect(r.keptKeys).toEqual(['shared-ref']);
     expect(forgotten).toEqual([]);
+  });
+});
+
+// Review follow-up: forgetKey is by value. A key another connection holds under
+// its own ref, or that Settings' key store holds, is still configured.
+describe('a deleted connection\'s key that is still held elsewhere keeps serving', () => {
+  it('the same key saved on another connection under another ref', async () => {
+    forgotten.length = 0;
+    expect((await conn('dupa', 'sk-same-value-twice')).ok).toBe(true);
+    expect((await conn('dupb', 'sk-same-value-twice')).ok).toBe(true);
+    const r = await del('/api/connections/dupa');
+    expect(r.removedKeys).toEqual(['custom-dupa']);
+    expect(forgotten).toEqual([]);
+  });
+
+  it('the same key in Settings\' key store', async () => {
+    forgotten.length = 0;
+    storeHolds.add('sk-also-in-the-store');
+    try {
+      expect((await conn('solo', 'sk-also-in-the-store')).ok).toBe(true);
+      await del('/api/connections/solo');
+      expect(forgotten).toEqual([]);
+    } finally { storeHolds.clear(); }
+  });
+
+  it('one key of a pool, removed, while another connection holds the same value', async () => {
+    forgotten.length = 0;
+    expect((await conn('poola', 'sk-pool-first')).ok).toBe(true);
+    expect((await post('/api/connections/poola/keys', { apiKey: 'sk-pool-shared', label: 'two' })).ok).toBe(true);
+    expect((await conn('poolb', 'sk-pool-shared')).ok).toBe(true);
+    const r = await del('/api/connections/poola/keys/poola-two');
+    expect(r.ok).toBe(true);
+    expect(forgotten).toEqual([]);
+    // and a key held nowhere else is still forgotten
+    expect((await post('/api/connections/poola/keys', { apiKey: 'sk-pool-only-here', label: 'three' })).ok).toBe(true);
+    await del('/api/connections/poola/keys/poola-three');
+    expect(forgotten).toEqual(['sk-pool-only-here']);
   });
 });

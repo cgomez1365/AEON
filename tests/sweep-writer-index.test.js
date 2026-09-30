@@ -163,6 +163,77 @@ describe.each(Object.keys(shapes))('Writer index under %s', (shape) => {
       expect(r.body.error).toMatch(/ENOSPC/);
       expect(w.index().map((d) => d.id).sort()).toEqual(['doc-a', 'doc-b', 'doc-c']);
       expect(fs.readdirSync(w.dir).filter((f) => f.includes('.tmp-'))).toEqual([]);
+      // The new document the list could not name is taken back: the client
+      // never got its id, and an orphan would come back as a duplicate draft.
+      expect(fs.existsSync(path.join(w.dir, 'doc-d.md'))).toBe(false);
     } finally { vi.restoreAllMocks(); await w.close(); }
   });
+
+  // Review follow-ups (2026-09-29).
+  it('a delete whose index write fails answers 500 instead of never answering', async () => {
+    const w = await start(shape);
+    const realWrite = fs.writeFileSync;
+    try {
+      await threeDrafts(w);
+      vi.spyOn(fs, 'writeFileSync').mockImplementation(function (file, data, ...rest) {
+        if (path.basename(String(file)).startsWith('_index.json')) throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' });
+        return realWrite.call(fs, file, data, ...rest);
+      });
+      const r = await w.call('DELETE', '/api/writer/doc/doc-a');
+      vi.restoreAllMocks();
+      expect(r.status).toBe(500);
+      expect(r.body.error).toMatch(/Could not delete the document: ENOSPC/);
+    } finally { vi.restoreAllMocks(); await w.close(); }
+  });
+
+  it('the first save on a fresh install reports no recovery', async () => {
+    const w = await start(shape);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect((await w.call('POST', '/api/writer/doc', { id: 'doc-first', title: 'First', content: '<p>x</p>' })).status).toBe(200);
+      expect(warn.mock.calls.filter(([m]) => /\[WRITER\]/.test(String(m)))).toEqual([]);
+      expect(w.index().map((d) => d.id)).toEqual(['doc-first']);
+    } finally { warn.mockRestore(); await w.close(); }
+  });
+
+  it('an index that parses to something other than a list is kept aside before the rebuild', async () => {
+    const w = await start(shape);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await threeDrafts(w);
+      fs.writeFileSync(w.indexFile, JSON.stringify({ docs: [{ id: 'doc-a', title: 'Mine' }] }));
+      const list = await w.call('GET', '/api/writer/docs');
+      expect(list.body.map((d) => d.id).sort()).toEqual(['doc-a', 'doc-b', 'doc-c']);
+      const aside = fs.readdirSync(w.dir).find((f) => f.startsWith('_index.json.unreadable-'));
+      expect(aside).toBeTruthy();
+      expect(JSON.parse(fs.readFileSync(path.join(w.dir, aside), 'utf8'))).toEqual({ docs: [{ id: 'doc-a', title: 'Mine' }] });
+    } finally { warn.mockRestore(); await w.close(); }
+  });
+
+  // chmod does not stop root, and Windows ignores the mode bits.
+  it.skipIf(process.platform === 'win32' || (process.getuid && process.getuid() === 0))(
+    'an index that exists but cannot be read is shown rebuilt, never written over, and a save says why', async () => {
+      const w = await start(shape);
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        await threeDrafts(w);
+        const tagged = await w.call('POST', '/api/writer/doc', { id: 'doc-a', title: 'My Custom Title', content: '<h1>Alpha plan</h1>', tags: ['client', 'q3'] });
+        expect(tagged.status).toBe(200);
+        const before = fs.readFileSync(w.indexFile, 'utf8');
+        fs.chmodSync(w.indexFile, 0o000);
+        try {
+          const list = await w.call('GET', '/api/writer/docs');
+          expect(list.status).toBe(200);
+          expect(list.body.map((d) => d.id).sort()).toEqual(['doc-a', 'doc-b', 'doc-c']);
+          const save = await w.call('POST', '/api/writer/doc', { id: 'doc-new', title: 'New', content: '<p>n</p>' });
+          expect(save.status).toBe(500);
+          expect(save.body.error).toMatch(/document list \(_index\.json\) could not be read .*left untouched and nothing was written/);
+          expect(fs.existsSync(path.join(w.dir, 'doc-new.md'))).toBe(false);
+          expect((await w.call('DELETE', '/api/writer/doc/doc-b')).status).toBe(500);
+          expect(fs.existsSync(path.join(w.dir, 'doc-b.md'))).toBe(true);
+        } finally { fs.chmodSync(w.indexFile, 0o644); }
+        expect(fs.readFileSync(w.indexFile, 'utf8')).toBe(before);
+        expect(w.index().find((d) => d.id === 'doc-a')).toMatchObject({ title: 'My Custom Title', tags: ['client', 'q3'] });
+      } finally { warn.mockRestore(); await w.close(); }
+    });
 });

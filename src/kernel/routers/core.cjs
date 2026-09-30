@@ -72,17 +72,11 @@ module.exports = function createCoreRouter(deps) {
     // every install regardless of how many were saved. chat-stream.cjs had
     // the identical stale path and was corrected; this copy was missed, which
     // is the argument for the shared constant rather than a third hardcoding.
-    let memoryCount = 0;
-    try {
-      const memFile = path.join(
-        VAULT_ROOT || path.join(__dirname, '..', '..', 'blocks', 'aeon_matrix', 'data', 'Vault'),
-        'Agents', 'Aeon', 'memory', 'memories.json'
-      );
-      if (fs.existsSync(memFile)) {
-        const parsed = JSON.parse(fs.readFileSync(memFile, 'utf8'));
-        memoryCount = Array.isArray(parsed) ? parsed.length : 0;
-      }
-    } catch {}
+    //
+    // Read through the kernel's one reader: an unreadable store is reported
+    // as `memory.error` with the count unknown (null), never as 0 (sweep C12).
+    const memStore = require('../context.cjs').readMemoryStore(VAULT_ROOT);
+    const memoryStatus = memStore.error ? { count: null, error: memStore.error } : { count: memStore.memories.length };
 
     let tasks = [];
     try {
@@ -99,7 +93,7 @@ module.exports = function createCoreRouter(deps) {
       roulette: settings.roulette || false,
       providers,
       vault: { unlocked: vaultUnlocked },
-      memory: { count: memoryCount },
+      memory: memoryStatus,
       tasks: { total: tasks.length, active: tasks.filter(t => t.enabled).length, list: tasks },
       telemetry: { calls: _llmTelemetry.totalCalls, tokens: _llmTelemetry.totalTokens, uptime: Math.floor(process.uptime()) },
       // B7 — IDE mode is visible state, never subtle: banner text present whenever active.

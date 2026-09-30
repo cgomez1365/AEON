@@ -76,4 +76,43 @@ describe('the wizard\'s restart', () => {
     expect(doRestart).not.toMatch(/catch \{\}/);
     expect(doRestart).not.toMatch(/reload in ~15s/);
   });
+
+  // Review follow-up: /api/health is Host OS's route. With Host OS stopped or
+  // removed, or a relaunch that never boots, the wait polled forever with
+  // every wizard button disabled and nothing said.
+  it('the wait after a restart gives up, says where to look, and counts any answer once AEON was down', () => {
+    const src = fs.readFileSync(path.join(ROOT, 'src', 'blocks', 'settings', 'index.jsx'), 'utf8');
+    const start = src.indexOf('function SetupWizard(');
+    const body = src.slice(start, src.indexOf('\nfunction ', start + 1));
+    const doRestart = body.slice(body.indexOf('const doRestart'), body.indexOf('if (!status) return null;'));
+    expect(doRestart).toMatch(/if \(Date\.now\(\) - started > RESTART_WAIT_MS\) \{\s*setBusy\(false\);/);
+    expect(doRestart).toMatch(/Check the window AEON was started from/);
+    expect(doRestart).toMatch(/h\.ok \|\| \(sawDown && h\.status !== 502 && h\.status !== 504\)/);
+    expect(src).toMatch(/const RESTART_WAIT_MS = \d+;/);
+  });
+});
+
+describe('Settings key screens report a refused save and a refused key', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'src', 'blocks', 'settings', 'index.jsx'), 'utf8');
+  const fn = (name) => { const i = src.indexOf(`function ${name}(`); return src.slice(i, src.indexOf('\nfunction ', i + 1)); };
+
+  it('Web Search: a save the route refused is not "Saved", and a refused key is not "no key"', () => {
+    const panel = fn('SearchKeysPanel');
+    expect(panel).toMatch(/if \(!r\.ok\) \{[\s\S]*?showToast\(d\?\.error \? `Not saved — \$\{d\.error\}`/);
+    expect(panel.indexOf('if (!r.ok)')).toBeLessThan(panel.indexOf('setSaved(true)'));
+    expect(panel).toMatch(/p\.configured && p\.connected === false/);
+    expect(panel).toMatch(/'⚠ key not working'/);
+    expect(src).toMatch(/<SearchKeysPanel providers=\{providers\} nervousSystem=\{nervousSystem\}/);
+  });
+
+  it('Account identities: a refused key save shows the route\'s reason', () => {
+    expect(fn('AccountIdentities')).toMatch(/showToast\(d\?\.error \? `Not saved — \$\{d\.error\}` : `Save failed \(HTTP \$\{r\.status\}\)`, 'error'\)/);
+  });
+
+  it('Export backup needs no password field before an account exists', () => {
+    const exp = fn('ExportCredentialsButton');
+    expect(exp).toMatch(/fetch\('\/api\/auth\/status'\)/);
+    expect(exp).toMatch(/disabled=\{busy \|\| \(hasAccount && !password\)\}/);
+    expect(exp).toMatch(/No account yet — this computer only\./);
+  });
 });

@@ -32,6 +32,10 @@ const flags = {
   json:  argv.includes('--json'),
   noLlm: argv.includes('--no-llm'),
   yes:   argv.includes('--yes') || argv.includes('-y'),
+  // `aeon block remove <id> --tracked`: the operator confirms that git tracks
+  // the block (a shipped block in a checkout). The kernel refuses that remove
+  // without it (sweep C32), and its refusal names this flag.
+  tracked: argv.includes('--tracked'),
 };
 function flagValue(...names) {
   for (const n of names) {
@@ -430,6 +434,7 @@ const commands = {
 
   ${c.dim('aeon block stop council')}       ${c.dim('# its API answers 503; the rest of AEON is untouched')}
   ${c.dim('aeon block remove council')}     ${c.dim('# moved aside to <data>/removed-blocks/, never deleted')}
+  ${c.dim('aeon block remove council --yes --tracked')} ${c.dim('# a shipped block git tracks: moved aside; restore it before git add -A / commit -a / pull')}
   ${c.dim('aeon block restore council')}    ${c.dim('# the latest removed copy comes back')}
   ${c.dim('then: npm run build, and reload the tab, for the screen to follow')}`);
       process.exit(1);
@@ -443,7 +448,10 @@ const commands = {
       if (!/^y(es)?$/i.test(answer.trim())) { console.log(`  ${c.dim('cancelled')}\n`); return; }
     }
     const [method, route] = routes[sub]();
-    const res = await client.withAuth(() => client.request(method, route, method === 'POST' ? {} : undefined));
+    // Without the body, `--tracked` — the remedy the kernel's own refusal
+    // names — was dropped, and the same 409 came back: a remedy that looped.
+    const body = method === 'POST' ? (sub === 'remove' && flags.tracked ? { tracked: true } : {}) : undefined;
+    const res = await client.withAuth(() => client.request(method, route, body));
     if (flags.json) console.log(JSON.stringify(res.data, null, 2));
     if (!res.ok) {
       if (!flags.json) console.error(`\n  ${c.red('✗')} ${res.data?.error || `failed (${res.status})`}\n`);
@@ -587,6 +595,7 @@ ${c.bold('FLAGS')}
   --json                    machine-readable output
   --no-llm                  intent matching only, never call a model
   -y, --yes                 pre-confirm dangerous commands
+  --tracked                 block remove: confirm git tracks the block (a shipped block in a checkout)
 
 ${c.dim('Examples')}
   ${c.dim('$')} aeon status

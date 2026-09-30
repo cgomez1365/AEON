@@ -134,3 +134,24 @@ describe('an unreadable roster is kept, never written over', () => {
     expect(JSON.parse(fs.readFileSync(historyFile(), 'utf8'))).toHaveLength(1);
   });
 });
+
+// Review follow-up: the server moved an unreadable roster aside and said so in
+// `notice`, and answered 500 for one it could not read — the Roster tab showed
+// neither (a 500 fell back to an empty roster, "No council members yet").
+describe('the Roster tab shows what the server said about the roster', () => {
+  const UI = path.join(path.dirname(API), '..', 'index.jsx');
+  const src = fs.readFileSync(UI, 'utf8').replace(/^\s*\/\/.*$/gm, '');
+
+  it('loadRoster keeps the roster on a failed read and says why; a notice is shown', () => {
+    const load = src.slice(src.indexOf('const loadRoster = useCallback('), src.indexOf('useEffect(() => { loadRoster(); }'));
+    expect(load).toMatch(/if \(m\.ok\) setMembers\(m\.d\.members \|\| \[\]\);/);
+    expect(load).toMatch(/setRosterNote\(m\.ok \? \(m\.d\.notice \|\| ''\) : `The roster could not be loaded — /);
+    expect(src).toMatch(/<RosterPanel [^>]*notice=\{rosterNote\}/);
+    expect(src).toMatch(/\{notice && <div role="alert"/);
+  });
+
+  it('an add that found the roster unreadable says so', () => {
+    const add = src.slice(src.indexOf('const add = async () => {'), src.indexOf('const patch = async'));
+    expect(add).toMatch(/setErr\(d\.notice \|\| ''\);/);
+  });
+});

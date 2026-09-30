@@ -97,6 +97,7 @@ module.exports = function createMemoryRouter(deps) {
     const err = new Error(`The memory store ${STORE} is unreadable (${why}). It was left untouched and nothing was saved — `
       + 'fix or restore that file (every memory also has an <id>.md copy beside it), then try again.');
     err.status = 503;
+    err.memoryStore = true; // only this error's status is passed on (see distill)
     console.error(`[MEMORY] ${err.message}`);
     throw err;
   };
@@ -108,10 +109,15 @@ module.exports = function createMemoryRouter(deps) {
   };
   // Atomic: a crash or an unplug mid-write leaves the previous file whole,
   // not half of a new one. The store lives on an exFAT drive on carried installs.
+  // The temp file is flushed to the disk before the rename: without the fsync
+  // an unplug just after the rename could still leave the new name holding a
+  // short file, and the comment above would only be true of a crash.
   const save = (all) => {
     const tmp = `${STORE}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
     try {
-      fs.writeFileSync(tmp, JSON.stringify(all, null, 2));
+      const fd = fs.openSync(tmp, 'w');
+      try { fs.writeFileSync(fd, JSON.stringify(all, null, 2)); fs.fsyncSync(fd); }
+      finally { fs.closeSync(fd); }
       fs.renameSync(tmp, STORE);
     } catch (e) {
       try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {}
@@ -460,7 +466,13 @@ ${String(transcript).slice(0, 8000)}`;
       // Name the session that was read. A button that silently distils
       // something is a button nobody trusts twice.
       res.json({ ok: true, added, candidates: usable.length, session: usedSession });
-    } catch (e) { res.status(e.status || 500).json({ error: 'distill failed: ' + e.message }); }
+    } catch (e) {
+      // The store's 503 is ours to pass on. A status on anything else belongs
+      // to whoever threw it — a provider's 401 or 429 surfacing through
+      // kernelLLM — and is not this route's answer: a 401 here reads as "your
+      // AEON session ended" to every client.
+      res.status(e.memoryStore ? e.status : 500).json({ error: 'distill failed: ' + e.message });
+    }
   });
 
   return router;

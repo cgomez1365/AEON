@@ -48,15 +48,18 @@ export default function MemoryCore() {
 
   // A store the server cannot read answers 503 with the reason. Read as
   // `d.memories || []`, that rendered "0 MEMORIES · No memories match." —
-  // the very lie the server now refuses to tell.
+  // the very lie the server now refuses to tell. A failed reload also drops
+  // the list an earlier load showed: left up, it offered edit, pin and delete
+  // on memories the server can no longer read, under the "not loaded" alert.
   const load = useCallback(async () => {
+    const failed = (why) => { setMemories([]); setLoadError(why); };
     try {
       const r = await fetch('/api/memory');
       const d = await r.json().catch(() => ({}));
-      if (!r.ok) { setLoadError(d.error || `the memory store did not load (server answered ${r.status})`); return; }
+      if (!r.ok) { failed(d.error || `the memory store did not load (server answered ${r.status})`); return; }
       setLoadError('');
       setMemories(d.memories || []);
-    } catch (e) { setLoadError(`the memory store did not load: ${e.message}`); }
+    } catch (e) { failed(`the memory store did not load: ${e.message}`); }
   }, []);
   useEffect(() => { load(); }, [load]);
 

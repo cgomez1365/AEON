@@ -201,6 +201,8 @@ module.exports = function ({ kernelLLM, loadSettings: loadSettingsDep, VAULT_ROO
         memory: mem.count,
         memoryConsidered: mem.considered,
         memoryDropped: mem.dropped,
+        // A store that could not be read is not "0 memories" (sweep C12).
+        memoryError: mem.memoryError || null,
         skillsDropped: mem.skillsDropped,
         autoMemory: mem.autoMemoryEnabled,
         wake: mem.wake,

@@ -51,14 +51,14 @@ should read the answer and show `error`/`remedy` (kernel-side change, reported).
 | Route | Method | What |
 |---|---|---|
 | `/api/fs/list` | POST | List a folder (`{dirPath}`); no path = the Vault. Answers `path`, the absolute folder listed. |
-| `/api/fs/read` | POST | A document's text (PDF/HTML/text via the kernel extractor), summarized when a chat model is assigned. |
-| `/api/fs/write` | POST | Write a file. Overwriting an existing file needs the hub unlocked (423). |
+| `/api/fs/read` | POST | A document's text (PDF/HTML/text via the kernel extractor), summarized when a chat model is assigned. With `{raw:true}` (the Files editor): the file's own bytes as UTF-8, whole or refused — 413 over 1 MB, 415 when not UTF-8 text; no summary; answers `eol`. |
+| `/api/fs/write` | POST | Write a file. Overwriting an existing file needs the hub unlocked (423). Refuses (409) to write text ending in the /read preview marker over an existing file. |
 | `/api/fs/mkdir` | POST | Create a folder (allowed while locked — adding is not editing). |
 | `/api/fs/rename` | POST | Rename or move (`{from, to}`); needs unlocked; never overwrites. |
 | `/api/fs/delete` | POST | Delete a file or folder; needs unlocked. |
 | `/api/fs/upload` | POST | Multipart, up to 20 files × 50 MB, into `targetDir` (no folder = the Vault). Replacing an existing file needs unlocked (423). |
 | `/api/fs/serve` | GET | Stream a file (`?path=`, `&download=1`); only known-safe types render inline. |
-| `/api/fs/lock` | GET/POST | The add-only lock (default locked, persisted under the block's data folder). |
+| `/api/fs/lock` | GET/POST | The add-only lock (default locked, persisted under the block's data folder). POST answers the state read back from disk; a write that did not persist is a 500 with `locked` = the real state. |
 
 **One boundary for all of them** (`safePath`): the path must resolve inside the
 operator's home, the workspace, or the Vault, and no segment may be a credential

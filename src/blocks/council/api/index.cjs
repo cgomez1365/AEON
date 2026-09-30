@@ -496,7 +496,17 @@ module.exports = function createCompareRouter(deps) {
       // 4096-token cap (services/ai.js) can truncate a full synthesis reply.
       // (The request-timeout side of this bug class is already covered by
       // services/ai.js's global 240s fetchTimeout default — see deep_research.)
-      text = await kernelLLM(prompt, { provider: engine, model, max_tokens: 6144 });
+      //
+      // returnMeta: a named provider that fails is answered by the next one in
+      // the kernel's chain, and Compare showed that text under this pane's
+      // model — compared and voted on as the wrong model's work. A pane shows
+      // only its own model's words; a substitute is reported, not shown.
+      const r = await kernelLLM(prompt, { provider: engine, model, max_tokens: 6144, returnMeta: true });
+      if (r && typeof r === 'object' && r.fallback) {
+        error = `${engine} could not answer; ${r.provider}/${r.model || 'default'} answered instead, so nothing is shown for ${model}.`;
+      } else {
+        text = typeof r === 'string' ? r : (r?.text || '');
+      }
     } catch (e) {
       error = e.message;
     }

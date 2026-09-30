@@ -243,7 +243,9 @@ module.exports = function createFsRouter(deps) {
     }
     const refuseTooBig = (bytes) => res.status(413).json({
       correlation_id: req.correlationId || 'AEON-SYS',
-      error: `${path.basename(resolved)} is ${(bytes / 1048576).toFixed(1)} MB (${bytes.toLocaleString('en-US')} bytes) — over the ${EDIT_MAX_BYTES / 1048576} MB the editor opens whole. It will not open part of a file: saving part would cut the real file short.`,
+      // Bytes on both sides: "1.0 MB — over the 1 MB" read as a contradiction
+      // for a file just past the cap.
+      error: `${path.basename(resolved)} is ${bytes.toLocaleString('en-US')} bytes (${(bytes / 1048576).toFixed(1)} MB) — over the ${EDIT_MAX_BYTES.toLocaleString('en-US')} bytes (${EDIT_MAX_BYTES / 1048576} MB) the editor opens whole. It will not open part of a file: saving part would cut the real file short.`,
       remedy: 'Download it and edit it in a text editor on this computer.',
       path: resolved, bytes, limit: EDIT_MAX_BYTES,
     });
@@ -389,11 +391,19 @@ module.exports = function createFsRouter(deps) {
     // A screen built before the raw read (the UI needs `npm run build`, the
     // server only a restart) or an agent that /read then /writefile would
     // otherwise still do it. Saving a preview as a NEW file stays allowed.
+    // It covers TRUNCATED previews only. A stale screen still opens an .html
+    // file of 8,000 characters or fewer as the tag-stripped text /read
+    // returns, with no marker to catch, so this fix needs `npm run build` on
+    // every install, not only a pull and a restart.
+    //
+    // A file an earlier save already cut short ends in the same marker, and
+    // the raw editor opens it whole — so the message names both cases: an
+    // operator repairing one is not told they opened a preview.
     if (typeof content === 'string' && PREVIEW_TAIL_RE.test(content) && fs.existsSync(target)) {
       return res.status(409).json({
         correlation_id: req.correlationId || 'AEON-SYS',
-        error: `This text ends in "[… more characters — ask about it, or open the file]": it is the ${PREVIEW_CHARS.toLocaleString('en-US')}-character preview /read returns, not the whole file. Writing it would cut ${path.basename(target)} short, so nothing was written.`,
-        remedy: 'Reopen the file in the File Manager (rebuild AEON with npm run build if the screen is older than this server) and save from there, or remove the marker line if this text is really meant to replace the file.',
+        error: `This text ends in the /read preview marker "[… more characters — ask about it, or open the file]". Either it is the ${PREVIEW_CHARS.toLocaleString('en-US')}-character preview /read returns, and writing it would cut ${path.basename(target)} short, or ${path.basename(target)} is a file an earlier save already cut short. Nothing was written.`,
+        remedy: 'Remove the marker line to save. If you opened a preview, reopen the file in the File Manager instead (rebuild AEON with npm run build if the screen is older than this server) and save from there.',
         path: target,
       });
     }

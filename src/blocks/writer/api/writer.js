@@ -60,15 +60,44 @@ module.exports = (app, deps) => {
   // wrote it back holding only the open draft. Every other draft vanished from
   // the list while its <id>.md sat on disk with nothing pointing at it.
   //
-  // Now the write is tmp-then-rename (writeJSON), an unparseable index is moved
-  // aside and named in the log (readJSON), and a missing or unreadable index is
-  // rebuilt from the documents themselves rather than starting from empty.
-  function loadDocs() {
-    const docs = storage.readJSON('_index.json', null);
-    if (Array.isArray(docs)) return docs;
+  // Now the write is tmp-then-rename (writeJSON), an index that will not parse
+  // (or parses to something other than a list) is moved aside and named in the
+  // log, and the list is rebuilt from the documents themselves rather than
+  // starting from empty.
+  //
+  // An index that EXISTS but cannot be read at all (EACCES, EIO on the drive)
+  // is different: its titles and tags are nowhere else, and the fault may pass.
+  // The list is still shown, rebuilt, but nothing is written over the index —
+  // a save or delete refuses with the reason (forWrite) instead of replacing
+  // the operator's titles with first lines and dropping every tag.
+  const INDEX = '_index.json';
+  const _indexWarned = new Set();
+  function readIndex() {
+    let text;
+    try { text = fs.readFileSync(INDEX, 'utf8'); }
+    catch (e) { return e.code === 'ENOENT' ? { state: 'missing' } : { state: 'unreadable', why: e.message }; }
+    let docs, why = null;
+    try { docs = JSON.parse(text); if (!Array.isArray(docs)) why = 'not a list of documents'; } catch (e) { why = e.message; }
+    if (!why) return { state: 'ok', docs };
+    const aside = `${INDEX}.unreadable-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+    try { fs.renameSync(INDEX, aside); }
+    catch (e) { return { state: 'unreadable', why: `${why}, and it could not be moved aside (${e.message})` }; }
+    console.warn(`[WRITER] ${INDEX} could not be read (${why}); kept as ${aside}.`);
+    return { state: 'recovered' };
+  }
+  function loadDocs({ forWrite = false } = {}) {
+    const r = readIndex();
+    if (r.state === 'ok') return r.docs;
+    if (r.state === 'unreadable') {
+      const msg = `the document list (${INDEX}) could not be read (${r.why}), so it was left untouched`;
+      if (forWrite) throw Object.assign(new Error(`${msg} and nothing was written. Fix the file's permissions or the drive, then try again.`), { indexUnreadable: true });
+      if (!_indexWarned.has(msg)) { _indexWarned.add(msg); console.warn(`[WRITER] ${msg}; the list shown is rebuilt from the document files (titles are first lines, no tags).`); }
+      return rebuildIndex();
+    }
     const rebuilt = rebuildIndex();
     // Written straight back so the recovery happens once and is said once,
-    // not re-scanned (and re-dated) on every list until the next save.
+    // not re-scanned (and re-dated) on every list until the next save. A
+    // missing index with no documents is a fresh install — nothing to say.
     if (rebuilt.length) {
       console.warn(`[WRITER] document list rebuilt from ${rebuilt.length} document file(s); titles are each document's first line, tags could not be recovered.`);
       try { saveDocs(rebuilt); } catch { /* the next save writes it */ }
@@ -260,11 +289,24 @@ OUTPUT FORMAT — the document is HTML. Return valid HTML using only these tags:
     // A write that throws must still answer. This handler is async and
     // Express 4 does not catch a rejected handler, so a full disk left the
     // request hanging with no answer — and the editor runs one save at a time.
+    //
+    // The list is read BEFORE the document is written: a fresh install's first
+    // save then finds no documents rather than logging a "rebuild" of the one
+    // it just wrote, and an index that cannot be read stops the save before
+    // anything is written. A NEW document whose list entry could not be
+    // written is taken back — the client never got its id, so each retry
+    // minted another <id>.md, and a later rebuild listed every one of them as
+    // a duplicate draft.
     try {
+      const docs = loadDocs({ forWrite: true }).filter(d => d.id !== docId);
+      const existed = fs.existsSync(`${docId}.md`);
       fs.writeFileSync(`${docId}.md`, content || '');
-      const docs = loadDocs().filter(d => d.id !== docId);
       docs.unshift({ id: docId, title: title || 'Untitled', tags: tags || [], updated: now, size: (content || '').length });
-      saveDocs(docs);
+      try { saveDocs(docs); }
+      catch (e) {
+        if (!existed) { try { fs.unlinkSync(`${docId}.md`); } catch { /* the rebuild lists it; nothing lost */ } }
+        throw e;
+      }
     } catch (e) {
       return res.status(500).json({ error: `Could not save the document: ${e.message}` });
     }
@@ -284,9 +326,18 @@ OUTPUT FORMAT — the document is HTML. Return valid HTML using only these tags:
     if (isVercel && supabase) {
       try { await supabase.from('writer_docs').delete().eq('id', req.params.id); } catch {}
     } else {
-      try { fs.unlinkSync(`${req.params.id}.md`); } catch {}
-      const _docsAfterDelete = loadDocs().filter(d => d.id !== req.params.id);
-      saveDocs(_docsAfterDelete);
+      // Wrapped like POST: a throw here (a full disk writing the index, an
+      // index that cannot be read) rejected this async handler, Express 4 does
+      // not catch that, and the request never answered — the editor's delete
+      // waited forever. The list is read first, so an unreadable one refuses
+      // before the document is gone.
+      try {
+        const docs = loadDocs({ forWrite: true });
+        try { fs.unlinkSync(`${req.params.id}.md`); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+        saveDocs(docs.filter(d => d.id !== req.params.id));
+      } catch (e) {
+        return res.status(500).json({ error: `Could not delete the document: ${e.message}` });
+      }
     }
     res.json({ ok: true });
   });

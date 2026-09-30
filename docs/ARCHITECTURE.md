@@ -111,7 +111,10 @@ drive carries the operator's keys on purpose. Explicit settings still win (`AEON
 then `AEON_HOME`). Launchers for macOS, Windows and Linux pick a free port, because the
 host may already run its own AEON on 3001; the kernel never signals another process
 (`src/kernel/portConflict.cjs`). Audit a drive with
-`node scripts/verify-usb.js --target <drive> --carry-home`.
+`node scripts/verify-usb.js --target <drive> --carry-home`. The builder refuses to replace a
+drive `AEON/` that is a git checkout (update it in place with `git pull`); `--keep-app`
+leaves that folder as it is and refreshes only the Node runtimes, launchers and
+`README_DRIVE.txt`.
 
 An install from before the home existed has its data inside the install directory.
 `src/kernel/homeMigration.cjs` moves it on the next launch — once, root by root, refusing a

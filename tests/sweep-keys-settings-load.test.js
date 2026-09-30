@@ -57,3 +57,37 @@ describe('loadSettings on a read that fails', () => {
     expect(settings.loadSettings().models.chat.provider).toBe('groq');
   });
 });
+
+// Review follow-up: the unread file was left in place, and the next save — a
+// change built on the defaults — replaced it with no copy kept.
+describe('saveSettings after a read that failed', () => {
+  const unread = () => fs.readdirSync(path.dirname(FILE)).filter((f) => f.startsWith(`${path.basename(FILE)}.unread-`));
+
+  it('keeps the unread file aside, named, before writing the change', () => {
+    const original = JSON.stringify({ models: { chat: { provider: 'groq', model: 'mine' } }, prefs: { theme: 'x' } });
+    fs.writeFileSync(FILE, original);
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const realRead = fs.readFileSync;
+    const spy = vi.spyOn(fs, 'readFileSync').mockImplementation((p, ...rest) => {
+      if (String(p) === FILE) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+      return realRead.call(fs, p, ...rest);
+    });
+    const next = settings.loadSettings();
+    spy.mockRestore();
+    next.prefs = { changed: true };
+    settings.saveSettings(next);
+
+    expect(unread()).toHaveLength(1);
+    expect(fs.readFileSync(path.join(path.dirname(FILE), unread()[0]), 'utf8')).toBe(original);
+    expect(JSON.parse(fs.readFileSync(FILE, 'utf8')).prefs).toEqual({ changed: true });
+    expect(err.mock.calls.join(' ')).toMatch(/kept as aeon-settings\.json\.unread-/);
+  });
+
+  it('after a good read, a save writes in place and keeps nothing aside', () => {
+    fs.writeFileSync(FILE, JSON.stringify({ models: {}, prefs: {} }));
+    const s = settings.loadSettings();
+    settings.saveSettings({ ...s, prefs: { a: 1 } });
+    expect(unread()).toEqual([]);
+    expect(JSON.parse(fs.readFileSync(FILE, 'utf8')).prefs).toEqual({ a: 1 });
+  });
+});

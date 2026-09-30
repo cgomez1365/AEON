@@ -93,6 +93,8 @@ const lrStub = {
   infer: async (_prompt, o) => {
     localCalls.push(o.model);
     if (localFails) throw new Error('local model crashed');
+    // What the runtime says for a model a role names that is not installed.
+    if (String(o.model || '').startsWith('missing-')) throw new Error(`Model "${o.model}" is not ready`);
     return { text: 'from-local', model: o.model || 'qwen-local', tokens: 3 };
   },
   inferStream: async () => { throw new Error('not used here'); },
@@ -254,7 +256,10 @@ describe('C33 — Vision never borrows Chat; unset means its own default', () =>
     const seen = [];
     const realFetch = globalThis.fetch;
     const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
-      if (!String(url).startsWith('https://api.groq.com/')) return realFetch(url, init);
+      // Fail closed: a regression that sent vision elsewhere must fail here,
+      // not try a live host. Only this suite's own 127.0.0.1 fakes pass.
+      if (/^http:\/\/127\.0\.0\.1:/.test(String(url))) return realFetch(url, init);
+      if (!String(url).startsWith('https://api.groq.com/')) throw new Error(`test refused network: ${url}`);
       seen.push({ url: String(url), model: JSON.parse(init.body).model });
       return new Response(JSON.stringify({ choices: [{ message: { content: 'a cat' } }], usage: { total_tokens: 4 } }), { status: 200, headers: { 'content-type': 'application/json' } });
     });
@@ -265,6 +270,130 @@ describe('C33 — Vision never borrows Chat; unset means its own default', () =>
     } finally {
       spy.mockRestore();
       delete process.env.GROQ_API_KEY;
+    }
+  });
+});
+
+// Review follow-ups (2026-09-29). Every hosted URL is refused here: only the
+// suite's 127.0.0.1 fakes and the stubbed local runtime can answer.
+const noNetwork = (allow = {}) => {
+  const realFetch = globalThis.fetch;
+  return vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+    const u = String(url);
+    if (/^http:\/\/127\.0\.0\.1:/.test(u)) return realFetch(url, init);
+    for (const [prefix, answer] of Object.entries(allow)) if (u.startsWith(prefix)) return answer(u, init);
+    throw new Error(`test refused network: ${u}`);
+  });
+};
+
+describe('C10 follow-up — a caller that NAMES Local gets Local or an error', () => {
+  it('Local named and failing is the answer: nothing is spent on the cloud', async () => {
+    localOn = true; localFails = true;
+    const err = await ai.kernelLLM('hello', { provider: 'local', returnMeta: true }).then(() => null, (e) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).toMatch(/local model crashed/);
+    expect(hits).toEqual({ primary: 0, groq: 0 });
+  });
+
+  it('Local named with no runtime says so, and spends nothing', async () => {
+    const err = await ai.kernelLLM('hello', { provider: 'local', role: 'chat', returnMeta: true }).then(() => null, (e) => e);
+    expect(err.message).toMatch(/No local model is installed/);
+    expect(hits).toEqual({ primary: 0, groq: 0 });
+  });
+
+  it('the kill-switch shape ({provider:"local"}, no model) loads Local\'s own default, not the chat role\'s cloud model', async () => {
+    localOn = true;
+    const r = await ai.kernelLLM('hello', { provider: 'local', role: 'chat', returnMeta: true });
+    expect(r).toMatchObject({ provider: 'local', text: 'from-local' });
+    expect(localCalls).toEqual([undefined]);
+  });
+});
+
+describe('Local\'s health is not spent on a model a role names that is not installed', () => {
+  it('three "not ready" calls do not rest Local for the roles whose model works', async () => {
+    localOn = true;
+    settingsNow.models.grading = { provider: 'local', model: 'missing-qwen3-1.7b' };
+    settingsNow.models.naming = { provider: 'local', model: 'qwen-local' };
+    for (let i = 0; i < 4; i++) await ai.kernelLLM('grade', { role: 'grading', returnMeta: true }).catch(() => null);
+    expect(ai.getProviderHealth().local?.healthy).not.toBe(false);
+    const r = await ai.kernelLLM('name this', { role: 'naming', returnMeta: true });
+    expect(r).toMatchObject({ provider: 'local', text: 'from-local' });
+  });
+});
+
+describe('Gemini\'s own failover to Local', () => {
+  it('returns the text, not the local transport\'s {text, model} wrapper', async () => {
+    localOn = true;
+    ai.GEMINI_KEY_POOL.push('AIza-stub-not-a-key');
+    const spy = noNetwork();
+    try {
+      const out = await ai.geminiRequest('hello', 'gemini-2.5-flash', ai.GEMINI_KEY_POOL.length, { returnMeta: true });
+      expect(out).toBe('from-local');
+    } finally { spy.mockRestore(); ai.GEMINI_KEY_POOL.pop(); }
+  });
+});
+
+describe('C35 follow-up — a named Claude that is rate-limited says 429', () => {
+  it('tags the error so POST /api/ai answers 429 with retryable, not 500', async () => {
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-stub-not-a-key';
+    const spy = noNetwork({
+      'https://api.anthropic.com/': async () => new Response(JSON.stringify({ error: { message: 'rate limited' } }), { status: 429 }),
+    });
+    try {
+      const err = await ai.kernelLLM('hello', { provider: 'claude', model: 'claude-sonnet-5' }).then(() => null, (e) => e);
+      expect(err).toMatchObject({ rateLimited: true, provider: 'claude' });
+      expect(hits).toEqual({ primary: 0, groq: 0 });
+    } finally { spy.mockRestore(); delete process.env.ANTHROPIC_API_KEY; }
+  });
+});
+
+describe('OpenAI assigned with only OPENAI_API_KEY', () => {
+  it('is dispatched by the non-stream chain, as readiness and the stream path say', async () => {
+    process.env.OPENAI_API_KEY = 'sk-openai-stub-not-a-key';
+    settingsNow.models.grading = { provider: 'openai', model: 'gpt-4o-mini' };
+    const seen = [];
+    const spy = noNetwork({
+      'https://api.openai.com/': async (u, init) => {
+        seen.push({ u, model: JSON.parse(init.body).model });
+        return new Response(JSON.stringify({ choices: [{ message: { content: 'from-openai' }, finish_reason: 'stop' }], usage: { total_tokens: 3 } }), { status: 200, headers: { 'content-type': 'application/json' } });
+      },
+    });
+    try {
+      const r = await ai.kernelLLM('grade', { role: 'grading', returnMeta: true });
+      expect(r).toMatchObject({ provider: 'openai', text: 'from-openai' });
+      expect(seen).toEqual([{ u: 'https://api.openai.com/v1/chat/completions', model: 'gpt-4o-mini' }]);
+      expect(hits).toEqual({ primary: 0, groq: 0 });
+    } finally { spy.mockRestore(); delete process.env.OPENAI_API_KEY; }
+  });
+});
+
+describe('the OpenRouter fallback rung asks for the free router first', () => {
+  it('with no role declaring OpenRouter, a connection listing openrouter/free is asked for it, not the paid default', async () => {
+    const asked = [];
+    const app = express();
+    app.use(express.json());
+    app.post('/v1/chat/completions', (req, res) => {
+      asked.push(req.body.model);
+      res.json({ choices: [{ message: { content: 'from-openrouter' }, finish_reason: 'stop' }], usage: { total_tokens: 2 } });
+    });
+    const server = await new Promise((r) => { const s = app.listen(0, '127.0.0.1', () => r(s)); });
+    const original = fs.readFileSync(REG_FILE, 'utf8');
+    const vault = require(VAULT_PATH);
+    await vault.setSecret('or-key', 'sk-or-stub-not-a-key');
+    const reg = JSON.parse(original);
+    reg.endpoints = [reg.endpoints[0], {
+      id: 'or-fake', provider: 'openrouter', base_url: `http://127.0.0.1:${server.address().port}/v1`, auth_ref: 'or-key',
+      reachable_from: ['local'], models: ['openai/gpt-4o-mini', 'openrouter/free', 'meta-llama/llama-3.3-70b-instruct:free'], rpm_limit: 0,
+    }];
+    fs.writeFileSync(REG_FILE, JSON.stringify(reg, null, 2));
+    modes.primary = '402';
+    try {
+      const r = await ai.kernelLLM('hello', { role: 'chat', returnMeta: true });
+      expect(r).toMatchObject({ provider: 'openrouter', text: 'from-openrouter' });
+      expect(asked).toEqual(['openrouter/free']);
+    } finally {
+      fs.writeFileSync(REG_FILE, original);
+      server.close();
     }
   });
 });

@@ -28,6 +28,8 @@ const LR_PATH = path.join(ROOT, 'services', 'local-runtime', 'index.cjs');
 const tempSecrets = fs.mkdtempSync(path.join(os.tmpdir(), 'aeon-sweep-readiness-'));
 const savedSecretsDir = process.env.AEON_SECRETS_DIR;
 process.env.AEON_SECRETS_DIR = tempSecrets;
+// Put back in afterAll: vitest runs several files per worker.
+const savedRuntimeEnv = { VERCEL: process.env.VERCEL, AEON_PORTABLE: process.env.AEON_PORTABLE };
 delete process.env.VERCEL;
 delete process.env.AEON_PORTABLE;
 const KEY_RE = /^(GROQ_API_KEY|OPENROUTER_API_KEY|ANTHROPIC_API_KEY|OPENAI_API_KEY|XAI_API_KEY|GROK_API_KEY|GEMINI_PAID_KEY|GEMINI_API_KEY|GEMINI_FREE_KEY_\d+)(_\d+)?$/;
@@ -87,6 +89,7 @@ afterAll(() => {
   for (const [p, mod] of Object.entries(savedCache)) { if (mod) require.cache[p] = mod; else delete require.cache[p]; }
   for (const [k, v] of Object.entries(savedEnv)) process.env[k] = v;
   if (savedSecretsDir === undefined) delete process.env.AEON_SECRETS_DIR; else process.env.AEON_SECRETS_DIR = savedSecretsDir;
+  for (const [k, v] of Object.entries(savedRuntimeEnv)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
   try { fs.rmSync(tempSecrets, { recursive: true, force: true }); } catch {}
 });
 

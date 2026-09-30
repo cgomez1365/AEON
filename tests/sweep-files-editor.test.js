@@ -108,6 +108,7 @@ describe('the editor opens the whole file (raw read)', () => {
     expect(r.status).toBe(413);
     expect(r.body.content).toBeUndefined();
     expect(r.body.error).toMatch(/will not open part of a file/);
+    expect(r.body.error).toMatch(/is 1,048,577 bytes \(1\.0 MB\) — over the 1,048,576 bytes/);
     expect(r.body.remedy).toBeTruthy();
     expect(llm).not.toHaveBeenCalled();
   });
@@ -186,6 +187,25 @@ describe('/fs/write will not put a preview over a real file', () => {
     expect(w.status).toBe(409);
     expect(w.body.error).toMatch(/preview/);
     expect(fs.readFileSync(file, 'utf8')).toBe(LONG);
+  });
+
+  // A file the old bug already cut short ends in the marker, and the raw
+  // editor opens it whole. The refusal must not tell the operator repairing it
+  // that they opened a preview — and must name the way through.
+  it('a file an earlier save cut short opens whole, and the refusal says so and how to save', async () => {
+    const file = path.join(root, 'damaged.md');
+    const damaged = (await post('read', { filePath: (fs.writeFileSync(file, LONG), file), summarize: false })).body.content;
+    fs.writeFileSync(file, damaged); // what the old Save left behind
+    await unlock();
+    const opened = await post('read', { filePath: file, raw: true });
+    expect(opened.status).toBe(200);
+    expect(opened.body.content).toBe(damaged);
+    const w = await post('write', { filePath: file, content: opened.body.content });
+    expect(w.status).toBe(409);
+    expect(w.body.error).toMatch(/a file an earlier save already cut short/);
+    expect(w.body.remedy).toMatch(/^Remove the marker line to save/);
+    const repaired = damaged.replace(/\r?\n\r?\n\[… \d+ more characters — ask about it, or open the file\]\s*$/, '\n');
+    expect((await post('write', { filePath: file, content: repaired })).status).toBe(200);
   });
 
   it('a preview may still be saved as a NEW file', async () => {

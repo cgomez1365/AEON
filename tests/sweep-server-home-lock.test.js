@@ -311,9 +311,15 @@ describe('server.js takes the home before it writes to it (C25)', () => {
 // child reads and moves nothing in this checkout.
 
 function serverEnv(port) {
+  // What a Windows child needs to open sockets and temp files at all — a Node
+  // child without SystemRoot/TEMP commonly fails with WSAEPROVIDERFAILEDINIT —
+  // passed through by name; everything AEON reads is still set below.
+  const winBase = Object.fromEntries(['SystemRoot', 'SYSTEMROOT', 'WINDIR', 'TEMP', 'TMP', 'COMSPEC']
+    .filter((k) => process.env[k]).map((k) => [k, process.env[k]]));
   return {
     PATH: process.env.PATH,
-    ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+    ...winBase,
+    ...(process.platform === 'win32' ? { USERPROFILE: home } : {}),
     HOME: home,
     AEON_HOME: home,
     AEON_HOME_MIGRATE: '0',

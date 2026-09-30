@@ -58,6 +58,13 @@ const PORT = Number(process.env.PORT) || 3001;
 // started a second AEON on 3002 over the same AEON-Data, and its Guardian
 // boot-revoke signed the operator out of the first (2026-09-28). The lock
 // names the running AEON's port; see src/kernel/runtime.cjs.
+//
+// Not before everything: prepareHome above has already run, so a refused
+// second AEON has made sure the home's folders exist, rewritten home.json's
+// appRoot/updatedAt, and run its legacy-root move (a no-op unless its own
+// install still holds pre-home data). The lock needs the home to exist to
+// be written, and the home it names is only settled after the move, so the
+// order stays; nothing past this point writes to a held home.
 const HOME_LOCK = require('../src/kernel/runtime.cjs').holdHome({ home: HOME_BOOT.roots.home, port: PORT, bind: bind.resolveBind(), app: ROOT });
 if (HOME_LOCK.ok === false) {
   console.error(HOME_LOCK.message);
@@ -188,6 +195,12 @@ try {
   if (mig.moved.length) console.log(`[VAULT] Moved ${mig.moved.length} key(s) from .env into the encrypted vault: ${mig.moved.join(', ')}`);
 } catch (e) { console.error('[VAULT] .env key move failed — keys left in .env:', e.message); }
 hydrateProviderSecrets(process.env);
+// A known-exposed AEON_MOBILE_SECRET in the vault is rotated here too, not
+// only by launch.js — the drive's launchers and `npm run server` never run it
+// (sweep C22). Before anything below reads the hydrated env.
+try {
+  settingsService.rotateCompromisedAtBoot({ listFile: path.join(ROOT, 'security', 'compromised-credentials.json') });
+} catch (e) { console.warn('[VAULT] known-exposed credential check failed:', e.message); }
 const cloudCredentialStore = settingsService.createCloudCredentialStore();
 const vaultCrypto = require('../src/kernel/vault.cjs');
 const vaultSync = require('../src/kernel/vaultSync.cjs');
@@ -311,6 +324,8 @@ const baseDeps = {
   fetchSerperSearch: search.fetchSerperSearch,
   fetchTavilySearch: search.fetchTavilySearch,
   fetchWebSearch: search.fetchWebSearch,
+  // What each keyed search provider last said about its key (sweep C24).
+  searchKeyStatus: search.searchKeyStatus,
   kernelLLM: ai.kernelLLM,
   upload: storage.upload, videoUpload: storage.videoUpload,
   requireShellAuth: security.requireShellAuth, WORKSPACE: storage.WORKSPACE,
@@ -323,6 +338,13 @@ const baseDeps = {
   isVercel, addRunCost: ai.addRunCost, getDailyCost: ai.getDailyCost,
   getProviderHealth: ai.getProviderHealth, getKeyPoolInfo: ai.getKeyPoolInfo,
   dehydrateProvider: ai.dehydrateProvider, forgetKey: ai.forgetKey,
+  // Is this key value held in Settings' key store? Deleting a connection must
+  // not forget a key the store still serves (settings/api/connections.js).
+  providerSecretHeld: (value) => {
+    const held = {};
+    settingsService.createProviderCredentialStore().hydrate(held);
+    return Object.values(held).includes(value);
+  },
   // A key added in Settings joins the running process's pools immediately,
   // rather than on the next boot.
   hydrateEnvFromVault: ai.hydrateEnvFromVault,

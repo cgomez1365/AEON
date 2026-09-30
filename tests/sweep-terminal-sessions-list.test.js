@@ -85,9 +85,25 @@ describe('a damaged session file is listed, not hidden', () => {
     const list = await api('GET', '/terminal/sessions');
     expect(list.status).toBe(200);
     expect(list.body).toEqual([expect.objectContaining({ id: 'on-disk-name', unreadable: true })]);
+    // Intact content, only the id disagrees: the screen says so rather than
+    // "unreadable", and offers Delete (behind a confirm) by this id.
+    expect(list.body[0]).toMatchObject({ mismatch: true, deletable: true });
     // and the id it is listed under is the one GET/DELETE actually address
     expect((await api('DELETE', '/terminal/sessions/on-disk-name')).status).toBe(200);
     expect(fs.existsSync(path.join(sessionsDir(), 'on-disk-name.json'))).toBe(false);
+  });
+
+  it('a file whose name DELETE refuses is listed as not deletable here, and a cut-off file is not a mismatch', async () => {
+    fs.mkdirSync(sessionsDir(), { recursive: true });
+    fs.writeFileSync(path.join(sessionsDir(), 'chat copy (1).json'), JSON.stringify({ id: 'chat', messages: conversation }));
+    fs.writeFileSync(path.join(sessionsDir(), 'cut-off.json'), '{"id":"cut-off","na');
+    const list = await api('GET', '/terminal/sessions');
+    const copy = list.body.find((x) => x.id === 'chat copy (1)');
+    expect(copy).toMatchObject({ unreadable: true, deletable: false });
+    expect((await api('DELETE', `/terminal/sessions/${encodeURIComponent('chat copy (1)')}`)).status).toBe(400);
+    const cut = list.body.find((x) => x.id === 'cut-off');
+    expect(cut).toMatchObject({ unreadable: true, deletable: true });
+    expect(cut.mismatch).toBeUndefined();
   });
 });
 

@@ -89,6 +89,7 @@ const LIFECYCLE = [
   ['aeon block stop <id>', 'Its API answers 503 ("block is stopped") until started. The rest of AEON is untouched.'],
   ['aeon block start <id>', 'It answers again.'],
   ['aeon block remove <id> --yes', 'Moved aside to <data>/removed-blocks/<id>@<time>, never deleted. Its API stops answering at once.'],
+  ['aeon block remove <id> --yes --tracked', 'A block git tracks (a shipped block in a checkout) is refused without --tracked: git sees its files as deleted until it is restored. Restore it before any git add -A, commit -a or pull.'],
   ['aeon block removed', 'Lists the removed copies.'],
   ['aeon block restore <id>', 'The latest removed copy comes back and is mounted again.'],
   ['aeon pack <id>  ·  /install <name>', 'pack writes dist-blocks/<id>-<version>.aeon; /install (terminal) or aeon install installs a cartridge through the airlock: lint gate, staging, approval, promote, rescan. It lands stopped — start it with aeon block start.'],
@@ -119,6 +120,7 @@ const RULES = [
   ['Namespace every route', 'router.get(\'/<id>/status\'), never router.get(\'/status\'): the router mounts at /api, and /api/status is a name every block would want.'],
   ['Declare a widget', 'Expose GET /api/<id>/widget + a manifest widget section, and the dashboard shows your quick-view automatically.'],
   ['No router-level middleware', 'Never router.use(...). Put express.json() on the route that needs it. A router-level middleware answered /api/auth/login for a stopped block and locked the operator out (2026-09-20).'],
+  ['A body over 10 MB needs the kernel to step aside', 'AEON parses every JSON body up to 10 MB before your router sees it, so express.json({ limit: \'36mb\' }) on your route alone still answers 413 for anything larger. The path must also be listed in OWN_JSON_LIMIT_PATHS (server/earlyware.cjs) — at both mounts, /api/... and /block/<id>/... — and a store pack cannot add itself there.'],
   ['Ask for nothing extra', 'Permissions start at the floor and the sandbox strips deps you did not declare. Every widening is a deliberate choice in contract.permissions.'],
   ['Never compute a storage path', 'Declare "filesystem": "write" and use the injected deps.blockStorage (writeData / publishState / writeMemoryDocument). It is scoped to your block; a hand-built path escapes the namespace and is refused. "none" means no storage at all.'],
   ['A command that needs something says so', 'contract.commands entries take `when`: "supabase", "runtime == local", "!ready". The terminal refuses with the reason instead of running a no-op.'],
@@ -358,6 +360,8 @@ If neither exists, nav.icon (a lucide-react name or an emoji) is used.
 aeon block stop my_block      its API answers 503 until started
 aeon block start my_block
 aeon block remove my_block --yes   moved aside to <data>/removed-blocks/, never deleted
+  (a block git tracks — a shipped block in a checkout — also needs --tracked; restore it
+   before any git add -A / commit -a / pull)
 aeon block restore my_block
 (the same, over HTTP: POST /api/build/blocks/:id/{stop,start,uninstall,restore})`;
 

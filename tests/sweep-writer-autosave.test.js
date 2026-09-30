@@ -13,6 +13,9 @@
  * no DOM, so the component's wiring of them is not rendered here.
  */
 import { describe, expect, it } from 'vitest';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { createSaveGate } from '../src/blocks/writer/index.jsx';
 
 const ok = (id = 'doc-a') => ({ httpOk: true, status: 200, body: { ok: true, id } });
@@ -106,5 +109,17 @@ describe('one save at a time', () => {
     expect(out).toMatchObject({ saved: true, sameDoc: false, adoptId: null, clearDirty: false });
     // The new document must not inherit the old one's id.
     expect(g.begin(undefined).id).toBeUndefined();
+  });
+});
+
+// Review follow-up: a no-op editor event (Replace All with 0 hits, a format
+// click that changes nothing) set dirty without a new rev, so the debounce —
+// which saves only untried revs — left the "unsaved" badge up for 30 s.
+describe('syncContent', () => {
+  it('does nothing when the editor\'s HTML did not change', () => {
+    const src = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'blocks', 'writer', 'index.jsx'), 'utf8');
+    const body = src.slice(src.indexOf('const syncContent = () => {'), src.indexOf('const setVal = (v) => {'));
+    expect(body.indexOf('if (html === content) return;')).toBeGreaterThan(-1);
+    expect(body.indexOf('if (html === content) return;')).toBeLessThan(body.indexOf('setDirty(true)'));
   });
 });

@@ -83,9 +83,13 @@ const isProviderSecretKey = (name) =>
     base => name === base || (name.startsWith(base + '_') && /^[1-9][0-9]{0,2}$/.test(name.slice(base.length + 1))),
   );
 
+// Set when the last read failed for a reason that says nothing about the file
+// (EACCES, EIO, EMFILE) and the file was left in place; see saveSettings.
+let _lastReadFailed = false;
 const loadSettings = () => {
-  try { return JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')); }
+  try { const s = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')); _lastReadFailed = false; return s; }
   catch (e) {
+    _lastReadFailed = false;
     // A file that exists but does not parse is moved aside before defaults
     // are returned — the next save would otherwise write defaults over every
     // role assignment in it.
@@ -100,6 +104,7 @@ const loadSettings = () => {
       try { fs.renameSync(SETTINGS_FILE, aside); console.error(`[SETTINGS] ${path.basename(SETTINGS_FILE)} did not parse (${e.message}); kept as ${path.basename(aside)}, using defaults`); }
       catch (re) { console.error(`[SETTINGS] ${path.basename(SETTINGS_FILE)} did not parse and could not be moved aside: ${re.message}`); }
     } else if (e.code !== 'ENOENT') {
+      _lastReadFailed = true;
       console.error(`[SETTINGS] ${path.basename(SETTINGS_FILE)} could not be read (${e.code || e.message}); using defaults for this call, file left in place`);
     }
     let m = null;
@@ -112,17 +117,47 @@ const loadSettings = () => {
   }
 };
 
+// A change built on a read that failed was built on the defaults, not on the
+// file. Written straight over it (an atomic rename replaces an unreadable file
+// as readily as any other), the operator's role assignments were gone with no
+// copy kept — the move-aside a parse failure gets. The file is kept aside
+// first and named; if even that fails, nothing is written.
+// If the write then fails too (EMFILE fails both), the file is put back: a
+// settings file moved aside and never replaced is the lasting loss C37 ended.
 function saveSettings(settings) {
-  writeFileAtomic(SETTINGS_FILE, JSON.stringify(settings, null, 2));
+  let aside = null;
+  if (_lastReadFailed && fs.existsSync(SETTINGS_FILE)) {
+    aside = `${SETTINGS_FILE}.unread-${Date.now()}`;
+    try { fs.renameSync(SETTINGS_FILE, aside); }
+    catch (e) {
+      throw new Error(`${path.basename(SETTINGS_FILE)} could not be read, and could not be kept aside before this save (${e.code || e.message}), so nothing was saved.`);
+    }
+  }
+  try { writeFileAtomic(SETTINGS_FILE, JSON.stringify(settings, null, 2)); }
+  catch (e) {
+    if (aside) { try { fs.renameSync(aside, SETTINGS_FILE); } catch { /* both named in the log below */ } }
+    throw e;
+  }
+  if (aside) {
+    console.error(`[SETTINGS] ${path.basename(SETTINGS_FILE)} could not be read when this change was made; the file was kept as ${path.basename(aside)} and the change was saved over the defaults. Restore it from there once it reads again.`);
+    _lastReadFailed = false;
+  }
 }
 
-function sanitizeSettings(value) {
-  if (Array.isArray(value)) return value.map(sanitizeSettings);
+// settings.blockLayout is passed through whole. Its keys are block and
+// section ids the operator chooses, never secrets, and the filter below
+// dropped any that matched it: a section named "Passwords" or "API Keys", or
+// a pack id containing "token", vanished from GET /api/settings, and the next
+// full-replace layout save (Master's install panel, a Dashboard drag) erased
+// it for good.
+function sanitizeSettings(value, top = true) {
+  if (Array.isArray(value)) return value.map((v) => sanitizeSettings(v, false));
   if (!value || typeof value !== 'object') return value;
   const clean = {};
   for (const [key, entry] of Object.entries(value)) {
+    if (top && key === 'blockLayout') { clean[key] = entry; continue; }
     if (/(?:api.?key|secret|token|password|credential|service.?role)/i.test(key)) continue;
-    clean[key] = sanitizeSettings(entry);
+    clean[key] = sanitizeSettings(entry, false);
   }
   return clean;
 }
@@ -474,7 +509,12 @@ function migrateEnvKeysToVault(envFile, { store = createProviderCredentialStore(
     const fix = {};
     for (const k of movedHere) {
       if (typeof held[k] !== 'string' || bogus.includes(k) || !travelsAsHeader(k)) continue;
-      if (!/\s|^['"`]/.test(held[k])) continue;
+      // A '#' with no space before it: dotenv cuts there too
+      // (GROQ_API_KEY=gsk_abc#main reads as gsk_abc), and the first parser did
+      // not. Re-read only when what precedes it is a provider key whose
+      // alphabet has no '#' — Groq, OpenRouter, Anthropic, Gemini, Tavily,
+      // Brave — since a secret saved in Settings may hold a bare '#' on purpose.
+      if (!/\s|^['"`]/.test(held[k]) && !/^(?:gsk_|sk-or-|sk-ant-|AIza|tvly-|BSA)[^#\s]+#/.test(held[k])) continue;
       const v = reread(k);
       if (v === held[k]) continue;
       const problem = keyShapeProblem(v);
@@ -574,6 +614,30 @@ function rotateCompromisedSecrets({ listFile, store = createProviderCredentialSt
   return { rotated, exposed };
 }
 
+/**
+ * The server's own pass of the check above, run at every boot right after the
+ * vault is hydrated (sweep C22). Only launch.js ran it, and the drive's
+ * launchers, `npm run server` and a packaged build all start the server
+ * without it — so on those installs a known-exposed AEON_MOBILE_SECRET held in
+ * the vault was never rotated. A rotated key is hydrated again into `target`,
+ * so this process runs on the new value; an exposed key AEON cannot mint (a
+ * provider's API key) is named, not changed.
+ */
+function rotateCompromisedAtBoot({ listFile, target = process.env, store = createProviderCredentialStore(), log = console } = {}) {
+  const r = rotateCompromisedSecrets({
+    listFile, store,
+    generate: (key) => (key === 'AEON_MOBILE_SECRET' ? crypto.randomBytes(24).toString('hex') : null),
+  });
+  if (r.rotated.length) {
+    store.hydrate(target);
+    log.log(`[VAULT] ${r.rotated.join(', ')} in the encrypted vault ${r.rotated.length === 1 ? 'was a known-exposed value' : 'were known-exposed values'} — rotated automatically.`);
+  }
+  for (const key of r.exposed.filter((k) => !r.rotated.includes(k))) {
+    log.warn(`[VAULT] ${key} in the encrypted vault is a known-exposed credential — replace it in Settings.`);
+  }
+  return r;
+}
+
 function hydrateProviderSecrets(target = process.env) {
   return createProviderCredentialStore().hydrate(target);
 }
@@ -589,6 +653,7 @@ module.exports = {
   hydrateProviderSecrets,
   migrateEnvKeysToVault,
   rotateCompromisedSecrets,
+  rotateCompromisedAtBoot,
   keyShapeProblem, validateKeyValue, MOVED_LINE_RE,
   SETTINGS_FILE,
   CLOUD_CREDENTIALS_FILE,

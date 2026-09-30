@@ -32,7 +32,7 @@ import { fileURLToPath } from 'url';
 
 import {
   takeSSEFrames, readSaveResponse, sessionEntries, unloadSave, distillSummary, forgetSavedChat,
-  BEACON_MAX_BYTES,
+  BEACON_MAX_BYTES, SAVED_CHIP_OUTPUT_MAX,
 } from '../src/components/Terminal2.jsx';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -129,13 +129,15 @@ describe('C13/C16 — a save response is read by its status, not by whether it h
     expect(readSaveResponse({ ok: false, status: 502, body: null, sentId: null })).toEqual({ kind: 'failed', error: 'HTTP 502' });
   });
 
+  // Both 404s below are the Dashboard block missing, which is 'unavailable'
+  // since the review follow-up: still not saved, still not 'gone'.
   it('a 404 for a NEW record (no id sent) is a failure, not a retry loop', () => {
-    expect(readSaveResponse({ ok: false, status: 404, body: { error: 'not mounted' }, sentId: null }).kind).toBe('failed');
+    expect(readSaveResponse({ ok: false, status: 404, body: { error: 'not mounted' }, sentId: null }).kind).toBe('unavailable');
   });
 
   it('a 404 that is not the route\'s own answer (block not mounted) does not drop the id', () => {
-    expect(readSaveResponse({ ok: false, status: 404, body: null, sentId: 'X' }).kind).toBe('failed');
-    expect(readSaveResponse({ ok: false, status: 404, body: { error: 'Cannot POST' }, sentId: 'X' }).kind).toBe('failed');
+    expect(readSaveResponse({ ok: false, status: 404, body: null, sentId: 'X' }).kind).toBe('unavailable');
+    expect(readSaveResponse({ ok: false, status: 404, body: { error: 'Cannot POST' }, sentId: 'X' }).kind).toBe('unavailable');
   });
 });
 
@@ -264,5 +266,81 @@ describe('the component uses these, rather than its old inline versions', () => 
 
   it('distil prints through distillSummary', () => {
     expect(SRC).toMatch(/content: distillSummary\(d\)/);
+  });
+});
+
+// Review follow-ups (sweep, 2026-09-29).
+describe('a saved chat stays saveable', () => {
+  it('a chip\'s long output is shortened in the saved copy, and says so; short ones and the screen are untouched', () => {
+    const long = 'x'.repeat(SAVED_CHIP_OUTPUT_MAX + 5000);
+    const feed = [
+      { id: 1, type: 'msg', role: 'user', content: '/doc big.md' },
+      { id: 2, type: 'chip', pid: '0001', kind: 'CMD', label: '/doc big.md', status: 'ok', output: long },
+      { id: 3, type: 'chip', pid: '0002', kind: 'CMD', label: '/gpu', status: 'ok', output: 'ok' },
+    ];
+    const kept = sessionEntries(feed);
+    expect(kept[1].output.length).toBeLessThan(SAVED_CHIP_OUTPUT_MAX + 200);
+    expect(kept[1].output).toMatch(/\[… 5000 more characters — shortened in the saved copy of this chat\]$/);
+    expect(kept[2]).toBe(feed[2]);
+    expect(feed[1].output).toBe(long);
+  });
+
+  it('chat history unavailable (Dashboard stopped or removed) is its own answer, with the remedy', () => {
+    const stopped = readSaveResponse({ ok: false, status: 503, body: { error: 'block "dashboard" is stopped (manual-start block)' }, sentId: 'A' });
+    expect(stopped).toMatchObject({ kind: 'unavailable', error: expect.stringMatching(/block start dashboard/) });
+    const removed = readSaveResponse({ ok: false, status: 404, body: { error: 'Not found' }, sentId: null });
+    expect(removed).toMatchObject({ kind: 'unavailable', error: expect.stringMatching(/block restore dashboard/) });
+    expect(readSaveResponse({ ok: false, status: 404, body: null, sentId: 'A' }).kind).toBe('unavailable');
+    // The route's own 404 for the id it was sent is still 'gone'.
+    expect(readSaveResponse({ ok: false, status: 404, body: { error: 'Session not found', id: 'A' }, sentId: 'A' }).kind).toBe('gone');
+  });
+});
+
+describe('the component, wired to the follow-ups', () => {
+  const code = SRC.replace(/^\s*\/\/.*$/gm, '');
+  const body = (from, to) => code.slice(code.indexOf(from), code.indexOf(to, code.indexOf(from)));
+
+  it('New chat proceeds when history is unavailable, and sets feedRef before a queued save can read it', () => {
+    const nc = body('const newChat = useCallback(', '}, [saveSession]);');
+    expect(nc).toMatch(/saved\?\.unavailable && hasTurns/);
+    expect(nc.indexOf('feedRef.current = fresh;')).toBeGreaterThan(-1);
+    expect(nc.indexOf('feedRef.current = fresh;')).toBeLessThan(nc.indexOf('setFeed(fresh);'));
+  });
+
+  it('an unavailable history is said once for automatic saves, and a manual Save is not called saved', () => {
+    const ss = body('const saveSession = useCallback(', '}, [fetchSessions]);');
+    expect(ss).toMatch(/if \(out\.kind === 'unavailable'\) \{\s*if \(!autoSaved \|\| !historyDownSaid\.current\)/);
+    expect(code).toMatch(/saveSession\(\)\.then\(d => d && d\.id && push/);
+  });
+
+  it('a loaded chat is swapped in behind any save in flight', () => {
+    const ls = body('const loadSession = useCallback(', '}, []);');
+    expect(ls).toMatch(/await \(saveChain\.current = saveChain\.current\.then\(\(\) => \{/);
+    expect(ls.indexOf('feedRef.current = next;')).toBeLessThan(ls.indexOf('currentSessionId.current = d.id;'));
+  });
+
+  it('naming waits for a second question, retries a bounded number of times, and stops once settled', () => {
+    const ss = body('const saveSession = useCallback(', '}, [fetchSessions]);');
+    expect(ss).toMatch(/questions >= 2 && asked < NAMING_TRIES/);
+    expect(ss).toMatch(/d\.nameSetBy === 'model' \|\| d\.code === 'operator_named' \|\| d\.code === 'no_model'/);
+  });
+
+  it('a command\'s narration is saved when it lands', () => {
+    const narr = body("fetch('/api/commands/narrate'", '})();');
+    expect(narr.match(/setTurnsDone\(k => k \+ 1\)/g)).toHaveLength(2);
+  });
+
+  it('deleting a row it could not read asks first, and a refused delete is said', () => {
+    const del = body('const deleteSession = useCallback(', '}, [fetchSessions]);');
+    expect(del).toMatch(/s\?\.unreadable && !window\.confirm\(/);
+    expect(del).toMatch(/if \(!r\.ok\)/);
+    expect(del).toMatch(/was not deleted/);
+    expect(code).toMatch(/s\.mismatch \? 'ID DOES NOT MATCH FILE NAME' : 'UNREADABLE'/);
+    expect(code).toMatch(/\{s\.deletable !== false && <button onClick=\{\(e\) => deleteSession\(s\.id, e, s\)\}/);
+  });
+
+  it('a vision refusal shows the server\'s reason, not "is the backend running?"', () => {
+    const v = body('const resolveImageContext = async', '[VISION] ${e.message}');
+    expect(v).toMatch(/data\?\.error\s*\?\s*`\[VISION\] \$\{data\.error\}/);
   });
 });

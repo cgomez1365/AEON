@@ -472,11 +472,28 @@ function memoryFile(vaultRoot) {
   return path.join(root, 'Agents', 'Aeon', 'memory', 'memories.json');
 }
 
-function readMemories(vaultRoot) {
+// Unreadable is not empty (sweep C12, the rule memory_core's own load()
+// follows). `catch { return [] }` here meant a memories.json cut short by an
+// unplug, or left with a trailing comma by a hand edit, injected 0 memories
+// into every chat turn with nothing said anywhere. Only a missing file is an
+// empty store; anything else comes back as `error`, is logged once per cause,
+// and is reported with the turn (meta.memoryError), never read as 0.
+const _memoryErrorsLogged = new Set();
+function readMemoryStore(vaultRoot) {
+  const file = memoryFile(vaultRoot);
+  let why;
   try {
-    const raw = JSON.parse(fs.readFileSync(memoryFile(vaultRoot), 'utf8'));
-    return Array.isArray(raw) ? raw : (Array.isArray(raw?.memories) ? raw.memories : []);
-  } catch { return []; }
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (Array.isArray(raw)) return { memories: raw, error: null };
+    if (Array.isArray(raw?.memories)) return { memories: raw.memories, error: null };
+    why = 'not a list of memories';
+  } catch (e) {
+    if (e.code === 'ENOENT') return { memories: [], error: null };
+    why = e.message;
+  }
+  const error = `The memory store ${file} is unreadable (${why}); no memories were loaded. Fix or restore that file.`;
+  if (!_memoryErrorsLogged.has(error)) { _memoryErrorsLogged.add(error); console.error(`[MEMORY] ${error}`); }
+  return { memories: [], error };
 }
 
 /**
@@ -501,7 +518,8 @@ function buildMemoryContext(message, {
     return { text: '', count: 0, considered: 0, dropped: 0, skillsDropped: 0, wake: false, autoMemoryEnabled };
   }
 
-  const all = Array.isArray(memories) ? memories : readMemories(vaultRoot);
+  const store = Array.isArray(memories) ? { memories, error: null } : readMemoryStore(vaultRoot);
+  const all = store.memories;
   const selection = memoryPolicy.selectForInjection({
     memories: all,
     budgetTokens,
@@ -553,6 +571,7 @@ function buildMemoryContext(message, {
     skillsDropped,
     wake,
     autoMemoryEnabled,
+    memoryError: store.error,
   };
 }
 
@@ -609,6 +628,7 @@ async function assembleContext(message, {
       memory: memory.count,
       memoryConsidered: memory.considered,
       memoryDropped: memory.dropped,
+      memoryError: memory.memoryError || null,
       skillsDropped: memory.skillsDropped,
       wake: memory.wake,
       autoMemory: memory.autoMemoryEnabled,
@@ -638,6 +658,7 @@ module.exports = {
   buildMemoryContext,
   assembleContext,
   memoryFile,
+  readMemoryStore,
   // Test seams.
   fitDocuments,
   forwardedAuth,

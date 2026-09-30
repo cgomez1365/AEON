@@ -598,6 +598,11 @@ export default function Writer() {
   const syncContent = () => {
     const el = editorRef.current; if (!el) return;
     const html = el.innerHTML;
+    // Nothing changed (Replace All with no hits, a format click that did
+    // nothing): no edit, so no "unsaved" badge. rev only moves on a real
+    // change, so the debounce would not clear a dirty flag set here and the
+    // badge sat up for the 30 s safety net after every such click.
+    if (html === content) return;
     if (!skipHistoryRef.current) {
       const now = performance.now();
       const snap = typingSnapRef.current;

@@ -208,3 +208,47 @@ describe('Master → Install files a block without erasing the operator\'s secti
     for (const g of rest) expect(ids).toContain(g);
   });
 });
+
+// Review follow-ups. The helpers above are pure; nothing tied SectionChooser
+// to them — the gap that let the original erasure through (the old test file
+// imported only pure helpers). No DOM here, so its body is read.
+describe('Master → Install, wired as the helpers say', () => {
+  const code = panelSrc.replace(/^\s*\/\/.*$/gm, '');
+  const chooser = code.slice(code.indexOf('function SectionChooser('), code.indexOf('export const labelise'));
+
+  it('SectionChooser reads the layout through layoutFromSettings and writes through placeBlock', () => {
+    expect(chooser).toMatch(/const bl = layoutFromSettings\(d\);/);
+    expect(chooser.indexOf('placeBlock(layout, blockId, groupId, customLabel)'))
+      .toBeLessThan(chooser.indexOf("fetch('/api/settings/block-layout'"));
+    expect(chooser).not.toMatch(/\.blockLayout \|\|/);
+  });
+
+  it('every fetch carries the self-reported header — its refusals are shown inline, not also bannered', () => {
+    const calls = [...code.matchAll(/fetch\('[^']+'(?:,\s*\{[^}]*\}[^)]*)?\)/g)].map((m) => m[0]);
+    expect(calls.length).toBe(4);
+    for (const c of calls) expect(c, c).toMatch(/SELF_REPORTED/);
+    expect(code).toMatch(/const SELF_REPORTED = \{ 'x-aeon-self-reported': '1' \};/);
+  });
+
+  it('says the block lands stopped, and that its screen needs a build — not that AEON starts it', () => {
+    expect(code).not.toMatch(/starts it, and opens its screens/);
+    expect(code).toMatch(/It then lands stopped/);
+    expect(chooser).toMatch(/start it in Settings → Blocks\. \$\{UI_NOTE\}/);
+    expect(code).toMatch(/npm run build/);
+  });
+
+  it('a hidden section named again is shown again, so the block is not sent to Unsorted', () => {
+    const [hiddenDefault] = [...new Set(BLOCKS.filter((b) => b.uiMode !== 'headless').map((b) => b.group))];
+    const layout = {
+      overrides: {}, customGroups: { mine: { label: 'Mine' } },
+      groupOverrides: { [hiddenDefault]: { hidden: true, label: 'Renamed' }, mine: { hidden: true } },
+    };
+    const a = panel.placeBlock(layout, 'zz_new', hiddenDefault);
+    expect(a.groupOverrides[hiddenDefault]).toEqual({ label: 'Renamed' });
+    expect(panel.sectionChoices(a).map((c) => c.id)).toContain(hiddenDefault);
+    const b = panel.placeBlock(layout, 'zz_new', 'mine', 'Mine');
+    expect(b.groupOverrides.mine).toBeUndefined();
+    expect(panel.sectionChoices(b)).toContainEqual({ id: 'mine', name: 'Mine' });
+    expect(layout.groupOverrides.mine).toEqual({ hidden: true }); // the input is not mutated
+  });
+});

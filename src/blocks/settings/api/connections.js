@@ -46,6 +46,19 @@ module.exports = (app, deps) => {
   const supabase = deps && deps.supabase ? deps.supabase : null;
   const audit = (deps && deps.writeOSAudit) || (() => {});
 
+  // forgetKey works by VALUE: every env slot and pool entry holding it goes.
+  // The same key saved under another ref (a second connection) or in the
+  // Settings key store (deps.providerSecretHeld — a block may not require
+  // services/) is still configured, and forgetting it stopped a key that is
+  // meant to serve until the next restart.
+  const heldElsewhere = async (value, refs) => {
+    for (const r of refs) {
+      if ((await vault.getSecret(r, supabase).catch(() => null)) === value) return true;
+    }
+    try { if (deps && typeof deps.providerSecretHeld === 'function' && deps.providerSecretHeld(value)) return true; } catch { /* unknown: forget, as before */ }
+    return false;
+  };
+
   // ── GET /api/connections — registry + vault status (no secrets) ────
   app.get('/api/connections', async (req, res) => {
     try {
@@ -206,7 +219,7 @@ module.exports = (app, deps) => {
         const secretValue = await vault.getSecret(ref, supabase).catch(() => null);
         try { await vault.removeSecret(ref, supabase); removedKeys.push(ref); }
         catch (e) { keptKeys.push(ref); console.warn(`[CONNECTIONS] could not remove key ${ref}: ${e.message}`); continue; }
-        if (deps.forgetKey && secretValue) deps.forgetKey(secretValue);
+        if (deps.forgetKey && secretValue && !(await heldElsewhere(secretValue, [...stillUsed]))) deps.forgetKey(secretValue);
       }
       audit('CONN_REMOVE', `Endpoint ${req.params.id}${removedKeys.length ? ` + ${removedKeys.length} key(s)` : ''}`, 200, 0);
       res.json({ ok: true, endpoints: reg.endpoints, removedKeys, keptKeys });
@@ -279,8 +292,10 @@ module.exports = (app, deps) => {
         warning = `The key was removed from the connection but its secret stayed in the vault: ${e.message}`;
         console.error(`[CONNECTIONS] ${warning}`);
       }
-      // The removed key stops serving now, not at the next restart.
-      if (deps.forgetKey && secretValue) deps.forgetKey(secretValue);
+      // The removed key stops serving now, not at the next restart — unless
+      // it is still held under another name.
+      const remaining = ((await endpoints.load(supabase)).endpoints || []).flatMap(e => endpoints.credentialRefs(e));
+      if (deps.forgetKey && secretValue && !(await heldElsewhere(secretValue, remaining))) deps.forgetKey(secretValue);
       audit('CONN_KEY_REMOVE', `Endpoint ${id} key ${ref}`, 200, 0);
       res.json({ ok: true, endpoint: updated, keyPool: await endpoints.credentialReport(supabase), ...(warning ? { warning } : {}) });
     } catch (e) { res.status(e.status || 500).json({ error: e.message }); }

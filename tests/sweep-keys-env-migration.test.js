@@ -133,6 +133,18 @@ describe('C23 — keys the first parser stored with their comment or quotes', ()
     expect(held(store).CANVA_CLIENT_SECRET).toBe('cnv#fixture-secret');
   });
 
+  // Review follow-up: "KEY=gsk_abc#main" — no space before the '#'. dotenv
+  // reads gsk_abc; the first parser stored the lot, and nothing re-read it.
+  it('a provider key with a comment glued on by "#" is re-read too', () => {
+    const { store, file, envFile } = fresh();
+    plant(file, { GROQ_API_KEY: 'gsk_live2#main', OPENROUTER_API_KEY: 'sk-or-v1-abc#free' });
+    fs.writeFileSync(envFile, `${MARK('GROQ_API_KEY')}\n${MARK('OPENROUTER_API_KEY')}\n`);
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const r = settings.migrateEnvKeysToVault(envFile, { store });
+    expect(r.repaired.sort()).toEqual(['GROQ_API_KEY', 'OPENROUTER_API_KEY']);
+    expect(held(store)).toEqual({ GROQ_API_KEY: 'gsk_live2', OPENROUTER_API_KEY: 'sk-or-v1-abc' });
+  });
+
   it('one that reads as empty is a placeholder: removed, and its line restored', () => {
     const { store, file, envFile } = fresh();
     plant(file, { GROQ_API_KEY: "'' # paste yours here" });

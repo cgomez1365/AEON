@@ -102,3 +102,31 @@ describe('a git checkout on the drive is never replaced', () => {
     expect(out.replace(/\x1b\[[0-9;]*m/g, '')).toMatch(/AEON\/ is a git checkout.*git pull && npm ci && npm run build/);
   });
 });
+
+// Review follow-up: the refusal stopped the WHOLE build, so on a checkout
+// drive runtime/, the launchers and README_DRIVE.txt could never be refreshed
+// (a launcher fix like a88694c could not reach the drive) short of moving the
+// checkout aside. --keep-app refreshes those and leaves AEON/ alone.
+describe('--keep-app refreshes the drive around a checkout', () => {
+  it('writes the launchers and README, and does not touch AEON/', async () => {
+    const { drive, app } = checkoutDrive();
+    const before = fs.readdirSync(app).sort();
+    const lines = [];
+    const r = await carry.buildCarried({ target: drive, skipRuntime: true, keepApp: true }, { log: (l) => lines.push(l) });
+    expect(r.plan.checkout).toBe(true);
+    expect(survived(app)).toBe(true);
+    expect(fs.readdirSync(app).sort()).toEqual(before);
+    expect(fs.existsSync(`${app}.incoming`)).toBe(false);
+    expect(fs.existsSync(path.join(drive, 'README_DRIVE.txt'))).toBe(true);
+    expect(fs.existsSync(path.join(drive, 'launch.command'))).toBe(true);
+    expect(lines.join('\n')).toMatch(/kept as it is — --keep-app/);
+  });
+
+  it('the checkout refusal names it, and --keep-app with no app on the drive says there is nothing to keep', async () => {
+    expect(carry.carryRefusal(carry.planCarry(checkoutDrive().drive))).toMatch(/--carry-home --keep-app/);
+    const empty = path.join(tmp, 'empty-drive');
+    fs.mkdirSync(empty);
+    await expect(carry.buildCarried({ target: empty, skipRuntime: true, keepApp: true }, { log: () => {} }))
+      .rejects.toThrow(/--keep-app: there is no .*AEON to keep/);
+  });
+});

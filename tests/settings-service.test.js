@@ -184,6 +184,21 @@ describe('Settings credential stores', () => {
     });
   });
 
+  // The layout's keys are ids the operator picks. Dropping a section named
+  // "Passwords" from the read meant the next full-replace save erased it.
+  it('passes the block layout through whole, whatever its ids are called', () => {
+    const blockLayout = {
+      overrides: { secret_notes: 'passwords', token_pack: 'api_keys', reports: 'tools' },
+      customGroups: { passwords: { label: 'Passwords' }, api_keys: { label: 'API Keys' }, client_work: { label: 'Client work' } },
+      groupOverrides: {},
+    };
+    expect(settings.sanitizeSettings({ blockLayout, apiKey: 'x' })).toEqual({ blockLayout });
+    // Only the top-level layout is exempt; a nested one is filtered as before.
+    expect(settings.sanitizeSettings({ nested: { blockLayout: { apiKey: 'x', ok: 1 } } }))
+      .toEqual({ nested: { blockLayout: { ok: 1 } } });
+    expect(settings.sanitizeSettings({ list: [{ blockLayout: { token: 'x' } }] })).toEqual({ list: [{ blockLayout: {} }] });
+  });
+
   it('persists cloud config through POST /api/settings and returns detection metadata only', async () => {
     const cloudCredentials = settings.createCloudCredentialStore({
       file: path.join(tempDir, 'Vault', 'blocks', 'security', 'cloud_credentials.json'),

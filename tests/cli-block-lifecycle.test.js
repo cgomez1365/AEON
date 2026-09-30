@@ -22,16 +22,25 @@ const require = createRequire(import.meta.url);
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CLI = path.join(ROOT, 'tools', 'aeon-cli.cjs');
 
-let server, url, seen, tmp;
+let server, url, seen, bodies, tmp;
 beforeAll(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'aeon-cli-block-'));
   seen = [];
+  bodies = [];
   const app = express();
   app.use(express.json());
   app.get('/api/ping', (_q, r) => r.json({ ok: true }));
   app.all('/api/build/blocks/*', (q, r) => {
     seen.push(`${q.method} ${q.path}`);
+    bodies.push(q.body);
     if (q.path.endsWith('/security/uninstall')) return r.status(409).json({ ok: false, error: 'security cannot be uninstalled' });
+    // The kernel's C32 refusal: a block git tracks needs a literal {tracked:true}.
+    if (q.path.endsWith('/shipped/uninstall') && q.body?.tracked !== true) {
+      return r.status(409).json({ ok: false, code: 'git_tracked', error: '"shipped" ships with this AEON\'s git checkout. To remove it anyway: `aeon block remove shipped --yes --tracked`.' });
+    }
+    if (q.path.endsWith('/shipped/uninstall')) {
+      return r.json({ ok: true, removed: 'shipped', movedTo: '/x/removed-blocks/shipped@t', warning: "git sees shipped's tracked files as deleted: restore it first." });
+    }
     if (q.path.endsWith('/removed')) return r.json({ removed: [{ blockId: 'council', removedAt: '2026-09-23T09-00-00-000Z' }] });
     r.json({ ok: true, blockId: q.path.split('/')[4], running: q.path.endsWith('/start'), movedTo: '/x/removed-blocks/council@t', ui: 'npm run build' });
   });
@@ -80,6 +89,29 @@ describe('aeon block', () => {
     expect(list.status).toBe(0);
     expect(list.stdout).toMatch(/council/);
     expect(seen).toEqual(['POST /api/build/blocks/council/restore', 'GET /api/build/blocks/removed']);
+  });
+
+  // Sweep C32: the kernel refuses to remove a block git tracks unless the body
+  // says {tracked:true}, and its refusal names `--tracked`. The CLI posted {}
+  // whatever the flags, so that remedy returned the same 409 — a loop.
+  it('remove --tracked sends the confirmation the git refusal asks for', async () => {
+    seen = []; bodies = [];
+    const refused = await run('remove', 'shipped', '--yes');
+    expect(refused.status).toBe(1);
+    expect(refused.stderr).toMatch(/aeon block remove shipped --yes --tracked/);
+    expect(bodies).toEqual([{}]);
+
+    const ok = await run('remove', 'shipped', '--yes', '--tracked');
+    expect(ok.status, ok.stderr).toBe(0);
+    expect(bodies[1]).toEqual({ tracked: true });
+    expect(seen).toEqual(['POST /api/build/blocks/shipped/uninstall', 'POST /api/build/blocks/shipped/uninstall']);
+    expect(ok.stdout).toMatch(/shipped removed/);
+    expect(ok.stdout).toMatch(/git sees shipped's tracked files as deleted/);
+
+    // --tracked belongs to remove alone.
+    bodies = [];
+    expect((await run('stop', 'shipped', '--tracked')).status).toBe(0);
+    expect(bodies).toEqual([{}]);
   });
 
   it('a refusal from the kernel is shown and exits 1', async () => {

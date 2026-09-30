@@ -180,3 +180,54 @@ describe.skipIf(process.platform === 'win32' || !TARGET)('the tunnel belongs to 
     expect(await waitFor(() => !alive(pid)), 'cloudflared outlived the AEON that started it').toBe(true);
   }, 40000);
 });
+
+// Review follow-ups: the download path. A fetched build is served from a
+// stand-in "release" (fetch stub): a raw file on Linux, a .tgz on macOS.
+describe.skipIf(process.platform === 'win32' || !TARGET)('downloading this host\'s build', () => {
+  const fakeRelease = () => {
+    const src = path.join(tmp, 'release');
+    fs.mkdirSync(src, { recursive: true });
+    const fake = path.join(src, 'cloudflared');
+    fs.writeFileSync(fake, [
+      `#!${process.execPath}`,
+      `require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));`,
+      "process.stderr.write('INF |  https://sweep-lifecycle.trycloudflare.com  |\\n');",
+      'setInterval(() => {}, 1000);',
+    ].join('\n'));
+    fs.chmodSync(fake, 0o755);
+    if (TARGET.archive !== 'tgz') return fs.readFileSync(fake);
+    const tgz = path.join(tmp, 'release.tgz');
+    const r = spawnSync('tar', ['-czf', tgz, '-C', src, 'cloudflared']);
+    expect(r.status).toBe(0);
+    return fs.readFileSync(tgz);
+  };
+  const serve = (bytes) => { globalThis.fetch = (url) => { requested.push(String(url)); return Promise.resolve({ ok: true, status: 200, arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.length) }); }; };
+
+  it('removes the arch-less binary an earlier AEON stored, once its own build is in place', async () => {
+    plantFake('cloudflared');
+    serve(fakeRelease());
+    const lc = lifecycle();
+    const r = await mount(lc)(START);
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    strays.add(fakePid());
+    expect(fs.existsSync(path.join(app, 'tools', 'bin', HOST_BIN))).toBe(true);
+    expect(fs.existsSync(path.join(app, 'tools', 'bin', 'cloudflared'))).toBe(false);
+    for (const fn of lc.cleanups) fn();
+  }, 20000);
+
+  it.skipIf(TARGET?.archive !== 'tgz')('a write that fails leaves no unpack- folder behind', async () => {
+    serve(fakeRelease());
+    const realWrite = fs.writeFileSync;
+    const { vi } = await import('vitest');
+    const spy = vi.spyOn(fs, 'writeFileSync').mockImplementation(function (file, ...rest) {
+      if (String(file).endsWith(TARGET.filename)) throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+      return realWrite.call(fs, file, ...rest);
+    });
+    try {
+      const r = await mount()(START);
+      expect(r.status).toBe(500);
+      expect(r.body.error).toMatch(/ENOSPC/);
+    } finally { spy.mockRestore(); }
+    expect(fs.readdirSync(path.join(app, 'tools', 'bin')).filter((f) => f.startsWith('unpack-'))).toEqual([]);
+  }, 20000);
+});

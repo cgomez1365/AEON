@@ -506,9 +506,24 @@ module.exports = (app, deps) => {
   // for good. The pre-account rule requireOperator uses applies: the machine
   // itself may act, the network may not. The moment an account exists, this
   // passes straight through to the password check below.
+  //
+  // Loopback is only the socket. The Vite dev server (host: true) forwards a
+  // LAN device's request from 127.0.0.1, and a cloudflared tunnel arrives from
+  // localhost too; before an account exists either could take the full export
+  // (master key, keyslots, provider keys). A request that carries a proxy's
+  // headers, or a browser Origin that is not this machine, is the network.
+  const LOCAL_HOSTNAME = /^(?:localhost|127(?:\.\d{1,3}){3}|\[::1\]|::1)$/i;
+  const cameFromNetwork = (req) => {
+    const h = req.headers || {};
+    if (h['cf-connecting-ip'] || h['x-forwarded-for'] || h['x-real-ip'] || h.forwarded || h.via) return true;
+    if (h.origin) {
+      try { return !LOCAL_HOSTNAME.test(new URL(h.origin).hostname); } catch { return true; }
+    }
+    return false;
+  };
   const reauthBeforeAccount = (req, res, next) => {
     if (loadUser()) return next();
-    if (!isLoopback(req)) {
+    if (!isLoopback(req) || cameFromNetwork(req)) {
       return res.status(401).json({ error: 'Create an AEON account first (Security block), or export from the machine running AEON.' });
     }
     const { purpose } = req.body || {};

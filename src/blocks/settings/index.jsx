@@ -54,6 +54,9 @@ function deriveRoles(settingsModels) {
 const toastQueue = [];
 let toastTimer = null;
 
+// How long the setup wizard waits for a restarted AEON before saying so.
+const RESTART_WAIT_MS = 90000;
+
 function showToast(msg, type = 'info') {
   const el = document.getElementById('aeon-settings-toast');
   if (!el) return;
@@ -902,7 +905,9 @@ function AccountIdentities({ endpoints, nervousSystem }) {
                           const r = await fetch('/api/settings/secrets', { method: 'POST', headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ vars: { [svc.envKey]: acct._pendingKey } }) });
                           if (r.ok) { showToast(`${svc.label} key saved to encrypted Vault`); update(svc.id, '_pendingKey', ''); }
-                          else showToast('Save failed', 'error');
+                          // The route's refusal names the field and the fault
+                          // (a key that cannot be sent, a locked vault).
+                          else { const d = await r.json().catch(() => null); showToast(d?.error ? `Not saved — ${d.error}` : `Save failed (HTTP ${r.status})`, 'error'); }
                         } catch { showToast('Save failed', 'error'); }
                       }}>
                       <Save size={12} /> Save
@@ -1486,6 +1491,14 @@ function ExportCredentialsButton() {
   const [asking, setAsking] = useState(false);
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
+  // Before an account exists there is no password to confirm (the server
+  // issues the token to this machine without one). The field used to stay,
+  // and Export stayed disabled until something was typed into it.
+  const [hasAccount, setHasAccount] = useState(true);
+  useEffect(() => {
+    if (!asking) return;
+    fetch('/api/auth/status').then(r => r.json()).then(d => setHasAccount(d?.configured !== false)).catch(() => setHasAccount(true));
+  }, [asking]);
   const exportNow = async () => {
     setBusy(true);
     try {
@@ -1518,9 +1531,13 @@ function ExportCredentialsButton() {
   }
   return (
     <form style={{ display: 'flex', gap: 6, flexShrink: 0 }} onSubmit={e => { e.preventDefault(); exportNow(); }}>
-      <input className="settings-input" type="password" autoFocus aria-label="Your AEON password"
-        placeholder="Your AEON password" value={password} onChange={e => setPassword(e.target.value)} style={{ width: 170 }} />
-      <button type="submit" className="settings-btn settings-btn--primary" disabled={busy || !password} style={{ fontSize: 11 }}>
+      {hasAccount ? (
+        <input className="settings-input" type="password" autoFocus aria-label="Your AEON password"
+          placeholder="Your AEON password" value={password} onChange={e => setPassword(e.target.value)} style={{ width: 170 }} />
+      ) : (
+        <span style={{ fontSize: 11, color: 'var(--text-dim)', alignSelf: 'center' }}>No account yet — this computer only.</span>
+      )}
+      <button type="submit" className="settings-btn settings-btn--primary" disabled={busy || (hasAccount && !password)} style={{ fontSize: 11 }}>
         {busy ? '…' : 'Export'}
       </button>
       <button type="button" className="settings-btn settings-btn--secondary" onClick={() => { setAsking(false); setPassword(''); }} style={{ fontSize: 11 }}>
@@ -1887,10 +1904,25 @@ function SetupWizard({ onComplete }) {
     const r = await requestRestart((_url, init) => fetch('/api/settings/restart', init));
     if (!r.restarting) { setBusy(false); showToast(r.message, 'error'); return; }
     showToast('Restarting AEON to apply config…');
-    // Claimed only once it answers again, then the page reloads onto it. A
-    // non-2xx is still down (the dev proxy answers 502 for a dead backend).
+    // Claimed only once it answers again, then the page reloads onto it. The
+    // dev proxy answers 502/504 for a dead backend. /api/health is Host OS's
+    // route, so with Host OS stopped or removed it never answered 200 and this
+    // polled forever with every button disabled: once AEON has been seen down,
+    // any answer of its own counts as back. And it gives up, saying where to
+    // look, when AEON does not come back.
+    const started = Date.now();
+    let sawDown = false;
     const wait = () => setTimeout(() => {
-      fetch('/api/health').then((h) => (h.ok ? window.location.reload() : wait())).catch(wait);
+      if (Date.now() - started > RESTART_WAIT_MS) {
+        setBusy(false);
+        showToast(`AEON did not come back within ${RESTART_WAIT_MS / 1000} seconds. Check the window AEON was started from for the reason, then reload this page.`, 'error');
+        return;
+      }
+      fetch('/api/health').then((h) => {
+        if (h.ok || (sawDown && h.status !== 502 && h.status !== 504)) return window.location.reload();
+        if (h.status === 502 || h.status === 504) sawDown = true;
+        wait();
+      }).catch(() => { sawDown = true; wait(); });
     }, 2000);
     wait();
   };
@@ -2110,7 +2142,7 @@ const SEARCH_PROVIDERS = [
   { id: 'ddg',     label: 'DuckDuckGo',     envKey: null,              icon: '🦆', desc: 'Always-on scrape fallback. No key needed.', url: null },
 ];
 
-function SearchKeysPanel({ providers, onReload }) {
+function SearchKeysPanel({ providers, nervousSystem, onReload }) {
   const [keys, setKeys] = useState({ TAVILY_API_KEY: '', SERPER_API_KEY: '', BRAVE_API_KEY: '' });
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -2120,6 +2152,13 @@ function SearchKeysPanel({ providers, onReload }) {
     const pid = envKey.replace('_API_KEY', '').toLowerCase();
     return providers?.[pid] === true;
   };
+  // A key that is set but was refused (401/403) or cannot be sent is not
+  // "no key": the nervous system says which, and why.
+  const refusedReason = (envKey) => {
+    if (!envKey) return null;
+    const p = nervousSystem?.providers?.[envKey.replace('_API_KEY', '').toLowerCase()];
+    return p && p.configured && p.connected === false ? (p.reason || 'The provider refused this key.') : null;
+  };
 
   const save = async () => {
     setSaving(true);
@@ -2128,12 +2167,19 @@ function SearchKeysPanel({ providers, onReload }) {
       if (v.trim()) vars[k] = v.trim();
     }
     if (!Object.keys(vars).length) { setSaving(false); return; }
+    // A refused save (400 KEY_SHAPE names the field; a locked vault) said
+    // "✓ Saved", and after the reload the provider read "○ no key".
     try {
-      await fetch('/api/settings/secrets', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ vars }) });
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-      if (onReload) onReload();
-    } catch {}
+      const r = await fetch('/api/settings/secrets', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ vars }) });
+      if (!r.ok) {
+        const d = await r.json().catch(() => null);
+        showToast(d?.error ? `Not saved — ${d.error}` : `Save failed (HTTP ${r.status})`, 'error');
+      } else {
+        setSaved(true);
+        setTimeout(() => setSaved(false), 2000);
+        if (onReload) onReload();
+      }
+    } catch (e) { showToast(`Save failed — ${e.message}`, 'error'); }
     setSaving(false);
   };
 
@@ -2150,13 +2196,14 @@ function SearchKeysPanel({ providers, onReload }) {
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
               <span style={{ fontWeight: 600, fontSize: 13 }}>{p.label}</span>
               <span style={{ fontSize: 11, padding: '2px 6px', borderRadius: 4,
-                background: isConnected(p.envKey) ? 'rgba(0,255,128,0.12)' : 'rgba(255,255,255,0.06)',
-                color: isConnected(p.envKey) ? '#00ff80' : '#888' }}>
-                {isConnected(p.envKey) ? '● connected' : '○ no key'}
+                background: isConnected(p.envKey) ? 'rgba(0,255,128,0.12)' : refusedReason(p.envKey) ? 'rgba(255,170,0,0.12)' : 'rgba(255,255,255,0.06)',
+                color: isConnected(p.envKey) ? '#00ff80' : refusedReason(p.envKey) ? '#ffaa00' : '#888' }}>
+                {isConnected(p.envKey) ? '● connected' : refusedReason(p.envKey) ? '⚠ key not working' : '○ no key'}
               </span>
               {p.url && <a href={p.url} target="_blank" rel="noreferrer" style={{ fontSize: 10, opacity: 0.5, color: 'inherit' }}>get key ↗</a>}
             </div>
             <div style={{ fontSize: 11, opacity: 0.55, marginBottom: p.envKey ? 6 : 0 }}>{p.desc}</div>
+            {refusedReason(p.envKey) && <div role="status" style={{ fontSize: 11, color: '#ffaa00', marginBottom: 6 }}>{refusedReason(p.envKey)}</div>}
             {p.envKey && (
               <input
                 type="password"
@@ -2261,7 +2308,7 @@ function UnifiedConnectionsPanel({ providers, nervousSystem, onReload }) {
       {/* Search Keys tab */}
       {tab === 'search' && (
         <div style={{ paddingTop: 12 }}>
-          <SearchKeysPanel providers={providers} onReload={onReload} />
+          <SearchKeysPanel providers={providers} nervousSystem={nervousSystem} onReload={onReload} />
         </div>
       )}
 
@@ -2704,7 +2751,14 @@ function BlockLifecyclePanel({ blocks }) {
     if (action === 'remove' && !window.confirm(
       `Remove "${id}"?\n\nIt is moved aside, NOT deleted: the block's folder moves to removed-blocks in your AEON data folder, and "Removed blocks" below can restore it.\n\nAny blocks that depend on it are named after the move.`)) return;
     setBusy(`${id}:${action}`);
-    const r = await client[action](id);
+    let r = await client[action](id);
+    // A shipped block in a git checkout is refused until the operator
+    // confirms git tracks it (sweep C32); the kernel's refusal says what git
+    // will see, and a second confirm sends {tracked:true}.
+    if (!r.ok && action === 'remove' && r.data?.code === 'git_tracked' && window.confirm(
+      `${r.error}\n\nRemove it anyway? Until you restore it, git shows ${id}'s files as deleted.`)) {
+      r = await client.remove(id, { tracked: true });
+    }
     setNotes(n => ({ ...n, [id]: { ok: r.ok, text: r.ok ? r.message : r.error } }));
     if (r.ok && action === 'remove') setRemovedNow(x => [...x, id]);
     if (r.ok && action === 'restore') setRemovedNow(x => x.filter(y => y !== id));
