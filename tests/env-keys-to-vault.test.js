@@ -3,7 +3,7 @@
  * settings and kernel go for it"). Provider and search keys found in .env
  * move into the encrypted vault Settings manages; bootstrap values stay.
  */
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -59,13 +59,20 @@ describe('migrateEnvKeysToVault', () => {
     expect(fs.readFileSync(envFile, 'utf8')).toBe(before);
   });
 
-  it('a key the vault already holds is not overwritten by the .env copy', () => {
+  // The vault copy still runs (it always won at boot), but a .env value that
+  // differs is not erased: it may be the operator's hand-rotated key, and
+  // commenting it out as "moved" lost it from disk (sweep C11).
+  it('a key the vault already holds is not overwritten by the .env copy, and the differing line is left as written', () => {
     fs.writeFileSync(envFile, 'GROQ_API_KEY=stale-env-copy\n');
-    settings.migrateEnvKeysToVault(envFile, { store });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const r = settings.migrateEnvKeysToVault(envFile, { store });
+      expect(r.differs).toEqual(['GROQ_API_KEY']);
+    } finally { warn.mockRestore(); }
     const env = {};
     store.hydrate(env);
     expect(env.GROQ_API_KEY).toBe('gsk_live_one');
-    expect(fs.readFileSync(envFile, 'utf8')).not.toMatch(/stale-env-copy/);
+    expect(fs.readFileSync(envFile, 'utf8')).toBe('GROQ_API_KEY=stale-env-copy\n');
   });
 
   it('a locked vault leaves .env exactly as it is', () => {
@@ -98,7 +105,12 @@ describe('placeholder lines and the repair (2026-09-28)', () => {
   });
 
   it('a comment the first version stored as a key is removed and its line restored', () => {
-    store.save({ TAVILY_API_KEY: '# optional — AI-native search' });
+    // save() now refuses a value with spaces (sweep C05), so the sealed file is
+    // written as the first version left it, keeping what the store holds.
+    const held = {};
+    store.hydrate(held);
+    fs.writeFileSync(path.join(tmp, 'provider-heal.json'), JSON.stringify(
+      vault.seal({ version: 1, secrets: { ...held, TAVILY_API_KEY: '# optional — AI-native search' } }), null, 2));
     fs.writeFileSync(envFile, '# TAVILY_API_KEY moved to the encrypted vault 2026-09-28 — manage it in Settings\n');
     const r = settings.migrateEnvKeysToVault(envFile, { store });
     expect(r.healed).toEqual(['TAVILY_API_KEY']);

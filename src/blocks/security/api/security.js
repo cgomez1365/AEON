@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const defaultSessions = require('../../../kernel/server-utils/sessionValidator.cjs');
+const { isLoopback } = require('../../../kernel/server-utils/requireOperator.cjs');
 const SECURITY_QUESTIONS = require('../constants/questions.data.json');
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
@@ -498,7 +499,25 @@ module.exports = (app, deps) => {
   // that must not trust the session alone. Five wrong passwords block it for
   // fifteen minutes — a session is not a licence to guess.
   const _reauthFails = { n: 0, until: 0 };
-  app.post('/api/auth/reauth', requireAuth, (req, res) => {
+  // Before any account exists there is no password to confirm and no session
+  // to hold, so requireAuth answered 401 to everyone — and the credential
+  // export (the one backup of the vault's two halves) could not be taken at
+  // all on a fresh install, beside a warning that a lost .env locks the vault
+  // for good. The pre-account rule requireOperator uses applies: the machine
+  // itself may act, the network may not. The moment an account exists, this
+  // passes straight through to the password check below.
+  const reauthBeforeAccount = (req, res, next) => {
+    if (loadUser()) return next();
+    if (!isLoopback(req)) {
+      return res.status(401).json({ error: 'Create an AEON account first (Security block), or export from the machine running AEON.' });
+    }
+    const { purpose } = req.body || {};
+    if (!purpose) return res.status(400).json({ error: 'purpose required' });
+    const token = require('../../../kernel/reauth.cjs').issue(String(purpose));
+    osAudit('AUTH_REAUTH', `Re-auth for ${purpose}: no account yet, local request`, 200);
+    res.json({ ok: true, token, noAccount: true });
+  };
+  app.post('/api/auth/reauth', reauthBeforeAccount, requireAuth, (req, res) => {
     const u = loadUser();
     if (!u) return res.status(404).json({ error: 'No account' });
     if (Date.now() < _reauthFails.until) {

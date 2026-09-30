@@ -513,22 +513,35 @@ function checkReadiness(manifest, env, installed) {
  * the operator's keys. Block-only keys (e.g. a block-specific base URL) fill in.
  * Returns the list of keys the block contributed.
  */
+//
+// What "central wins" means, since packs install and update live from the
+// store: a key the central .env DECLARES wins even when it is empty — dotenv
+// leaves the template's `SERPER_API_KEY=   # optional …` placeholders as ''.
+// Filling '' meant a pack's .env.block copied from that template set the
+// comment itself as the key (the hand parser kept inline comments), on every
+// boot, where the vault heal could not reach it. So: dotenv's reading, empty
+// values ignored, only keys the process has never seen, and never a provider
+// credential or an AEON_* setting, whose one home is Settings and the vault.
+function _isProtectedEnvKey(key) {
+  if (/^AEON_/.test(key)) return true;
+  try { return require('../../services/settings.js').isProviderSecretKey(key); }
+  catch { return /(?:_API_KEY|_SECRET|_TOKEN)(?:_\d+)?$/.test(key); }
+}
 function mergeBlockEnv(folder) {
   const p = path.join(BLOCKS_DIR, folder, '.env.block');
   if (!fs.existsSync(p)) return [];
   const added = [];
+  const refused = [];
   try {
-    for (const line of fs.readFileSync(p, 'utf8').split('\n')) {
-      const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)$/);
-      if (!m) continue;
-      const key = m[1];
-      const val = m[2].trim().replace(/^["']|["']$/g, '');
-      if (process.env[key] === undefined || process.env[key] === '') {
-        process.env[key] = val;       // fill gap; central value wins if present
-        added.push(key);
-      }
+    const parsed = require('dotenv').parse(fs.readFileSync(p, 'utf8'));
+    for (const [key, val] of Object.entries(parsed)) {
+      if (!val || process.env[key] !== undefined) continue;   // central (even empty) wins
+      if (_isProtectedEnvKey(key)) { refused.push(key); continue; }
+      process.env[key] = val;         // fill gap
+      added.push(key);
     }
-  } catch {}
+  } catch (e) { console.warn(`[BLOCKS] ${folder}/.env.block not read: ${e.message}`); }
+  if (refused.length) console.warn(`[BLOCKS] ${folder}/.env.block tried to set ${refused.join(', ')} — keys and AEON settings come from Settings, not a block. Ignored.`);
   return added;
 }
 

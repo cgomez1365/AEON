@@ -14,6 +14,32 @@ try {
 } catch (e) {
   console.error('[CONNECTIONS] kernel modules failed to load:', e.message);
 }
+// The key-shape rule of the Settings key store (services/settings.js
+// keyShapeProblem), restated: a block may not require services/
+// (tests/block-shell-contract). Printable ASCII, no spaces; the answer names
+// the position, never the value. tests/sweep-keys-key-shape holds the two to
+// the same words.
+const KEY_SHAPE_RE = /^[\x21-\x7e]+$/;
+function keyShapeProblem(value) {
+  if (typeof value !== 'string' || !value) return 'is empty';
+  if (KEY_SHAPE_RE.test(value)) return null;
+  const chars = [...value];
+  const at = chars.findIndex((ch) => !KEY_SHAPE_RE.test(ch));
+  const ch = chars[at];
+  const what = /\s/.test(ch) ? 'a space or line break'
+    : ch.codePointAt(0) < 0x80 ? 'a control character'
+    : 'a non-ASCII character (often an invisible one picked up while copying)';
+  return `contains ${what} at position ${at + 1}`;
+}
+
+// A key that cannot go in a header is refused where it is saved — accepted, it
+// showed "connected" and then failed every call before any HTTP status existed
+// (a TypeError from Node's Headers), so it was never rotated out or cooled.
+// Returns the operator-facing refusal, or null for a usable key.
+const keyRefusal = (value, field = 'API key', remedy = 'Paste the key by itself, with no note after it.') => {
+  const problem = keyShapeProblem(String(value).trim());
+  return problem ? `${field} is not a usable key: it ${problem}. ${remedy}` : null;
+};
 
 module.exports = (app, deps) => {
   if (!vault || !endpoints) return;
@@ -53,8 +79,12 @@ module.exports = (app, deps) => {
     const { provider, base_url, apiKey, auth_ref } = req.body || {};
     if (!provider) return res.status(400).json({ error: 'provider required' });
 
-    let key = apiKey || null;
+    let key = apiKey ? String(apiKey).trim() : null;
     let target = base_url;
+    if (key) {
+      const refusal = keyRefusal(key);
+      if (refusal) return res.status(400).json({ ok: false, error: refusal });
+    }
 
     if (!key && auth_ref && vault.isUnlocked()) {
       const reg = await endpoints.load(supabase);
@@ -65,6 +95,10 @@ module.exports = (app, deps) => {
       // The registry's address wins — never the request's.
       target = owner.base_url || null;
       key = await vault.getSecret(auth_ref, supabase);
+      // A key saved before keys were checked can still hold such a value; say
+      // so, instead of discovery's "Could not reach that address".
+      const refusal = key ? keyRefusal(key, 'The saved key', 'Re-enter it on this connection.') : null;
+      if (refusal) return res.json({ ok: false, error: refusal });
     }
 
     // The catalogue, not just the ids: `free` carries the rows the provider
@@ -79,9 +113,15 @@ module.exports = (app, deps) => {
   // ── POST /api/connections — add/update an endpoint (+ optional key) ─
   app.post('/api/connections', async (req, res) => {
     try {
-      const { id, label, provider, base_url, models, reachable_from, apiKey,
+      const { id, label, provider, base_url, models, reachable_from,
               preferred_model, rpm_limit } = req.body || {};
       if (!provider) return res.status(400).json({ error: 'provider required' });
+      // Stored trimmed — it used to go into the vault exactly as pasted.
+      const apiKey = req.body?.apiKey ? String(req.body.apiKey).trim() : '';
+      if (apiKey) {
+        const refusal = keyRefusal(apiKey);
+        if (refusal) return res.status(400).json({ error: refusal });
+      }
 
       // Validate the address BEFORE writing anything. This used to run after
       // the vault write, so a rejected save still left an orphaned secret
@@ -152,13 +192,21 @@ module.exports = (app, deps) => {
       // The connection's keys go with it (measured 2026-09-23: they stayed in
       // the vault, encrypted, referenced by nothing, shown nowhere). A ref
       // another connection still uses is kept — auth_ref can be shared.
+      //
+      // And they stop serving now. Only the provider's LAST connection was
+      // dehydrated (and only for four providers), so deleting one of two
+      // OpenRouter connections left its key in OPENROUTER_API_KEY_n and the
+      // pool, rotated into requests until restart, while this answered
+      // removedKeys:[ref]. Same read-then-forget as the per-key DELETE below.
       const stillUsed = new Set((reg.endpoints || []).flatMap(e => endpoints.credentialRefs(e)));
       const removedKeys = [];
       const keptKeys = [];
       for (const ref of heldRefs) {
         if (stillUsed.has(ref)) { keptKeys.push(ref); continue; }
+        const secretValue = await vault.getSecret(ref, supabase).catch(() => null);
         try { await vault.removeSecret(ref, supabase); removedKeys.push(ref); }
-        catch (e) { keptKeys.push(ref); console.warn(`[CONNECTIONS] could not remove key ${ref}: ${e.message}`); }
+        catch (e) { keptKeys.push(ref); console.warn(`[CONNECTIONS] could not remove key ${ref}: ${e.message}`); continue; }
+        if (deps.forgetKey && secretValue) deps.forgetKey(secretValue);
       }
       audit('CONN_REMOVE', `Endpoint ${req.params.id}${removedKeys.length ? ` + ${removedKeys.length} key(s)` : ''}`, 200, 0);
       res.json({ ok: true, endpoints: reg.endpoints, removedKeys, keptKeys });
@@ -177,6 +225,8 @@ module.exports = (app, deps) => {
     try {
       const { apiKey, label } = req.body || {};
       if (!apiKey || !String(apiKey).trim()) return res.status(400).json({ error: 'Paste the API key to add.' });
+      const refusal = keyRefusal(apiKey);
+      if (refusal) return res.status(400).json({ error: refusal });
       if (!vault.isUnlocked()) return res.status(400).json({ error: 'Encrypted Vault is locked — unlock it before saving keys.' });
 
       const reg = await endpoints.load(supabase);

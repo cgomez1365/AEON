@@ -89,10 +89,18 @@ const loadSettings = () => {
     // A file that exists but does not parse is moved aside before defaults
     // are returned — the next save would otherwise write defaults over every
     // role assignment in it.
-    if (e.code !== 'ENOENT') {
+    //
+    // ONLY a parse failure. A read that fails (EMFILE when descriptors run
+    // out, EACCES, EIO) says nothing about the file, which is usually fine:
+    // moving it aside turned one bad moment into a lasting loss — every later
+    // read hit ENOENT and ran on defaults until someone restored it by hand.
+    // renameSync needs no descriptor, so it succeeded under EMFILE.
+    if (e instanceof SyntaxError) {
       const aside = `${SETTINGS_FILE}.corrupt-${Date.now()}`;
       try { fs.renameSync(SETTINGS_FILE, aside); console.error(`[SETTINGS] ${path.basename(SETTINGS_FILE)} did not parse (${e.message}); kept as ${path.basename(aside)}, using defaults`); }
       catch (re) { console.error(`[SETTINGS] ${path.basename(SETTINGS_FILE)} did not parse and could not be moved aside: ${re.message}`); }
+    } else if (e.code !== 'ENOENT') {
+      console.error(`[SETTINGS] ${path.basename(SETTINGS_FILE)} could not be read (${e.code || e.message}); using defaults for this call, file left in place`);
     }
     let m = null;
     try {
@@ -125,6 +133,46 @@ function nonEmptyString(value, field) {
   }
   return value.trim();
 }
+
+/**
+ * What a stored key must look like: printable ASCII, no spaces.
+ *
+ * A key goes into an HTTP header (Bearer, x-api-key) or a URL. A zero-width
+ * space from a copy, an em-dash note, a line break or a "  # comment" cannot:
+ * Node refuses the header ("Cannot convert argument to a ByteString") before
+ * any request exists, so no status comes back, nothing rotates or cools, and
+ * the provider stays "connected" while every turn fails. trim() does not
+ * remove U+200B. Checked where keys are SAVED, naming the field and the
+ * position — never echoing the value.
+ */
+const KEY_SHAPE_RE = /^[\x21-\x7e]+$/;
+function keyShapeProblem(value) {
+  if (typeof value !== 'string' || !value) return 'is empty';
+  if (KEY_SHAPE_RE.test(value)) return null;
+  const chars = [...value];
+  const at = chars.findIndex((ch) => !KEY_SHAPE_RE.test(ch));
+  const ch = chars[at];
+  const what = /\s/.test(ch) ? 'a space or line break'
+    : ch.codePointAt(0) < 0x80 ? 'a control character'
+    : 'a non-ASCII character (often an invisible one picked up while copying)';
+  return `contains ${what} at position ${at + 1}`;
+}
+function validateKeyValue(value, field) {
+  const v = nonEmptyString(value, field);
+  const problem = keyShapeProblem(v);
+  if (problem) {
+    throw Object.assign(
+      new Error(`${field} is not a usable key: it ${problem}. Paste the key by itself, with no note after it.`),
+      { statusCode: 400, code: 'KEY_SHAPE' },
+    );
+  }
+  return v;
+}
+// The one approved credential that never travels in a header or URL: a
+// Coinbase CDP API secret is a PEM private key that signs requests locally —
+// spaces and line breaks are its shape. Stored as given (trimmed), like before.
+const LOCAL_SIGNING_BASES = new Set(['COINBASE_API_SECRET']);
+const travelsAsHeader = (name) => !LOCAL_SIGNING_BASES.has(String(name).replace(/_[1-9][0-9]{0,2}$/, ''));
 
 function validateSupabaseConfig(input = {}) {
   const urlText = nonEmptyString(input.url || input.SUPABASE_URL, 'Supabase URL');
@@ -337,7 +385,7 @@ function createProviderCredentialStore(options = {}) {
       if (!isProviderSecretKey(key)) {
         throw Object.assign(new Error(`${key} is not an approved provider credential`), { statusCode: 400 });
       }
-      const secret = nonEmptyString(value, key);
+      const secret = travelsAsHeader(key) ? validateKeyValue(value, key) : nonEmptyString(value, key);
       data.secrets[key] = secret;
       written.push(key);
     }
@@ -399,11 +447,40 @@ function migrateEnvKeysToVault(envFile, { store = createProviderCredentialStore(
   // — empty to dotenv — were stored as the key "# optional — …", and Orion's
   // web search then failed on an invalid header. A stored "key" that is a
   // comment is never a key: take it out of the vault and put the line back.
+  //
+  // The same parser also kept a REAL key's trailing comment, and the quotes
+  // around a value followed by one:
+  //   GROQ_API_KEY=gsk_live1 # main — acct     stored "gsk_live1 # main — acct"
+  //   OPENROUTER_API_KEY="sk-or-1" # free       stored "\"sk-or-1\" # free"
+  // dotenv reads those lines as gsk_live1 and sk-or-1, which is what ran
+  // before the move. The .env line is now the "moved" comment, so nothing
+  // would ever re-read it: every Groq call sent the comment in its Bearer
+  // header. Each key this move took (its line carries the marker) is re-read
+  // the way dotenv reads it; a value that changes is stored as dotenv reads
+  // it, and one that reads as empty is a placeholder, handled as above.
+  // Only a value that parser could have produced — one holding whitespace or
+  // opening with a quote — is re-read: a key saved in Settings since (the
+  // marker stays) may hold a bare '#', which dotenv would cut.
+  const dotenv = require('dotenv');
   const healed = [];
+  const repaired = [];
   {
     const held = {};
     store.hydrate(held);
-    const bogus = Object.keys(held).filter((k) => /^\s*#/.test(held[k]));
+    const movedHere = new Set(text.split(/\r?\n/).map((l) => MOVED_LINE_RE.exec(l)?.[1]).filter(Boolean));
+    const reread = (k) => dotenv.parse(`${k}=${held[k]}`)[k] || '';
+    const bogus = Object.keys(held).filter((k) => /^\s*#/.test(held[k])
+      || (movedHere.has(k) && !reread(k)));
+    const fix = {};
+    for (const k of movedHere) {
+      if (typeof held[k] !== 'string' || bogus.includes(k) || !travelsAsHeader(k)) continue;
+      if (!/\s|^['"`]/.test(held[k])) continue;
+      const v = reread(k);
+      if (v === held[k]) continue;
+      const problem = keyShapeProblem(v);
+      if (problem) { console.warn(`[VAULT] ${k} in the vault is not a usable key (it ${problem}) — re-enter it in Settings.`); continue; }
+      fix[k] = v;
+    }
     if (bogus.length) {
       text = text.split(/(\r?\n)/).map((part) => {
         const m = MOVED_LINE_RE.exec(part);
@@ -412,17 +489,26 @@ function migrateEnvKeysToVault(envFile, { store = createProviderCredentialStore(
       writeFileAtomic(envFile, text);
       healed.push(...store.remove(bogus));
     }
+    if (Object.keys(fix).length) {
+      repaired.push(...store.save(fix));
+      console.log(`[VAULT] Repaired ${repaired.length} key(s) stored with their .env comment or quotes attached: ${repaired.join(', ')}`);
+    }
   }
 
   // dotenv's own parser: the same reading the server gives this file at boot
   // (inline comments, quotes, export, CRLF), so an empty placeholder stays empty.
-  const parsed = require('dotenv').parse(text);
+  const parsed = dotenv.parse(text);
   const found = {};
   for (const [name, value] of Object.entries(parsed)) {
-    if (isProviderSecretKey(name) && value && !/^\s*#/.test(value)) found[name] = value;
+    if (!isProviderSecretKey(name) || !value || /^\s*#/.test(value)) continue;
+    // A value that cannot be sent stays in .env, where the operator can see
+    // and fix it — importing it would hide it behind a "moved" comment.
+    const problem = travelsAsHeader(name) ? keyShapeProblem(value) : null;
+    if (problem) { console.warn(`[VAULT] ${name} in .env is not a usable key (it ${problem}) — left in .env, not moved.`); continue; }
+    found[name] = value.trim(); // as save() stores it, so the read-back compares equal
   }
   const names = Object.keys(found);
-  if (!names.length) return { moved: [], healed, skipped: null };
+  if (!names.length) return { moved: [], healed, repaired, skipped: null };
 
   // The vault already wins at boot (hydrate runs after dotenv), so a key it
   // holds is not overwritten; only keys it lacks are imported.
@@ -431,8 +517,17 @@ function migrateEnvKeysToVault(envFile, { store = createProviderCredentialStore(
   if (Object.keys(toImport).length) store.save(toImport);
   const check = {};
   store.hydrate(check);
-  const verified = names.filter((n) => typeof check[n] === 'string' && check[n].length > 0);
-  if (!verified.length) return { moved: [], healed, skipped: 'not-verified' };
+  // Only a line whose value the vault now holds is commented out. A .env
+  // value that DIFFERS from the vault's is usually the operator's newest
+  // input (a rotated key typed into .env): commenting it out erased it from
+  // disk while the old key kept serving and the log said "moved". It stays
+  // exactly as written, and the log says which copy runs.
+  const verified = names.filter((n) => check[n] === found[n]);
+  const differs = names.filter((n) => current[n] && typeof check[n] === 'string' && check[n] && check[n] !== found[n]);
+  for (const n of differs) {
+    console.warn(`[VAULT] ${n} in .env differs from the copy in the encrypted vault — the vault copy is what runs. The .env line was left untouched; save the new value in Settings to use it.`);
+  }
+  if (!verified.length) return { moved: [], healed, repaired, differs, skipped: names.length > differs.length ? 'not-verified' : null };
 
   const stamp = date.toISOString().slice(0, 10);
   const out = text.split(/(\r?\n)/).map((part) => {
@@ -443,7 +538,40 @@ function migrateEnvKeysToVault(envFile, { store = createProviderCredentialStore(
   }).join('');
   writeFileAtomic(envFile, out);
   try { fs.chmodSync(envFile, 0o600); } catch { /* not supported here */ }
-  return { moved: verified, imported: Object.keys(toImport), healed, skipped: null };
+  return { moved: verified, imported: Object.keys(toImport), healed, repaired, differs, skipped: null };
+}
+
+/**
+ * BO-A3b for keys that live in the vault.
+ *
+ * launch.js replaces a known-exposed credential (security/compromised-
+ * credentials.json holds only SHA-256 digests) by reading its `KEY=` line in
+ * .env. Once migrateEnvKeysToVault moved the key, that line is a comment and
+ * the check saw nothing: an exposed AEON_MOBILE_SECRET in the vault was never
+ * rotated again. This runs the same check against the vault's copy.
+ *
+ * `generate(key)` returns the replacement, or null for a key that cannot be
+ * minted locally (a provider's API key) — that one is reported, not changed.
+ * Returns { rotated, exposed }. Read-only when nothing matches.
+ */
+function rotateCompromisedSecrets({ listFile, store = createProviderCredentialStore(), generate } = {}) {
+  let list = [];
+  try { list = JSON.parse(fs.readFileSync(listFile, 'utf8')).credentials || []; }
+  catch { return { rotated: [], exposed: [] }; }
+  if (!list.length || !vault.isUnlocked()) return { rotated: [], exposed: [] };
+  const held = {};
+  store.hydrate(held);
+  const exposed = Object.keys(held).filter((key) => {
+    const digest = crypto.createHash('sha256').update(String(held[key])).digest('hex');
+    return list.some((c) => c.key === key && c.sha256 === digest);
+  });
+  const replace = {};
+  for (const key of exposed) {
+    const next = typeof generate === 'function' ? generate(key) : null;
+    if (next) replace[key] = next;
+  }
+  const rotated = Object.keys(replace).length ? store.save(replace) : [];
+  return { rotated, exposed };
 }
 
 function hydrateProviderSecrets(target = process.env) {
@@ -460,6 +588,8 @@ module.exports = {
   createProviderCredentialStore,
   hydrateProviderSecrets,
   migrateEnvKeysToVault,
+  rotateCompromisedSecrets,
+  keyShapeProblem, validateKeyValue, MOVED_LINE_RE,
   SETTINGS_FILE,
   CLOUD_CREDENTIALS_FILE,
   PROVIDER_CREDENTIALS_FILE,

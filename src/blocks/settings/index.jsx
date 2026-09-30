@@ -7,6 +7,7 @@ import { BlockIcon } from '../../components/BlockIcon';
 import { applyAppearance, applyThemeBuilder } from '../../kernel/appearance';
 import { createLifecycleClient, runLabel, UI_NOTE as LIFECYCLE_UI_NOTE } from './blockLifecycle';
 import { createLoginGuardClient, loginGuardText } from './loginGuard';
+import { requestRestart } from '../../utils/restartRequest.js';
 
 // Derive provider registry from nervous system — no mutable module state.
 function getProviderRegistry(ns) {
@@ -1874,11 +1875,24 @@ function SetupWizard({ onComplete }) {
     setBusy(false);
   };
 
+  // The route refuses (501, with a remedy) when nothing would bring AEON back
+  // — npm start, npm run server, an older launcher. This ignored the answer
+  // and toasted "AEON is restarting" anyway, and busy never cleared, so every
+  // wizard button stayed disabled on a server that never went down.
+  // requestRestart reads the answer the header's RESTART reads; it is pointed
+  // at this block's own route because the Host OS one needs a session, and
+  // first-time setup usually has no account yet.
   const doRestart = async () => {
     setBusy(true);
+    const r = await requestRestart((_url, init) => fetch('/api/settings/restart', init));
+    if (!r.restarting) { setBusy(false); showToast(r.message, 'error'); return; }
     showToast('Restarting AEON to apply config…');
-    try { await fetch('/api/settings/restart', { method: 'POST' }); } catch {}
-    setTimeout(() => { showToast('AEON is restarting — reload in ~15s'); }, 1000);
+    // Claimed only once it answers again, then the page reloads onto it. A
+    // non-2xx is still down (the dev proxy answers 502 for a dead backend).
+    const wait = () => setTimeout(() => {
+      fetch('/api/health').then((h) => (h.ok ? window.location.reload() : wait())).catch(wait);
+    }, 2000);
+    wait();
   };
 
   if (!status) return null;

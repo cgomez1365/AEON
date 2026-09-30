@@ -4,6 +4,7 @@
  */
 const express = require('express');
 const https = require('https');
+const crypto = require('crypto');
 
 // How many hits a caller gets when it does not say. 5 is what the keyed
 // providers always returned; DDG returned 3. The ceiling bounds one scrape.
@@ -28,6 +29,79 @@ function searchKey(name) {
     console.warn(`[SEARCH] ${name} is set but is not a usable key (spaces or non-ASCII) — skipped. Re-enter it in Settings → Keys.`);
   }
   return null;
+}
+
+// What each keyed provider last said about its key. A 401/403 is the provider
+// refusing the key (expired, revoked, a pasted "quoted" value — quotes pass the
+// shape check above). The handlers never read the status: the error JSON parsed
+// as "no results", every search paid a round trip and fell to DuckDuckGo with
+// no log and no audit, and Settings kept showing "● connected". Keyed by env
+// name and a fingerprint of the key, so a re-entered key starts clean.
+const LABELS = { TAVILY_API_KEY: 'Tavily', SERPER_API_KEY: 'Serper', BRAVE_API_KEY: 'Brave' };
+const _verdicts = new Map(); // name -> { fp, status, at }
+const fingerprint = (v) => crypto.createHash('sha256').update(String(v)).digest('hex');
+const isRefusal = (status) => status === 401 || status === 403;
+function recordKeyAnswer(name, key, status) {
+  if (isRefusal(status)) _verdicts.set(name, { fp: fingerprint(key), status, at: new Date().toISOString() });
+  else if (status >= 200 && status < 300) _verdicts.delete(name);
+}
+
+/**
+ * The state of one search key, for Settings and anything that lists
+ * providers: 'unset', 'malformed' (cannot be sent), 'rejected' (the provider
+ * refused this exact key) or 'ok' (usable as far as AEON knows). No secrets.
+ */
+function searchKeyStatus(name) {
+  const v = process.env[name];
+  const label = LABELS[name] || name;
+  if (!v) return { state: 'unset' };
+  if (!/^[\x21-\x7e]+$/.test(v)) {
+    return { state: 'malformed', reason: `${name} is set but is not a usable key (spaces or non-ASCII). Re-enter it in Settings → Keys.` };
+  }
+  const verdict = _verdicts.get(name);
+  if (verdict && verdict.fp === fingerprint(v)) {
+    return { state: 'rejected', status: verdict.status, at: verdict.at, reason: `${label} refused this key (HTTP ${verdict.status}). Re-enter it in Settings → Keys.` };
+  }
+  return { state: 'ok' };
+}
+
+// The cheapest request each provider answers with its verdict on the key —
+// a one-result search. Sent only when asked for by name (test-provider with
+// {probe:true}); never by a search, never by Settings opening.
+const PROBES = {
+  TAVILY_API_KEY: (key) => ['https://api.tavily.com/search', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ api_key: key, query: 'test', max_results: 1, search_depth: 'basic' }),
+  }],
+  SERPER_API_KEY: (key) => ['https://google.serper.dev/search', {
+    method: 'POST', headers: { 'X-API-KEY': key, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ q: 'test', num: 1 }),
+  }],
+  BRAVE_API_KEY: (key) => ['https://api.search.brave.com/res/v1/web/search?q=test&count=1', {
+    method: 'GET', headers: { Accept: 'application/json', 'X-Subscription-Token': key },
+  }],
+};
+
+/** Ask the provider whether the key works. { ok, status?, error? } */
+async function probeSearchKey(name, fetchImpl = globalThis.fetch) {
+  const label = LABELS[name] || name;
+  if (!PROBES[name]) return { ok: false, error: `Unknown search provider: ${name}` };
+  const st = searchKeyStatus(name);
+  if (st.state === 'unset') return { ok: false, error: `No ${label} key (set ${name} in Settings → Keys)` };
+  if (st.state === 'malformed') return { ok: false, error: st.reason };
+  const key = process.env[name];
+  const [url, init] = PROBES[name](key);
+  let r;
+  try { r = await fetchImpl(url, { ...init, signal: AbortSignal.timeout(8000) }); }
+  catch (e) { return { ok: false, error: `${label} could not be reached: ${e.message}` }; }
+  recordKeyAnswer(name, key, r.status);
+  if (r.ok) return { ok: true, status: r.status };
+  return {
+    ok: false, status: r.status,
+    error: isRefusal(r.status)
+      ? `${label} refused the key (HTTP ${r.status}). Re-enter it in Settings → Keys.`
+      : `${label} answered HTTP ${r.status}.`,
+  };
 }
 
 // DuckDuckGo Lite's result page → [{ title, url, snippet }], or null when the
@@ -64,6 +138,26 @@ function parseDuckDuckGoLite(html, count = DEFAULT_COUNT) {
 const formatHit = (h) => `- **${h.title}**\n  ${h.snippet}\n  Source: [${h.url}](${h.url})`;
 
 module.exports = ({ writeOSAudit, kernelLLM }) => {
+
+  // A keyed provider that did not answer 2xx is said out loud — audited every
+  // time, logged once per key and status — and handed on as "no results" so
+  // the next provider answers. Returns true when the caller should stop.
+  const _warnedAnswers = new Set();
+  const refusedAnswer = (name, key, status, correlationId) => {
+    recordKeyAnswer(name, key, status);
+    if (status >= 200 && status < 300) return false;
+    const label = LABELS[name];
+    const refused = isRefusal(status);
+    writeOSAudit(refused ? 'SEARCH_KEY_REJECTED' : 'SEARCH_PROVIDER_ERROR',
+      `${label} answered HTTP ${status}${refused ? ` — ${name} was refused` : ''}; trying the next provider`,
+      status, 0, correlationId);
+    const once = `${name}:${status}:${fingerprint(key)}`;
+    if (!_warnedAnswers.has(once)) {
+      _warnedAnswers.add(once);
+      console.warn(`[SEARCH] ${label} answered HTTP ${status}${refused ? ` — ${name} was refused. Re-enter it in Settings → Keys.` : ''} Trying the next provider.`);
+    }
+    return true;
+  };
 
   // The hits themselves, [{ title, url, snippet }] or null. The citation gate
   // needs these; it was handed the markdown string below, read it as "no
@@ -131,6 +225,7 @@ module.exports = ({ writeOSAudit, kernelLLM }) => {
         let data = '';
         res.on('data', c => data += c);
         res.on('end', () => {
+          if (refusedAnswer('BRAVE_API_KEY', apiKey, res.statusCode, correlationId)) return resolve(null);
           try {
             const json = JSON.parse(data);
             const hits = (json.web?.results || []).slice(0, count);
@@ -164,6 +259,7 @@ module.exports = ({ writeOSAudit, kernelLLM }) => {
         let data = '';
         res.on('data', c => data += c);
         res.on('end', () => {
+          if (refusedAnswer('SERPER_API_KEY', apiKey, res.statusCode, correlationId)) return resolve(null);
           try {
             const json = JSON.parse(data);
             const hits = (json.organic || []).slice(0, count);
@@ -198,6 +294,7 @@ module.exports = ({ writeOSAudit, kernelLLM }) => {
         let data = '';
         res.on('data', c => data += c);
         res.on('end', () => {
+          if (refusedAnswer('TAVILY_API_KEY', apiKey, res.statusCode, correlationId)) return resolve(null);
           try {
             const json = JSON.parse(data);
             const hits = (json.results || []).slice(0, count);
@@ -276,5 +373,10 @@ module.exports = ({ writeOSAudit, kernelLLM }) => {
     }
   });
 
-  return { fetchDuckDuckGo, fetchDuckDuckGoHits, parseDuckDuckGoLite, fetchBraveSearch, fetchSerperSearch, fetchTavilySearch, fetchWebSearch, router, clampCount, DEFAULT_COUNT, MAX_COUNT };
+  return { fetchDuckDuckGo, fetchDuckDuckGoHits, parseDuckDuckGoLite, fetchBraveSearch, fetchSerperSearch, fetchTavilySearch, fetchWebSearch, router, clampCount, DEFAULT_COUNT, MAX_COUNT, searchKeyStatus, probeSearchKey };
 };
+
+// Stateless readers, usable without building the service (Settings lists
+// provider state and runs the Test button through these).
+module.exports.searchKeyStatus = searchKeyStatus;
+module.exports.probeSearchKey = probeSearchKey;

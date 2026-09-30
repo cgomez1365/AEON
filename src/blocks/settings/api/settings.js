@@ -132,24 +132,15 @@ module.exports = (app, deps) => {
     } catch (e) { console.error('[SETTINGS] block settings did not resolve:', e.message); }
     const cloudProviders = cloudCredentials.metadata();
     const envKeys = {};
-    if (fs.existsSync(ENV_FILE)) {
-      const lines = fs.readFileSync(ENV_FILE, 'utf8').split('\n');
-      for (const line of lines) {
-        // Strip inline "# comment" trailing a value (dotenv convention: only
-        // a #  preceded by whitespace ends the value) — un-stripped, a blank
-        // "KEY=          # docs..." line captured the comment text as the
-        // value and reported "configured" on a genuinely empty key.
-        const withoutComment = line.replace(/\s+#.*$/, '');
-        const match = withoutComment.match(/^([A-Z0-9_]+)=(.*)$/);
-        if (match) {
-          const key = match[1];
-          const val = match[2].trim();
-          if (key.includes('KEY') || key.includes('SECRET') || key.includes('TOKEN')) {
-            envKeys[key] = val ? 'configured' : 'missing';
-          } else if (key === 'AEON_WORKSPACE' || key === 'AEON_LLM_BACKEND') {
-            envKeys[key] = val || 'not set';
-          }
-        }
+    // dotenv's reading (parseEnvFile below): a blank "KEY=   # docs…" line is
+    // empty, `KEY=""` is empty, and a CRLF file still has lines. The regex
+    // this replaced matched no line of a CRLF .env and called KEY="" set.
+    for (const [key, raw] of Object.entries(parseEnvFile())) {
+      const val = String(raw).trim();
+      if (key.includes('KEY') || key.includes('SECRET') || key.includes('TOKEN')) {
+        envKeys[key] = val ? 'configured' : 'missing';
+      } else if (key === 'AEON_WORKSPACE' || key === 'AEON_LLM_BACKEND') {
+        envKeys[key] = val || 'not set';
       }
     }
     // Vault-stored keys upgrade "missing" → "vault" for their provider's env var.
@@ -427,6 +418,12 @@ module.exports = (app, deps) => {
   // appears everywhere: /providers (legacy boolean shape), /nervous-system,
   // and any future consumer. The old hand-maintained checks map is gone —
   // it drifted (tavily/serper were missing) and can never drift again.
+  //
+  // What the search service last heard about each search key (refused, or
+  // unsendable). Optional: without it, search keys report as before.
+  let searchService = null;
+  try { searchService = require(path.join(APP_ROOT, 'services', 'search.js')); }
+  catch (e) { console.error('[SETTINGS] search key status unavailable:', e.message); }
   async function buildNervousSystem() {
     const env = process.env;
     const cloudProviderMetadata = cloudCredentials.metadata();
@@ -593,6 +590,14 @@ module.exports = (app, deps) => {
         // Address is per-connection, not per-provider.
         requiresBaseUrl: !!meta.alwaysOffer,
       };
+      // A search key being present is not the same as it working: one the
+      // provider refused (401/403) or that cannot be sent is skipped on every
+      // search, and "configured" alone showed it as connected.
+      if (meta.kind === 'search' && keysPresent && searchService) {
+        const ks = searchService.searchKeyStatus(meta.keys[0]);
+        providers[id].connected = ks.state === 'ok';
+        if (ks.reason) providers[id].reason = ks.reason;
+      }
     }
 
     // ── 4. Block config state ──
@@ -612,7 +617,9 @@ module.exports = (app, deps) => {
     try {
       const ns = await buildNervousSystem();
       const checks = {};
-      for (const [id, p] of Object.entries(ns.providers)) checks[id] = !!p.configured;
+      // `connected: false` (a search key that was refused or cannot be sent)
+      // is not a working provider, whatever `configured` says.
+      for (const [id, p] of Object.entries(ns.providers)) checks[id] = !!p.configured && p.connected !== false;
       res.json(checks);
     } catch (e) {
       res.status(500).json({ error: e.message });
@@ -853,6 +860,20 @@ module.exports = (app, deps) => {
         return res.json({ ok: r.ok, models: (data.data || []).map(m => m.id).sort().slice(0, MAX_MODELS) });
       }
 
+      // The keyed web-search providers: a one-result search, so a refused key
+      // is found here rather than as a silent fall-through to DuckDuckGo.
+      // Only on an explicit {probe:true}: Settings posts here for EVERY
+      // configured provider each time it opens (to fetch model lists), and a
+      // search probe spends paid/quota-counted searches — up to three per
+      // open — that nobody asked for. A search provider has no model list, so
+      // the plain call answers that, with no network.
+      if ((id === 'tavily' || id === 'serper' || id === 'brave') && searchService) {
+        if (!(req.body && req.body.probe === true)) {
+          return res.json({ ok: false, error: `${id} is a web-search provider and has no model list. POST {"probe": true} to spend one search testing its key.` });
+        }
+        return res.json(await searchService.probeSearchKey(`${id.toUpperCase()}_API_KEY`));
+      }
+
       if (id === 'lmstudio') {
         const host = kernelEndpoints.lmStudioHost();
         try {
@@ -923,20 +944,27 @@ module.exports = (app, deps) => {
     },
   };
 
+  // .env as the server reads it at boot — dotenv's own parser, so an inline
+  // "# comment", quotes, `export` and CRLF mean here what they mean there.
+  // A hand-rolled regex kept "   # comment" as a value (a set key) and
+  // matched no line of a CRLF file.
   function parseEnvFile() {
-    const map = {};
-    if (fs.existsSync(ENV_FILE)) {
-      for (const line of fs.readFileSync(ENV_FILE, 'utf8').split('\n')) {
-        const m = line.match(/^\s*([A-Z0-9_]+)\s*=(.*)$/);
-        if (m) map[m[1]] = m[2];
-      }
+    try {
+      return fs.existsSync(ENV_FILE) ? require('dotenv').parse(fs.readFileSync(ENV_FILE, 'utf8')) : {};
+    } catch (e) {
+      console.error('[SETTINGS] .env could not be read for setup status:', e.message);
+      return {};
     }
-    return map;
   }
 
   // ── GET /api/settings/setup-status — wizard progress (no secrets) ──
   app.get('/api/settings/setup-status', (req, res) => {
-    const env = { ...process.env, ...parseEnvFile() }; // live + file (covers not-yet-restarted)
+    // Live env first; the file only fills what the running process lacks (a
+    // key typed into .env since boot). Spread the other way round, the
+    // template's empty `GROQ_API_KEY=` placeholders overwrote the keys the
+    // vault had hydrated, and the wizard said "no API keys" forever.
+    const env = { ...process.env };
+    for (const [k, v] of Object.entries(parseEnvFile())) if (!env[k]) env[k] = v;
     const cloudProviders = cloudCredentials.metadata();
     const groupStatus = {};
     for (const [key, g] of Object.entries(ENV_GROUPS)) {

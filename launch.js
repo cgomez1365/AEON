@@ -58,10 +58,57 @@ function writeEnvFile(file, content) {
   return secureEnvFile(file);
 }
 
+// ── Keys that live in the vault, not in .env ────────────────────────────────
+// The server moves provider secrets — AEON_MOBILE_SECRET among them — into the
+// encrypted vault and leaves "# KEY moved to the encrypted vault …" in .env
+// (services/settings.js migrateEnvKeysToVault). ensure() and rotateCompromised()
+// read only `KEY=` lines, so from then on each launch appended a fresh secret
+// that the server could not use (the vault copy wins), and an exposed value in
+// the vault was never rotated again (BO-A3b).
+//
+// Fill `key` when .env has no value for it — unless the vault holds it, where
+// a line here would only be a second, dead copy.
+function ensureEnvKey(envText, key, gen, { heldInVault = false } = {}) {
+  const m = envText.match(new RegExp('^' + key + '=(.*)$', 'm'));
+  if ((m && m[1].trim()) || heldInVault) return { env: envText, added: false };
+  const v = gen();
+  return {
+    env: m ? envText.replace(new RegExp('^' + key + '=.*$', 'm'), `${key}=${v}`) : envText + `\n${key}=${v}`,
+    added: true,
+  };
+}
+
+// What the provider vault holds, after replacing any known-exposed value it
+// can mint (`generate(key)` → new value, or null). The vault module takes its
+// master key from process.env, which the launcher never loads (the server
+// does), so it is lent for this call only. null when the vault cannot be read
+// here — on a first run node_modules is not installed yet — and the launcher
+// then behaves exactly as it did before keys moved.
+function checkProviderVault({ envText, listFile, generate }) {
+  const prev = process.env.AEON_VAULT_MASTER_KEY;
+  try {
+    const master = prev || require('dotenv').parse(envText).AEON_VAULT_MASTER_KEY;
+    if (!master) return null;
+    process.env.AEON_VAULT_MASTER_KEY = master;
+    if (!require('./src/kernel/vault.cjs').isUnlocked()) return null;
+    const settings = require('./services/settings.js');
+    const store = settings.createProviderCredentialStore();
+    if (store.metadata().__unreadable) return null;
+    const { rotated, exposed } = settings.rotateCompromisedSecrets({ listFile, store, generate });
+    const held = store.metadata();
+    return { holds: (key) => !!held[key], rotated, exposed };
+  } catch {
+    return null;
+  } finally {
+    if (prev === undefined) delete process.env.AEON_VAULT_MASTER_KEY;
+    else process.env.AEON_VAULT_MASTER_KEY = prev;
+  }
+}
+
 // Required (tests) rather than run: export the helpers, run nothing — the rest
 // of this file is the interactive launcher and ends by booting the server.
 if (require.main !== module) {
-  module.exports = { writeEnvFile, secureEnvFile, ENV_MODE };
+  module.exports = { writeEnvFile, secureEnvFile, ENV_MODE, ensureEnvKey, checkProviderVault };
   return;
 }
 
@@ -223,14 +270,10 @@ async function main() {
 
   // ── 4. vault bootstrap — master key is generated, never asked for ─────────
   let env = fs.readFileSync(ENV_PATH, 'utf8');
-  const ensure = (key, gen) => {
-    const m = env.match(new RegExp('^' + key + '=(.*)$', 'm'));
-    if (!m || !m[1].trim()) {
-      const v = gen();
-      env = m ? env.replace(new RegExp('^' + key + '=.*$', 'm'), `${key}=${v}`) : env + `\n${key}=${v}`;
-      return true;
-    }
-    return false;
+  const ensure = (key, gen, opts) => {
+    const r = ensureEnvKey(env, key, gen, opts);
+    env = r.env;
+    return r.added;
   };
   // ── Compromised-credential rotation (BO-A3b) ──────────────────────────────
   // ensure() only fills a value that is MISSING. A credential that is present
@@ -268,7 +311,20 @@ async function main() {
 
   const madeVault = ensure('AEON_VAULT_MASTER_KEY', () => crypto.randomBytes(32).toString('hex'));
   const newMobile = () => crypto.randomBytes(24).toString('hex');
-  ensure('AEON_MOBILE_SECRET', newMobile);
+  // The vault's copy first: rotated there if it is known-exposed, and a vault
+  // copy means .env gets no second one (see checkProviderVault above).
+  const inVault = checkProviderVault({
+    envText: env,
+    listFile: path.join(ROOT, 'security', 'compromised-credentials.json'),
+    generate: (key) => (key === 'AEON_MOBILE_SECRET' ? newMobile() : null),
+  });
+  if (inVault && inVault.rotated.includes('AEON_MOBILE_SECRET')) {
+    ok('AEON_MOBILE_SECRET in the vault was a known-exposed value — rotated automatically.');
+  }
+  for (const k of (inVault ? inVault.exposed.filter((x) => !inVault.rotated.includes(x)) : [])) {
+    warn(`${k} in the vault is a known-exposed credential — replace it in Settings.`);
+  }
+  ensure('AEON_MOBILE_SECRET', newMobile, { heldInVault: !!(inVault && inVault.holds('AEON_MOBILE_SECRET')) });
   if (rotateCompromised('AEON_MOBILE_SECRET', newMobile)) {
     ok('AEON_MOBILE_SECRET was a known-exposed value — rotated automatically.');
   }
