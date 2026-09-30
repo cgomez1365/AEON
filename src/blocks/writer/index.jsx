@@ -168,6 +168,63 @@ const IMPROVE_ACTIONS = [
   { id: 'critique', label: 'Critique', icon: '🔍' },
 ];
 
+// ── Save bookkeeping ────────────────────────────────────────────────────────
+// Kept outside React so its rules can be tested without a DOM.
+//
+// Autosave cleared "unsaved" after ANY answer that parsed as JSON: a 401 once
+// the session was locked (every restart, with lockEveryLaunch), a 503 with the
+// block stopped from Settings. The draft looked saved, both autosave timers
+// stopped (they run only while dirty), Export skipped its save, and closing
+// the tab lost the edits. Nothing stopped a second save starting while the
+// first was out either: a new document's first write that outlasted the 500 ms
+// debounce tick on the exFAT drive minted another doc-<ts> per tick.
+//
+// So: one save at a time; "unsaved" clears only when the server said ok AND
+// nothing was edited while the save was out AND the editor still shows that
+// document; a failure is kept until a save succeeds; and the debounce saves
+// only edits no attempt has carried yet — after a failure the 30 s interval
+// is the retry, not a 500 ms loop against a locked session.
+function saveErrorText({ status = 0, body = null, thrown = null } = {}) {
+  if (!status) return thrown?.name === 'TimeoutError' ? 'no answer from AEON' : 'could not reach AEON';
+  if (status === 401 || body?.requires_auth) return 'session locked — sign in again';
+  return body?.error || `server answered ${status}`;
+}
+
+export function createSaveGate() {
+  let inFlight = false;
+  let doc = 0;        // bumps when the editor switches document
+  let rev = 0;        // bumps on every change to content or title
+  let attempted = -1; // the rev the last save carried
+  let minted = null;  // { doc, id }: the id the server gave this document's first save
+  return {
+    edited() { rev += 1; },
+    switched() { doc += 1; },
+    hasUntriedEdits: () => rev !== attempted,
+    // null while a save is out. A new document has no id until its first save
+    // answers, and a timer holding a stale render can still ask with none —
+    // it gets the minted id rather than creating the document again.
+    begin(id) {
+      if (inFlight) return null;
+      inFlight = true;
+      attempted = rev;
+      return { doc, rev, id: id || (minted && minted.doc === doc ? minted.id : undefined) };
+    },
+    end(ticket, { httpOk = false, status = 0, body = null, thrown = null } = {}) {
+      inFlight = false;
+      const sameDoc = ticket.doc === doc;
+      const saved = !!(httpOk && body && body.ok);
+      if (!saved) return { saved, sameDoc, adoptId: null, clearDirty: false, error: saveErrorText({ status, body, thrown }) };
+      const adoptId = sameDoc && !ticket.id && body.id ? body.id : null;
+      if (adoptId) minted = { doc, id: adoptId };
+      return { saved, sameDoc, adoptId, clearDirty: sameDoc && ticket.rev === rev, error: '' };
+    },
+  };
+}
+
+const SAVE_TIMEOUT_MS = 60000;
+const saveSignal = () => (typeof AbortSignal !== 'undefined' && AbortSignal.timeout
+  ? AbortSignal.timeout(SAVE_TIMEOUT_MS) : undefined);
+
 export default function Writer() {
   const [docs, setDocs] = useState([]);
   const [activeId, setActiveId] = useState(null);
@@ -199,6 +256,10 @@ export default function Writer() {
   const toastTimer = useRef(null);
   const lastEditRef = useRef(0);
   const [autosaving, setAutosaving] = useState(false);
+  const [saveGate] = useState(createSaveGate);
+  const [saveError, setSaveError] = useState('');
+  // A save still out for the previous document must not touch this one.
+  const switchDoc = () => { saveGate.switched(); setSaveError(''); };
   const editorRef = useRef(null);
   const skipHistoryRef = useRef(false);
   const [selLen, setSelLen] = useState(0); // unused now (WYSIWYG tracks its own selection)
@@ -336,6 +397,7 @@ export default function Writer() {
     // The built-in templates are all authored in markdown.
     const raw = t.content || '';
     const html = sanitizeHtml(looksLikeHtml(raw) ? raw : markdownToHtml(raw));
+    switchDoc();
     setActiveId(null); setTitle(t.id === 'blank' ? 'Untitled' : t.label); setContent(html);
     setDirty(!!raw); setCritiqueText('');
     setUndoStack([]); setRedoStack([]); setTemplatesOpen(false);
@@ -380,28 +442,43 @@ export default function Writer() {
   const aiCrash = (e) => showToast(e?.message ? `AI request failed: ${e.message}` : 'AI request failed');
 
   // ── Autosave: debounce 2.5s after last edit + 30s safety interval ──
+  // One POST for both autosave and Save. Returns the gate's verdict; the
+  // caller only decides what to say about it. See createSaveGate.
+  const postDoc = useCallback(async (ticket, currentContent, currentTitle) => {
+    let r = null; let d = null; let thrown = null;
+    try {
+      r = await fetch('/api/writer/doc', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: ticket.id, title: currentTitle, content: currentContent }), signal: saveSignal() });
+      d = await r.json().catch(() => null);
+    } catch (e) { thrown = e; }
+    const out = saveGate.end(ticket, { httpOk: !!r?.ok, status: r?.status || 0, body: d, thrown });
+    if (out.adoptId) setActiveId(out.adoptId);
+    if (out.clearDirty) setDirty(false);
+    if (out.sameDoc) setSaveError(out.error);
+    return out;
+  }, [saveGate]);
+
   const silentSave = useCallback(async (currentContent, currentTitle, currentId) => {
     if (!currentId && !currentContent.trim()) return;
+    const ticket = saveGate.begin(currentId);
+    if (!ticket) return; // a save is still out; the next tick carries anything newer
     setAutosaving(true);
-    try {
-      const r = await fetch('/api/writer/doc', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: currentId || undefined, title: currentTitle, content: currentContent }) });
-      const d = await r.json();
-      if (d.ok && !currentId) setActiveId(d.id);
-      setDirty(false);
-    } catch {}
+    await postDoc(ticket, currentContent, currentTitle);
     setAutosaving(false);
-  }, []);
+  }, [saveGate, postDoc]);
 
   useEffect(() => {
     lastEditRef.current = Date.now();
   }, [content]);
+
+  useEffect(() => { saveGate.edited(); }, [content, title, saveGate]);
 
   useEffect(() => {
     // 2.5s debounce after last edit
     const debounce = setInterval(() => {
       if (!dirty) return;
       if (Date.now() - lastEditRef.current < 2500) return;
+      if (!saveGate.hasUntriedEdits()) return;
       silentSave(content, title, activeId);
     }, 500);
     // 30s safety net
@@ -420,6 +497,7 @@ export default function Writer() {
       // literal ## and **bold**, and mark dirty so autosave persists the upgrade.
       const migrated = raw && !looksLikeHtml(raw);
       const html = sanitizeHtml(migrated ? markdownToHtml(raw) : raw);
+      switchDoc();
       setActiveId(id); setContent(html); setTitle(docs.find(x => x.id === id)?.title || 'Untitled');
       setDirty(migrated); setCritiqueText('');
       setUndoStack([]); setRedoStack([]);
@@ -433,6 +511,7 @@ export default function Writer() {
   };
 
   const newDoc = () => {
+    switchDoc();
     setActiveId(null); setContent(''); setTitle('Untitled'); setDirty(false);
     setCritiqueText(''); setUndoStack([]); setRedoStack([]);
     setTimeout(() => {
@@ -442,15 +521,16 @@ export default function Writer() {
     }, 100);
   };
 
+  // Resolves true only when the server kept it — Export relies on that.
   const saveDoc = async () => {
+    const ticket = saveGate.begin(activeId);
+    if (!ticket) { showToast('Autosave is still writing — press Save again in a moment.'); return false; }
     setSaving(true);
-    try {
-      const r = await fetch('/api/writer/doc', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: activeId, title, content }) });
-      const d = await r.json();
-      if (d.ok) { if (!activeId) setActiveId(d.id); setDirty(false); loadDocs(); }
-    } catch {}
+    const out = await postDoc(ticket, content, title);
+    if (out.saved) loadDocs();
+    else showToast(`Not saved — ${out.error}`, 7000);
     setSaving(false);
+    return out.saved;
   };
 
   const deleteDoc = async (id) => {
@@ -1307,7 +1387,10 @@ export default function Writer() {
         <div className="writer-footer">
           {toast && <span className="writer-toast">{toast}</span>}
           <span className="writer-footer-info">
-            {autosaving ? <span className="writer-autosave">saving…</span> : dirty && <span className="writer-dirty">unsaved</span>}
+            {autosaving ? <span className="writer-autosave">saving…</span>
+              : dirty && (saveError
+                ? <span className="writer-dirty" title={saveError}>not saved — {saveError}</span>
+                : <span className="writer-dirty">unsaved</span>)}
             <span>{wordCount} words</span>
             <span>{plainText.length.toLocaleString()} chars</span>
             <span>~{Math.max(1, Math.ceil(wordCount / 200))} min read</span>
@@ -1318,7 +1401,7 @@ export default function Writer() {
             <button className="writer-btn-sm" onClick={() => exportDoc('md')} title="Export MD"><Download size={12} /> MD</button>
             <button className="writer-btn-sm" onClick={() => exportDoc('html')} title="Export HTML"><Download size={12} /> HTML</button>
             {activeId && <button className="writer-btn-sm" title="Export Word (.doc)"
-              onClick={async () => { if (dirty) await saveDoc(); window.location.assign(`/api/writer/export/${activeId}.doc`); }}>
+              onClick={async () => { if (dirty && !(await saveDoc())) return; window.location.assign(`/api/writer/export/${activeId}.doc`); }}>
               <Download size={12} /> Word</button>}
             <button className="writer-btn-sm" onClick={() => exportDoc('print')} title="Print/PDF"><Download size={12} /> PDF</button>
             {/* Write both flavours: pasting into Word or Docs keeps the formatting,

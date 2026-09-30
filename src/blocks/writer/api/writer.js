@@ -47,17 +47,56 @@ module.exports = (app, deps) => {
   // namespace and enforces the manifest's write permission. Fall back to a
   // kernel-rooted store for Vercel's /tmp and for loading outside the host;
   // both confine, neither is the raw fs module.
-  const fs = deps.blockStorage
-    ? deps.blockStorage.fs
-    : require('../../../kernel/blockStorage.cjs').createRootedStorage(resolvedRoot).fs;
+  const storage = deps.blockStorage
+    || require('../../../kernel/blockStorage.cjs').createRootedStorage(resolvedRoot);
+  const fs = storage.fs;
 
   try { fs.mkdirSync(''); } catch {}
 
+  // _index.json is rewritten on every autosave. It was read with a bare
+  // catch → [] and written with a plain writeFileSync (truncate, then write),
+  // so one save cut off on the exFAT drive — a kill, a pulled drive, a full
+  // disk — left an index that read as "no documents", and the next autosave
+  // wrote it back holding only the open draft. Every other draft vanished from
+  // the list while its <id>.md sat on disk with nothing pointing at it.
+  //
+  // Now the write is tmp-then-rename (writeJSON), an unparseable index is moved
+  // aside and named in the log (readJSON), and a missing or unreadable index is
+  // rebuilt from the documents themselves rather than starting from empty.
   function loadDocs() {
-    try { return JSON.parse(fs.readFileSync('_index.json', 'utf8')); }
-    catch { return []; }
+    const docs = storage.readJSON('_index.json', null);
+    if (Array.isArray(docs)) return docs;
+    const rebuilt = rebuildIndex();
+    // Written straight back so the recovery happens once and is said once,
+    // not re-scanned (and re-dated) on every list until the next save.
+    if (rebuilt.length) {
+      console.warn(`[WRITER] document list rebuilt from ${rebuilt.length} document file(s); titles are each document's first line, tags could not be recovered.`);
+      try { saveDocs(rebuilt); } catch { /* the next save writes it */ }
+    }
+    return rebuilt;
   }
-  function saveDocs(docs) { fs.writeFileSync('_index.json', JSON.stringify(docs, null, 2)); }
+  function saveDocs(docs) { storage.writeJSON('_index.json', docs); }
+
+  // What the index lost can only be recovered from the files: tags are gone,
+  // the title is the document's first heading or line, the date its mtime.
+  function rebuildIndex() {
+    let names = [];
+    try { names = fs.readdirSync(''); } catch { return []; }
+    const docs = [];
+    for (const name of names) {
+      // <id>.md only. This directory is Writer's own, so nothing hidden is a
+      // document — least of all a "._<id>.md" sidecar macOS drops on exFAT.
+      if (name.startsWith('.') || !name.endsWith('.md')) continue;
+      try {
+        const st = fs.statSync(name);
+        if (!st.isFile()) continue;
+        const content = fs.readFileSync(name, 'utf8');
+        const first = stripHtml(content).split('\n').map(l => l.replace(/^#+\s*/, '').trim()).find(Boolean);
+        docs.push({ id: name.slice(0, -3), title: (first || 'Untitled').slice(0, 80), tags: [], updated: st.mtimeMs, size: content.length });
+      } catch { /* one unreadable document must not hide the rest */ }
+    }
+    return docs.sort((a, b) => b.updated - a.updated);
+  }
 
   function loadStyle() {
     if (!fs.existsSync(STYLE_FILE)) return null;
@@ -218,11 +257,17 @@ OUTPUT FORMAT — the document is HTML. Return valid HTML using only these tags:
       }
     } catch { /* versioning must never block a save */ }
 
-    fs.writeFileSync(`${docId}.md`, content || '');
-
-    const docs = loadDocs().filter(d => d.id !== docId);
-    docs.unshift({ id: docId, title: title || 'Untitled', tags: tags || [], updated: now, size: (content || '').length });
-    saveDocs(docs);
+    // A write that throws must still answer. This handler is async and
+    // Express 4 does not catch a rejected handler, so a full disk left the
+    // request hanging with no answer — and the editor runs one save at a time.
+    try {
+      fs.writeFileSync(`${docId}.md`, content || '');
+      const docs = loadDocs().filter(d => d.id !== docId);
+      docs.unshift({ id: docId, title: title || 'Untitled', tags: tags || [], updated: now, size: (content || '').length });
+      saveDocs(docs);
+    } catch (e) {
+      return res.status(500).json({ error: `Could not save the document: ${e.message}` });
+    }
     // NOTE: Writer deliberately does NOT publish doc state to the Vault/Matrix —
     // drafts stay private in data/writer/. Promotion to memory is explicit only.
     // Supabase mirror — best-effort, never blocks the local save
