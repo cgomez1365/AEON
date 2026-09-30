@@ -302,6 +302,20 @@ function carryRefusal(plan) {
   return null;
 }
 
+/**
+ * What --keep-app still refuses. It skips the app refusals (the app is not
+ * touched), but replacing the data from inside the app that runs on it would
+ * move the live AEON-Data aside and then copy that same home back onto the
+ * drive — the builder's source home IS the drive's AEON-Data (aeonHome rule 5).
+ */
+function keepAppRefusal(plan) {
+  if (plan.self && plan.dataAction === 'replace') {
+    return `--keep-app --replace-data from ${plan.app} would move the AEON-Data this app is using aside and copy it back onto itself. `
+      + 'Run it from another AEON (for example ~/Desktop/AEON) to replace the drive\'s data, or drop --replace-data.';
+  }
+  return null;
+}
+
 // ── Node runtimes ────────────────────────────────────────────────────────────
 
 /** A Mach-O universal ("fat") binary runs natively on Intel and Apple Silicon. */
@@ -710,7 +724,7 @@ async function buildCarried(args, { download, log = console.log } = {}) {
   if (keepApp && !fs.existsSync(plan.app)) {
     throw new Error(`--keep-app: there is no ${plan.app} to keep. Run without --keep-app to carry this install onto the drive.`);
   }
-  const refusal = keepApp ? null : carryRefusal(plan);
+  const refusal = keepApp ? keepAppRefusal(plan) : carryRefusal(plan);
   if (refusal) throw new Error(refusal);
   const t0 = Date.now();
 
@@ -789,6 +803,6 @@ async function buildCarried(args, { download, log = console.log } = {}) {
 module.exports = {
   buildCarried, planCarry, carryRefusal, copyFileData, copyTreeMaterialized, sweepOsJunk, sweepDriveRoot, installFileList,
   copyHome, driveRoots, writeCarriedMarker, unparseableJson, isUniversalMachO, parseShasums, stageRuntimes,
-  writeCarriedLaunchers, writeDriveReadme, macLauncher, linuxLauncher, windowsLauncher, APP_FOLDER, DATA_FOLDER,
+  writeCarriedLaunchers, writeDriveReadme, keepAppRefusal, macLauncher, linuxLauncher, windowsLauncher, APP_FOLDER, DATA_FOLDER,
   LEGACY_MAC_NODE,
 };

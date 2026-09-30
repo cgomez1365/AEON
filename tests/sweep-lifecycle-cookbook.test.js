@@ -73,6 +73,9 @@ async function mount() {
 
 /** A stand-in server binary named `name` that writes its argv to argv.json. */
 function fakeBinary(name, { stay = false } = {}) {
+  // A test reads the argv of ITS binary: the previous test's argv.json must
+  // not answer first (seen as a flake under full-suite load).
+  fs.rmSync(path.join(root, 'argv.json'), { force: true });
   const p = path.join(root, 'bin', name);
   fs.mkdirSync(path.dirname(p), { recursive: true });
   fs.writeFileSync(p, [
@@ -83,7 +86,10 @@ function fakeBinary(name, { stay = false } = {}) {
   fs.chmodSync(p, 0o755);
   return p;
 }
-const argvSeen = () => waitFor(() => fs.existsSync(path.join(root, 'argv.json')) && JSON.parse(fs.readFileSync(path.join(root, 'argv.json'), 'utf8')));
+// A half-written argv.json is "not yet", not a failure.
+const argvSeen = () => waitFor(() => {
+  try { return JSON.parse(fs.readFileSync(path.join(root, 'argv.json'), 'utf8')); } catch { return false; }
+});
 
 /** A Hugging Face cache entry, as `hf download` leaves it, with these .gguf files. */
 function cachedRepo(repo, files) {
