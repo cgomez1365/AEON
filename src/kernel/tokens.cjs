@@ -61,9 +61,38 @@ function estimateMessageTokens(messages) {
  * Lives here rather than with the local-runtime budget engine because blocks
  * need it and a block may only reach into the kernel. Dividing a window is
  * arithmetic on the unit; it has nothing to do with llama.cpp.
-/* AEON-REWRITE[context] 21 line(s) removed: written on the 2026-09-24 work machine; re-implement from the context spec */
+ *
+ * Each share also has an absolute ceiling. A fraction alone is right for the
+ * windows this was first written for, but describeRole now reports the
+ * provider's real window, and some free cloud models serve a million tokens:
+ * a quarter of that would put 250,000 tokens of retrieved documents on one
+ * user turn. A big window allows a big prompt; it does not make one useful.
+ * Attention thins out over very long prompts, latency grows with every token
+ * sent, and a free tier's per-minute token limit is usually far below its
+ * window. The ceilings sit well above real use (the operator's whole memory
+ * store measured about 5,400 tokens), so they only bind on large windows:
+ *
+ *   memory   32,000  binds above a 266,667-token window (128,000 on wake)
+ *   skills    8,000  binds above ~133,334 (~66,667 on wake)
+ *   recall   32,000  binds above 128,000 (wake does not change recall)
+ *
+ * No local model and no modest cloud model reaches them, so small-window
+ * budgets are exactly what they were. opts.maxMemoryTokens / maxSkillTokens /
+ * maxRecallTokens replace a ceiling for one call; any number counts, 0
+ * included, and only an absent or null override keeps the default.
+ *
+ * The returned contextTokens is the clamped window itself, never capped.
  */
-/* AEON-REWRITE[context] 3 line(s) removed: written on the 2026-09-24 work machine; re-implement from the context spec */
+const MAX_MEMORY_TOKENS = 32000;
+const MAX_SKILL_TOKENS = 8000;
+const MAX_RECALL_TOKENS = 32000;
+
+/** The smaller of a fractional share and its ceiling (an explicit override wins). */
+function capped(ctx, fraction, override, ceiling) {
+  const limit = override ?? ceiling;
+  return Math.min(Math.floor(ctx * fraction), limit);
+}
+
 function inputBudgets(contextTokens, opts = {}) {
   const ctx = Math.max(512, Number(contextTokens) || 4096);
   const memoryFraction = opts.memoryFraction ?? (opts.wake ? 0.25 : 0.12);
@@ -80,8 +109,19 @@ function inputBudgets(contextTokens, opts = {}) {
   const recallFraction = opts.recallFraction ?? 0.25;
   return {
     contextTokens: ctx,
-/* AEON-REWRITE[context] 3 line(s) removed: written on the 2026-09-24 work machine; re-implement from the context spec */
+    memoryTokens: capped(ctx, memoryFraction, opts.maxMemoryTokens, MAX_MEMORY_TOKENS),
+    skillTokens: capped(ctx, skillFraction, opts.maxSkillTokens, MAX_SKILL_TOKENS),
+    recallTokens: capped(ctx, recallFraction, opts.maxRecallTokens, MAX_RECALL_TOKENS),
   };
 }
 
-/* AEON-REWRITE[context] 4 line(s) removed: written on the 2026-09-24 work machine; re-implement from the context spec */
+module.exports = {
+  CHARS_PER_TOKEN,
+  detectKind,
+  estimateTokens,
+  estimateMessageTokens,
+  inputBudgets,
+  MAX_MEMORY_TOKENS,
+  MAX_SKILL_TOKENS,
+  MAX_RECALL_TOKENS,
+};

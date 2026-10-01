@@ -8,7 +8,10 @@ const fs = require('fs');
 const path = require('path');
 const { isCloud: _isCloud } = require('../src/kernel/runtime.cjs');
 const _capabilities = require('../src/kernel/capabilities.cjs');
-/* AEON-REWRITE[context] 3 line(s) removed: written on the 2026-09-24 work machine; re-implement from the context spec */
+// Asks a cloud provider how big a model's window really is, so the memory
+// budget is a fraction of that and not of a guessed 8k. Requiring it creates
+// nothing on disk (this file loads at boot); its cache is written on first use.
+const _modelContext = require('../src/kernel/modelContext.cjs');
 // The one token estimator (D1f), for sizing a trimmed retry.
 const _tokens = require('../src/kernel/tokens.cjs');
 
@@ -1904,7 +1907,15 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   };
 
   // The provider/model the role WOULD stream through, and the context window
-/* AEON-REWRITE[context] 11 line(s) removed: written on the 2026-09-24 work machine; re-implement from the context spec */
+  // that turn's memory, skill and recall budgets are measured against.
+  //
+  // Cloud models used to report a flat 8,192 here on the theory that their
+  // windows are large, so a small floor was safe. It was not: inputBudgets
+  // derives the injection FROM this number, so the floor capped what was
+  // injected. A 1M-token model got ~980 tokens of memory and told the
+  // operator that memories it had indexed were not in context. The provider
+  // is now asked (modelContext, cached on disk); one that will not say keeps
+  // the 8,192 floor, which is the honest figure for an unknown size.
   const describeRole = async (role = 'chat') => {
     const opts = _isCloud() ? { _vercelStrict: true } : {};
     let c = null;
@@ -1917,7 +1928,16 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       const lr = _getLocalRT();
       if (!model) model = defaultLocalModel();
       try { contextTokens = (await lr?.plannedContext?.(model))?.contextTokens || 8192; } catch {}
-/* AEON-REWRITE[context] 7 line(s) removed: written on the 2026-09-24 work machine; re-implement from the context spec */
+    } else if (model) {
+      // Same host and key the turn will stream through (Google's or
+      // Anthropic's own API for those two); the candidate list is already
+      // Local-only filtered. A null or a throw leaves the floor in place.
+      try {
+        const known = await _modelContext.lookup({
+          provider: c.provider, model, base_url: c.base_url, apiKey: c.apiKey,
+        });
+        if (Number.isFinite(known) && known > 0) contextTokens = known;
+      } catch {}
     }
     return { provider: c.provider, model: model ?? null, contextTokens };
   };

@@ -92,7 +92,16 @@ module.exports = function ({ kernelLLM, loadSettings: loadSettingsDep, VAULT_ROO
       wake,
       // Wake lifts the count cap entirely; otherwise the operator's cap applies
       // and memory-policy still keeps pinned memories ahead of it.
-/* AEON-REWRITE[context] 12 line(s) removed: written on the 2026-09-24 work machine; re-implement from the context spec */
+      //
+      // The default count is 200, not 25. The kernel ranks memories, keeps the
+      // top maxCount, and only THEN fits them to the token budget, so a small
+      // count throws memories away before their cost is ever weighed. 25 dates
+      // from when the budget came from an assumed 8k window and could not be
+      // trusted to limit anything. Now describeRole reports the real window and
+      // inputBudgets caps memory in tokens (32,000 at most), the unit that
+      // actually matters: about 180 average memories fit, so the budget binds
+      // first and 200 is only a backstop for a store that grows without bound.
+      // An operator who sets memory_max_context still gets exactly that.
       maxCount: wake ? 0 : Math.max(Number(mem.memory_max_context) || 200, 0),
       enabled: mem.memory_in_context !== false,
       autoMemoryEnabled: !!mem.auto_memory,
