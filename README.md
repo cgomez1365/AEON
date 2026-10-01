@@ -7,7 +7,7 @@
 
 # AEON
 
-**A local-first AI workspace built from governed blocks.** Runs on your computer. Your documents and keys stay on it; nothing syncs to a cloud unless you connect your own. What does reach the internet, only when you ask: web search (DuckDuckGo with no key), model and runtime downloads (Hugging Face, GitHub), and Deep Research's archive lookups.
+**A local-first AI workspace built from governed blocks.** Runs on your computer. Your keys stay on it. Your documents stay on it too, unless a cloud model you added a key for is given them — to answer you, or to index your Vault when no local embedding model is installed (Settings → Models → **Local only** stops both); nothing syncs to a cloud unless you connect your own. What else reaches the internet, only when you ask: web search (DuckDuckGo with no key), model and runtime downloads (Hugging Face, GitHub), and Deep Research's archive lookups. The full list is in the [Privacy notice](PRIVACY.md).
 
 > Think Linux, for the AI era: a kernel that discovers self-contained blocks, a nervous system (Settings) every block reports to, a vault that encrypts your keys, a Second Brain that indexes your files and answers with sources, and one LLM layer that routes every AI call by role.
 
@@ -100,7 +100,7 @@ then launch as usual. `git pull` leaves your installed packs alone (git does not
 
 ### Free AI, two ways
 - **Cloud (free keys)** — grab a free key from [aistudio.google.com](https://aistudio.google.com) (Gemini) or [console.groq.com](https://console.groq.com) (Groq). Paste it when the launcher asks on first run, or later under **Settings**. A connection can hold more than one key: when one is rate-limited, out of credit or rejected, AEON fails over to the next. That is for keys from accounts or projects you are entitled to use — it is not a way around a provider's limits, and whether a provider allows more than one account or key is set by its own terms, so check them.
-- **Local (no keys, fully private)** — open the **Cookbook** block, install the local runtime, download a model with one click. Models run inside AEON on a llama.cpp worker that the Cookbook downloads (a pinned, hash-verified release) into `~/AEON/data` — it is not bundled with AEON, nothing is installed system-wide, nothing lands in the AEON folder, and no internet is needed after the download.
+- **Local (no keys)** — open the **Cookbook** block, install the local runtime, download a model with one click. Models run inside AEON on a llama.cpp worker that the Cookbook downloads (a pinned, hash-verified release) into `~/AEON/data` — it is not bundled with AEON, nothing is installed system-wide, nothing lands in the AEON folder, and no internet is needed after the download. Local stays private only while Settings → Models → **Local only** is on. With it off (the default) and a cloud key added, a local model that cannot answer hands the prompt to that cloud provider, and the chat shows a one-line notice when it does.
 
 ---
 
@@ -132,7 +132,7 @@ Not the wins — the failures, with mechanisms. A test suite that passed because
 
 ### The honest limit
 
-**Blocks share a Node process.** The manifest describes what a block *should* do and governs what the kernel injects into it — it is **not** a sandbox against hostile code. That is fine while you install your own blocks, and it is a hard prerequisite before anyone else's. It is why the block store is a **pilot, and nothing in it is for sale**: AEON installs a pack only from a store you point it at (`AEON_STORE`) or from a cartridge file or https link you give it. Every cartridge, including one fetched from a URL, runs through the same untrusted-source pipeline (gate → staging → lint → approval), and one installed from a store by id must also match the SHA-256 the store's catalog lists. The install endpoint is only as protected as the global guard, which is off until you create a login.
+**Blocks share a Node process.** The manifest describes what a block *should* do and governs what the kernel injects into it — it is **not** a sandbox against hostile code. That is fine while you install your own blocks, and it is a hard prerequisite before anyone else's. It is why the block store is a **pilot, and nothing in it is for sale**: AEON installs a pack only from a store you point it at (`AEON_STORE`) or from a cartridge file or https link you give it. Every cartridge, including one fetched from a URL, runs through the same untrusted-source pipeline (gate → staging → lint → boot proof; MEDIUM and HIGH wait for approval, LOW is promoted stopped), and one installed from a store by id must also match the SHA-256 the store's catalog lists. The install endpoint is only as protected as the global guard, which is off until you create a login.
 
 ---
 
@@ -180,11 +180,11 @@ The manifest is not documentation — it is the source of truth the kernel reads
 ## Security model
 
 - **Keys are encrypted into the vault and are never returned by the API.** AES-256-GCM; Settings sees only *configured / missing / vault* status. The one exception is your own credential backup (Settings → Keys → Export backup), a deliberate download of `.env`, the keyslots and the provider credentials file that asks for your password once you have an account. The master key (`~/AEON/.env`) and the keyslots (`~/AEON/secrets`) are two halves — both live under `~/AEON`; move both or neither.
-- **The vault refuses to overwrite itself.** A first-run guard that mints a fresh master key over an existing vault destroys access to everything in it. AEON refuses, names both halves, and stays running. To reopen the vault, restore the matching `.env` from your backup, or start AEON with its launcher (`LAUNCH.bat`, `launch.command` or `launch.sh`) and paste the recovery code printed when the vault was created: the launcher asks for it when the key in `.env` is missing or does not open the vault. The code works only with the vault's `secrets/aeon-keyslots.json` still in place (see [Backup and recovery](docs/DISASTER_RECOVERY.md)).
+- **The vault refuses to overwrite itself.** A first-run guard that mints a fresh master key over an existing vault destroys access to everything in it. AEON refuses, names both halves, and stays running. To reopen the vault, restore the matching `.env` from your backup, or use the recovery code printed when the vault was created: on any layout, a carried drive included, run `node launch.js --recover-vault` in the AEON app folder and paste the code; the SEALED message prints that command with this install's folder and Node.js. The desktop `LAUNCH.bat`, `launch.command` and `launch.sh` also ask for it on their own when the key in `.env` is missing or does not open the vault. The code works only with the vault's `secrets/aeon-keyslots.json` still in place (see [Backup and recovery](docs/DISASTER_RECOVERY.md)).
 - **Block API routes are auth-gated at mount** from the manifest, fail-closed, and enforced whether or not the global guard is on. Before a login exists the gate is a pass-through by design.
 - **Filesystem access beyond a block's own namespace is declared and audited.** Each declaration names the file, a scope, and a reason a reader can check (22 declarations on 2026-09-30). Undeclared access: **0**, enforced by a gate.
 - **No caller-supplied string reaches a shell.** Operator-facing OS actions are named operations with fixed executables and argument arrays, and the terminal's `>` verb is retired. Two internal housekeeping calls still run constant strings through a shell (port reclaim on a busy port, the FFmpeg reaper), and Cookbook's session-gated model serve and download hand validated arguments to a Python or Node interpreter — an operator-only surface, not a shell.
-- **No telemetry, no phone-home.** Broken Gear Industries runs zero servers on your behalf and receives nothing. Outbound traffic goes only to services you configure or trigger (model providers, your own Supabase or Firebase project, Hugging Face and GitHub for downloads, DuckDuckGo and archive.org during research). Firebase Analytics, if you configure Firebase, reports to your project and can be switched off.
+- **No telemetry, no phone-home.** Broken Gear Industries runs zero servers on your behalf and receives nothing. Outbound traffic goes only to services you configure or trigger: model providers you add keys for (including as a fallback when a local model fails, unless Settings → Models → **Local only** is on), your own Supabase or Firebase project, Hugging Face and GitHub for downloads, DuckDuckGo and archive.org during research, cdn.jsdelivr.net for OCR language data (only with `AEON_OCR_DOWNLOAD=1` in `.env`), and your browser's speech service if you choose an online Narrator voice. With no local embedding model installed, adding a cloud key can send your Vault's text to that provider for indexing, in the background (Local only stops that too). The interface's fonts are served by AEON itself, and Quick Links draws its icons instead of fetching them. Firebase Analytics, if you configure Firebase, reports to your project and can be switched off. The full list: [Privacy notice](PRIVACY.md).
 - **Not claimed:** process isolation between blocks. See *The honest limit* above.
 
 Found a vulnerability? Report it privately — see the [security policy](.github/SECURITY.md).
@@ -219,7 +219,7 @@ This AEON is the fourth generation. Two full rewrites, one hardening fork, one f
 
 ## License
 
-[AEON Community License](LICENSE) — free to use and modify; no resale or redistribution. See [Terms of Use](TERMS_OF_USE.md).
+[AEON Community License](LICENSE) — free to use and modify; no resale or redistribution. See [Terms of Use](TERMS_OF_USE.md) and the [Privacy notice](PRIVACY.md).
 
 ---
 *Broken Gear Industries · Build anything. Run anywhere.*

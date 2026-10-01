@@ -30,7 +30,6 @@ const API_ENV = {
   claude:   ['ANTHROPIC_API_KEY'],
   supabase: ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY'], // all
   firebase: ['VITE_FIREBASE_PROJECT_ID'],
-  gas:      ['VITE_GAS_URL'],
   youtube:  ['YOUTUBE_REFRESH_TOKEN'],
   coinbase: ['__FILE__cdp_api_key.json'],                // desktop file, not env
   canva:    ['CANVA_API_KEY'],
@@ -39,9 +38,9 @@ const API_ENV = {
 const API_ENV_ALL = new Set(['supabase']);
 
 // APIs whose credentials live in the endpoint registry + vault, so a blank env
-// var proves nothing. Deliberately NOT the whole list: supabase, firebase and
-// gas are genuine .env config rather than vault-sealed provider keys, and
-// asking the registry about them would always answer no.
+// var proves nothing. Deliberately NOT the whole list: supabase and firebase
+// are genuine .env config rather than vault-sealed provider keys, and asking
+// the registry about them would always answer no.
 const PROVIDER_APIS = new Set(['groq', 'gemini', 'openai', 'claude']);
 
 // Label overrides used to live here. Deleted 2026-07-29: the frontend registry

@@ -5,7 +5,7 @@
  * /model-pull demanded org/repo and answered "Invalid repo_id" to anything
  * else — including the catalogue ids its OWN description advertises:
  *
- *   "/model-pull qwen3-1.7b-q4 (curated catalog) or org/repo (HuggingFace)"
+ *   "/model-pull qwen3-1.7b-q8 (curated catalog) or org/repo (HuggingFace)"
  *
  * The curated half of that sentence was false. /model/download validated
  * against a strict org/repo regex, so every catalogue id and every display

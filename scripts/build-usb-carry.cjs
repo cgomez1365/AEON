@@ -666,8 +666,8 @@ START IT
   Linux     ./launch.sh                      x86-64
 
 It opens in your browser (http://localhost:3001, or the next free port
-if this machine already runs an AEON). Sign in as usual — AEON asks for
-your password on every launch.
+if this machine already runs an AEON). If you created an account, AEON
+asks for its password; until you create one, it opens with no login.
 
 EJECT BEFORE UNPLUGGING. This drive is exFAT so every OS can use it;
 exFAT has no journal, so pulling it mid-write can corrupt a file.

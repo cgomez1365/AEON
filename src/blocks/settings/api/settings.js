@@ -210,10 +210,20 @@ module.exports = (app, deps) => {
     res.json({ ok: true });
   });
 
-  app.post('/api/settings/secrets', (req, res) => {
+  app.post('/api/settings/secrets', async (req, res) => {
     try {
       const written = providerCredentials.save(req.body?.vars);
       providerCredentials.hydrate(process.env);
+      // hydrate() sets the env names, but the kernel's key pools (GEMINI_KEY_POOL
+      // among them) are rebuilt only by hydrateEnvFromVault: without this call
+      // a Gemini key saved here was not used until a restart, while the reply
+      // said restartRequired: false (A041). Same call connections.js makes after
+      // a key add. A failure here leaves the key saved, so it is logged, not
+      // returned as an error.
+      if (deps?.hydrateEnvFromVault) {
+        try { await deps.hydrateEnvFromVault(); }
+        catch (e) { console.error('[SETTINGS] key saved but not loaded until restart:', e.message); }
+      }
       res.json({ ok: true, written, stored: 'encrypted-vault', restartRequired: false });
     } catch (error) {
       res.status(error.statusCode || 500).json({ error: error.message });
@@ -469,7 +479,6 @@ module.exports = (app, deps) => {
       supabase:   { keys: ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY'], kind: 'infra', icon: '🟢', allRequired: true },
       firebase:   { keys: ['VITE_FIREBASE_PROJECT_ID'], kind: 'infra', icon: '🔥' },
       youtube:    { keys: ['YOUTUBE_REFRESH_TOKEN'], kind: 'service', icon: '📺' },
-      gas:        { keys: ['VITE_GAS_URL'], kind: 'service', icon: '📋' },
       coingecko:  { keys: ['COINGECKO_API_KEY'], kind: 'service', icon: '🦎' },
       coinbase:   { keys: [], kind: 'service', icon: '🪙', detect: cdpKeyExists() },
       canva:      { keys: ['CANVA_CLIENT_SECRET'], kind: 'service', icon: '🎨' },
@@ -548,9 +557,6 @@ module.exports = (app, deps) => {
       if (id === 'youtube') {
         if (env.YOUTUBE_CHANNEL_HANDLE) details.channelHandle = env.YOUTUBE_CHANNEL_HANDLE;
         if (env.YOUTUBE_CHANNEL_ACCOUNT) details.email = env.YOUTUBE_CHANNEL_ACCOUNT;
-      }
-      if (id === 'gas' && env.VITE_GAS_URL) {
-        details.scriptUrl = env.VITE_GAS_URL.substring(0, 60) + '...';
       }
       if (id === 'gemini') {
         details.keyCount = [env.GEMINI_PAID_KEY, env.GEMINI_FREE_KEY_1, env.GEMINI_FREE_KEY_2, env.GEMINI_FREE_KEY_3].filter(Boolean).length;
@@ -688,10 +694,6 @@ module.exports = (app, deps) => {
       coinbase: {
         configured: cdpKeyExists(),
       },
-      gas: {
-        configured: !!env.VITE_GAS_URL,
-        scriptUrl: env.VITE_GAS_URL ? env.VITE_GAS_URL.substring(0, 60) + '...' : null,
-      },
       grok: {
         configured: !!env.GROK_API_KEY,
         keyHint: env.GROK_API_KEY ? `xai-...${env.GROK_API_KEY.slice(-4)}` : null,
@@ -783,7 +785,13 @@ module.exports = (app, deps) => {
         ]);
         const data = await r.json();
         // Same as Groq: the tier lives on the project, not on the model row.
-        return res.json({ ok: r.ok, models: (data.models || []).map(m => m.name.replace('models/', '')).sort().slice(0, MAX_MODELS) });
+        // A rejected key answers 400 API_KEY_INVALID; the Test button showed
+        // only "Gemini: Failed" until the reason was passed on (A041).
+        return res.json({
+          ok: r.ok,
+          models: (data.models || []).map(m => m.name.replace('models/', '')).sort().slice(0, MAX_MODELS),
+          ...(r.ok ? {} : { error: data?.error?.message || `Gemini answered HTTP ${r.status}` }),
+        });
       }
 
       if (id === 'local') {
@@ -821,10 +829,6 @@ module.exports = (app, deps) => {
 
       if (id === 'coinbase') {
         return res.json({ ok: cdpKeyExists(), note: cdpKeyExists() ? 'CDP key file found' : 'cdp_api_key.json not found in <AEON>/secrets' });
-      }
-
-      if (id === 'gas') {
-        return res.json({ ok: !!env.VITE_GAS_URL, note: 'GAS URL presence verified' });
       }
 
       if (id === 'openai') {

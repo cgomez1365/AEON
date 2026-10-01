@@ -34,7 +34,7 @@ in the vault, keyed by `AEON_VAULT_MASTER_KEY` which lives only in env.
 | Rate limiting | `server/server.js` | 120/min/IP default, tunable; requests from this machine are not limited, and that includes Remote Access traffic |
 | File Manager deny-list | `src/blocks/host_os/api/fs.cjs` | `.ssh`, `.env`, `secrets`, `Library/LaunchAgents` and the rest are refused in any spelling the disk would open (case, `ß`/`ſ` folding, a Windows trailing dot), and checked again against the path the filesystem resolves |
 | Encrypted vault | `src/kernel/vault.cjs` | AES-256-GCM, atomic writes, mode 0600 |
-| Crash guards | `server/server.js` | uncaught/unhandled → log + restart |
+| Crash guards | `server/server.js`, `src/kernel/processGuards.cjs` | a fault inside one request is logged and survived; one that leaves the process unsound (out of memory, a missing module) is logged and stops AEON. Nothing restarts it except **Settings → RESTART**; start it again from the Desktop icon or the launcher. The crash log is capped |
 | Log redaction | `src/kernel/logger.cjs` | secrets censored in logs |
 | Anon canary | `tools/rls-canary.cjs` | alerts if a table goes public |
 | Dependency audit | `.github/workflows/ci.yml`, dependabot | weekly |
@@ -121,10 +121,10 @@ a click is not decided yet.
 
 ## Key rotation procedure
 
-Run this whenever a key may be exposed (and once now — keys have been on disk):
+Run this whenever a key may be exposed:
 
 1. **Generate new key** at the provider dashboard (Groq, Gemini, Supabase, etc.).
-2. **Update env** on every machine that runs AEON (`.env`, or Settings → Account).
+2. **Replace it** on every machine that runs AEON (Settings → Keys, or `.env`).
    Never commit.
 3. **Supabase service_role**: Settings → API → roll. Then redeploy with new key in
    server env ONLY. Grep first: `grep -rI service_role src/` must only hit `kernel/`.
@@ -141,8 +141,7 @@ verify the app FIRST; only then disable legacy keys, or AEON breaks instantly.
 ## Reporting a vulnerability
 
 Report privately, never in a public issue: see the
-[security policy](../.github/SECURITY.md). For anything touching candidate PII,
-escalate before acting (notification obligations may apply).
+[security policy](../.github/SECURITY.md).
 
 ## Standing orders (non-negotiable)
 

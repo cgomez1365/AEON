@@ -482,11 +482,12 @@ async function main() {
   }
 
   // ── 2. Local AI models ────────────────────────────────────────────────────
-  // AEON runs local models with a bundled llama.cpp worker — no daemon, no
-  // system-wide install, everything inside <home>/data. The runtime and the
-  // GGUF models are large, so fetching them is the Cookbook block's job (it
-  // has progress, cancel, and disk-space checks); the launcher only reports
-  // what is already installed. AEON boots fine on cloud AI either way.
+  // AEON runs local models with a llama.cpp worker that Cookbook downloads
+  // (not bundled) — no daemon, no system-wide install, everything inside
+  // <home>/data. The runtime and the GGUF models are large, so fetching them
+  // is the Cookbook block's job (it has progress, cancel, and disk-space
+  // checks); the launcher only reports what is already installed. AEON boots
+  // fine on cloud AI either way.
   // Read the registry, never probe a daemon — and only now, after the data
   // root is settled (requiring storage resolves it for the whole process).
   let localRuntime = { available: false, runtimeId: null, readyModels: [] };

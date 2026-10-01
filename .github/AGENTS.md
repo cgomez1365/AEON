@@ -5,7 +5,7 @@ AEON is an AI-native operating system: kernel + self-contained block cartridges 
 ## Founding principles (never violate)
 1. **Manifest is truth** — a block declares everything in `block.manifest.json`; nothing about a block is hardcoded elsewhere.
 2. **Settings is the nervous system** — blocks declare needs upward, read config back down. One source of truth.
-3. **Self-contained cartridges** — a block ships UI + API + assets + data. Drop the folder in `src/blocks/`, restart, it works.
+3. **Self-contained cartridges** — a block ships UI + API + assets + data. Drop the folder in `src/blocks/`, then `npm run prep:routes` and `npm run build`; a restart alone does not rebuild the interface.
 
 ## Map
 | Path | What |

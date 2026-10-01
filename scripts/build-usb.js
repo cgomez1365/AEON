@@ -541,9 +541,16 @@ if exist "%NODE_DIR%\\node.exe" (
 set "AEON_PORTABLE=true"
 
 REM .env.usb is the template; .env is the materialised copy with the real
-REM drive letter substituted for __USB_ROOT__.
+REM drive letter substituted for __USB_ROOT__. The server writes the vault
+REM master key into .env on first boot (and --recover-vault writes a new one),
+REM so the key line is carried over: rebuilding .env from the template alone
+REM sealed the vault from the second boot on.
 echo   Configuring for %USB_ROOT%...
-powershell -NoProfile -Command "(Get-Content -Raw '%USB_ROOT%\\AEON\\.env.usb') -replace '__USB_ROOT__', ('%USB_ROOT%' -replace '\\\\','/') | Set-Content -NoNewline '%USB_ROOT%\\AEON\\.env'"
+set "AEON_ENV=%USB_ROOT%\\AEON\\.env"
+set "KEEP_KEY="
+if exist "%AEON_ENV%" for /f "delims=" %%L in ('findstr /b /c:"AEON_VAULT_MASTER_KEY=" "%AEON_ENV%"') do set "KEEP_KEY=%%L"
+powershell -NoProfile -Command "(Get-Content -Raw '%USB_ROOT%\\AEON\\.env.usb') -replace '__USB_ROOT__', ('%USB_ROOT%' -replace '\\\\','/') | Set-Content -NoNewline '%AEON_ENV%'"
+if defined KEEP_KEY >>"%AEON_ENV%" echo(!KEEP_KEY!
 
 REM No model daemon to start. AEON serves local models in-process through its
 REM own llama.cpp worker (services/local-runtime), so there is nothing to
@@ -596,7 +603,17 @@ export AEON_LOCAL_MODELS_DIR="$USB_ROOT/models"
 export AEON_PORTABLE=true
 
 echo "  Configuring for $USB_ROOT…"
-sed "s|__USB_ROOT__|$USB_ROOT|g" "$USB_ROOT/AEON/.env.usb" > "$USB_ROOT/AEON/.env"
+# .env.usb is the template; .env is the materialised copy. The server writes
+# the vault master key into .env on first boot (and --recover-vault writes a
+# new one), so the key line is carried over: rebuilding .env from the
+# template alone sealed the vault from the second boot on.
+AEON_ENV="$USB_ROOT/AEON/.env"
+KEEP_KEY=""
+[ -f "$AEON_ENV" ] && KEEP_KEY="$(grep -E '^AEON_VAULT_MASTER_KEY=' "$AEON_ENV" | tail -n 1 || true)"
+sed "s|__USB_ROOT__|$USB_ROOT|g" "$USB_ROOT/AEON/.env.usb" > "$AEON_ENV.tmp"
+[ -n "$KEEP_KEY" ] && printf '%s\\n' "$KEEP_KEY" >> "$AEON_ENV.tmp"
+mv -f "$AEON_ENV.tmp" "$AEON_ENV"
+chmod 600 "$AEON_ENV" 2>/dev/null || true
 
 # No model daemon to start: AEON serves local models in-process through its
 # own llama.cpp worker (services/local-runtime). Nothing is left running on
@@ -698,7 +715,7 @@ Slow model responses     the model streams off the drive. USB 3.2 or
                          better is strongly recommended.
 
 ---------------------------------------------------------------------
-AEON · Broken Gear Industries · Apache-2.0
+AEON · Broken Gear Industries · AEON Community License — see AEON/LICENSE
 `);
 }
 

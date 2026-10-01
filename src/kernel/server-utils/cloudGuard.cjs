@@ -46,7 +46,7 @@ function requireCloud(res, { service = 'Supabase', feature = 'This feature' } = 
     error: 'CLOUD_NOT_CONFIGURED',
     service,
     message: `${feature} needs ${service}, which is not configured on this install.`,
-    hint: 'Add credentials in Settings → Connections, or use the local equivalent.',
+    hint: 'Add credentials in Settings → Services, or use the local equivalent.',
   });
   return true;
 }

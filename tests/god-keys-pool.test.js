@@ -120,7 +120,7 @@ describe('/god/keys adds to the connection pool, not a single env var — WITH a
     const body = await r.json();
     expect(r.status).toBe(404);
     expect(body.ok).toBe(false);
-    expect(body.text).toMatch(/Settings → Connections/);
+    expect(body.text).toMatch(/Settings → Keys/);
   });
 
   it('still refuses an unknown provider and a too-short key before any network call', async () => {

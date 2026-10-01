@@ -11,8 +11,8 @@ A compact, categorized bookmark manager. Lets you search, add, edit
 (name / address / category), reorder within a category, and delete links
 (bookmarks, portals, ops URLs) grouped into collapsible categories
 (General, Workspace, Dev Ops, Database, Integrations, Personal, Active
-Portals, Codebases, Client). Each entry shows its favicon and domain and
-opens in a new tab.
+Portals, Codebases, Client). Each entry shows a letter badge and its domain
+and opens in a new tab.
 
 ## Files
 
@@ -53,13 +53,13 @@ still receives a copy. Legacy browser-only links are migrated up to an empty
 server store on first load. Deletions route through the shared trash store
 (`moveToTrash`) rather than being destroyed immediately.
 
-Favicons are fetched client-side, per link, from Google's public favicon
-service (`https://www.google.com/s2/favicons?domain=...`) — this is the
-block's one real external network dependency; it needs no API key or
-secret.
+Icons are drawn locally as a letter badge (the first letter of the link's
+domain); the block requests nothing outside AEON. It used to fetch favicons
+from Google's favicon service, which sent each saved link's domain to Google.
 
 ## To activate
 
 This block is automatically detected by the AEON kernel
-(`src/kernel/blockStandard.cjs`) from `block.manifest.json`. Drop this
-folder into `src/blocks/` and restart the Command Center.
+(`src/kernel/blockStandard.cjs`) from `block.manifest.json`. Drop this folder into
+`src/blocks/`, then run `npm run prep:routes` and `npm run build`; a
+restart alone does not rebuild the interface.

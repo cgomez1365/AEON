@@ -51,7 +51,7 @@ export function providerRows(health, now = Date.now(), endpoints = []) {
     const pool = pools[id];
     const keys = pool ? ` · ${pool.count} key${pool.count === 1 ? '' : 's'} · slot ${pool.activeIndex}` : '';
     if (p.configured === false) {
-      return { id, state: 'unconfigured', label: 'Not configured', detail: 'Add it in Settings → Connections' };
+      return { id, state: 'unconfigured', label: 'Not configured', detail: 'Add it in Settings → Keys' };
     }
     if (p.healthy) {
       return { id, state: 'healthy', label: p._fromRegistry ? 'Healthy — no failures recorded' : 'Healthy', detail: keys.replace(/^ · /, '') };

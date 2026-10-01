@@ -586,7 +586,7 @@ Write in full prose (not bullet dumps) except where a table or numbered steps ge
         // This used to blame DuckDuckGo alone — measured with the network
         // down (2026-09-23), where the real cause was no internet at all.
         const remedy = availableSearchProviders().length <= 1
-          ? 'Either this computer is offline (check the internet connection), or DuckDuckGo refused the automated queries — this install has no search API key, so DuckDuckGo scraping is all it has, and it blocks repeated queries. Add a Brave, Serper, or Tavily key in Settings → Connections for reliable research.'
+          ? 'Either this computer is offline (check the internet connection), or DuckDuckGo refused the automated queries — this install has no search API key, so DuckDuckGo scraping is all it has, and it blocks repeated queries. Add a Brave, Serper, or Tavily key in Settings → Keys for reliable research.'
           : 'Either this computer is offline (check the internet connection), or the search providers refused the queries. Try again in a moment, or pick a different search provider.';
         throw Object.assign(
           new Error(`No sources could be gathered for "${query}". ${why} ${remedy}`),
@@ -1107,7 +1107,7 @@ Structure: # Title, ## Abstract, ## Findings (thematic, cited), ## Conclusion. D
     // be present and still report "Set BRAVE_API_KEY in .env".
     const keyed = (base) => hasKey(base);
     const note = (base, label) => keyRefused(base)
-      || (keyed(base) ? 'Active' : `Add a ${label} key in Settings → Connections`);
+      || (keyed(base) ? 'Active' : `Add a ${label} key in Settings → Keys`);
     res.json([
       {
         id: 'duckduckgo', label: 'DuckDuckGo', available: true,

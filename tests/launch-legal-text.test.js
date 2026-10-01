@@ -60,12 +60,22 @@ describe('shipped legal text', () => {
     expect(terms).toMatch(/Nothing here limits those rights/);
   });
 
-  it('the privacy notice names the one thing sent without setup, and the keyless search fallback', () => {
+  it('the privacy notice says opening AEON sends nothing by itself, and names the keyless search fallback', () => {
+    // The first notice said the interface loaded its fonts from Google Fonts.
+    // That stopped in 2b4b364 (self-hosted fonts, Quick Links letter badges),
+    // and this check kept passing only because a CSS comment still named the
+    // old URL. It now reads the code with comments stripped.
     const p = read('PRIVACY.md');
-    expect(p).toMatch(/Google Fonts/);
+    expect(p).toMatch(/Opening AEON sends nothing by itself/);
+    expect(p).toMatch(/served by AEON itself; nothing is fetched from Google Fonts/);
+    expect(p).not.toMatch(/loads its (fonts|typefaces) from Google Fonts/);
+    expect(p).not.toMatch(/icon from Google's favicon service/);
     expect(p).toMatch(/DuckDuckGo/);
-    // The code it describes: the stylesheet main.jsx imports, and search.js's fallback.
-    expect(read('src/aurora.css')).toMatch(/fonts\.googleapis\.com/);
+    const code = (f) => read(f).replace(/\/\*[\s\S]*?\*\//g, '').split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');
+    // The code it describes: the stylesheet main.jsx imports, Quick Links, and search.js's fallback.
+    expect(code('src/aurora.css')).not.toMatch(/fonts\.googleapis\.com/);
+    expect(code('src/aurora.css')).toMatch(/@font-face/);
+    expect(code('src/blocks/quick_links/index.jsx')).not.toMatch(/google\.com\/s2\/favicons/);
     expect(read('services/search.js')).toMatch(/lite\.duckduckgo\.com/);
   });
 });

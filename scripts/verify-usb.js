@@ -239,9 +239,9 @@ for (const name of ['launch.sh', 'launch.command']) {
 section('6. Runtime and models');
 const rtNode = path.join(T, 'runtime', 'node');
 // This used to also verify a staged model-daemon runtime. The builder stopped staging
-// system-wide model daemon when AEON moved to its own bundled llama.cpp
-// runtime; the check was never updated, so it warned about a directory nothing
-// creates any more. Local inference now lives under the app's own data root and
+// system-wide model daemon when AEON moved to its own llama.cpp runtime
+// (downloaded by Cookbook, not bundled); the check was never updated, so it
+// warned about a directory nothing creates any more. Local inference now lives under the app's own data root and
 // is verified by the runtime registry, not by a staged vendor folder.
 if (fs.existsSync(rtNode)) {
   const plats = fs.readdirSync(rtNode).filter((p) => fs.statSync(path.join(rtNode, p)).isDirectory());

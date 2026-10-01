@@ -190,11 +190,6 @@
     },
     {
       "method": "GET",
-      "path": "/api/gas/status",
-      "auth": true
-    },
-    {
-      "method": "GET",
       "path": "/api/health",
       "auth": false
     },

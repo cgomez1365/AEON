@@ -78,9 +78,10 @@ describe('POST /api/auth/reauth with no account yet', () => {
   });
 });
 
-// Review follow-up: loopback is only the socket. The Vite dev server
-// (host: true) forwards a LAN device from 127.0.0.1, and a cloudflared tunnel
-// arrives from localhost too — each with a tell the socket does not show.
+// Review follow-up: loopback is only the socket. The Vite dev server's proxy
+// forwards from 127.0.0.1 with no forwarding headers (vite.config.js now
+// listens on 127.0.0.1 only), and a cloudflared tunnel arrives from localhost
+// too — each with a tell the socket does not show.
 describe('POST /api/auth/reauth with no account, through a proxy on this machine', () => {
   it('a browser on another device, through the dev server, is refused (its Origin is not this machine)', async () => {
     const r = await post('/api/auth/reauth', { purpose: 'export-credentials' }, { Origin: 'http://192.168.1.20:3000' });

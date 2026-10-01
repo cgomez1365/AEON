@@ -50,7 +50,7 @@
 export const IGNORED_ENDPOINTS = [
   '/api/audit', '/api/health', '/api/canva/status',
   '/api/telemetry', '/api/llm-telemetry', '/api/local-status',
-  '/api/gas/status', '/api/transcribe', '/api/kernel/llm', '/api/auth/status',
+  '/api/transcribe', '/api/kernel/llm', '/api/auth/status',
   '/api/writer/cowrite', '/api/writer/improve', '/api/writer/generate',
   '/api/writer/style/analyze',
 ];

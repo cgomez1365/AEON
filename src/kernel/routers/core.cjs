@@ -63,7 +63,6 @@ module.exports = function createCoreRouter(deps) {
     providers.youtube = !!env.YOUTUBE_REFRESH_TOKEN;
     providers.coingecko = !!env.COINGECKO_API_KEY;
     providers.coinbase = cdpKeyExists();
-    providers.gas = !!env.VITE_GAS_URL;
     providers.canva = !!env.CANVA_CLIENT_SECRET;
 
     // The store lives at Vault/Agents/Aeon/memory/, owned by memory_core.

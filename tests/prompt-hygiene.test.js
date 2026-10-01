@@ -29,9 +29,9 @@ function sourceFiles(dir, acc = []) {
 // Each entry: a pattern that must not appear, and why it is banned.
 const BANNED = [
   [/LIVE FINANCIAL TELEMETRY/i, 'operator financial telemetry block inside a model prompt'],
-  [/Daily Interest Bleed/i, 'operator debt figure inside a model prompt'],
-  [/Base Loan Principal/i, 'operator debt figure inside a model prompt'],
-  [/System Deficit/i, 'operator debt figure inside a model prompt'],
+  [/Daily Interest Bleed/i, 'operator financial figure inside a model prompt'],
+  [/Base Loan Principal/i, 'operator financial figure inside a model prompt'],
+  [/System Deficit/i, 'operator financial figure inside a model prompt'],
   [/\?\?\s*9\.41/, "one operator's real daily interest as a default for every user"],
 ];
 

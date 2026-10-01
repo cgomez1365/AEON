@@ -1,12 +1,12 @@
 /**
  * AEON Jarvis — Security Layer (Blood Vessels)
- * Enforcement middleware + audit trail: correlation IDs, CORS allowlist,
- * helmet headers, rate limiting, tunnel Bearer gate, hard shell gate,
- * SDI schema enforcement, OS exec allowlists.
+ * Enforcement middleware + audit trail: correlation IDs, helmet headers,
+ * rate limiting, tunnel Bearer gate, hard shell gate, SDI schema enforcement,
+ * OS exec allowlists. CORS and the Host check live in server/earlyware.cjs
+ * (rules in src/kernel/ws.cjs checkHost / checkOrigin).
  */
 const fs = require('fs');
 const path = require('path');
-const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const { isCloud: _isCloud } = require('../src/kernel/runtime.cjs');
@@ -18,28 +18,6 @@ module.exports = ({ supabase, getLocalFile, WORKSPACE, AUDIT_FILE, SDI_VIOLATION
     req.correlationId = 'AEON-REQ-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
     next();
   };
-
-  // ── CORS allowlist ──
-  const allowedOrigins = [
-    'http://localhost:3000',
-    'https://aeon-cortex.vercel.app',
-    ...(process.env.AEON_ALLOWED_ORIGINS
-      ? process.env.AEON_ALLOWED_ORIGINS.split(',').map(s => s.trim()).filter(Boolean)
-      : [])
-  ];
-
-  // Any loopback origin is the operator's own machine — Electron (:3001), vite
-  // (:3000), and preview ports must all pass. Off-machine access is enforced by
-  // the tunnel Bearer gate, not CORS.
-  const LOOPBACK = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/;
-  const corsMiddleware = cors({
-    origin: function (origin, callback) {
-      if (!origin || LOOPBACK.test(origin) || allowedOrigins.includes(origin)) return callback(null, true);
-      console.warn(`[SECURITY] Blocked CORS origin: ${origin}`);
-      return callback(new Error(`CORS: origin not allowed`));
-    },
-    credentials: true
-  });
 
   // ── Security headers ──
   const helmetMiddleware = helmet({
@@ -274,7 +252,7 @@ module.exports = ({ supabase, getLocalFile, WORKSPACE, AUDIT_FILE, SDI_VIOLATION
   };
 
   return {
-    correlationId, corsMiddleware, helmetMiddleware, apiLimiter, tunnelGate,
+    correlationId, helmetMiddleware, apiLimiter, tunnelGate,
     requireShellAuth, SAFE_EXEC_PREFIXES, ALLOWED_ROOTS, HOME_ROOT, writeOSAudit,
     SDI_SCHEMAS, validateSDI, logSDIViolation,
   };

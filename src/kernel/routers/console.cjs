@@ -317,7 +317,7 @@ module.exports = function ({ storage, kernelLLM, _blockRegistry, _blockReadiness
       if (!ep) {
         return res.status(404).json({
           ok: false, error: `No connection for "${provider}" yet.`,
-          text: `No connection exists for ${provider} yet — add one in Settings → Connections first, then keys can be added from here.`,
+          text: `No connection exists for ${provider} yet — add one in Settings → Keys first, then keys can be added from here.`,
         });
       }
 

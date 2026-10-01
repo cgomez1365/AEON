@@ -88,6 +88,8 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     const status = typeof e === 'number' ? e : _failureStatus(e);
     const msg = typeof e === 'number' ? '' : String(e?.message || '');
     if (status === 402 || /credit|insufficient.?(funds|balance)|billing/i.test(msg)) return 'out of credits';
+    // Gemini rejects a bad key with 400 + API_KEY_INVALID, not 401/403 (A041).
+    if (status === 400 && /API_KEY_INVALID|API key not valid/i.test(msg)) return 'key rejected';
     if (status === 401 || status === 403) return 'key rejected';
     if (status === 429 || /rate.?limit|quota/i.test(msg)) return 'rate-limited';
     if (status === 404) return 'model not available';
@@ -469,7 +471,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     return new Error(
       alive.length
         ? `No local model is installed. Assign a configured provider (${alive.join(', ')}) in Settings → Model Assignment — that works now and needs no download — or install a local model in Cookbook.`
-        : 'No local model is installed and no cloud provider is configured. Install a local model in Cookbook, or add a provider key in Settings → Connections.'
+        : 'No local model is installed and no cloud provider is configured. Install a local model in Cookbook, or add a provider key in Settings → Keys.'
     );
   };
 
@@ -2002,6 +2004,14 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     throw _chainExhaustedError(attempts, registryErr || lastErr || (localOnly ? _noLocalModelError() : null), { localOnly });
   };
 
+  // One attempt in words. A bare status keeps the provider's body out of the
+  // phrase (a Gemini 429 body mentions "billing" and is still a rate limit),
+  // except for a 400, whose status alone says nothing: Gemini's rejected key
+  // is a 400 that only its body names (A041).
+  const _attemptReason = (a) => _plainReason(a.status === 400
+    ? { status: 400, message: a.message || '' }
+    : (a.status || { message: a.message }));
+
   // BO-SHIP P8c — say which provider failed and why.
   //
   // This used to throw `lastErr`: the error from the LAST provider in the
@@ -2032,7 +2042,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
         // Parenthesised: the || used to bind to the whole (never-empty) string,
         // so the message ended on "either: " (agent C2, 2026-09-23).
         + (attempts.filter((a) => a !== throttled)
-          .map((a) => `${a.provider} ${_plainReason(a.status || { message: a.message })}`).join(', ') || 'none configured')
+          .map((a) => `${a.provider} ${_attemptReason(a)}`).join(', ') || 'none configured')
       );
       err.rateLimited = true;
       err.provider = throttled.provider;
@@ -2060,7 +2070,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     // connection" is already the actionable sentence and keeps its words.
     if (attempts.some((a) => a.configured !== false)) {
       // One line per provider, in words — the raw bodies are in the server log.
-      const summary = attempts.map((a) => `${a.provider} ${_plainReason(a.status || { message: a.message })}`).join(', ');
+      const summary = attempts.map((a) => `${a.provider} ${_attemptReason(a)}`).join(', ');
       // "Add a key" is the wrong remedy when Local only kept every cloud key out.
       const plain = new Error(o.localOnly
         ? `Local only is on, so no cloud model was tried, and the local one could not answer — ${summary}. Check the local model in Cookbook, or turn Local only off in Settings → Models.`

@@ -38,11 +38,6 @@ module.exports = function createSystemRouter(deps) {
     res.json(summary);
   });
 
-  // GAS status stub (silences frontend polling)
-  router.get('/gas/status', (req, res) => {
-    res.json({ configured: false });
-  });
-
   // Health check
   router.get('/health', (req, res) => {
     res.json({

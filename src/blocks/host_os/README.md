@@ -92,7 +92,7 @@ Operator Console widget in Settings) and `/api/host_os/audit` are reads behind
 | `/api/system/scan` | POST | Pulls Supabase notes/terminal history to disk (if Supabase is set) and, with "Auto-sync to cloud" on, pushes blocks back. No indexing (the Vault indexes on boot and from Matrix ▸ Index). |
 | `/api/force-sync` | POST | Pushes recent chat and audit logs to Supabase; `{success:false, reason:'ignored'}` without it. |
 | `/api/desktop-tasks` | GET/POST | An in-memory queue (POST needs a shell-tier session). |
-| `/api/sdi/*`, `/api/gas/status` | | SDI schema validation and a GAS polling stub. |
+| `/api/sdi/*` | | SDI schema validation. |
 
 ## Known, not fixed here (kernel)
 

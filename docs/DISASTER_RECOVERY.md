@@ -39,20 +39,21 @@ cannot open.
   credentials file in one file (it asks for your password first, if you have an
   account). The banner appears once the vault holds a key.
 - **Recovery code.** When the vault is first created, AEON prints a recovery code once,
-  in its terminal window. Write it down. If `.env` is later lost or replaced, start AEON
-  with its launcher (`LAUNCH.bat`, `launch.command` or `launch.sh`): when the key in
-  `.env` is missing or does not open the vault, the launcher asks for the code. The code
+  in its terminal window. Write it down. If `.env` is later lost or replaced: on any
+  layout, a carried drive included, run `node launch.js --recover-vault` in the AEON app
+  folder and paste the code; the SEALED message prints that command with this install's
+  folder and Node.js. The desktop `LAUNCH.bat`, `launch.command` and `launch.sh` also ask
+  on their own when the key in `.env` is missing or does not open the vault. The code
   reopens the vault and writes a new key to `.env`; your stored keys come back. It opens
   the recovery slot inside `secrets/aeon-keyslots.json`, so it helps when `.env` is lost,
-  not when the `secrets/` folder is. A carried drive's launchers start AEON directly and
-  do not ask for it. The `.env` + keyslots backup above stays the first way back, and the
-  only one if you did not keep the code.
+  not when the `secrets/` folder is. The `.env` + keyslots backup above stays the first
+  way back, and the only one if you did not keep the code.
 
 If AEON starts and says the vault is **SEALED**, it found keyslots with no master key
 — usually a `.env` that was not restored with them. AEON does not mint a new key over
 an existing vault (that would lock it for good). Restore the matching `.env` from your
-backup and start AEON again, or start it with its launcher and paste your recovery code
-when it asks.
+backup and start AEON again, or run `node launch.js --recover-vault` in the AEON app
+folder and paste your recovery code.
 
 ## Restoring
 

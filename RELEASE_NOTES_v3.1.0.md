@@ -10,10 +10,14 @@ block store is a pilot and **nothing in it is for sale.**
 ## What AEON is
 
 A local-first AI workspace that runs on your own computer. Your documents, notes and
-API keys stay on it, in one folder (`~/AEON`); nothing syncs to a cloud unless you connect
-your own. You talk to it in a terminal, it indexes your files and answers from them with
-sources, and it runs AI either through cloud providers you add a key for (Gemini and Groq
-offer free keys) or through local models it downloads for you. Everything is built from
+API keys are kept on it, in one folder (`~/AEON`); nothing syncs to a cloud unless you
+connect your own. A cloud model you add a key for is sent what it needs to answer you —
+and, with no local embedding model installed, your Vault's text to index it; Settings →
+Models → **Local only** keeps all of that on your machine. The
+[Privacy notice](PRIVACY.md) lists everything AEON sends. You talk to it in a terminal,
+it indexes your files and answers from them with sources, and it runs AI either through
+cloud providers you add a key for (Gemini and Groq offer free keys) or through local
+models it downloads for you. Everything is built from
 blocks — Terminal, Aeon Matrix, Cookbook, Writer, Council, Deep Research and more — and
 you can write your own.
 
@@ -32,7 +36,12 @@ The full list, with commits, is in [CHANGELOG.md](CHANGELOG.md). In short:
 - **Security fixes.** An auth-guard bypass by letter case (`/API/...`), `/blocks/*` and
   `/ws` reachable without a session, `.env` (the vault master key) not written
   owner-only, a tunnel that could start with no login protecting it, and a "Require login"
-  switch that switched nothing. **Do not keep running 3.0.0.**
+  switch that switched nothing. AEON now answers only to its own names and its own page:
+  a rebinding site or a page on another localhost port is refused. **Do not keep running
+  3.0.0.**
+- **Opening AEON contacts nothing but AEON** (fonts and icons ship with it), and a
+  **Local only** switch keeps every model call, Vault indexing included, on this computer
+  or your own network.
 - **Your data moved out of the install folder** into `~/AEON`, so replacing AEON no
   longer replaces your data.
 - **Data-safety fixes.** A file AEON cannot read is no longer treated as empty and
@@ -43,6 +52,11 @@ The full list, with commits, is in [CHANGELOG.md](CHANGELOG.md). In short:
 - **Store install (pilot):** install and update packs from a store by id, checked
   against the store's SHA-256.
 - **Carry AEON on a drive** (macOS launcher run; Windows and Linux not yet).
+- **First run:** the launcher finds a free port (3001–3020), a second launch opens the
+  AEON already running, an interrupted install is redone, and the vault recovery code
+  works (`node launch.js --recover-vault`).
+- **Licence, terms and a privacy notice** that promise only what exists; Cookbook shows
+  each model's licence before you install it.
 
 ## Requirements
 
@@ -120,17 +134,25 @@ pull's new dependencies and interface are not picked up.
 - **No automatic updates** and no in-app notice of a new version.
 - **Installed packs live in the install folder**, so replacing the folder without
   copying them removes them.
-- **Vault recovery code:** AEON prints one when the vault is created. Only the launcher
-  (`LAUNCH.bat`, `launch.command`, `launch.sh`) asks for it, when the key in `.env` is
-  missing or does not open the vault; a carried drive's launchers do not. It reopens the
-  vault only while `secrets/aeon-keyslots.json` is still there. Back up `~/AEON` (or at
-  least `.env` together with `secrets/`): see [Backup and recovery](docs/DISASTER_RECOVERY.md).
+- **Vault recovery code:** AEON prints one when the vault is created. On any layout, a
+  carried drive included, `node launch.js --recover-vault` in the AEON app folder asks
+  for it; the desktop `LAUNCH.bat`, `launch.command` and `launch.sh` also ask on their
+  own when the key in `.env` is missing or does not open the vault. It reopens the vault
+  only while `secrets/aeon-keyslots.json` is still there. Back up `~/AEON` (or at least
+  `.env` together with `secrets/`): see [Backup and recovery](docs/DISASTER_RECOVERY.md).
 - **Blocks share one Node process.** A block's manifest governs what the kernel gives it;
   it is not a sandbox against hostile code. Install blocks you trust.
 - **Before you create a login, the global guard is off by design.** Create one if anyone
   else can use this computer. Remote Access refuses to start until one exists.
 - **Several keys per provider** are for failover across accounts or projects you are
   entitled to use, not a way around a provider's limits. Check each provider's terms.
+- **Local only is off by default.** With it off and a cloud key added, a local model that
+  cannot answer hands the prompt to that cloud provider (the chat says so in one line),
+  and with no local embedding model installed, adding a cloud key can send your Vault's
+  text to that provider for indexing. Turn it on in Settings → Models.
+- **Text in images and scanned PDFs is not read out of the box.** OCR needs English
+  language data on disk; AEON downloads it only with `AEON_OCR_DOWNLOAD=1` in `.env`, and
+  otherwise reports the file as not read, with that remedy.
 - **Dependency advisories still open.** `npm audit` on 2026-09-30 reports six, to be
   measured again at tagging:
   - **vite 5 and its esbuild:** one high, three moderate. All are in the Vite

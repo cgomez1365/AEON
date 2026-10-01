@@ -4,7 +4,7 @@
   "label": "Security",
   "icon": "Shield",
   "route": "/security",
-  "description": "The Guardian — password on every launch, idle auto-lock, encrypted sync-then-forget on walk-away, and a deployment shield that keeps CDNs from caching your data.",
+  "description": "The Guardian — a password once you create an account (off until then), idle auto-lock, encrypted sync-then-forget on walk-away, and a deployment shield that keeps CDNs from caching your data.",
   "category": "core",
   "tier": "core",
   "nav": {

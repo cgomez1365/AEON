@@ -1,9 +1,10 @@
 /**
  * Key rotation, on the path a chat turn actually takes.
  *
- * CEO, 2026-09-17: rotation is the feature Hope's CEO singled out — "make a
- * handful of free accounts, hand AEON every key, and it keeps working." The
- * code for it existed and had never once run for a registry-resolved turn:
+ * CEO, 2026-09-17: rotation is the feature a pilot user singled out — several
+ * keys the operator is entitled to use, for failover; not a way around a
+ * provider's limits. The code for it existed and had never once run for a
+ * registry-resolved turn:
  *
  *   - endpoints.cjs resolved exactly ONE credential (`ep.auth_ref`) for all
  *     ten roles, and services/ai.js consumed that single key.

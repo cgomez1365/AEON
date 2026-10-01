@@ -52,9 +52,10 @@ const ACCEPTED = {
           + 'which runs `vite build` once and then `node server/server.js`; that '
           + 'serves dist/ through Express and never starts the dev server. The '
           + 'dev server runs only under `npm start` / `npm run dev` (developer '
-          + 'entry points), and it binds every interface (vite.config.js '
-          + 'server.host: true), so the remaining exposure is a contributor on '
-          + 'Windows running it on an untrusted network. Fixed in vite 6.4.3; a '
+          + 'entry points). It listens on 127.0.0.1 only (vite.config.js '
+          + 'server.host, since 6defca4), so the remaining exposure is a '
+          + 'contributor on Windows who starts it with --host on an untrusted '
+          + 'network. Fixed in vite 6.4.3; a '
           + 'scratch `vite build` under 6.4.3 passed on 2026-09-30 but the '
           + 'upgrade is not taken yet (see docs/DEPENDENCY_DECISIONS.md).',
     review: '2026-10-31',

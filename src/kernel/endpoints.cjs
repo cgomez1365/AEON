@@ -741,7 +741,7 @@ async function resolveForProvider(provider, model, supabase, prefer = []) {
   const runtime = RUNTIME;
   const reg = await load(supabase);
   const eps = reg.endpoints.filter(e => e.provider === provider && (e.reachable_from || []).includes(runtime));
-  if (!eps.length) return { ok: false, error: `No "${provider}" connection is configured — add one in Settings → Connections.` };
+  if (!eps.length) return { ok: false, error: `No "${provider}" connection is configured — add one in Settings → Keys.` };
   const ep = (model && eps.find(e => (e.models || []).includes(model)))
     || eps.find(e => credentialRefs(e).length) || eps[0];
   // A caller with no model may name the ones it would rather have, best first

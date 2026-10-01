@@ -160,4 +160,5 @@ under `Vault/Agents/vp/memory/` visible in Aeon Matrix.
 ## To Activate
 This block is automatically detected by the AEON OS Kernel router and
 dual-mounted at `/api` and `/block/memory_core`. Drop this folder into
-`src/blocks/` and restart the Command Center.
+`src/blocks/`, then run `npm run prep:routes` and `npm run build`; a
+restart alone does not rebuild the interface.

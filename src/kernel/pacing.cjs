@@ -51,7 +51,7 @@ async function pace(key, rpm, { maxWaitMs = 60_000 } = {}) {
     _buckets.set(key, b);
     const waitFor = Math.max(250, (b.stamps[0] + 60_000) - Date.now());
     if (Date.now() - started + waitFor > maxWaitMs) {
-      const err = new Error('This endpoint is at its requests-per-minute limit. Wait a moment and try again, or raise the limit in Settings → Connections.');
+      const err = new Error('This endpoint is at its requests-per-minute limit. Wait a moment and try again, or raise the limit in Settings → Keys.');
       err.localThrottle = true; // structural — never scraped from message text
       throw err;
     }

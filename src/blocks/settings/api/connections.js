@@ -228,10 +228,10 @@ module.exports = (app, deps) => {
 
   // ── Key pools: several accounts behind one connection ──────────────
   //
-  // This is what "a few free accounts, and AEON rotates between them" means in
-  // the UI. The kernel round-robins the pool per turn, paces each account on
-  // its own per-minute budget, and rests one that answers 429/402/401 instead
-  // of condemning the whole provider.
+  // Several keys the operator is entitled to use, for failover; not a way
+  // around a provider's limits. The kernel round-robins the pool per turn,
+  // paces each key on its own per-minute budget, and rests one that answers
+  // 429/402/401 instead of condemning the whole provider.
 
   // POST /api/connections/:id/keys — add an account to this connection
   app.post('/api/connections/:id/keys', async (req, res) => {

@@ -33,7 +33,9 @@ backward compatibility — do not rename those route strings).
 - **Narrator** (`components/NarratorPlayer.jsx`) — sentence-by-sentence
   text-to-speech via the browser's `speechSynthesis` API, with themes, focus
   mode, adjustable speed/voice, and resumable playback position (persisted
-  server-side).
+  server-side). The default voice is one that runs on this computer. Online
+  voices (Chrome's "Google …", Edge's "Online (Natural)") are marked in the
+  picker, because they send each sentence to the browser's speech service.
 - **Ingestion & indexing** (`api/ingest.cjs`) — incrementally walks the Vault,
   extracts text from every supported file, and maintains `vault_index.json`
   (the Table of Contents): one entry per file with title, a short summary,
@@ -50,7 +52,11 @@ backward compatibility — do not rename those route strings).
   zip/XML parsing (.docx is refused — see tests/docx-support-removed.test.js), PDFs via `pdf-parse` with a
   fallback to page-by-page OCR (`pdfjs-dist` + `@napi-rs/canvas` +
   `tesseract.js`) for scanned PDFs, images OCR'd directly. OCR results are
-  cached on disk (`data/.extract-cache/`, capped at 100 entries).
+  cached on disk (`data/.extract-cache/`, capped at 100 entries). OCR's
+  English data (`eng.traineddata`) is read from `data/.extract-cache/` or the
+  `@tesseract.js-data/eng` package. AEON downloads it from cdn.jsdelivr.net
+  only with `AEON_OCR_DOWNLOAD=1` in `.env`; otherwise the image is reported
+  as not read, with that remedy.
 - **Cloud vault sync** (`api/cloudvault.cjs`) — optional, incremental mirror
   of indexed docs to Supabase `vault_docs` so a deployed Command Center has
   read access to Vault content. Triggered via `/vault-push`.

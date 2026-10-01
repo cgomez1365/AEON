@@ -47,9 +47,10 @@ const PROVIDER_CREDENTIALS_FILE = path.join(SECURITY_VAULT_DIR, 'provider_creden
  *
  * This was a flat list of exact names, which enumerated GEMINI_FREE_KEY_1..3
  * and stopped: Gemini could hold three accounts and every other provider
- * exactly one, and a fourth Gemini key was refused. The operator's whole
- * strategy — several free accounts per provider, AEON rotating between them —
- * was unreachable from the UI for every provider but one, and capped there.
+ * exactly one, and a fourth Gemini key was refused. Several keys per
+ * provider — keys the operator is entitled to use, for failover; not a way
+ * around a provider's limits — were unreachable from the UI for every
+ * provider but one, and capped there.
  *
  * It stays an allowlist. An unlisted base is still refused, and the suffix
  * must be a plain number: nothing here admits an arbitrary name.

@@ -127,4 +127,5 @@ If `fleet_control` is ever removed, the What Fits tab will fail to load data
 ## To activate
 
 Automatically detected by the AEON kernel. Drop this folder into
-`src/blocks/` and restart the Command Center.
+`src/blocks/`, then run `npm run prep:routes` and `npm run build`; a
+restart alone does not rebuild the interface.

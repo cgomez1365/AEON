@@ -16,8 +16,8 @@ function getProviderRegistry(ns) {
     id: p.id, label: p.label, icon: p.icon, kind: p.kind,
     fallbackModels: p.registryModels || [],
     // All vault accounts registered for this provider. Length > 1 when the
-    // operator added multiple keys of the same type (e.g. two OpenRouter
-    // accounts) for roulette-mode rotation.
+    // operator added several keys of the same type: keys the operator is
+    // entitled to use, for failover; not a way around a provider's limits.
     accounts: p.accounts || [],
   }));
 }
@@ -888,7 +888,6 @@ function AccountIdentities({ endpoints, nervousSystem }) {
                 {detail.keyCount > 0 && <div className="acct-id-auto-row"><span className="acct-id-auto-label">Keys</span><span className="acct-id-auto-val">{detail.keyCount} key(s) · {detail.plan}</span></div>}
                 {detail.channelHandle && <div className="acct-id-auto-row"><span className="acct-id-auto-label">Channel</span><span className="acct-id-auto-val">{detail.channelHandle}</span></div>}
                 {detail.email && <div className="acct-id-auto-row"><span className="acct-id-auto-label">Account</span><span className="acct-id-auto-val">{detail.email}</span></div>}
-                {detail.scriptUrl && <div className="acct-id-auto-row"><span className="acct-id-auto-label">Script</span><span className="acct-id-auto-val">{detail.scriptUrl}</span></div>}
               </div>
             )}
             {/* Quick key input for unconfigured services */}
@@ -1064,12 +1063,13 @@ function BlockAssignPicker({ provider, providerBlocks, allBlocks, selected, onCh
 
 // ── Key pool: several accounts behind one connection ────────────────
 //
-// The operator's strategy is "make a few free accounts and give AEON every
-// key." That only means something if they can SEE the pool — how many
-// accounts a connection holds, which one takes the next turn, and which are
-// resting after a rate limit — and can add a key without editing a file. The
-// kernel round-robins the pool per call and paces each account on its own
-// per-minute budget, so a second key is real extra throughput, not a spare.
+// A connection can hold several keys the operator is entitled to use, for
+// failover; not a way around a provider's limits. That only means something
+// if they can SEE the pool — how many keys a connection holds, which one takes
+// the next turn, and which are resting after a rate limit — and can add a key
+// without editing a file. The kernel round-robins the pool per call and paces
+// each key on its own per-minute budget, so a bad spare is found early rather
+// than at the moment it is needed.
 function KeyPool({ ep, pool, onChange }) {
   const [open, setOpen] = useState(false);
   const [apiKey, setApiKey] = useState('');
@@ -3054,7 +3054,7 @@ function GetStartedStrip() {
       </div>
       <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
         <Step n="1" done={st.key} title="Add a key" desc="One AI provider — or run local models, no key needed." />
-        <Step n="2" done={st.supabase} title="Connect Supabase" desc="Your data's permanent home. The one setup that matters." />
+        <Step n="2" done={st.supabase} title="Connect Supabase (optional)" desc="Cloud sync to a database you own. AEON works without it." />
         <Step n="3" done={allDone} title="You're running" desc={`${st.blocks} blocks ready. Pick your models below.`} />
       </div>
     </div>
@@ -3201,11 +3201,19 @@ function BlocksNeedsPanel({ onManageModels }) {
                     a disjunction AEON can already resolve (`configured` is in the
                     same payload), and a remedy that no longer exists — the local
                     gate was removed in BO-2. Name one cause, and a live one. §08 */}
+                {/* Local needs no key: it needs the runtime and a model, both
+                    installed from Cookbook. The old text sent both to a
+                    "Connections" tab that does not exist; keys live under
+                    Settings → Keys. */}
                 {providerMissing && (
                   <div style={{ fontSize: 11, color: '#ffb454', marginTop: 3 }}>
-                    ⚠ {cfg.provider} {health?.providers?.[cfg.provider]?.configured
-                      ? 'is configured but not responding — check Settings → Connections'
-                      : 'has no key configured — add one in Settings → Connections'}
+                    ⚠ {cfg.provider} {cfg.provider === 'local'
+                      ? (health?.providers?.local?.configured
+                        ? 'is installed but not responding — check it in Cookbook'
+                        : 'needs the local runtime and a model — install them in Cookbook')
+                      : (health?.providers?.[cfg.provider]?.configured
+                        ? 'is configured but not responding — check Settings → Keys'
+                        : 'has no key configured — add one in Settings → Keys')}
                   </div>
                 )}
                 {supabaseMissing && <div style={{ fontSize: 11, color: '#ffb454', marginTop: 3 }}>⚠ needs Supabase — connect it under Services</div>}

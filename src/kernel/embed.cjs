@@ -68,17 +68,17 @@ async function embedOpenAICompatible(text, { base_url, apiKey, model }) {
     const body = (await res.text().catch(() => '')).slice(0, 200);
     if (body) console.warn(`[EMBED] endpoint ${res.status}: ${body.replace(/\s+/g, ' ')}`);
     if (res.status === 401 || res.status === 403) {
-      throw embedError('embed_auth', 'This endpoint rejected the key assigned to the Embedding role.', 'Check the key in Settings → Connections.');
+      throw embedError('embed_auth', 'This endpoint rejected the key assigned to the Embedding role.', 'Check the key in Settings → Keys.');
     }
     if (res.status === 429) {
-      const e = embedError('embed_rate_limited', 'The embedding endpoint is rate limiting this run.', 'Lower the requests-per-minute for this endpoint in Settings → Connections, or install a local embedding model in Cookbook.');
+      const e = embedError('embed_rate_limited', 'The embedding endpoint is rate limiting this run.', 'Lower the requests-per-minute for this endpoint in Settings → Keys, or install a local embedding model in Cookbook.');
       e.rateLimited = true;
       throw e;
     }
     throw embedError(
       'embed_failed',
       `The embedding endpoint answered ${res.status}.`,
-      'Check the endpoint address and key in Settings → Connections, or install a local embedding model in Cookbook. The endpoint\u2019s own message is in the server log.',
+      'Check the endpoint address and key in Settings → Keys, or install a local embedding model in Cookbook. The endpoint\u2019s own message is in the server log.',
     );
   }
   const vector = (await res.json())?.data?.[0]?.embedding;
@@ -99,7 +99,7 @@ async function embedGeminiTransport(text, { base_url, apiKey, model }) {
   });
   if (!res.ok) {
     if (res.status === 429) {
-      const e = embedError('embed_rate_limited', 'The embedding endpoint is rate limiting this run.', 'Lower the requests-per-minute for this endpoint in Settings → Connections, or install a local embedding model in Cookbook.');
+      const e = embedError('embed_rate_limited', 'The embedding endpoint is rate limiting this run.', 'Lower the requests-per-minute for this endpoint in Settings → Keys, or install a local embedding model in Cookbook.');
       e.rateLimited = true;
       throw e;
     }

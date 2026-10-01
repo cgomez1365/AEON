@@ -5,8 +5,11 @@ commit it comes from, so it can be checked. A version is listed here only once i
 tagged; until then its heading says so.
 
 <!-- Range of the 3.1.0 entry: v3.0.0 (e25f5ee, 2026-09-14) to fe93dbf (2026-09-30),
-     169 commits. Anything merged after fe93dbf and before the v3.1.0 tag is added
-     here before tagging, and the heading's "not tagged yet" is replaced by the date. -->
+     169 commits; then dc8e3a1, the five launch commits 6defca4, 2b4b364, 801fda5,
+     601155b and 0c80a7c, and the release-prep commit on top of 0c80a7c ("release prep"
+     below; 176 commits in all). Anything merged after that and before the v3.1.0 tag
+     is added here before tagging, and the heading's "not tagged yet" is replaced by
+     the date. -->
 
 ## 3.1.0 — not tagged yet (planned for 2026-10-01)
 
@@ -41,6 +44,19 @@ from 3.1.0 to 3.0.0 is not supported.
   it as they stop everything else (4008905).
 - Cookbook's model server binds to this computer only, and gets the model file it was
   asked for (5015de1).
+- AEON answers only to its own names: `localhost`, `127.x`, `[::1]`, an IP address, the
+  running tunnel's name, or a name in `AEON_ALLOWED_ORIGINS`. Any other `Host` is refused
+  (421) before a route runs, which stops DNS rebinding (6defca4).
+- A browser page is answered only from AEON's own origin, the Vite dev server or
+  `AEON_ALLOWED_ORIGINS`. 3.0.0 trusted any localhost port, with credentials, and an
+  unused `vercel.app` origin; a refusal is now 403, not 500, and HTTP and `/ws` share
+  one rule (6defca4; the dead allowlist code was removed in release prep).
+- While Remote Access runs with login off, tunnel requests are refused. The credential
+  export before an account exists is refused to the tunnel, to other origins and to
+  proxied requests (6defca4).
+- File Manager's deny-list (`.ssh`, `.env`, `secrets`, …) matches every spelling the
+  disk would open and the path the filesystem resolves (6defca4).
+- The dev server (`npm start`) listens on 127.0.0.1 only (6defca4).
 - Dependencies: adm-zip 0.6.1 (8d678cc); express, qs, body-parser, multer and
   ip-address updated (fe93dbf). Still open (`npm audit`, 2026-09-30): one high and three
   moderate advisories in vite 5 and its esbuild, all in the Vite *dev server*, which the
@@ -48,6 +64,21 @@ from 3.1.0 to 3.0.0 is not supported.
   high and one low in `@grpc/grpc-js`, first reported after fe93dbf, which arrives through
   `firebase`. AEON uses firebase only in the browser interface, whose build does not
   include grpc-js. Reasons and review dates: `docs/DEPENDENCY_DECISIONS.md`.
+
+### Privacy
+
+- Opening AEON contacts nothing but AEON: the fonts ship with it, Quick Links draws a
+  letter badge instead of fetching each link's icon from Google, and a saved Deep Research
+  report no longer loads Google Fonts (2b4b364).
+- **Settings → Models → Local only** (off by default): no cloud model is tried, not even
+  as a fallback, and the Vault is embedded only by a model on this computer or your own
+  network (2b4b364).
+- OCR's language data is read from disk, and downloaded from jsDelivr only with
+  `AEON_OCR_DOWNLOAD=1` in `.env`. Without the data, an image or scanned PDF is reported
+  as not read, with that remedy (2b4b364).
+- The Narrator's default voice runs on this computer; online voices are marked (2b4b364).
+- New [PRIVACY.md](PRIVACY.md): what AEON keeps and what it sends, to whom (601155b,
+  updated in release prep).
 
 ### Your data
 
@@ -73,6 +104,12 @@ from 3.1.0 to 3.0.0 is not supported.
   rewrite the model cut off no longer replaces the document (6a556ff).
 - Quick Links persist without Firebase (718b505).
 - Building a carried drive refuses to replace the data it is running on (e44058b).
+- The vault recovery code can be used: `node launch.js --recover-vault` on any layout,
+  and the desktop launchers ask for it when the key in `.env` does not open the vault
+  (0c80a7c).
+- A portable USB drive (`build-usb.js` without `--carry-home`) keeps its vault key from
+  boot to boot; its launchers rebuilt `.env` from the template and dropped the key, so the
+  vault was sealed from the second boot on (release prep).
 
 ### Models, keys and roles
 
@@ -90,6 +127,15 @@ from 3.1.0 to 3.0.0 is not supported.
 - The model picker lists free models first, then a size guess it labels as a guess
   (3231a73, eb1ace3). Groq's retired Llama 3.x defaults are replaced (4008905).
 - Memory spends the model's real context window (ae573f6).
+- Default roles name a local model the catalog can install (`qwen3-1.7b-q8`, not
+  `qwen3-1.7b-q4`) (0c80a7c).
+- With no embedding model, `/ask` names the remedy (install nomic-embed-text in Cookbook)
+  instead of sending you to `/index-brain` (0c80a7c).
+- A key saved in Settings → Keys joins the running key pool at once, as the reply already
+  said; a Gemini key Google rejects reads "key rejected", and the Test button shows
+  Google's reason (release prep).
+- Cookbook shows each model's licence before Install; Llama and Gemma rows link Meta's or
+  Google's licence and use policy (601155b).
 
 ### Blocks and the store (pilot)
 
@@ -106,6 +152,20 @@ from 3.1.0 to 3.0.0 is not supported.
   Master guide name the real steps that make a block appear — routes, build, rescan — not
   a restart (ef8ffee, c37f82b, 4a7cc4b, ef14045).
 - Readiness names a block's missing dependencies (c907243).
+
+### First run and the launcher
+
+- The launcher takes the first port from 3001 to 3020 that nothing answers on, and a
+  second launch opens the AEON already running on this data folder instead of starting
+  another (0c80a7c).
+- An interrupted first install is detected and installed again, instead of reporting
+  "Dependencies ready" and failing (0c80a7c).
+- First run says plainly that there is no password until you create one, and the cloud
+  database is optional; Settings no longer calls Supabase "the one setup that matters",
+  and its pointers name tabs that exist (0c80a7c, release prep). The Security page no
+  longer claims to protect a stolen laptop (0c80a7c).
+- On macOS older than 13.5, `launch.command` installs Node 22 LTS, which that macOS can
+  run, instead of the current LTS, which it cannot (release prep).
 
 ### Carry AEON on a drive
 
@@ -139,12 +199,27 @@ from 3.1.0 to 3.0.0 is not supported.
   report spend, calls and failures as they are, and Quick Links can be edited and
   reordered (4c89f25, 9e78a88, f55aa27).
 - A local model's server exits when AEON does (5be3acb).
+- Dashboard's Models card: the label sits in the ring's centre and the bar labels are
+  readable (dc8e3a1).
 
 ### Removed
 
 - 58 files nothing loaded (a88b2f0); 17 unused packages, the never-deployed Vercel
   mirror and a risky patch script (12b0b57); a 10-second poll nothing read (4fa1e2f);
   duplicate and dead routes (3c4c313, 304985e, b20ced0).
+- The Google Apps Script service (`VITE_GAS_URL`), whose only consumer was deleted
+  earlier, is gone from Settings, `.env.example` and its status route (release prep).
+
+### Docs and licence
+
+- README: the download link is the latest release; requirements, Gatekeeper steps, safe
+  updates and the upgrade from 3.0.0 are written out; docs no longer call llama.cpp
+  bundled; Backup and recovery is rewritten for the person running AEON (801fda5).
+- LICENSE and Terms no longer promise a per-block licence that does not exist; the
+  contact is GitHub Issues (601155b). The portable drive's README states the AEON
+  Community License (it said Apache-2.0) (release prep).
+- The dependency-audit gate covers the whole tree, and its acceptances were re-reviewed,
+  to be reviewed again by 2026-10-31 (601155b).
 
 ### Known limits
 

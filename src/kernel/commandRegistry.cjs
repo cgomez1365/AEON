@@ -177,7 +177,7 @@ module.exports = function ({ blockReadiness = {}, isVercel = false, writeOSAudit
     ];
     const when = String(spec.when || '');
     const why = !ready && missing.length
-      ? `${spec.blockLabel} needs: ${missing.join(', ')}. Add them in Settings → Connections.`
+      ? `${spec.blockLabel} needs: ${missing.join(', ')}. Add them in Settings → Keys.`
       : !ready
         ? `${spec.blockLabel} is not ready.`
         : /\bsupabase\b/.test(when)
