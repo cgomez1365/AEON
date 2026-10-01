@@ -151,7 +151,11 @@ describe('the gate', () => {
   });
 
   it('strips the force prefix so the model never sees the command', () => {
-/* AEON-REWRITE[recall] 6 line(s) removed: written on the 2026-09-24 work machine; re-implement from the recall spec */
+    // Whole-object equality: an extra key in the result fails here. A question
+    // is not a list request; only "list" opens the cheap titles-only mode.
+    expect(ctx.parseRecallInput('/matrix what changed')).toEqual({ query: 'what changed', forced: true, manifest: false });
+    expect(ctx.parseRecallInput('ordinary text')).toEqual({ query: 'ordinary text', forced: false, manifest: false });
+    expect(ctx.parseRecallInput('/matrix list phishing')).toEqual({ query: 'phishing', forced: true, manifest: true });
   });
 });
 

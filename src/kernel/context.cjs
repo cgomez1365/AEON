@@ -97,7 +97,39 @@ const FORMATTING = 'Your answer is read in a narrow terminal panel, so prefer sh
 // The wake phrase. Was a private const in chat-stream.cjs; the terminal needs
 // the same one, and two copies of a trigger phrase drift exactly like two
 // copies of a gate do.
-/* AEON-REWRITE[recall] 21 line(s) removed: written on the 2026-09-24 work machine; re-implement from the recall spec */
+//
+// The memory persona was renamed from "vp" to "Aeon" (Agents/vp became
+// Agents/Aeon) and the trigger was not, so "aeon come online" did nothing and
+// said nothing — which, to the operator, looked exactly like broken memory.
+// Both words wake now. A short spoken name may sit between the wake word and
+// "online" ("aeon shield come online"); it is captured, never required.
+//
+// Shape: the wake word on its own (word boundary before, whitespace or ,/!
+// after), an optional name of 1–31 characters starting with a letter, an
+// optional comma or "!", whitespace, an optional "come", then "online" as a
+// whole word. The name is the SHORTEST run that lets the rest match, so
+// "aeon shield come online" names "shield", not "shield come". 31 characters
+// is a spoken handle, not a sentence: anything longer is not a wake phrase.
+//
+// Case-insensitive and deliberately NOT global or sticky: both routes call
+// .test() on every message, and a stateful pattern alternates its answers.
+// Exactly one capture group — the name.
+const WAKE_RE = /\b(?:aeon|vp)(?:\s+([a-z][a-z0-9 _-]{0,30}?))?[,!]?\s+(?:come\s+)?online\b/i;
+
+/**
+ * { wake, agent } for a message. `agent` is the spoken name, trimmed and
+ * lower-cased, or null when none was given ("come" in the name slot is the
+ * word, not a name). An unknown name is not an error: resolving it is the
+ * caller's job (agentRoster.resolve), and if it cannot be resolved AEON
+ * itself wakes — a name nobody recognises must not cancel a wake the
+ * operator plainly asked for.
+ */
+function parseWake(message) {
+  const m = WAKE_RE.exec(String(message ?? ''));
+  if (!m) return { wake: false, agent: null };
+  const name = (m[1] || '').trim().toLowerCase();
+  return { wake: true, agent: name && name !== 'come' ? name : null };
+}
 
 /**
  * Everything a single-prompt transport needs, as one string.
@@ -130,29 +162,76 @@ function isRecallQuery(text) {
 }
 
 /**
-/* AEON-REWRITE[recall] 1 line(s) removed: written on the 2026-09-24 work machine; re-implement from the recall spec */
+ * Split an operator's line into the three things recall needs: { query, forced, manifest }.
  *
  * The force prefix is stripped so the model never sees the command itself —
  * and the SAME string is both gated and queried. The old copies gated on one
  * field and queried with another, which is how one of them ended up unable to
  * fire for any real caller.
-/* AEON-REWRITE[recall] 5 line(s) removed: written on the 2026-09-24 work machine; re-implement from the recall spec */
-/* AEON-REWRITE[recall] 6 line(s) removed: written on the 2026-09-24 work machine; re-implement from the recall spec */
+ *
+ * `/matrix list <query>` asks for a MANIFEST: the titles and paths of what
+ * matched, without the passages. Passages are the expensive part of recall —
+ * hundreds of tokens each against tens for a title line — and very often the
+ * operator first wants to know WHAT is there, then opens one document with
+ * /ask-doc. The keyword is stripped, so the search runs on the rest.
+ *
+ * Only "list" opens that mode. The first version also took "what" and
+ * "which", and those open ordinary questions far more often than they ask for
+ * a list: "/matrix what changed" quietly became a title search for "changed",
+ * and the operator got an answer to a question they did not ask. A trigger
+ * word must not be one people start real questions with.
  */
 function parseRecallInput(message) {
   const raw = String(message || '');
   const forced = raw.toLowerCase().startsWith(FORCE_PREFIX);
-/* AEON-REWRITE[recall] 1 line(s) removed: written on the 2026-09-24 work machine; re-implement from the recall spec */
+  let query = forced
     ? raw.slice(FORCE_PREFIX.length).trim().replace(/^"(.*)"$/, '$1')
     : raw;
-/* AEON-REWRITE[recall] 1 line(s) removed: written on the 2026-09-24 work machine; re-implement from the recall spec */
-/* AEON-REWRITE[recall] 1 line(s) removed: written on the 2026-09-24 work machine; re-implement from the recall spec */
-/* AEON-REWRITE[recall] 20 line(s) removed: written on the 2026-09-24 work machine; re-implement from the recall spec */
+  let manifest = false;
+  const listed = forced ? /^list\s+([\s\S]+)$/i.exec(query) : null;
+  if (listed) {
+    manifest = true;
+    query = listed[1].trim().replace(/^"([\s\S]*)"$/, '$1');
+  }
+  return { query, forced, manifest };
+}
+
+/** One citation, in the shape the passages path and the terminal use. */
+function citationOf(d, i) {
+  return {
+    n: i + 1,
+    title: d?.metadata?.source || d?.id || 'document',
+    path: d?.metadata?.path || d?.metadata?.source_id || d?.id || null,
+    similarity: typeof d?.similarity === 'number' ? Number(d.similarity.toFixed(3)) : null,
+  };
+}
+
+/**
+ * The model-facing list of what matched: titles, paths, scores — never a
+ * word of content. `reason` is 'asked' (the operator wanted the list) or
+ * 'too-large' (passages were wanted but none fit the budget, and a list of
+ * names is still cheap enough to hand over).
+ *
+ * The closing instruction is not optional. A filename invites a model to
+ * describe the file with confidence; it has read nothing, and must say so.
+ */
+function renderManifest(docs, matched, query, budgetTokens, reason = 'asked') {
+  const rows = docs.map((d, i) => {
     const title = d?.metadata?.source || d?.id || 'document';
     const p = d?.metadata?.path || d?.metadata?.source_id || d?.id || '';
-/* AEON-REWRITE[recall] 5 line(s) removed: written on the 2026-09-24 work machine; re-implement from the recall spec */
-/* AEON-REWRITE[recall] 1 line(s) removed: written on the 2026-09-24 work machine; re-implement from the recall spec */
-/* AEON-REWRITE[recall] 9 line(s) removed: written on the 2026-09-24 work machine; re-implement from the recall spec */
+    const where = p && p !== title ? ` — ${p}` : '';
+    const score = typeof d?.similarity === 'number' ? ` · ${d.similarity.toFixed(2)}` : '';
+    return `${i + 1}. ${title}${where}${score}`;
+  });
+  const one = matched === 1;
+  const counted = `${matched} ${one ? 'document' : 'documents'} in the operator's vault ${one ? 'matches' : 'match'} "${query}".`;
+  const tooLarge = `None of them could be loaded within this turn's ${budgetTokens}-token context budget — they matched, but none fit — so their titles are listed instead of an empty answer.`;
+  const asked = 'The operator asked for the list of matches, not their contents.';
+  return `\n\n[AEON SECOND BRAIN CONTEXT — SEARCH RESULTS ONLY]\n${counted} ${reason === 'too-large' ? tooLarge : asked} Showing ${rows.length}.\n\n`
+    + rows.join('\n')
+    + '\n\nYou have TITLES ONLY. You have not read any of these documents: do not say what any of them contains, do not summarise one, and do not answer a question from one. '
+    + 'Present the list and invite the operator to pick one to open (/ask-doc "<title or path>" <question>). '
+    + 'If they asked a question, point to the titles that look relevant and explain that a document has to be opened before you can answer from it.';
 }
 
 /**
@@ -232,9 +311,11 @@ async function buildRecallContext(message, {
   budgetTokens = 2048,
   timeoutMs = 8000,
   fetchImpl = null,
-/* AEON-REWRITE[recall] 1 line(s) removed: written on the 2026-09-24 work machine; re-implement from the recall spec */
+  manifest = false,
 } = {}) {
-/* AEON-REWRITE[recall] 2 line(s) removed: written on the 2026-09-24 work machine; re-implement from the recall spec */
+  const parsed = parseRecallInput(message);
+  const { query, forced } = parsed;
+  const listMode = !!manifest || parsed.manifest;
   const base = {
     query, forced, ran: false, ok: true, count: 0, dropped: 0,
     citations: [], context: '',
@@ -294,16 +375,39 @@ async function buildRecallContext(message, {
   const docs = Array.isArray(data.documents) ? data.documents : [];
 
   if (docs.length) {
-/* AEON-REWRITE[recall] 20 line(s) removed: written on the 2026-09-24 work machine; re-implement from the recall spec */
+    // One matched total for every figure this function reports. The retriever
+    // cuts `documents` to k, so its `matched` can exceed what came back; when
+    // it is missing or not a real number, what came back is all we know.
+    const matchedTotal = Number.isFinite(data.matched) ? data.matched : docs.length;
+
+    // List mode: hand over the names before any budget fitting. A title line
+    // costs tens of tokens where a passage costs hundreds, and the retriever
+    // already capped the list at k.
+    if (listMode) {
+      return {
+        query, forced, ran: true, ok: true, manifest: true,
+        count: docs.length, dropped: 0, matched: matchedTotal,
+        citations: docs.map(citationOf),
+        context: renderManifest(docs, matchedTotal, query, budgetTokens, 'asked'),
+      };
+    }
+
     const { kept, dropped, tokensUsed } = fitDocuments(docs, budgetTokens);
 
     // Every match was too large for this window — a real case on a small local
     // model. Rendering the "relevant knowledge" header above an empty list
     // would read as "searched, found nothing", which is the opposite of true.
-/* AEON-REWRITE[recall] 5 line(s) removed: written on the 2026-09-24 work machine; re-implement from the recall spec */
+    //
+    // It used to apologise instead: "documents matched, none fit", and the
+    // operator was left with no idea WHAT had matched. A list of titles fits a
+    // budget that could not hold one passage, and once the operator can see
+    // the names, narrowing the question or opening one is easy.
     if (!kept.length) {
       return {
-/* AEON-REWRITE[recall] 9 line(s) removed: written on the 2026-09-24 work machine; re-implement from the recall spec */
+        query, forced, ran: true, ok: true, manifest: true,
+        count: 0, dropped, matched: matchedTotal, tokensUsed: 0,
+        citations: docs.map(citationOf),
+        context: renderManifest(docs, matchedTotal, query, budgetTokens, 'too-large'),
       };
     }
     const citations = kept.map((k, i) => ({
@@ -319,7 +423,7 @@ async function buildRecallContext(message, {
       : '';
     // How many cleared the floor versus how many are shown. The retriever cuts
     // to k; the model must know it is looking at a sample.
-/* AEON-REWRITE[recall] 1 line(s) removed: written on the 2026-09-24 work machine; re-implement from the recall spec */
+    const matched = matchedTotal;
     const subsetNote = matched > kept.length
       ? `\n\nShowing ${kept.length} of ${matched} matching documents.`
       : '';
@@ -559,6 +663,7 @@ module.exports = {
   FORCE_PREFIX,
   FORMATTING,
   WAKE_RE,
+  parseWake,
   composePrompt,
   isRecallQuery,
   parseRecallInput,
