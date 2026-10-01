@@ -12,7 +12,17 @@ tagged; until then its heading says so.
      is added here before tagging, and the heading's "not tagged yet" is replaced by
      the date. -->
 
-## 3.1.0 — not tagged yet (planned for 2026-10-01)
+## 3.1.1 — 2026-10-01
+
+Same behaviour as 3.1.0; four features rebuilt from written specifications.
+
+- **Re-implemented, behaviour unchanged:** context-window budgeting (the memory budget
+  follows each model's real context window), recall and the wake phrase, chat distill to
+  Memory Core with the /ask-doc quote hints, and Master → Install from the store
+  (f37bbc8, bb5883a, 613c665, f6c3574, 56e7f05). 3.1.0's own tests for these features
+  pass unchanged on the new code; new tests were added from the specifications.
+
+## 3.1.0 — 2026-10-01
 
 **Read before upgrading from 3.0.0:** 3.0.0 kept your data inside its own folder; 3.1.0
 keeps it in `~/AEON` and moves it there on its first launch, from its own folder only.

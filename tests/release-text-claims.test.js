@@ -23,10 +23,13 @@ const tracked = execFileSync('git', ['ls-files'], { cwd: ROOT, encoding: 'utf8' 
 const code = (f) => read(f).replace(/\/\*[\s\S]*?\*\//g, '').split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');
 
 describe('the version', () => {
-  it('package.json and both version fields of package-lock.json agree, and say 3.1.0', () => {
+  it('package.json and both version fields of package-lock.json agree, and match the newest CHANGELOG release', () => {
     const pkg = JSON.parse(read('package.json'));
     const lock = JSON.parse(read('package-lock.json'));
-    expect(pkg.version).toBe('3.1.0');
+    // The version a release carries is the newest heading in CHANGELOG.md, so a bump
+    // that forgets either file fails here instead of shipping two different numbers.
+    const newest = /^## (\d+\.\d+\.\d+)\b/m.exec(read('CHANGELOG.md'))[1];
+    expect(pkg.version).toBe(newest);
     expect(lock.version).toBe(pkg.version);
     expect(lock.packages[''].version).toBe(pkg.version);
   });
