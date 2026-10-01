@@ -823,6 +823,27 @@ export default function CookbookHardware() {
                           {m.fit.reason}
                         </div>
                       )}
+                      {/* The license, before the Install button is pressed. Llama
+                          and Gemma also say whose terms using them accepts — the
+                          public copies AEON downloads never ask (A074). */}
+                      {m.licenseTerms && (
+                        <div style={{ fontSize: '10px', color: 'var(--text-dim)', marginTop: 2 }}>
+                          License:{' '}
+                          {m.licenseTerms.url ? (
+                            <a href={m.licenseTerms.url} target="_blank" rel="noopener noreferrer"
+                               style={{ color: 'inherit', textDecoration: 'underline' }}>{m.licenseTerms.name}</a>
+                          ) : m.licenseTerms.name}
+                        </div>
+                      )}
+                      {m.licenseTerms?.notice && (
+                        <div style={{ fontSize: '10px', color: '#e0a94a', marginTop: 2, lineHeight: 1.5 }}>
+                          {m.licenseTerms.notice}
+                          {m.licenseTerms.policyUrl && (
+                            <>{' '}<a href={m.licenseTerms.policyUrl} target="_blank" rel="noopener noreferrer"
+                                      style={{ color: 'inherit', textDecoration: 'underline' }}>{m.licenseTerms.policyName}</a></>
+                          )}
+                        </div>
+                      )}
                     </div>
                     {m.installed ? (
                       <span style={{ fontSize: '11px', color: '#22d36f' }}>✓ installed</span>

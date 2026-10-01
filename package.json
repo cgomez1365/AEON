@@ -1,7 +1,7 @@
 {
   "name": "aeon",
   "description": "AEON — a local-first AI workspace built from governed blocks. Runs anywhere.",
-  "author": "Broken Gear Industries <cristian@brokengear.io>",
+  "author": "Broken Gear Industries",
   "private": true,
   "license": "SEE LICENSE IN LICENSE",
   "version": "3.0.0",

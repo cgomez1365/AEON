@@ -85,6 +85,60 @@ function modelArg(args) {
   return null;
 }
 
+// ── A model's license, shown before its download starts ─────────────────────
+//
+// Every catalogue entry carries `license` and `licenseUrl`, and nothing showed
+// them: a Cookbook row was a name, a size and an Install button (audit finding
+// A074, 2026-09-30). That matters most for Llama and Gemma. Using those models
+// means accepting Meta's or Google's terms, and Meta's and Google's own
+// downloads ask first; the catalogue uses public copies that do not ask (a
+// gated repo needs a token AEON never ships — model-catalog.json's own note).
+// So AEON says it itself, and links the licensor's terms rather than the
+// re-host's page. It informs; it does not block the download.
+//
+// Matched on the display name as well as the license field: the catalogue
+// labels Llama 3.1 8B "Llama 3 Community License". Most specific first.
+const LICENSOR_TERMS = [
+  { match: /llama[\s-]*3\.2/i, licensor: 'Meta', name: 'Llama 3.2 Community License',
+    url: 'https://huggingface.co/meta-llama/Llama-3.2-1B-Instruct/blob/main/LICENSE.txt',
+    policyName: 'Acceptable Use Policy', policyUrl: 'https://www.llama.com/llama3_2/use-policy' },
+  { match: /llama[\s-]*3\.1/i, licensor: 'Meta', name: 'Llama 3.1 Community License',
+    url: 'https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct/blob/main/LICENSE',
+    policyName: 'Acceptable Use Policy', policyUrl: 'https://llama.meta.com/llama3_1/use-policy' },
+  { match: /gemma/i, licensor: 'Google', name: 'Gemma Terms of Use',
+    url: 'https://ai.google.dev/gemma/terms',
+    policyName: 'Prohibited Use Policy', policyUrl: 'https://ai.google.dev/gemma/prohibited_use_policy' },
+];
+
+/**
+ * The license a catalogue model comes under, for display before install.
+ * @returns {{ name: string, url: string|null, requiresAcceptance: boolean,
+ *             licensor?: string, policyName?: string, policyUrl?: string, notice: string|null }}
+ */
+function modelLicense(entry) {
+  const e = entry || {};
+  const said = `${e.displayName || ''} ${e.id || ''} ${e.license || ''}`;
+  const t = LICENSOR_TERMS.find(x => x.match.test(said));
+  if (t) {
+    return {
+      name: t.name, url: t.url, requiresAcceptance: true, licensor: t.licensor,
+      policyName: t.policyName, policyUrl: t.policyUrl,
+      notice: `Using this model means accepting ${t.licensor}'s ${t.name} and its ${t.policyName}. `
+            + `${t.licensor}'s own download asks you to agree first; this catalogue uses a public copy that does not ask, so read them before you install.`,
+    };
+  }
+  // A Llama or Gemma model this table does not know yet: still say whose terms
+  // apply, with whatever link the catalogue has, rather than nothing.
+  const family = /llama/i.test(said) ? 'Meta' : /gemma/i.test(said) ? 'Google' : null;
+  if (family) {
+    return {
+      name: e.license || `${family}'s license`, url: e.licenseUrl || null, requiresAcceptance: true, licensor: family,
+      notice: `Using this model means accepting ${family}'s license for it. Read it before you install.`,
+    };
+  }
+  return { name: e.license || 'not stated in the catalogue', url: e.licenseUrl || null, requiresAcceptance: false, notice: null };
+}
+
 module.exports = function createCookbookRouter(deps) {
   const router = express.Router();
   const { getLocalFile, getDataFile, writeOSAudit } = deps;
@@ -706,14 +760,20 @@ module.exports = function createCookbookRouter(deps) {
       const t = activeTasks[sessionId]; if (t) { t.status = 'failed'; t.error = e.message; }
     });
 
+    // The terminal has no row to show the license on before the download, so
+    // it comes with the first line /model-pull prints (A074).
+    const lic = modelLicense(entry || { id: modelId });
+    const licText = ` License: ${lic.name}${lic.url ? ` (${lic.url})` : ''}.`
+      + (lic.notice ? ` ${lic.notice}${lic.policyUrl ? ` ${lic.policyName}: ${lic.policyUrl}` : ''}` : '');
     return {
       ok: true,
       session_id: sessionId,
       model: modelId,
       needsRuntime,
+      licenseTerms: lic,
       // What the terminal prints. The download runs in the background; this
       // says what is happening, how big it is, and where to watch it.
-      text: `Downloading ${entry?.displayName || modelId} (${size})${needsRuntime ? ' — installing the local AI engine first' : ''}. Verified by SHA-256 when it lands. Watch progress in Cookbook, or run /models in a minute.`,
+      text: `Downloading ${entry?.displayName || modelId} (${size})${needsRuntime ? ' — installing the local AI engine first' : ''}. Verified by SHA-256 when it lands. Watch progress in Cookbook, or run /models in a minute.${licText}`,
     };
   }
 
@@ -1617,7 +1677,9 @@ module.exports = function createCookbookRouter(deps) {
       try {
         const { reg, dataRoot } = regAndRoot();
         const models = modelInstaller.listCatalog(dataRoot || '')
-          .map(m => ({ ...m, format: 'gguf' }));   // catalogue is GGUF by construction
+          // catalogue is GGUF by construction; licenseTerms is what the row
+          // shows before Install (A074)
+          .map(m => ({ ...m, format: 'gguf', licenseTerms: modelLicense(m) }));
 
         if (!capabilities || !fitEngine) {
           return res.json({ ok: true, models, shown: models, hidden: [], capabilities: null,
@@ -1806,3 +1868,5 @@ module.exports = function createCookbookRouter(deps) {
 
   return router;
 };
+
+module.exports.modelLicense = modelLicense;

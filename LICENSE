@@ -1,4 +1,4 @@
-AEON COMMUNITY LICENSE v1.0
+AEON COMMUNITY LICENSE v1.1
 
 Copyright (c) 2026 Cristian Gomez / Broken Gear Industries. All rights reserved.
 
@@ -27,18 +27,21 @@ TERMS
    d. remove or alter this license, the copyright notice, or attribution.
 
 3. YOUR BLOCKS ARE YOURS. Blocks you create for your own AEON installation
-   are your property. This license does not claim them. Distribution of
-   blocks through the official store is governed by its own terms.
+   are your property. This license does not claim them. No official block
+   store is open to the public yet; if one opens, its terms will be published
+   before it does.
 
-4. PAID BLOCKS. Blocks purchased through Broken Gear Industries are licensed
-   separately under the End User License Agreement supplied with each block.
-   This license grants no rights to paid blocks.
+4. PAID BLOCKS. No paid blocks are on sale yet. When a paid block goes on
+   sale, it will come with its own license terms, published before anyone
+   can buy it. This license grants no rights to paid blocks.
 
-5. NO WARRANTY. AEON IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-   EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO MERCHANTABILITY, FITNESS
-   FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT. IN NO EVENT SHALL THE
-   AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER
-   LIABILITY ARISING FROM THE USE OF THE SOFTWARE.
+5. NO WARRANTY. TO THE EXTENT PERMITTED BY APPLICABLE LAW, AEON IS PROVIDED
+   "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT
+   NOT LIMITED TO MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND
+   NON-INFRINGEMENT, AND IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+   LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY ARISING FROM THE USE OF
+   THE SOFTWARE. Nothing in this license limits rights that the law where you
+   live gives you and that cannot be waived by agreement.
 
 6. THIRD-PARTY COSTS. AI provider usage (API keys, tokens, hosting) is
    contracted and paid by you directly with those providers. Broken Gear
@@ -52,4 +55,4 @@ TERMS
    this copy.
 
 For commercial licensing, redistribution permission, or anything else:
-contact Broken Gear Industries — https://broken-gear-industries.pages.dev/
+open an issue at https://github.com/cgomez1365/AEON/issues

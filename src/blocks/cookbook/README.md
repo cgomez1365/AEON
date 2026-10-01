@@ -33,7 +33,12 @@ SGLang), and track running/queued tasks with live log tails and error diagnosis.
   lets you Serve or delete a cached model.
 - **Local models** — AEON's own catalogue, downloaded and SHA-256 verified by
   the app itself with no external tooling required. This is the recommended
-  path and the only one that works on a machine without Python.
+  path and the only one that works on a machine without Python. Each row shows
+  the model's license with a link before you press Install. Llama and Gemma
+  rows also say that using the model means accepting Meta's or Google's terms
+  (linked), because the public copies the catalogue downloads never ask; the
+  download itself is not blocked. `/model-pull` prints the same license line
+  when it starts a catalogue download.
 - **Download tab** — direct download by HuggingFace repo id or URL. Requires
   the `hf` CLI or a real Python on PATH, and says so plainly when neither is
   present; also surfaces HuggingFace trending models to

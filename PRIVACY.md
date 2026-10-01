@@ -1,0 +1,72 @@
+# AEON — Privacy notice
+
+*Last changed 2026-09-30 · applies to AEON · Broken Gear Industries*
+
+This notice covers the AEON software: what it keeps on your machine, and what it sends over the network and to whom. It does not cover any website. The block store is not open, and nothing is for sale; if a store or website collects anything from you, it will need its own notice.
+
+## The short version
+
+- **AEON sends nothing to Broken Gear Industries.** The software has no telemetry, no analytics that report to us, no account with us and no license check.
+- **What AEON keeps stays on your machine**, in one folder (the AEON home, below).
+- **AEON talks to other services when you set them up or use a feature that needs them.** Each of those services sees what AEON sends it and handles it under its own terms. Adding a cloud provider's key can be enough for AEON to send your Vault's documents to that provider to index them — see [Indexing your Vault](#services-you-set-up). One thing happens without any setup: the interface loads its fonts from Google Fonts (see [Things the interface loads](#things-the-interface-loads)).
+
+## What AEON keeps, and where
+
+By default everything lives in one folder, the **AEON home**: a folder named `AEON` in your home folder (`~/AEON`). If AEON itself was installed into `~/AEON`, the home is `~/AEON Data` instead. Setting `AEON_HOME` moves it, and a portable or carried drive keeps it on the drive.
+
+| In the AEON home | What it holds |
+|---|---|
+| `Vault/` | the documents, memories and notes you add |
+| `data/` | search indexes, local models, block data, Cookbook logs |
+| `db/` | runtime state: chat log, audit log, retrieval indexes |
+| `secrets/` | your API keys, encrypted |
+| `.env` | the master key that unlocks `secrets/`, and configuration |
+| `aeon-settings.json` | your settings |
+
+Both halves of the key store — `secrets/` and `.env` — sit in the same folder, so anyone who can read the whole AEON home can read your keys. Protect it like a password file.
+
+Your browser also keeps a few things for the AEON page in its own storage: your login session token, layout preferences, quick links and Orion search history.
+
+Cookbook's Download tab uses Hugging Face's own tools, which save models in the Hugging Face cache (`~/.cache/huggingface/hub`, or wherever `HF_HOME` points).
+
+## What AEON sends, and to whom
+
+### Services you set up
+
+- **AI model providers** (for example OpenAI, Anthropic, Google, Groq, OpenRouter, xAI, or an endpoint you add). When you use a cloud model, AEON sends that provider your prompt and what goes with it: the conversation so far, files you attach, and passages AEON pulls from your Vault to answer you, along with your API key. Local models run on your machine and send nothing.
+- **Indexing your Vault (the Embedding role).** To make your Vault searchable by meaning, AEON sends the text of every document it indexes there to whichever model serves the Embedding role — a short summary of each document and, for a longer one, its whole text, piece by piece. It does this at startup, once a night, and whenever you add or change a file or memory; the questions you search your Vault with go to the same model. With a local embedding model installed, all of this stays on your machine. **If no local embedding model is installed and you have not assigned the Embedding role yourself, AEON picks the first provider you have added a key for and, if that provider offers an embedding model, uses it without asking — so adding a key (for example OpenAI's or Google's) can be enough to send your whole Vault to that provider in the background.** To keep indexing on your machine, install a local embedding model in Cookbook (nomic-embed-text, about 150 MB) before you add cloud keys, or assign the Embedding role in Settings → Model Assignment.
+- **Web search.** With a Tavily, Serper or Brave key, your search query goes to that service. **With no search key, or when those services fail, the query goes to DuckDuckGo.**
+- **Supabase** — only if you connect your own Supabase project. The features you turn on there, such as cloud sync, send that data to your project.
+- **Firebase** — only if AEON is built with your own Firebase project's settings. The page then talks to your project for sign-in and session records, and Firebase Analytics reports to your project unless you switch tracking off in Settings.
+- **YouTube** — only if you add YouTube credentials and ask the media pipeline to upload a video.
+- **Cloudflare** — only if you turn on remote access (Quick Tunnel) in Settings. AEON downloads Cloudflare's `cloudflared` program from GitHub, and traffic to your AEON then passes through Cloudflare.
+- **A block store** — only if you set `AEON_STORE` to a web address. AEON then downloads the catalog and packs from that address.
+
+### Downloads you start
+
+These send no personal data, but like any download they show your IP address to the server.
+
+- **Local AI engine and models.** When you install a local model (Cookbook, or `/model-pull` in the terminal), AEON downloads the llama.cpp engine from GitHub and the model from Hugging Face. If you give Cookbook a Hugging Face token for a gated model, it goes to Hugging Face.
+- **Popular-model list.** Opening Cookbook's Download tab asks Hugging Face for a list of popular models.
+- **First launch.** The launcher runs `npm install`, which downloads AEON's open-source dependencies from the npm registry.
+- **Text recognition.** The first time AEON reads text from an image or a scanned PDF, it downloads English language data from the jsDelivr CDN. The image itself is read on your machine.
+
+### Things the interface loads
+
+- **Fonts.** The AEON interface loads its typefaces from Google Fonts when it opens (unless your browser has them cached). Google sees your IP address and that the page loaded; nothing you type is sent. Deep Research reports load a font the same way when you open them.
+- **Quick Links icons.** The Quick Links block shows each link's icon from Google's favicon service, which sends the link's domain name to Google.
+- **Deep Research sources.** When a report cites a web page, AEON asks archive.org whether an archived copy exists, which sends that page's address to archive.org.
+
+## Free provider tiers
+
+Some providers use what you send on their free tiers to improve their products. For example, Google's terms for unpaid use of the Gemini API, including Google AI Studio, say Google uses the content you submit and the responses to improve its products, and that human reviewers may read them. Other providers have their own rules. Read the terms of any provider you use before sending anything private through a free tier; a paid tier or a local model avoids this.
+
+## Broken Gear Industries
+
+The AEON software sends Broken Gear Industries nothing, so we hold no data about you from it. AEON's own usage counters (model calls, tokens) stay on your machine. If you contact us through GitHub Issues, GitHub's terms and privacy policy apply to what you post there, and issues are public.
+
+## Questions and changes
+
+Questions: open an issue at [github.com/cgomez1365/AEON/issues](https://github.com/cgomez1365/AEON/issues). Never post keys or personal data there.
+
+This notice applies per version, like the [Terms of Use](TERMS_OF_USE.md). A version that changes what AEON sends will change this notice.
