@@ -23,7 +23,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Send, Loader, Cpu, Clock, Zap, ChevronRight, ChevronDown, ShieldAlert, Paperclip, Square, X as XIcon, Archive, History, Plus, Trash2, Pencil, BookmarkPlus, Check, Sparkles } from 'lucide-react';
+/* AEON-REWRITE[distill] 1 line(s) removed: written on the 2026-09-24 work machine; re-implement from the distill spec */
 import { describeStreamFailure, SELF_REPORTED_HEADER } from '../utils/interceptorPolicy.js';
 import { describeDispatchOutcome, describeDenial, describeCommandOutput } from '../utils/commandOutcome.js';
 
@@ -415,7 +415,7 @@ const Terminal2 = ({ onUsageUpdate }) => {
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
   }, [input]);
   const [feed, setFeed] = useState([BOOT_MSG]);
-  const [distilling, setDistilling] = useState(false);
+/* AEON-REWRITE[distill] 1 line(s) removed: written on the 2026-09-24 work machine; re-implement from the distill spec */
   const [isLoading, setIsLoading] = useState(false);
   const [commands, setCommands] = useState([]);
   const [showPalette, setShowPalette] = useState(false);
@@ -469,42 +469,11 @@ const Terminal2 = ({ onUsageUpdate }) => {
 
   useEffect(() => { fetchSessions(); }, [fetchSessions]);
 
-  // ── Two different verbs, deliberately next to each other ──
-  //
-  // SAVE keeps the chat: the whole thing, word for word, so it can be reopened
-  // another day. DISTILL keeps what the chat was ABOUT: a handful of durable
-  // facts in Memory Core that ride into future conversations. One is an
-  // archive, the other is learning, and the operator wants them separate.
-  //
-  // This sends the LIVE feed rather than letting the server hunt for a saved
-  // file. Memory Core's own button reads the newest session on disk, which is
-  // right for it and wrong here: an active chat is not written out until it is
-  // saved, so "distil what I am looking at" read whatever was saved last -
-  // the operator distilled a Stephen King conversation and got memories about
-  // an unrelated session that happened to be newer on disk.
-  const distillToMemory = useCallback(async () => {
-    const msgs = (feedRef.current || [])
-      .filter(m => m.type === 'msg' && (m.role === 'user' || m.role === 'assistant'));
-    if (msgs.length < 2) {
-      push({ type: 'msg', role: 'system', content: 'Nothing to distil yet — have a conversation first.' });
-      return;
-    }
-    setDistilling(true);
-    try {
-      const transcript = msgs.slice(-30)
-        .map(m => `${m.role}: ${String(m.content || '').slice(0, 400)}`).join('\n');
-      const r = await fetch('/api/memory/distill', {
+/* AEON-REWRITE[distill] 25 line(s) removed: written on the 2026-09-24 work machine; re-implement from the distill spec */
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ transcript }),
-      });
-      const d = await r.json().catch(() => ({}));
-      if (!r.ok || d.error) throw new Error(d.error || `HTTP ${r.status}`);
+/* AEON-REWRITE[distill] 4 line(s) removed: written on the 2026-09-24 work machine; re-implement from the distill spec */
       push({ type: 'msg', role: 'system', content: distillSummary(d) });
-    } catch (e) {
-      push({ type: 'msg', role: 'error', content: `[DISTILL] ${e.message}` });
-    } finally { setDistilling(false); }
-  }, []);
-
+/* AEON-REWRITE[distill] 5 line(s) removed: written on the 2026-09-24 work machine; re-implement from the distill spec */
   // Resolves to { id, name, … } once the server has the chat, or null when
   // there was nothing to save or the save failed — and a failure is said in the
   // feed, never swallowed: every caller used to read a { error } body as saved.
@@ -878,59 +847,10 @@ const Terminal2 = ({ onUsageUpdate }) => {
     commands.filter(c => c.cmd.startsWith(paletteFilter) || paletteFilter === '/'),
     [commands, paletteFilter]);
 
-  // ── Picking a command leaves the cursor where the first value goes ──
-  //
-  // Choosing /ask-doc used to insert "/ask-doc " and stop, which says nothing
-  // about the two things the operator then has to know: that a document is
-  // named first, and that its name has to be quoted because it contains
-  // spaces. Both are obvious once and easy to forget every time after.
-  //
-  // So a command whose first field is a document inserts the quotes too and
-  // puts the caret between them. The shape of the line answers the question
-  // before it is asked — the operator types or pastes, and the quoting is
-  // already right.
-  const firstParamName = (c) => {
-    const p = Array.isArray(c?.params) && c.params.length ? c.params[0] : null;
-    if (!p) return null;
-    return typeof p === 'string' ? p : (p?.name || null);
-  };
-  // Fields that name a file. These are the ones that carry spaces, so these
-  // are the ones that need quoting; a plain word field would only be made
-  // harder to type by wrapping it.
-  const NAMES_A_DOCUMENT = /^(path|file|filename|title|doc|document)$/i;
-
-  const pickCommand = useCallback((c) => {
-    const first = firstParamName(c);
-    const quoted = first && NAMES_A_DOCUMENT.test(first);
-    const text = quoted ? `${c.cmd} ""` : `${c.cmd} `;
-    const caret = quoted ? text.length - 1 : text.length;
-    setInput(text);
-    // After the value lands, or the caret is placed in the old text and the
-    // re-render moves it back to the end.
-    requestAnimationFrame(() => {
+/* AEON-REWRITE[distill] 30 line(s) removed: written on the 2026-09-24 work machine; re-implement from the distill spec */
       const el = textareaRef.current;
       if (!el) return;
-      el.focus();
-      try { el.setSelectionRange(caret, caret); } catch { /* not all inputs allow it */ }
-    });
-  }, []);
-
-  // What the command being typed still expects, shown under the field while it
-  // is being typed. The registry already knows the field names; nothing was
-  // showing them at the moment they are needed.
-  const usageHint = useMemo(() => {
-    if (!input.startsWith('/')) return null;
-    const token = input.slice(0, input.indexOf(' ') === -1 ? input.length : input.indexOf(' '));
-    const c = commands.find(x => x.cmd === token);
-    if (!c || !Array.isArray(c.params) || !c.params.length) return null;
-    const fields = c.params
-      .map(p => (typeof p === 'string' ? p : p?.name))
-      .filter(Boolean);
-    if (!fields.length) return null;
-    const shape = fields.map((f, i) => (i === 0 && NAMES_A_DOCUMENT.test(f) ? `"${f}"` : `<${f}>`)).join(' ');
-    return `${c.cmd} ${shape}`;
-  }, [input, commands]);
-
+/* AEON-REWRITE[distill] 21 line(s) removed: written on the 2026-09-24 work machine; re-implement from the distill spec */
   // ── Image attach → vision two-hop ──
   // The chat model can't see images; the Settings "vision" role reads the
   // attachment first (kernel route, provider-agnostic) and its description
@@ -1317,19 +1237,13 @@ const Terminal2 = ({ onUsageUpdate }) => {
       {/* ── Session action strip — top of terminal, not in the input row ── */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 0, borderBottom: '1px solid #111a28', flexShrink: 0 }}>
         <button onClick={() => saveSession().then(d => d && d.id && push({ type: 'msg', role: 'system', content: `💾 Saved: ${d.name}` }))}
-          title="Keep this whole chat so you can reopen it later. To keep what it TAUGHT AEON, use Distil."
+/* AEON-REWRITE[distill] 1 line(s) removed: written on the 2026-09-24 work machine; re-implement from the distill spec */
           style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'transparent', border: 'none', borderRight: '1px solid #111a28', color: sessionSaving ? '#39ff14' : '#3a5070', padding: '5px 12px', cursor: 'pointer', fontSize: 10, fontFamily: 'inherit', letterSpacing: '0.08em', whiteSpace: 'nowrap' }}
           onMouseEnter={e => e.currentTarget.style.color = '#00f2ff'}
           onMouseLeave={e => e.currentTarget.style.color = sessionSaving ? '#39ff14' : '#3a5070'}>
           <Archive size={11} /> SAVE
         </button>
-        <button onClick={distillToMemory} disabled={distilling}
-          title="Pull the durable facts out of this chat into Memory Core, so AEON carries them into future conversations."
-          style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'transparent', border: 'none', borderRight: '1px solid #111a28', color: distilling ? '#39ff14' : '#3a5070', padding: '5px 12px', cursor: distilling ? 'default' : 'pointer', fontSize: 10, fontFamily: 'inherit', letterSpacing: '0.08em', whiteSpace: 'nowrap' }}
-          onMouseEnter={e => { if (!distilling) e.currentTarget.style.color = '#00f2ff'; }}
-          onMouseLeave={e => { e.currentTarget.style.color = distilling ? '#39ff14' : '#3a5070'; }}>
-          <Sparkles size={11} /> {distilling ? 'DISTILLING…' : 'DISTIL → MEMORY'}
-        </button>
+/* AEON-REWRITE[distill] 7 line(s) removed: written on the 2026-09-24 work machine; re-implement from the distill spec */
         <button onClick={() => { setShowSessions(v => !v); if (!showSessions) fetchSessions(); }}
           title="Chat history"
           style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'transparent', border: 'none', borderRight: '1px solid #111a28', color: showSessions ? '#00f2ff' : '#3a5070', padding: '5px 12px', cursor: 'pointer', fontSize: 10, fontFamily: 'inherit', letterSpacing: '0.08em', whiteSpace: 'nowrap' }}
@@ -1439,7 +1353,7 @@ const Terminal2 = ({ onUsageUpdate }) => {
           {filteredCommands.map(c => {
             const off = c.available === false;
             return (
-              <div key={c.id || c.cmd} onClick={() => pickCommand(c)} title={off ? c.reason || 'unavailable' : undefined}
+/* AEON-REWRITE[distill] 1 line(s) removed: written on the 2026-09-24 work machine; re-implement from the distill spec */
                 data-unavailable={off ? 'true' : undefined}
                 style={{ padding: '3px 16px', fontSize: 11.5, cursor: 'pointer', display: 'flex', gap: 10, opacity: off ? 0.55 : 1 }}
                 onMouseEnter={e => e.currentTarget.style.background = 'rgba(0,242,255,0.07)'}
@@ -1591,14 +1505,7 @@ const Terminal2 = ({ onUsageUpdate }) => {
           )}
         </div>
       )}
-      {usageHint && (
-        // Sits above the field, not in the placeholder: a placeholder vanishes
-        // the moment there is any text, which is exactly when the shape of the
-        // rest of the line starts mattering.
-        <div style={{ padding: '4px 14px 0 38px', fontSize: 10.5, color: '#4a6a90', fontFamily: 'inherit' }}>
-          {usageHint}
-        </div>
-      )}
+/* AEON-REWRITE[distill] 8 line(s) removed: written on the 2026-09-24 work machine; re-implement from the distill spec */
       <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, padding: '10px 14px', borderTop: '1px solid #1e2d45' }}>
         <span style={{ color: sigilColor, fontSize: 14, width: 14, textAlign: 'center', textShadow: `0 0 8px ${sigilColor}`, lineHeight: '20px' }}>{sigilGlyph}</span>
         <input ref={fileInputRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={onFileSelected} />

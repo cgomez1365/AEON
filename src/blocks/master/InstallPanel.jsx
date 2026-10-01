@@ -1,14 +1,10 @@
-/**
- * Master → Install. Paste a link, get a block, choose where it lives.
- *
+/* AEON-REWRITE[store] 3 line(s) removed: written on the 2026-09-24 work machine; re-implement from the store spec */
  * Everything under this panel already existed as kernel routes
  * (src/kernel/routers/store.cjs, mounted at /api/store): POST
  * /api/store/install takes { url } (https only), { name } (from the
- * configured store, verified against its catalog's SHA-256) or { base64 };
+/* AEON-REWRITE[store] 1 line(s) removed: written on the 2026-09-24 work machine; re-implement from the store spec */
  * POST /api/store/update swaps a version only if the new one goes live and
- * rolls back if it does not. What was missing was a surface. This is the
- * surface, and nothing more — the kernel decides, this reports.
- *
+/* AEON-REWRITE[store] 3 line(s) removed: written on the 2026-09-24 work machine; re-implement from the store spec */
  * 2026-09-28 — this panel shipped calling /blocks/store/source and
  * /blocks/store/install. Nothing has ever been mounted there: /blocks serves
  * only /registry, /widgets and /state. The GET fell through to the SPA
@@ -18,24 +14,18 @@
  * CLI already use, and tests/sweep-master-install-panel.test.js checks every
  * path this file fetches against what the server mounts.
  *
- * TWO THINGS IT DELIBERATELY DOES NOT DO.
- *
+/* AEON-REWRITE[store] 2 line(s) removed: written on the 2026-09-24 work machine; re-implement from the store spec */
  * It asks for no licence. A key checked in the browser is a key anyone skips
  * with devtools, so a gated store's check belongs on the install route,
  * server-side — and /api/store/install has none (installCartridge reads name,
  * url or base64, nothing else). The key field this panel had went nowhere: it
  * told the operator a key had been judged when nothing read it. It comes back
  * with the server check, not before.
- *
- * It does not decide where a block goes. It asks, because the operator is the
- * only one who knows whether a thing is a tool or an agent, and a block that
- * silently lands in Unsorted is a block they have to go hunting for.
- */
+/* AEON-REWRITE[store] 5 line(s) removed: written on the 2026-09-24 work machine; re-implement from the store spec */
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { Download, FolderInput, Check, AlertTriangle, Loader } from 'lucide-react';
+/* AEON-REWRITE[store] 1 line(s) removed: written on the 2026-09-24 work machine; re-implement from the store spec */
 import { getEffectiveBlockGroups } from '../../kernel/blockRegistry.js';
-
-const DIM = { fontSize: 12.5, color: 'var(--dim, #9aa3b2)' };
+/* AEON-REWRITE[store] 2 line(s) removed: written on the 2026-09-24 work machine; re-implement from the store spec */
 // This panel shows every refusal inline. The header keeps the global
 // forensics banner (interceptorPolicy.shouldBannerResponse) from ALSO firing
 // on an expected refusal — a lint stop, an already-installed block, an
@@ -44,31 +34,7 @@ const SELF_REPORTED = { 'x-aeon-self-reported': '1' };
 // Said with every install that lands: the block list and nav are compiled into
 // the screen bundle (Settings → Blocks says the same).
 const UI_NOTE = 'Its screen appears after `npm run build` and a reload of this tab — no restart needed.';
-const FIELD = {
-  width: '100%', padding: '8px 10px', borderRadius: 6, fontSize: 13,
-  background: 'rgba(255,255,255,0.04)', color: 'var(--fg, #e8f0fa)',
-  border: '1px solid var(--line, #272d39)', fontFamily: 'inherit',
-};
-
-/**
- * A store link, a catalog id, or a .aeon file — whichever the operator has.
- *
- * Exported because the https rule is a safety property, not a convenience: a
- * cartridge is executable code, and fetching one over http invites whoever is
- * between here and the store to choose what gets installed. The kernel refuses
- * it too. This refuses earlier, and says why.
- */
-export function classifySource(raw) {
-  const v = String(raw || '').trim();
-  if (!v) return { kind: 'empty' };
-  if (/^https:\/\//i.test(v)) return { kind: 'url', body: { url: v } };
-  // http:// is refused by the kernel too, but saying so here costs one
-  // round-trip less and explains why rather than showing a rejection.
-  if (/^http:\/\//i.test(v)) return { kind: 'insecure' };
-  if (/^[a-z0-9][a-z0-9_-]*$/i.test(v)) return { kind: 'name', body: { name: v } };
-  return { kind: 'unknown' };
-}
-
+/* AEON-REWRITE[store] 25 line(s) removed: written on the 2026-09-24 work machine; re-implement from the store spec */
 /**
  * What an accepted POST /api/store/install answered, in the panel's terms.
  *
@@ -115,9 +81,7 @@ export function layoutFromSettings(body) {
 export function placeBlock(layout, blockId, groupId, customLabel) {
   const next = {
     overrides: { ...(layout?.overrides || {}), [blockId]: groupId },
-    customGroups: { ...(layout?.customGroups || {}) },
-    groupOverrides: { ...(layout?.groupOverrides || {}) },
-  };
+/* AEON-REWRITE[store] 3 line(s) removed: written on the 2026-09-24 work machine; re-implement from the store spec */
   // A section the operator hid (Delete on a default section hides it) and
   // now names again is shown again. Left hidden, getEffectiveBlockGroups sent
   // the block to Unsorted while this card said "Filed under" that section.
@@ -145,16 +109,9 @@ export function sectionChoices(layout) {
 }
 
 export default function InstallPanel({ onInstalled, onBlockLayoutChange }) {
-  const [source, setSource] = useState('');
-  const [busy, setBusy] = useState(false);
+/* AEON-REWRITE[store] 2 line(s) removed: written on the 2026-09-24 work machine; re-implement from the store spec */
   const [result, setResult] = useState(null);   // { ok, id, label, detail, queued, error }
-  const [store, setStore] = useState(null);     // configured store catalog
-
-  // What the configured store offers, if one is configured at all. A panel
-  // that cannot say "no store is set up" is a panel that looks broken when
-  // AEON_STORE is simply unset.
-  useEffect(() => {
-    let alive = true;
+/* AEON-REWRITE[store] 7 line(s) removed: written on the 2026-09-24 work machine; re-implement from the store spec */
     fetch('/api/store/source', { headers: SELF_REPORTED })
       .then(async (r) => {
         const d = await r.json();
@@ -163,206 +120,84 @@ export default function InstallPanel({ onInstalled, onBlockLayoutChange }) {
         if (!r.ok && !d.error) d.error = `HTTP ${r.status}`;
         return d;
       })
-      .then((d) => { if (alive) setStore(d); })
-      .catch(() => { if (alive) setStore({ configured: false, items: [], hint: 'The store could not be reached.' }); });
-    return () => { alive = false; };
-  }, []);
-
-  const install = useCallback(async () => {
-    const cls = classifySource(source);
-    if (cls.kind === 'empty') return setResult({ ok: false, error: 'Nothing to install yet — paste a store link, or type a block name.' });
-    // A block is a program. Fetching one over a link that is not encrypted lets
-    // anyone between here and the store swap what arrives, so this is refused
-    // rather than warned about.
-    if (cls.kind === 'insecure') return setResult({ ok: false, error: 'That link is not secure — it starts with http:// instead of https://. A block is a program, so AEON will not download one over a link that could be tampered with on the way. Ask the store for an https link.' });
-    if (cls.kind === 'unknown') return setResult({ ok: false, error: 'That does not look like a store link or a block name. A link starts with https:// ; a name is a single word like "reports".' });
-
-    setBusy(true); setResult(null);
-    try {
+/* AEON-REWRITE[store] 16 line(s) removed: written on the 2026-09-24 work machine; re-implement from the store spec */
       const r = await fetch('/api/store/install', {
         method: 'POST', headers: { 'Content-Type': 'application/json', ...SELF_REPORTED }, body: JSON.stringify(cls.body),
-      });
-      const d = await r.json().catch(() => ({}));
-      if (!r.ok || d.ok === false) {
-        setResult({ ok: false, error: d.error || `The install was refused (HTTP ${r.status}).` });
-      } else {
+/* AEON-REWRITE[store] 5 line(s) removed: written on the 2026-09-24 work machine; re-implement from the store spec */
         const out = installOutcome(d, cls);
         setResult({ ok: true, ...out });
         if (onInstalled) onInstalled(out.id);
-      }
-    } catch (e) {
-      setResult({ ok: false, error: `The install could not run: ${e.message}` });
-    } finally { setBusy(false); }
+/* AEON-REWRITE[store] 4 line(s) removed: written on the 2026-09-24 work machine; re-implement from the store spec */
   }, [source, onInstalled]);
-
-  return (
-    <div>
-      <p style={{ ...DIM, marginTop: 0 }}>
-        Paste a link from the AEON block store, or type the name of a block the store offers.
+/* AEON-REWRITE[store] 5 line(s) removed: written on the 2026-09-24 work machine; re-implement from the store spec */
         AEON downloads it, checks it is what the store said it was, and boots it once to prove it runs.
         It then lands stopped — you start it in Settings → Blocks. If any of that fails, nothing is
         installed and you are told why.
-      </p>
-
-      <label style={{ ...DIM, display: 'block', marginBottom: 4 }} htmlFor="ip-src">Store link or block name</label>
-      <input id="ip-src" style={FIELD} value={source} spellCheck={false}
-        placeholder="https://store.example/reports-0.1.0.aeon   ·   or just:  reports"
-        onChange={(e) => setSource(e.target.value)}
-        onKeyDown={(e) => { if (e.key === 'Enter' && !busy) install(); }} />
-
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 12 }}>
-        <button className="btn primary" onClick={install} disabled={busy}
-          style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
-          {busy ? <Loader size={13} aria-hidden="true" /> : <Download size={13} aria-hidden="true" />}
-          {busy ? 'Installing…' : 'Install'}
-        </button>
+/* AEON-REWRITE[store] 14 line(s) removed: written on the 2026-09-24 work machine; re-implement from the store spec */
         {store && store.error && (
           <span style={{ ...DIM, flex: 1 }}>
             The store could not be read ({store.error}), so only a direct https link will work.
           </span>
         )}
         {store && !store.error && !store.configured && (
-          <span style={{ ...DIM, flex: 1 }}>
-            No store is set up yet, so only a direct https link will work. {store.hint}
-          </span>
-        )}
+/* AEON-REWRITE[store] 4 line(s) removed: written on the 2026-09-24 work machine; re-implement from the store spec */
         {store && !store.error && store.configured && (
-          <span style={{ ...DIM, flex: 1 }}>
-            Store connected — {store.items?.length || 0} block{(store.items?.length || 0) === 1 ? '' : 's'} available by name.
-          </span>
-        )}
-      </div>
-
-      {result && !result.ok && (
-        <div role="alert" style={{ marginTop: 14, padding: '10px 12px', borderRadius: 8, fontSize: 12.5,
-          background: 'rgba(208,59,59,0.10)', border: '1px solid rgba(208,59,59,0.40)' }}>
-          <AlertTriangle size={13} aria-hidden="true" style={{ verticalAlign: -2, marginRight: 6 }} />
-          {result.error}
-        </div>
-      )}
-
-      {result && result.ok && (
+/* AEON-REWRITE[store] 15 line(s) removed: written on the 2026-09-24 work machine; re-implement from the store spec */
         <SectionChooser blockId={result.id} label={result.label} detail={result.detail} queued={result.queued}
           onBlockLayoutChange={onBlockLayoutChange} onDone={() => setResult(null)} />
-      )}
-    </div>
-  );
-}
-
-/**
- * "Where should this live?" — asked once, immediately after an install.
- *
- * The sections are the operator's own (settings.blockLayout), the same truth
- * the sidebar and the Dashboard's grid read, so a choice made here is the
- * choice they see everywhere. Writing it is a full replace of blockLayout,
- * which is what POST /api/settings/block-layout expects: the Dashboard needs
- * real removal when a block is dragged back to its default, and a deep merge
+/* AEON-REWRITE[store] 13 line(s) removed: written on the 2026-09-24 work machine; re-implement from the store spec */
  * can never delete a key. A full replace is only safe from the full layout,
  * so this writes nothing until it has read the saved one.
- */
+/* AEON-REWRITE[store] 1 line(s) removed: written on the 2026-09-24 work machine; re-implement from the store spec */
 function SectionChooser({ blockId, label, detail, queued, onBlockLayoutChange, onDone }) {
-  const [layout, setLayout] = useState(null);
+/* AEON-REWRITE[store] 1 line(s) removed: written on the 2026-09-24 work machine; re-implement from the store spec */
   const [readErr, setReadErr] = useState('');
-  const [chosen, setChosen] = useState('');
-  const [newName, setNewName] = useState('');
-  const [saved, setSaved] = useState(false);
-  const [err, setErr] = useState('');
-
+/* AEON-REWRITE[store] 5 line(s) removed: written on the 2026-09-24 work machine; re-implement from the store spec */
   // Read from the server, not the shell's copy: the shell falls back to an
   // empty layout when its own read fails, and writing from that is the same
   // erasure this reads around.
-  useEffect(() => {
-    let alive = true;
+/* AEON-REWRITE[store] 2 line(s) removed: written on the 2026-09-24 work machine; re-implement from the store spec */
     fetch('/api/settings', { headers: SELF_REPORTED })
       .then((r) => r.json())
       .then((d) => {
-        if (!alive) return;
+/* AEON-REWRITE[store] 1 line(s) removed: written on the 2026-09-24 work machine; re-implement from the store spec */
         const bl = layoutFromSettings(d);
         if (bl) setLayout(bl); else setReadErr(d?.error || 'the reply had no settings in it');
       })
       .catch((e) => { if (alive) setReadErr(e.message); });
-    return () => { alive = false; };
-  }, []);
-
+/* AEON-REWRITE[store] 3 line(s) removed: written on the 2026-09-24 work machine; re-implement from the store spec */
   const groups = useMemo(() => (layout ? sectionChoices(layout) : []), [layout]);
 
-  const save = useCallback(async (groupId, customLabel) => {
-    setErr('');
+/* AEON-REWRITE[store] 2 line(s) removed: written on the 2026-09-24 work machine; re-implement from the store spec */
     if (!layout) return;
     const next = placeBlock(layout, blockId, groupId, customLabel);
-    try {
-      const r = await fetch('/api/settings/block-layout', {
+/* AEON-REWRITE[store] 2 line(s) removed: written on the 2026-09-24 work machine; re-implement from the store spec */
         method: 'POST', headers: { 'Content-Type': 'application/json', ...SELF_REPORTED }, body: JSON.stringify(next),
-      });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      setLayout(next); setSaved(true);
+/* AEON-REWRITE[store] 3 line(s) removed: written on the 2026-09-24 work machine; re-implement from the store spec */
       // The shell (sidebar + Dashboard) holds its own copy and writes it back
       // whole on the next drag; left stale, that write would drop this
       // placement. `saved` tells it this layout is already on the server:
       // adopt it, do not write it again.
       if (onBlockLayoutChange) onBlockLayoutChange(next, { saved: true });
-    } catch (e) {
-      // The block IS installed. Only its placement failed, and saying
-      // otherwise would send the operator looking for a block that is there.
+/* AEON-REWRITE[store] 3 line(s) removed: written on the 2026-09-24 work machine; re-implement from the store spec */
       setErr(`${label} is installed, but its section could not be saved (${e.message}). Drag it on the Home dashboard instead.`);
-    }
+/* AEON-REWRITE[store] 1 line(s) removed: written on the 2026-09-24 work machine; re-implement from the store spec */
   }, [layout, blockId, label, onBlockLayoutChange]);
-
-  if (!blockId) return null;
-
-  return (
-    <div style={{ marginTop: 14, padding: '12px 14px', borderRadius: 8,
-      background: 'rgba(12,163,12,0.08)', border: '1px solid rgba(12,163,12,0.38)' }}>
-      <div style={{ fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 7 }}>
+/* AEON-REWRITE[store] 7 line(s) removed: written on the 2026-09-24 work machine; re-implement from the store spec */
         <Check size={14} aria-hidden="true" />
         {queued
           ? `${label} is waiting for your approval — its permissions need a review. Approve it in Settings → Agent, then start it.`
           : `${label} is installed${detail ? ` (${detail})` : ''}. It lands stopped: start it in Settings → Blocks. ${UI_NOTE}`}
-      </div>
-
+/* AEON-REWRITE[store] 2 line(s) removed: written on the 2026-09-24 work machine; re-implement from the store spec */
       {readErr ? (
         <p role="alert" style={{ ...DIM, color: 'var(--warning, #fab219)', margin: '8px 0 0' }}>
           Your sections could not be read ({readErr}), so none were changed. Drag {label} on the Home dashboard instead.
         </p>
       ) : saved ? (
-        <p style={{ ...DIM, margin: '8px 0 0' }}>
-          Filed under <strong>{groups.find((g) => g.id === chosen)?.name || newName || chosen}</strong>.
+/* AEON-REWRITE[store] 2 line(s) removed: written on the 2026-09-24 work machine; re-implement from the store spec */
           You can drag it somewhere else any time on the Home dashboard.{' '}
-          <button className="link" onClick={onDone} style={{ padding: 0 }}>Install another</button>
-        </p>
-      ) : (
-        <>
-          <p style={{ ...DIM, margin: '6px 0 10px', display: 'flex', alignItems: 'center', gap: 6 }}>
-            <FolderInput size={13} aria-hidden="true" /> Where should we nest this block?
-          </p>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            {groups.map((g) => (
-              <button key={g.id} className="btn" onClick={() => { setChosen(g.id); save(g.id); }}
-                style={{ fontSize: 12 }}>{g.name}</button>
-            ))}
-          </div>
-          <div style={{ display: 'flex', gap: 6, marginTop: 10 }}>
-            <input style={{ ...FIELD, flex: 1 }} value={newName} placeholder="…or name a new section"
-              onChange={(e) => setNewName(e.target.value)}
-              onKeyDown={(e) => {
+/* AEON-REWRITE[store] 17 line(s) removed: written on the 2026-09-24 work machine; re-implement from the store spec */
                 if (e.key !== 'Enter' || !newName.trim() || !layout) return;
-                const id = slug(newName);
-                setChosen(id); save(id, newName.trim());
-              }} />
+/* AEON-REWRITE[store] 3 line(s) removed: written on the 2026-09-24 work machine; re-implement from the store spec */
             <button className="btn" disabled={!newName.trim() || !layout}
-              onClick={() => { const id = slug(newName); setChosen(id); save(id, newName.trim()); }}>
-              Create
-            </button>
-          </div>
-        </>
-      )}
-
-      {err && (
-        <p role="alert" style={{ ...DIM, color: 'var(--warning, #fab219)', margin: '8px 0 0' }}>{err}</p>
-      )}
-    </div>
-  );
-}
-
-export const labelise = (id) => String(id).replace(/[_-]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
-export const slug = (s) => String(s).trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'custom';
+/* AEON-REWRITE[store] 16 line(s) removed: written on the 2026-09-24 work machine; re-implement from the store spec */

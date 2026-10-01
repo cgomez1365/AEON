@@ -126,11 +126,7 @@ export default function MemoryCore() {
     // A repeat is refused, not searched: "nothing durable found" here was
     // also what a chat that had already yielded five memories showed.
     if (d.alreadyDistilled) { setNote(d.message || 'already distilled — nothing new since'); return; }
-    const from = d.session ? ` from "${d.session}"` : '';
-    const n = d.added?.length || 0;
-    setNote(n
-      ? `distilled ${n} new ${n === 1 ? 'memory' : 'memories'}${from}`
-      : `nothing durable found${from} — ${d.candidates || 0} candidates, none new`);
+/* AEON-REWRITE[distill] 5 line(s) removed: written on the 2026-09-24 work machine; re-implement from the distill spec */
   });
 
   const shown = memories.filter(m => {

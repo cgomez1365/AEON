@@ -36,7 +36,7 @@
  *     ring (no `outline: none` — WCAG 2.4.7).
  */
 import React, { useState, useEffect, useCallback } from 'react';
-import InstallPanel from './InstallPanel.jsx';
+/* AEON-REWRITE[store] 1 line(s) removed: written on the 2026-09-24 work machine; re-implement from the store spec */
 import { Card, StatCard } from '../../components/aurora';
 import { Dna, Radio, LayoutGrid, RefreshCw } from 'lucide-react';
 
@@ -132,9 +132,7 @@ const RULES = [
 export default function Master({ onBlockLayoutChange }) {
   const [registry, setRegistry] = useState(null);
   const [kernel, setKernel] = useState('checking');
-  // Build is what Master already was; Install is the other half of the same
-  // job. Both are about a block existing here - one writes it, one fetches it.
-  const [tab, setTab] = useState('build');
+/* AEON-REWRITE[store] 3 line(s) removed: written on the 2026-09-24 work machine; re-implement from the store spec */
 
   const loadRegistry = useCallback(() => {
     fetch('/blocks/registry')
@@ -167,23 +165,7 @@ export default function Master({ onBlockLayoutChange }) {
           sub={kernel === 'online' ? window.location.host : kernel} />
       </div>
 
-      <div role="tablist" aria-label="Master sections"
-        style={{ display: 'flex', gap: 4, marginBottom: 16, borderBottom: '1px solid var(--line, #272d39)' }}>
-        {[['build', 'Build your own'], ['install', 'Install from the store']].map(([id, label]) => (
-          <button key={id} role="tab" aria-selected={tab === id} onClick={() => setTab(id)}
-            style={{
-              background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: 13,
-              padding: '8px 14px', color: tab === id ? 'var(--fg, #e8f0fa)' : 'var(--dim, #9aa3b2)',
-              borderBottom: `2px solid ${tab === id ? 'var(--accent, #00f2ff)' : 'transparent'}`,
-              marginBottom: -1,
-            }}>
-            {label}
-          </button>
-        ))}
-      </div>
-
-      {tab === 'build'
-        ? <ReferencePanel registry={registry} onRefresh={loadRegistry} />
+/* AEON-REWRITE[store] 17 line(s) removed: written on the 2026-09-24 work machine; re-implement from the store spec */
         : <InstallPanel onInstalled={loadRegistry} onBlockLayoutChange={onBlockLayoutChange} />}
     </div>
   );
