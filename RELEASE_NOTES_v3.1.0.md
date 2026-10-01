@@ -48,6 +48,7 @@ The full list, with commits, is in [CHANGELOG.md](CHANGELOG.md). In short:
   written over — vault, memories, indexes, Writer, settings.
 - **Settings decides each role's model**, a connection can hold several keys with
   failover between them, and fallback uses every provider you added.
+- **Failover reads the failure:** a paid OpenRouter model out of credits hands the turn to a free OpenRouter model, a request too large for a model is retried once with less context, and each notice appears above the answer it explains.
 - **Blocks can be stopped, removed and restored** while AEON runs.
 - **Store install (pilot):** install and update packs from a store by id, checked
   against the store's SHA-256.

@@ -11,6 +11,8 @@ const _capabilities = require('../src/kernel/capabilities.cjs');
 // What a cloud model's context window actually is, so the memory budget is a
 // fraction of the real window rather than of an assumed 8k floor.
 const modelContext = require('../src/kernel/modelContext.cjs');
+// The one token estimator (D1f), for sizing a trimmed retry.
+const _tokens = require('../src/kernel/tokens.cjs');
 
 // Phase 6: native local runtime (llama.cpp). Lazy require.
 // Loaded lazily so ai.js still boots on machines without the runtime installed.
@@ -82,18 +84,49 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
 
   const isHealthy = (p) => Date.now() > (providerHealth[p]?.blockedUntil || 0);
 
+  // A request bigger than the model (or its free tier) will take: HTTP 413,
+  // llama.cpp/LM Studio "exceeds the available context size", the local
+  // budget engine's "The prompt uses N of a M-token window", Groq's per-minute
+  // "Request too large", OpenAI's "maximum context length", Anthropic's
+  // "prompt is too long". It is a fact about the REQUEST, not the provider.
+  const _TOO_LARGE_RE = /too large|(?:prompt|input|request) is too long|too long for|exceeds? (?:the )?(?:available |maximum )?context|context (?:length|size|window)|maximum context|context_length_exceeded|exceed_context_size|maximum number of tokens|token limit|-token window/i;
+  const _isTooLarge = (e, status = _failureStatus(e)) => {
+    if ([401, 402, 403, 404, 429].includes(status)) return false;
+    const msg = String(e?.message || '');
+    // A model that never started or stalled quotes llama-server's log tail,
+    // which talks about context sizes; that is not a request too large.
+    if (e?.code === 'MODEL_STALLED' || /llama-server (?:exited|did not become ready)|could not start llama-server/i.test(msg)) return false;
+    return status === 413 || e?.code === 'CONTEXT_EXHAUSTED' || _TOO_LARGE_RE.test(msg);
+  };
+
   // What the operator reads when a provider steps aside: a phrase, never the
   // provider's raw error body. The raw text stays in the server log.
+  //
+  // A status is read before any body text: Groq's 413 body links its billing
+  // page and a Gemini 429 body mentions billing, and neither is out of credits.
   const _plainReason = (e) => {
     const status = typeof e === 'number' ? e : _failureStatus(e);
     const msg = typeof e === 'number' ? '' : String(e?.message || '');
-    if (status === 402 || /credit|insufficient.?(funds|balance)|billing/i.test(msg)) return 'out of credits';
+    if (status === 402) return 'out of credits';
     // Gemini rejects a bad key with 400 + API_KEY_INVALID, not 401/403 (A041).
     if (status === 400 && /API_KEY_INVALID|API key not valid/i.test(msg)) return 'key rejected';
     if (status === 401 || status === 403) return 'key rejected';
-    if (status === 429 || /rate.?limit|quota/i.test(msg)) return 'rate-limited';
+    if (status === 429) return 'rate-limited';
+    if (typeof e !== 'number' && _isTooLarge(e, status)) return 'request too large for it';
+    if (status === 413) return 'request too large for it';
+    if (/credit|insufficient.?(funds|balance)|billing/i.test(msg)) return 'out of credits';
+    if (/rate.?limit|quota/i.test(msg)) return 'rate-limited';
     if (status === 404) return 'model not available';
-    if (status === 413 || /too large|context length|maximum context/i.test(msg)) return 'request too large for it';
+    // This computer's runtime says what actually happened. Every one of these
+    // read "unavailable" (2026-09-30: the local rung's real error matched no
+    // pattern), which names no cause and no remedy.
+    if (e?.localRuntime || /llama-server|No local (?:AI engine|chat model|model) (?:is )?installed/i.test(msg)) {
+      if (/No local AI engine installed/i.test(msg)) return 'no local engine installed';
+      if (/No local (?:chat model|model) (?:is )?installed|^Model ".*" is not ready$/i.test(msg)) return 'no chat model installed';
+      if (e?.code === 'MODEL_STALLED' || /stopped producing output/i.test(msg)) return 'stopped responding';
+      if (/queue full/i.test(msg)) return 'busy with another request';
+      if (/llama-server (?:exited|did not become ready|not found)|could not start llama-server|model file not found|ECONNRE|fetch failed/i.test(msg)) return 'no chat model running';
+    }
     if (status >= 500) return 'provider error';
     if (/timeout|timed out|ETIMEDOUT|ECONNRE|ENOTFOUND|fetch failed|network/i.test(msg)) return 'unreachable';
     if (/failures in a row/.test(msg)) return 'failing repeatedly';
@@ -191,13 +224,119 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     for (const p of new Set([...registered, ...Object.keys(providerHealth)])) {
       if (!out[p]) out[p] = { healthy: isHealthy(p), configured: registered.includes(p), ...(providerHealth[p] || {}) };
     }
+    // Paid models resting is not the provider resting: its free models serve.
+    for (const p of Object.keys(paidRest)) {
+      if (out[p] && _paidResting(p)) Object.assign(out[p], { paidResting: true, paidPlain: paidRest[p].plain, paidBlockedUntil: paidRest[p].blockedUntil });
+    }
     return out;
   };
   // Tests only: forget every cooldown and failure count.
   const _resetProviderHealth = () => {
     for (const k of Object.keys(providerHealth)) delete providerHealth[k];
     for (const k of Object.keys(_failStreak)) delete _failStreak[k];
+    for (const k of Object.keys(paidRest)) delete paidRest[k];
   };
+
+  // ── OpenRouter: paid out of credits is not OpenRouter down ─────────────
+  // An account with no credits still serves every ':free' model, but a 402 on
+  // a paid model benched the whole provider for 30 minutes, so the turn fell
+  // to Groq and Local and failed there (2026-09-30, the CEO's drive: a 402 on
+  // anthropic/claude-opus-4.6, "can only afford 4" tokens, one turn after a
+  // ':free' model had answered). Only the PAID models rest now, and the same
+  // connection is asked on a free model before any other provider.
+  const PAID_REST_MS = 30 * 60 * 1000;
+  const paidRest = {}; // { openrouter: { blockedUntil, model, reason, plain } }
+  const _isFreeOpenRouterModel = (m) => m === 'openrouter/free' || /:free$/.test(String(m || ''));
+  const _paidResting = (p) => Date.now() < (paidRest[p]?.blockedUntil || 0);
+  const _paidOutOfCredits = (c, status) => c?.provider === 'openrouter' && status === 402
+    && !!c.model && !_isFreeOpenRouterModel(c.model);
+  const _paidNotice = (model) => `openrouter (${model}) out of credits → openrouter free model`;
+  const _restPaid = (p, model, message = '') => {
+    paidRest[p] = { blockedUntil: Date.now() + PAID_REST_MS, model, reason: _redactKeys(message).slice(0, 160), plain: 'out of credits' };
+    console.warn(`[KERNEL] ${p} paid models resting ${PAID_REST_MS / 1000}s (${model}): ${_redactKeys(message).slice(0, 160)}`);
+    notify(`⏸ ${p} paid models out of credits — resting ${PAID_REST_MS / 60000} min; its free models still serve`, { provider: p });
+  };
+  // The model's own ':free' twin when the connection lists it, else
+  // OpenRouter's free router. A variant suffix (":nitro") is not part of the name.
+  const _freeModelFor = async (c) => {
+    const twin = `${String(c?.model || '').replace(/:[a-z0-9_-]+$/i, '')}:free`;
+    const id = c?.endpoint_id || c?.resolved?.endpoint_id;
+    let listed = [];
+    if (id && aeonEndpoints?.load) {
+      try { listed = (await aeonEndpoints.load(supabase)).endpoints.find((e) => e.id === id)?.models || []; } catch { /* registry unreadable */ }
+    }
+    return Array.isArray(listed) && listed.includes(twin) ? twin : 'openrouter/free';
+  };
+  // While paid rests, a candidate declared on a paid OpenRouter model starts on
+  // the free one. Mutated in place: the caller's `primary` is this object.
+  const _applyPaidRest = async (c) => {
+    if (!c || c.provider !== 'openrouter' || !c.model || _isFreeOpenRouterModel(c.model) || !_paidResting('openrouter')) return false;
+    const free = await _freeModelFor(c);
+    c.paidFrom = c.model;
+    c.model = free;
+    if (c.resolved) c.resolved = { ...c.resolved, model: free };
+    return true;
+  };
+
+  // ── Too large: one retry with less context ─────────────────────────────
+  // The chat turn is sized for the DECLARED model's window — 68 memories for a
+  // model serving hundreds of thousands of tokens — and when that model cannot
+  // answer, every fallback rung received the same ~11,000 tokens: Groq's free
+  // tier answers 413 on its per-minute cap, a local 8k window cannot hold it.
+  // The same candidate is asked once more with the system prompt's head, the
+  // newest turns that fit, and the operator's message intact, before the chain
+  // moves on.
+  const TRIMMED_RETRY_TOKENS = 6000;
+  const TRIM_NOTE = '[Context trimmed: the full request was too large for this model, so stored memories and older turns were left out of this reply.]';
+  const _systemHead = (s) => {
+    const str = String(s || '');
+    // The identity and formatting rules come first; memory, skills and rules
+    // follow under markdown headings (src/kernel/context.cjs).
+    const cut = str.search(/\n#{1,3} /);
+    return (cut > 0 && cut <= 4000 ? str.slice(0, cut) : str.slice(0, 2000)).trimEnd();
+  };
+  const _trimMessages = (messages, budget) => {
+    const list = Array.isArray(messages) ? messages : [];
+    let lastUser = -1;
+    for (let i = list.length - 1; i >= 0; i--) if (list[i]?.role === 'user') { lastUser = i; break; }
+    if (lastUser === -1) return null;
+    const head = _systemHead(list.filter((m) => m.role === 'system').map((m) => m.content).join('\n\n'));
+    const system = { role: 'system', content: head ? `${head}\n\n${TRIM_NOTE}` : TRIM_NOTE };
+    const last = list[lastUser];
+    const older = list.slice(0, lastUser).filter((m) => m.role !== 'system');
+    let room = budget - _tokens.estimateMessageTokens([system, last]);
+    const kept = [];
+    for (let i = older.length - 1; i >= 0; i--) {
+      const cost = _tokens.estimateMessageTokens([older[i]]);
+      if (cost > room) break;
+      kept.unshift(older[i]);
+      room -= cost;
+    }
+    const out = [system, ...kept, last, ...list.slice(lastUser + 1)];
+    const before = _tokens.estimateMessageTokens(list);
+    const after = _tokens.estimateMessageTokens(out);
+    // Nothing to cut (a short system prompt, no older turns): a retry would
+    // send the same request again.
+    if (after >= before) return null;
+    return { messages: out, before, after, droppedTurns: older.length - kept.length };
+  };
+  // How small the retry must be. A per-minute cap the provider names
+  // ("Limit 8000") bounds the prompt AND the answer it reserves; a local
+  // window bounds what llama-server can hold.
+  const _trimBudget = async (c, e, opts = {}) => {
+    if (c.provider === 'local') {
+      let ctx = null;
+      try { ctx = (await _getLocalRT()?.plannedContext?.(c.model))?.contextTokens || null; } catch { /* unknown window */ }
+      return { promptTokens: Math.min(TRIMMED_RETRY_TOKENS, ctx ? Math.floor(ctx * 0.6) : TRIMMED_RETRY_TOKENS), maxTokens: opts.max_tokens };
+    }
+    const limit = Number(/\bLimit:?\s*(\d{3,})/i.exec(String(e?.message || ''))?.[1]) || null;
+    const maxTokens = Math.min(opts.max_tokens || 4096, limit ? Math.max(256, Math.floor(limit * 0.25)) : 2048);
+    const promptTokens = limit
+      ? Math.max(1000, Math.min(TRIMMED_RETRY_TOKENS, limit - maxTokens - 500))
+      : TRIMMED_RETRY_TOKENS;
+    return { promptTokens, maxTokens };
+  };
+  const _tooLargeNotice = (p) => `${p} request too large for it → retried with less context`;
 
   // ── Local-model confirmation gate ──────────────────────────────────────────
   // When every cloud provider is down/exhausted, the INTERACTIVE chat path
@@ -475,9 +614,29 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     );
   };
 
+  // A local failure happens inside this process — often before llama-server
+  // is asked anything — so it carried no status, left no ledger row, and its
+  // words ("The prompt uses 11,230 of a 8,192-token window …") matched no
+  // reason: the operator read "local unavailable" (2026-09-30). It is tagged
+  // as the local runtime's, given the status llama-server answered when there
+  // was one, recorded, and logged whole.
+  const _localFailure = (e, model, t0) => {
+    const err = e instanceof Error ? e : new Error(String(e));
+    err.localRuntime = true;
+    if (!err.status) {
+      const s = Number(/llama-server returned (\d{3})/.exec(err.message || '')?.[1]);
+      if (s) err.status = s;
+    }
+    _trackLLM('local', model || defaultLocalModel() || 'local', 0, Date.now() - t0, false, { status: err.status || null, error: err.message });
+    console.warn(`[KERNEL] local runtime failed${model ? ` (${model})` : ''}: ${_redactKeys(err.message).slice(0, 300)}`);
+    return err;
+  };
+  // Nothing installed is a state, not a failed call: tagged, not recorded.
+  const _localMissing = () => Object.assign(_noLocalModelError(), { localRuntime: true });
+
   const localNativeRequest = async (prompt, modelId, opts = {}) => {
     const lr = _getLocalRT();
-    if (!lr || !lr.isAvailable()) throw _noLocalModelError();
+    if (!lr || !lr.isAvailable()) throw _localMissing();
     const _t0 = Date.now();
     const flatPrompt = typeof prompt === 'string' ? prompt : (Array.isArray(prompt) ? prompt.map(m => m.content || '').join('\n') : String(prompt));
     // D1a — no default here. `|| 512` made this the real ceiling on /api/ai:
@@ -486,13 +645,16 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     // capped at 512 no matter how large a window the model was serving.
     // Undefined means "derive it from the window", which is the only value
     // that can be right for every prompt size.
-    const result = await lr.infer(flatPrompt, {
-      model: modelId || undefined,
-      maxTokens: opts.max_tokens,
-      temperature: opts.temperature ?? 0.7,
-      long: opts.long === true,
-      signal: opts.signal,
-    });
+    let result;
+    try {
+      result = await lr.infer(flatPrompt, {
+        model: modelId || undefined,
+        maxTokens: opts.max_tokens,
+        temperature: opts.temperature ?? 0.7,
+        long: opts.long === true,
+        signal: opts.signal,
+      });
+    } catch (e) { throw opts.signal?.aborted ? e : _localFailure(e, modelId, _t0); }
     _trackLLM('local', result.model, result.tokens, Date.now() - _t0, true);
     return opts.returnMeta
       ? { text: result.text, provider: 'local', model: result.model }
@@ -1295,16 +1457,19 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   // caller's signal, so /chat/stop reaches llama-server, not just the display.
   const streamLocal = async (messages, model, opts = {}) => {
     const lr = _getLocalRT();
-    if (!lr || !lr.isAvailable()) throw _noLocalModelError();
+    if (!lr || !lr.isAvailable()) throw _localMissing();
     const _t0 = Date.now();
-    const result = await lr.inferStream('', {
-      model: model || undefined,
-      messages,
-      signal: opts.signal,
-      // D1a — undefined means "derive it from the window".
-      maxTokens: opts.max_tokens,
-      temperature: opts.temperature ?? 0.7,
-    }, opts.onToken);
+    let result;
+    try {
+      result = await lr.inferStream('', {
+        model: model || undefined,
+        messages,
+        signal: opts.signal,
+        // D1a — undefined means "derive it from the window".
+        maxTokens: opts.max_tokens,
+        temperature: opts.temperature ?? 0.7,
+      }, opts.onToken);
+    } catch (e) { throw opts.signal?.aborted ? e : _localFailure(e, model, _t0); }
     _trackLLM('local', result.model || model || 'local', result.tokens || 0, Date.now() - _t0, !result.cancelled);
     return {
       text: result.text || '',
@@ -1592,6 +1757,8 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       const at = candidates.findIndex((c) => c.provider === 'local');
       candidates.splice(at === -1 ? candidates.length : at, 0, primary);
     }
+    // OpenRouter's paid models resting: that connection serves on a free one.
+    for (const c of candidates) await _applyPaidRest(c);
     return candidates;
   };
 
@@ -1600,7 +1767,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
    *
    *   opts = { role='chat', signal, onToken(delta) [required],
    *            onAttempt({provider, model, fallback}),
-   *            onFallback({from, to, model, reason}),
+   *            onFallback({from, to, model, reason, notice?}),
    *            max_tokens, timeout_ms, provider, model }
    *
    * Resolves like kernelLLM (registry, then settings, then the fallback
@@ -1628,34 +1795,50 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
         from: primary.provider, to: candidates[0].provider, model: candidates[0].model,
         reason: providerHealth[primary.provider]?.plain || 'resting',
       });
+    } else if (primary.paidFrom) {
+      // Paid OpenRouter models are resting: this turn starts on a free one,
+      // with one notice rather than a failure.
+      opts.onFallback?.({
+        from: primary.provider, to: primary.provider, model: primary.model,
+        reason: 'out of credits', notice: _paidNotice(primary.paidFrom),
+      });
     }
 
-    for (const c of candidates) {
-      const fallback = c !== primary;
-      if (fallback && lastFailed) {
+    // An index, not for…of: a recovery attempt on the same connection (a free
+    // model after a paid 402, less context after a "too large") is inserted
+    // right after the candidate that failed, ahead of every other provider.
+    for (let i = 0; i < candidates.length; i++) {
+      const c = candidates[i];
+      const root = c.retryOf || c;
+      const fallback = root !== primary || !!c.paidFrom;
+      // A recovery attempt's notice went out when it was queued.
+      if (!c.retryOf && c !== primary && lastFailed) {
         opts.onFallback?.({ from: lastFailed.provider, to: c.provider, model: c.model, reason: _plainReason(lastErr) });
       }
       opts.onAttempt?.({ provider: c.provider, model: c.model, fallback });
 
+      const sent = c.trimmedMessages || messages;
+      const callOpts = c.trimmedMaxTokens ? { ...opts, max_tokens: c.trimmedMaxTokens } : opts;
       let partial = '';
       let served = 0;
       const onToken = (t) => { if (!t) return; served++; partial += t; opts.onToken(t); };
       try {
-        const r = await _dispatchStream(messages, c, { ...opts, onToken });
+        const r = await _dispatchStream(sent, c, { ...callOpts, onToken });
         noteProviderSuccess(c.provider);
         const usedModel = r.model || c.model;
-        if (fallback) notify(`↪ Fallback: ${role} streamed via ${c.provider}/${usedModel} (configured: ${primary.provider})`, { provider: c.provider });
+        if (fallback) notify(`↪ Fallback: ${role} streamed via ${c.provider}/${usedModel} (configured: ${primary.provider}${c.paidFrom ? `/${c.paidFrom}` : ''})`, { provider: c.provider });
         return {
           text: r.text, tokens: r.tokens, latencyMs: Date.now() - t0,
           provider: c.provider, model: usedModel, fallback,
           complete: r.complete !== false, truncated: !!r.truncated,
           truncationReason: r.truncationReason || null, cancelled: !!r.cancelled,
           finishReason: r.finishReason || null,
+          ...(c.trimmedMessages ? { trimmed: true } : {}),
         };
       } catch (e) {
         if (opts.signal?.aborted) {
           // The operator stopped it. Not a provider failure — do not fall back.
-          _trackLLM(c.provider, c.model || 'unknown', _estimateTokens(messages, partial), Date.now() - t0, false);
+          _trackLLM(c.provider, c.model || 'unknown', _estimateTokens(sent, partial), Date.now() - t0, false);
           return {
             text: partial, tokens: Math.ceil(partial.length / 4), latencyMs: Date.now() - t0,
             provider: c.provider, model: c.model, fallback,
@@ -1665,19 +1848,45 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
         if (served > 0) {
           // Tokens already reached the caller; a silent retry would show the
           // operator two answers. Surface it with what arrived.
-          _trackLLM(c.provider, c.model || 'unknown', _estimateTokens(messages, partial), Date.now() - t0, false);
+          _trackLLM(c.provider, c.model || 'unknown', _estimateTokens(sent, partial), Date.now() - t0, false);
           e.partialText = partial;
           e.provider = c.provider;
           e.model = c.model;
           throw e;
         }
+        const status = _failureStatus(e);
+        if (root === primary) primaryErr = e;
+
+        // A paid OpenRouter model out of credits: the paid models rest, not
+        // OpenRouter, and the same connection answers on a free model next.
+        if (_paidOutOfCredits(c, status)) {
+          _restPaid(c.provider, c.model, e.message);
+          const free = await _freeModelFor(c);
+          attempts.push({ provider: c.provider, status, message: e.message, configured: root === primary, label: `openrouter (${c.model})`, model: c.model });
+          candidates.splice(i + 1, 0, { ...c, model: free, paidFrom: c.model, retryOf: root });
+          opts.onFallback?.({ from: c.provider, to: c.provider, model: free, reason: 'out of credits', notice: _paidNotice(c.model) });
+          continue;
+        }
+
+        // Too large is the request, not the provider: never a rest, and the
+        // same candidate is asked once more with less context.
+        const tooLarge = _isTooLarge(e, status);
+        if (tooLarge && !c.trimmedRetry) {
+          const budget = await _trimBudget(c, e, callOpts);
+          const cut = _trimMessages(sent, budget.promptTokens);
+          if (cut) {
+            console.warn(`[KERNEL] stream ${c.provider} request too large (~${cut.before} tokens: ${_redactKeys(e.message).slice(0, 160)}); retrying with ~${cut.after}`);
+            candidates.splice(i + 1, 0, { ...c, retryOf: root, trimmedRetry: true, trimmedMessages: cut.messages, trimmedMaxTokens: budget.maxTokens });
+            opts.onFallback?.({ from: c.provider, to: c.provider, model: c.model, reason: 'request too large for it', notice: _tooLargeNotice(c.provider) });
+            continue;
+          }
+        }
+
         lastErr = e;
         lastFailed = c;
-        const status = _failureStatus(e);
         if (status === 429 || status === 402) markUnhealthy(c.provider, status, e.message);
-        else noteProviderFailure(c.provider, e);
-        if (c === primary) primaryErr = e;
-        attempts.push({ provider: c.provider, status: status || null, message: e.message, configured: c === primary });
+        else if (!tooLarge) noteProviderFailure(c.provider, e);
+        attempts.push({ provider: c.provider, status: status || null, message: e.message, configured: root === primary, ..._attemptExtras(c, e) });
         console.warn(`[KERNEL] stream ${c.provider} failed (${e.message.slice(0, 120)}), trying next provider`);
       }
     }
@@ -1769,7 +1978,11 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       if (!response.ok) {
         const errBody = await response.text();
         _trackLLM(provider, model, 0, Date.now() - _t0, false);
-        if (response.status === 429 || response.status === 402) { markUnhealthy(provider, response.status, errBody); rotateKeyPool(provider); }
+        // A paid OpenRouter model out of credits rests the paid models only;
+        // chat on a ':free' model keeps working.
+        if (_paidOutOfCredits({ provider, model }, response.status)) _restPaid(provider, model, errBody);
+        else if (response.status === 429 || response.status === 402) markUnhealthy(provider, response.status, errBody);
+        if (response.status === 429 || response.status === 402) rotateKeyPool(provider);
         throw new Error(`${provider} vision error ${response.status}: ${errBody}`);
       }
       const data = await response.json();
@@ -1828,6 +2041,67 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   // opts.system for specialized personas (grader, researcher, councilor).
   const AEON_SYSTEM = 'You are AEON, a private AI workspace. You are concise, accurate, and action-oriented. When given a task, execute it directly. When asked a question, answer it directly. Never fabricate data.';
 
+  // What an attempt carries beyond its status, for the one-line summary.
+  const _attemptExtras = (cand, e) => ({
+    ...(cand?.paidFrom ? { label: `openrouter (${cand.model})` } : {}),
+    // Which OpenRouter model failed decides the next step: a paid one out of
+    // credits means "pick a free one"; a free one out of credits does not.
+    ...(cand?.provider === 'openrouter' && cand.model ? { model: cand.model } : {}),
+    ...(e?.code ? { code: e.code } : {}),
+    ...(e?.localRuntime ? { localRuntime: true } : {}),
+  });
+
+  // The blocking twin of the stream loop's recovery. One candidate, then — for
+  // the two failures that are about the model or the request rather than the
+  // provider — the same connection once more: a free model after a paid 402,
+  // less context after "too large". `run(c, o)` answers. Returns
+  // { ok, out | error, cand } so the caller rests and records by the candidate
+  // the attempt ended on (an error never carries the candidate — it holds a key).
+  const _runRecovering = async (c, run, prompt, opts, attempts, configured) => {
+    let cur = c;
+    let o = opts;
+    let trimmed = false;
+    if (cur.paidFrom) notify(`↪ ${_paidNotice(cur.paidFrom)}`, { provider: cur.provider });
+    for (;;) {
+      try {
+        return { ok: true, out: await run(cur, o), cand: cur };
+      } catch (e) {
+        const status = _failureStatus(e);
+        if (_paidOutOfCredits(cur, status)) {
+          _restPaid(cur.provider, cur.model, e.message);
+          attempts.push({ provider: cur.provider, status, message: e.message, ...(configured !== undefined ? { configured } : {}), label: `openrouter (${cur.model})`, model: cur.model });
+          const free = await _freeModelFor(cur);
+          notify(`↪ ${_paidNotice(cur.model)}`, { provider: cur.provider });
+          cur = { ...cur, model: free, paidFrom: cur.model, ...(cur.resolved ? { resolved: { ...cur.resolved, model: free } } : {}) };
+          continue;
+        }
+        // The blocking local transport sends the prompt alone, which is kept
+        // whole, so a trimmed retry there would repeat the same request.
+        if (!trimmed && cur.provider !== 'local' && _isTooLarge(e, status)) {
+          const system = o.system ? [{ role: 'system', content: String(o.system) }] : [];
+          const turns = Array.isArray(o.messages)
+            ? o.messages
+            : [{ role: 'user', content: typeof prompt === 'string' ? prompt : JSON.stringify(prompt) }];
+          const budget = await _trimBudget(cur, e, o);
+          const cut = _trimMessages([...system, ...turns], budget.promptTokens);
+          if (cut) {
+            trimmed = true;
+            const [sys, ...rest] = cut.messages;
+            o = {
+              ...o, system: sys.content,
+              ...(Array.isArray(o.messages) ? { messages: rest } : {}),
+              ...(budget.maxTokens ? { max_tokens: budget.maxTokens } : {}),
+            };
+            console.warn(`[KERNEL] ${cur.provider} request too large (~${cut.before} tokens: ${_redactKeys(e.message).slice(0, 160)}); retrying with ~${cut.after}`);
+            notify(`↪ ${_tooLargeNotice(cur.provider)}`, { provider: cur.provider });
+            continue;
+          }
+        }
+        return { ok: false, error: e, cand: cur };
+      }
+    }
+  };
+
   const kernelLLM = async (prompt, opts = {}) => {
     const role = opts.role || 'chat';
     if (!opts.system) opts = { ...opts, system: AEON_SYSTEM };
@@ -1848,6 +2122,8 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     // configured provider that was rate-limited for a minute.
     let registryErr = null;
     let registryAttempt = null;
+    // A paid OpenRouter model's 402, recorded before the free model's outcome.
+    const preAttempts = [];
     // A provider the chain below does not carry (custom, lmstudio, openai…) is
     // resolved from the registry too; the chain skipped it and then reported
     // "No local model is installed" for a configured endpoint (agent C2).
@@ -1877,18 +2153,22 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
         // A resting registry provider is skipped while another can serve —
         // the same rule the chain below applies to every other provider.
         if (isHealthy(r.provider) || !_anotherCanServe(r.provider, localOnly)) {
-          try {
-            const text = await _dispatchResolved(prompt, r, opts);
+          const rc = { ...r };
+          await _applyPaidRest(rc);
+          const res = await _runRecovering(rc, (cand, o) => _dispatchResolved(prompt, cand, o), prompt, opts, preAttempts, true);
+          if (res.ok) {
             noteProviderSuccess(r.provider);
-            return opts.returnMeta ? { text, provider: r.provider, model: r.model } : text;
-          } catch (e) {
-            const status = _failureStatus(e);
-            if (status === 429 || status === 402) markUnhealthy(r.provider, status, e.message);
-            else noteProviderFailure(r.provider, e);
-            registryErr = e;
-            registryAttempt = { provider: r.provider, status: status || null, message: e.message, configured: true };
-            console.warn(`[KERNEL] registry ${r.provider} failed (${e.message.slice(0, 120)}), trying the chain`);
+            return opts.returnMeta
+              ? { text: res.out, provider: r.provider, model: res.cand.model, ...(res.cand.paidFrom ? { fallback: true } : {}) }
+              : res.out;
           }
+          const e = res.error;
+          const status = _failureStatus(e);
+          if (status === 429 || status === 402) markUnhealthy(r.provider, status, e.message);
+          else if (!_isTooLarge(e, status)) noteProviderFailure(r.provider, e);
+          registryErr = e;
+          registryAttempt = { provider: r.provider, status: status || null, message: e.message, configured: true, ..._attemptExtras(res.cand, e) };
+          console.warn(`[KERNEL] registry ${r.provider} failed (${e.message.slice(0, 120)}), trying the chain`);
         }
       }
     }
@@ -1954,7 +2234,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     let lastErr = null;
     // Every failure in the chain, so the thrown error can name the real cause
     // rather than whichever provider happened to be tried last. See P8c below.
-    const attempts = registryAttempt ? [registryAttempt] : [];
+    const attempts = [...preAttempts, ...(registryAttempt ? [registryAttempt] : [])];
     let prev = registryAttempt ? registryAttempt.provider : null;
     // A caller that NAMED Local — a Council local seat, the /api/chat
     // kill-switch past its spend threshold — asked for this computer. Handing
@@ -1971,41 +2251,46 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
         // Not a failure of a provider: nothing is installed to try.
         continue;
       }
-      try {
-        let text;
-        let usedModel = c.model;
-        if (c.resolved) text = await _dispatchResolved(prompt, c.resolved, opts);
-        else if (p === 'groq') text = await groqRequest(prompt, usedModel || 'openai/gpt-oss-120b', 0, opts);
-        else if (p === 'gemini') text = await geminiRequest(prompt, usedModel || 'gemini-flash-latest', 0, opts);
-        else if (p === 'openrouter') text = await openRouterRequest(prompt, usedModel || 'openai/gpt-4o-mini', opts);
-        else if (p === 'openai') {
-          usedModel = usedModel || 'gpt-4o-mini';
-          text = await genericOpenAIRequest(prompt, usedModel, aeonEndpoints?.PROVIDER_TRANSPORT?.openai?.base || 'https://api.openai.com/v1', _legacyKeyFor('openai'), opts);
+      // The model the env-key OpenRouter rung would ask for, made explicit so
+      // a 402 on it is read as the paid model it is.
+      if (p === 'openrouter' && !c.resolved && !c.model) c.model = 'openai/gpt-4o-mini';
+      await _applyPaidRest(c);
+      const res = await _runRecovering(c, async (cand, o) => {
+        if (cand.resolved) return { text: await _dispatchResolved(prompt, cand.resolved, o), model: cand.resolved.model };
+        const m = cand.model;
+        if (p === 'groq') return { text: await groqRequest(prompt, m || 'openai/gpt-oss-120b', 0, o), model: m };
+        if (p === 'gemini') return { text: await geminiRequest(prompt, m || 'gemini-flash-latest', 0, o), model: m };
+        if (p === 'openrouter') return { text: await openRouterRequest(prompt, m, o), model: m };
+        if (p === 'openai') {
+          const om = m || 'gpt-4o-mini';
+          return { text: await genericOpenAIRequest(prompt, om, aeonEndpoints?.PROVIDER_TRANSPORT?.openai?.base || 'https://api.openai.com/v1', _legacyKeyFor('openai'), o), model: om };
         }
-        else if (p === 'local') {
+        if (p === 'local') {
           // The runtime names the model it loaded. Asked with the caller's
           // returnMeta it answered {text, model}, returned below as the text
           // of a second wrapper — the kill-switch's local answer was an object.
-          const r = await localNativeRequest(prompt, usedModel, { ...opts, returnMeta: true });
-          text = r.text;
-          usedModel = r.model || usedModel;
+          const r = await localNativeRequest(prompt, m, { ...o, returnMeta: true });
+          return { text: r.text, model: r.model || m };
         }
-        else continue;
-        if (text !== undefined) {
-          noteProviderSuccess(p);
-          if (p !== provider) notify(`↪ ${role} answered by ${p}/${usedModel || 'default'}`, { provider: p });
-          return opts.returnMeta ? { text, provider: p, model: usedModel, fallback: p !== provider } : text;
-        }
-      } catch (e) {
-        lastErr = e;
-        const status = _failureStatus(e);
-        if (status === 429 || status === 402) markUnhealthy(p, status, e.message);
-        else noteProviderFailure(p, e);
-        attempts.push({ provider: p, status: status ? Number(status) : null, message: e.message });
-        if (prev !== p) notify(`↪ ${p} ${_plainReason(e)} — trying the next provider`, { provider: p });
-        prev = p;
-        console.warn(`[KERNEL] ${p} failed (${e.message.slice(0, 120)}), trying next provider`);
+        return null;
+      }, prompt, opts, attempts);
+      if (res.ok) {
+        if (!res.out || res.out.text === undefined) continue;
+        const { text, model: usedModel } = res.out;
+        noteProviderSuccess(p);
+        if (p !== provider) notify(`↪ ${role} answered by ${p}/${usedModel || 'default'}`, { provider: p });
+        return opts.returnMeta ? { text, provider: p, model: usedModel, fallback: p !== provider || !!res.cand.paidFrom } : text;
       }
+      const e = res.error;
+      lastErr = e;
+      const status = _failureStatus(e);
+      if (status === 429 || status === 402) markUnhealthy(p, status, e.message);
+      // Too large is the request, not the provider: no rest, no streak.
+      else if (!_isTooLarge(e, status)) noteProviderFailure(p, e);
+      attempts.push({ provider: p, status: status ? Number(status) : null, message: e.message, ..._attemptExtras(res.cand, e) });
+      if (prev !== p) notify(`↪ ${p} ${_plainReason(e)} — trying the next provider`, { provider: p });
+      prev = p;
+      console.warn(`[KERNEL] ${p} failed (${e.message.slice(0, 120)}), trying next provider`);
     }
 
     if (namedLocal) throw lastErr || _noLocalModelError();
@@ -2019,9 +2304,38 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   // phrase (a Gemini 429 body mentions "billing" and is still a rate limit),
   // except for a 400, whose status alone says nothing: Gemini's rejected key
   // is a 400 that only its body names (A041).
-  const _attemptReason = (a) => _plainReason(a.status === 400
-    ? { status: 400, message: a.message || '' }
-    : (a.status || { message: a.message }));
+  // A local attempt keeps its body and code: llama-server's 400 "exceeds the
+  // available context size" and the runtime's own CONTEXT_EXHAUSTED say what a
+  // bare status cannot.
+  const _attemptReason = (a) => _plainReason(a.status && a.status !== 400 && !a.localRuntime
+    ? a.status
+    : { status: a.status || null, message: a.message || '', code: a.code, localRuntime: a.localRuntime });
+  const _attemptName = (a) => a.label || a.provider;
+
+  // The one step most likely to get the next turn answered, for the causes
+  // the chain actually met — never a raw body.
+  const _nextStep = (attempts, o = {}) => {
+    const seen = attempts.map((a) => ({ a, why: _attemptReason(a) }));
+    const has = (why, p) => seen.find((x) => x.why === why && (!p || x.a.provider === p));
+    const orBroke = seen.filter((x) => x.why === 'out of credits' && x.a.provider === 'openrouter');
+    if (orBroke.some((x) => _isFreeOpenRouterModel(x.a.model))) {
+      return 'Add OpenRouter credits — its free models were refused too — or assign another provider in Settings → Models.';
+    }
+    if (orBroke.length) {
+      return "Pick a ':free' OpenRouter model for this role in Settings → Models, or add OpenRouter credits.";
+    }
+    const broke = has('out of credits');
+    if (broke) return `Add credits for ${broke.a.provider}, or pick a free model in Settings → Models.`;
+    const rejected = has('key rejected');
+    if (rejected) return `Re-enter the ${rejected.a.provider} key in Settings → Keys.`;
+    if (has('request too large for it')) {
+      return 'Start a new chat, send a shorter message, or lower "Most memories per turn" in Settings → Blocks → Memory Core.';
+    }
+    if (has('no chat model running') || has('no chat model installed') || has('no local engine installed') || has('stopped responding')) {
+      return o.localOnly ? 'Check the local model in Cookbook.' : 'Check the local model in Cookbook, or add a key or credits in Settings.';
+    }
+    return 'Add a key or credits in Settings, or try again shortly.';
+  };
 
   // BO-SHIP P8c — say which provider failed and why.
   //
@@ -2053,7 +2367,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
         // Parenthesised: the || used to bind to the whole (never-empty) string,
         // so the message ended on "either: " (agent C2, 2026-09-23).
         + (attempts.filter((a) => a !== throttled)
-          .map((a) => `${a.provider} ${_attemptReason(a)}`).join(', ') || 'none configured')
+          .map((a) => `${_attemptName(a)} ${_attemptReason(a)}`).join(', ') || 'none configured')
       );
       err.rateLimited = true;
       err.provider = throttled.provider;
@@ -2081,11 +2395,11 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     // connection" is already the actionable sentence and keeps its words.
     if (attempts.some((a) => a.configured !== false)) {
       // One line per provider, in words — the raw bodies are in the server log.
-      const summary = attempts.map((a) => `${a.provider} ${_attemptReason(a)}`).join(', ');
+      const summary = attempts.map((a) => `${_attemptName(a)} ${_attemptReason(a)}`).join(', ');
       // "Add a key" is the wrong remedy when Local only kept every cloud key out.
       const plain = new Error(o.localOnly
         ? `Local only is on, so no cloud model was tried, and the local one could not answer — ${summary}. Check the local model in Cookbook, or turn Local only off in Settings → Models.`
-        : `No provider could answer right now — ${summary}. Add a key or credits in Settings, or try again shortly.`);
+        : `No provider could answer right now — ${summary}. ${_nextStep(attempts, o)}`);
       plain.cause = exhausted;
       if (exhausted.partialText) plain.partialText = exhausted.partialText;
       exhausted = plain;

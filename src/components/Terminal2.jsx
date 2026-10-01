@@ -268,6 +268,22 @@ export function takeSSEFrames(buffer) {
 }
 
 /**
+ * Put a notice ABOVE the entry it explains.
+ *
+ * A fallback notice ("openrouter out of credits → groq") arrives while the
+ * answer's bubble is already on screen, streaming. It was appended after it,
+ * so when every provider failed the error bubble sat above its own causes
+ * and read as if the switches came afterwards (2026-09-30). The bubble's id
+ * is the anchor; with no such entry the notice goes at the end.
+ */
+export function insertBefore(feed, beforeId, entry) {
+  const list = Array.isArray(feed) ? feed : [];
+  const i = list.findIndex(e => e && e.id === beforeId);
+  if (i === -1) return [...list, entry];
+  return [...list.slice(0, i), entry, ...list.slice(i)];
+}
+
+/**
  * The part of the feed that is the conversation.
  *
  * A pending VAULT PLACEMENT card carries the dropped file itself as base64 (up
@@ -734,6 +750,11 @@ const Terminal2 = ({ onUsageUpdate }) => {
     setFeed(prev => [...prev, { id, ...entry }]);
     return id;
   }, []);
+  const pushBefore = useCallback((beforeId, entry) => {
+    const id = feedId.current++;
+    setFeed(prev => insertBefore(prev, beforeId, { id, ...entry }));
+    return id;
+  }, []);
   const patch = useCallback((id, updates) => {
     setFeed(prev => prev.map(e => e.id === id ? { ...e, ...(typeof updates === 'function' ? updates(e) : updates) } : e));
   }, []);
@@ -1014,8 +1035,8 @@ const Terminal2 = ({ onUsageUpdate }) => {
           if (eventType === 'token') { streamed += payload.t; patch(msgId, { content: streamed }); }
           else if (eventType === 'meta') {
             if (payload.streamId) activeChatRef.current = { ...activeChatRef.current, streamId: payload.streamId };
-            // Fallback narrative: show degradation inline, strikethrough style
-            if (payload.notice) push({ type: 'msg', role: 'system', content: `↪ ${payload.notice}` });
+            // Fallback narrative, inline and ABOVE the answer it explains.
+            if (payload.notice) pushBefore(msgId, { type: 'msg', role: 'system', content: `↪ ${payload.notice}` });
             meta = { ...meta, ...payload };
           }
           else if (eventType === 'warning') push({ type: 'msg', role: 'warning', content: payload.message });

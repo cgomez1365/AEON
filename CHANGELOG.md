@@ -7,7 +7,8 @@ tagged; until then its heading says so.
 <!-- Range of the 3.1.0 entry: v3.0.0 (e25f5ee, 2026-09-14) to fe93dbf (2026-09-30),
      169 commits; then dc8e3a1, the five launch commits 6defca4, 2b4b364, 801fda5,
      601155b and 0c80a7c, and the two release-prep commits on top of 0c80a7c (7c73e1a and
-     its review fixes, "release prep" below; 177 commits in all). Anything merged after that and before the v3.1.0 tag
+     its review fixes, "release prep" below), then the failover fix on top of d31ecd8
+     ("failover fix" below; 178 commits in all). Anything merged after that and before the v3.1.0 tag
      is added here before tagging, and the heading's "not tagged yet" is replaced by
      the date. -->
 
@@ -125,6 +126,9 @@ from 3.1.0 to 3.0.0 is not supported.
   (5d80f41, 602ff12, 24f3a01).
 - A rate limit is reported as a rate limit (66de40c), and "empty response" now names
   which of four failures happened (24bdb78).
+- A paid OpenRouter model out of credits rests only the paid models and the same
+  connection answers on a free one; a request too large for a model is retried once with
+  less context; Local's failures are named; fallback notices sit above the answer (failover fix).
 - The model picker lists free models first, then a size guess it labels as a guess
   (3231a73, eb1ace3). Groq's retired Llama 3.x defaults are replaced (4008905).
 - Memory spends the model's real context window (ae573f6).
