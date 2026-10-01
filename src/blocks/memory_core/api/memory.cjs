@@ -27,7 +27,34 @@ const memoryPolicy = require('../../../kernel/memory-policy.cjs');
 const sections = require('../../../kernel/memorySections.cjs');
 const crypto = require('crypto');
 
-/* AEON-REWRITE[distill] 14 line(s) removed: written on the 2026-09-24 work machine; re-implement from the distill spec */
+/**
+ * How long ago an ISO time was, in words, for the "already distilled" reply.
+ * Each unit is rounded before its threshold is checked, so 59.6 minutes
+ * reads "1 hour ago". Clock skew (a time in the future) reads "moments ago";
+ * a time that does not parse counts from the epoch.
+ */
+function agoInWords(iso, now = Date.now()) {
+  const t = Date.parse(iso);
+  const ms = now - (Number.isFinite(t) ? t : 0);
+  if (ms < 90 * 1000) return 'moments ago';
+  const ago = (n, unit) => `${n} ${unit}${n === 1 ? '' : 's'} ago`;
+  const minutes = Math.round(ms / 60000);
+  if (minutes < 60) return ago(minutes, 'minute');
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return ago(hours, 'hour');
+  return ago(Math.round(hours / 24), 'day');
+}
+
+/**
+ * A saved chat as the distil prompt reads it: the last 30 turns, one
+ * "role: content" line each, content cut to 400 characters. The terminal's
+ * DISTIL button builds its live transcript the same way, so the same
+ * conversation fingerprints the same from either button.
+ */
+function sessionTranscript(msgs) {
+  return msgs.slice(-30).map((m) => `${m?.role}: ${String(m?.content ?? '').slice(0, 400)}`).join('\n');
+}
+
 module.exports = function createMemoryRouter(deps) {
   const router = express.Router();
   const { kernelLLM, VAULT_ROOT, TERMINAL_HISTORY_FILE } = deps;
@@ -45,7 +72,31 @@ module.exports = function createMemoryRouter(deps) {
 
   const MEM_DIR = path.join(VAULT_ROOT || path.join(__dirname, '..', '..', 'aeon_matrix', 'data', 'Vault'), 'Agents', 'Aeon', 'memory');
   const STORE = path.join(MEM_DIR, 'memories.json');
-/* AEON-REWRITE[distill] 16 line(s) removed: written on the 2026-09-24 work machine; re-implement from the distill spec */
+  // Which transcripts have already been distilled, by fingerprint. It sits
+  // beside memories.json rather than under db/, so a Vault restored from a
+  // backup brings back the ledger that matches its memories. Bounded: 200
+  // runs is far more than the guard needs, and a file next to the Vault must
+  // not grow forever.
+  const LEDGER = path.join(MEM_DIR, '.distilled.json');
+  const LEDGER_MAX = 200;
+  // Missing, damaged or not a list: an empty ledger. Reading never fails a distill.
+  const readLedger = () => {
+    try {
+      const entries = JSON.parse(fs.readFileSync(LEDGER, 'utf8'));
+      return Array.isArray(entries) ? entries : [];
+    } catch { return []; }
+  };
+  // A ledger that cannot be written costs one repeat distil later, never this
+  // one: the memories are already saved, so the failure is logged, not raised.
+  const recordDistilled = (sha, added) => {
+    try {
+      const entries = readLedger().filter((e) => e && e.sha !== sha);
+      entries.push({ sha, at: new Date().toISOString(), added });
+      fs.writeFileSync(LEDGER, JSON.stringify(entries.slice(-LEDGER_MAX), null, 2));
+    } catch (e) {
+      console.warn(`[MEMORY] distill ledger ${LEDGER} was not written (${e.message}); this conversation can be distilled again.`);
+    }
+  };
   try { if (!fs.existsSync(MEM_DIR)) fs.mkdirSync(MEM_DIR, { recursive: true }); } catch {}
 
   // Unreadable is not empty — the rule vault.cjs and endpoints.cjs already
@@ -283,19 +334,83 @@ module.exports = function createMemoryRouter(deps) {
     if (transcript && !refs) {
       refs = [{ kind: 'transcript', sha: crypto.createHash('sha256').update(String(transcript)).digest('hex').slice(0, 12), at: new Date().toISOString() }];
     }
-/* AEON-REWRITE[distill] 13 line(s) removed: written on the 2026-09-24 work machine; re-implement from the distill spec */
+    // The saved chat a transcript was read from, named in the reply so the
+    // operator can see WHICH conversation was distilled. Null when the caller
+    // sent its own transcript or the legacy history file was used.
+    let usedSession = null;
+    // Where the transcript comes from when the caller sent none:
+    //   1. the operator's saved chat sessions (newest, or `sessionId`), the
+    //      folder dashboard/api/chat.cjs writes beside this memory folder;
+    //   2. the legacy terminal history file, for installs that still write it.
+    // The panel's button posts an empty body, and that file does not exist on
+    // a normal install — so it used to answer "nothing to distill" while a
+    // long conversation sat saved on disk.
     if (!transcript) {
       try {
-/* AEON-REWRITE[distill] 28 line(s) removed: written on the 2026-09-24 work machine; re-implement from the distill spec */
+        const sessionsDir = path.join(path.dirname(MEM_DIR), 'chat_sessions');
+        const files = fs.readdirSync(sessionsDir).filter((f) => f.endsWith('.json'));
+        if (!files.length) throw new Error('no saved sessions');
+        // Compared with values only — never joined into a path — so it cannot
+        // reach outside the folder.
+        const wanted = typeof req.body?.sessionId === 'string' ? req.body.sessionId : null;
+        let best = null;
+        for (const f of files) {
+          let rec;
+          try { rec = JSON.parse(fs.readFileSync(path.join(sessionsDir, f), 'utf8')); } catch { continue; }
+          const msgs = Array.isArray(rec) ? rec : (rec?.messages || []);
+          if (!Array.isArray(msgs) || !msgs.length) continue;
+          if (wanted && rec?.id !== wanted && f !== `${wanted}.json`) continue;
+          const t = Date.parse(rec?.updatedAt || rec?.savedAt);
+          const rank = Number.isFinite(t) ? t : -Infinity;
+          if (!best || rank > best.rank) best = { f, rec, msgs, rank };
+        }
+        if (!best) throw new Error(wanted ? 'that session has no messages' : 'every saved session is empty');
+        // Both sides of the conversation, on purpose. R09 keeps assistant
+        // output out of the document index so the model's own words never
+        // come back as evidence; a distilled memory is a short item the
+        // operator sees, edits or deletes, with a ref to its chat. Dropping
+        // the assistant turns would usually drop half of what was agreed.
+        transcript = sessionTranscript(best.msgs);
+        usedSession = best.rec?.name || best.f;
+        refs = [{ kind: 'chat-session', file: `Agents/Aeon/chat_sessions/${best.f}`, span: `last-${Math.min(best.msgs.length, 30)}-turns`, at: new Date().toISOString() }];
+      } catch (sessionErr) {
+        try {
           if (!TERMINAL_HISTORY_FILE) throw new Error('TERMINAL_HISTORY_FILE not injected');
           const h = JSON.parse(fs.readFileSync(TERMINAL_HISTORY_FILE, 'utf8'));
           const msgs = Array.isArray(h) ? h : h.messages || [];
-/* AEON-REWRITE[distill] 1 line(s) removed: written on the 2026-09-24 work machine; re-implement from the distill spec */
+          if (!Array.isArray(msgs) || !msgs.length) throw new Error('terminal history is empty');
           transcript = msgs.slice(-30).map(m => `${m.role}: ${String(m.content).slice(0, 400)}`).join('\n');
           refs = [{ kind: 'terminal-history', file: 'db/aeon_terminal_history.json', span: `last-${Math.min(msgs.length, 30)}-turns`, at: new Date().toISOString() }];
-/* AEON-REWRITE[distill] 10 line(s) removed: written on the 2026-09-24 work machine; re-implement from the distill spec */
+        } catch (historyErr) {
+          return res.status(400).json({
+            ok: false,
+            error: 'Nothing to distill. No transcript was sent, '
+              + `no saved chat session could be read (${sessionErr.message}), `
+              + `and the terminal history file is unavailable (${historyErr.message}). `
+              + 'Send a message in the terminal first, or pass a transcript.',
+          });
+        }
+      }
     }
-/* AEON-REWRITE[distill] 26 line(s) removed: written on the 2026-09-24 work machine; re-implement from the distill spec */
+    // Once per unchanged conversation. The INPUT is fingerprinted, not the
+    // output: three presses on one chat once stored 13 memories — five facts,
+    // each reworded — because a model asked twice words its answer
+    // differently. Fuzzy matching on the stored text found 2 of those 9
+    // repeats and blocked one genuine memory, and a blocked memory is simply
+    // lost where an extra one can be deleted. The transcript is what really
+    // recurs, so an exact fingerprint of it never blocks new material: once
+    // the chat grows, the fingerprint changes and a distil runs again.
+    // SHA-256, first 16 hex characters, over the transcript as resolved —
+    // existing ledgers are keyed this way, so the derivation must not change.
+    const fingerprint = crypto.createHash('sha256').update(String(transcript)).digest('hex').slice(0, 16);
+    const already = req.body?.force ? null : readLedger().find((e) => e && e.sha === fingerprint);
+    if (already) {
+      return res.json({
+        ok: true, added: [], candidates: 0, session: usedSession, alreadyDistilled: true,
+        message: `Nothing new — this conversation was distilled ${agoInWords(already.at)}, and nothing has been said since. `
+          + 'Keep chatting and distil again, or pass force to run it anyway.',
+      });
+    }
     const prompt = `Distill durable memories from this operator/VP terminal session. Prefer the operator's working artifacts over chit-chat:
 - outline: a scoped structure/plan that was settled
 - algorithm: logic or a flow that was decided
@@ -348,7 +463,6 @@ ${String(transcript).slice(0, 8000)}`;
       for (const c of usable.slice(0, 5)) {
         if (c.text.trim().length < 10) continue;
         if (all.find(m => m.text.trim().toLowerCase() === c.text.trim().toLowerCase())) continue;
-/* AEON-REWRITE[distill] 1 line(s) removed: written on the 2026-09-24 work machine; re-implement from the distill spec */
         const m = {
           id: newId(), text: c.text.trim(), category: c.category || 'fact',
           type: ['outline', 'algorithm', 'decision', 'milestone'].includes(c.type) ? c.type : null,
@@ -358,8 +472,9 @@ ${String(transcript).slice(0, 8000)}`;
         all.push(m); mdMirror(m); added.push(m);
       }
       if (added.length) { save(all); requestIndex('memory-distill'); }
-/* AEON-REWRITE[distill] 4 line(s) removed: written on the 2026-09-24 work machine; re-implement from the distill spec */
-/* AEON-REWRITE[distill] 2 line(s) removed: written on the 2026-09-24 work machine; re-implement from the distill spec */
+      // Recorded even when nothing was added: asking again about the same
+      // transcript would only come back empty again, at the price of a call.
+      recordDistilled(fingerprint, added.length);
       res.json({ ok: true, added, candidates: usable.length, session: usedSession });
     } catch (e) {
       // The store's 503 is ours to pass on. A status on anything else belongs
