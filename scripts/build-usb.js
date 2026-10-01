@@ -602,7 +602,7 @@ command -v node >/dev/null 2>&1 || {
 export AEON_LOCAL_MODELS_DIR="$USB_ROOT/models"
 export AEON_PORTABLE=true
 
-echo "  Configuring for $USB_ROOT…"
+echo "  Configuring for \${USB_ROOT}…"
 # .env.usb is the template; .env is the materialised copy. The server writes
 # the vault master key into .env on first boot (and --recover-vault writes a
 # new one), so the key line is carried over: rebuilding .env from the

@@ -24,6 +24,9 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const buildUsb = require('../scripts/build-usb.js');
 
+// Windows runs LAUNCH.bat, never launch.sh; Git-for-Windows bash would also
+// read a backslash path through sed (\U, \A…), which is not the product's case.
+const posix = process.platform !== 'win32';
 const hasBash = (() => {
   try { execFileSync('bash', ['-c', 'exit 0'], { stdio: 'ignore' }); return true; }
   catch { return false; }
@@ -50,12 +53,16 @@ function envStep(file) {
 const KEY_LINE = `AEON_VAULT_MASTER_KEY=${'ab'.repeat(32)}`;
 
 describe.each(['launch.sh', 'launch.command'])('%s env step', (file) => {
-  it.skipIf(!hasBash)('keeps the master key the server wrote, boot after boot', () => {
+  it.skipIf(!hasBash || !posix)('keeps the master key the server wrote, boot after boot', () => {
     const drive = path.join(tmp, `drive-${file}`);
     fs.mkdirSync(path.join(drive, 'AEON'), { recursive: true });
     buildUsb.writeEnvUsb(path.join(drive, 'AEON'), {});
     const script = `set -uo pipefail\nUSB_ROOT=${JSON.stringify(drive)}\n${envStep(file)}\n`;
-    const boot = () => execFileSync('bash', ['-c', script], { stdio: 'pipe' });
+    // A failure carries bash's own words, not a byte count.
+    const boot = () => {
+      try { execFileSync('bash', ['-c', script], { stdio: 'pipe' }); }
+      catch (e) { throw new Error(`env step exited ${e.status}: ${String(e.stderr || '').trim()}`); }
+    };
     const env = () => fs.readFileSync(path.join(drive, 'AEON', '.env'), 'utf8');
 
     // First boot: no .env yet, so no key to keep.
