@@ -91,6 +91,8 @@ module.exports = (app, deps) => {
         creative: { ...live },
       },
       roulette: false,
+      // Settings → Models → Local only; services/ai.js reads it (audit A072).
+      local_only: false,
       providers: {},
       prefs: {}
     };

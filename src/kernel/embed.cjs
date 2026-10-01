@@ -144,6 +144,19 @@ function embedSpace(model) {
   return taskPrefix(model, 'document') ? `${model}#task` : String(model || '');
 }
 
+// Settings → Models → Local only (services/ai.js reads the same flag). The
+// boot scan embeds every Vault document, so a cloud embedder would receive
+// them all; under Local only only an embedder on this computer or the LAN may.
+function localOnlyOn() {
+  try { return require('../../services/settings.js').loadSettings()?.local_only === true; } catch { return false; }
+}
+function isLocalEmbedder(r) {
+  if (r.provider === 'local') return true;
+  const profile = endpoints.PROVIDER_TRANSPORT[r.provider] || {};
+  if (!profile.requiresBaseUrl && (profile.reach || []).includes('cloud')) return false;
+  try { return !!endpoints.isPrivateHost(new URL(r.base_url || profile.base).hostname); } catch { return false; }
+}
+
 async function kernelEmbed(text, { supabase = null, kind = 'document' } = {}) {
   if (typeof text !== 'string' || !text.trim()) {
     throw embedError('empty_input', 'Nothing to embed.');
@@ -155,6 +168,14 @@ async function kernelEmbed(text, { supabase = null, kind = 'document' } = {}) {
       r.code || 'no_embed_model',
       r.error || 'No embedding model is available.',
       'Install one in Cookbook (about 150 MB, runs on CPU), or assign an endpoint that serves embeddings to the Embedding role in Settings → Model Assignment.',
+    );
+  }
+
+  if (!isLocalEmbedder(r) && localOnlyOn()) {
+    throw embedError(
+      'local_only',
+      `Local only is on (Settings → Models), so documents are not sent to ${r.provider} for embedding.`,
+      'Install a local embedder in Cookbook (nomic-embed-text, about 150 MB, runs on CPU), or turn Local only off.',
     );
   }
 

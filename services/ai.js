@@ -139,8 +139,9 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   const _failureStatus = (e) => e?.status
     || Number(/error (\d{3})/i.exec(e?.message || '')?.[1])
     || (/429/.test(e?.message || '') ? 429 : /402/.test(e?.message || '') ? 402 : null);
-  // Any other configured provider that could take a turn right now.
-  const _anotherCanServe = (p) => ['groq', 'gemini', 'openrouter', 'local']
+  // Any other configured provider that could take a turn right now. Under
+  // Local only (Settings → Models) the cloud ones cannot.
+  const _anotherCanServe = (p, localOnly = false) => (localOnly ? ['local'] : ['groq', 'gemini', 'openrouter', 'local'])
     .some((q) => q !== p && isConfigured(q) && isHealthy(q));
 
   // BO-A4a — one truth, two readers collapsed.
@@ -456,6 +457,12 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   // providers are healthy — it just was not using that knowledge when it
   // explained a failure. Shared by the blocking and streaming local paths.
   const _noLocalModelError = () => {
+    // Under Local only a configured cloud provider is not a remedy.
+    if (_localOnly(_settingsNow())) {
+      const err = new Error('Local only is on, and no local model is installed. Install one in Cookbook, or turn Local only off in Settings → Models.');
+      err.localOnly = true;
+      return err;
+    }
     const alive = Object.entries(getProviderHealth())
       .filter(([p, h]) => p !== 'local' && h.configured && h.healthy)
       .map(([p]) => p);
@@ -1404,11 +1411,61 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     const floor = p === 'openrouter' ? ['openrouter/free', _STREAM_FALLBACK_MODELS[p]] : [_STREAM_FALLBACK_MODELS[p]];
     return [...new Set([...declared, ...floor].filter((m) => m && !(nonChat && nonChat.test(m))))];
   };
+
+  // ── Local only (Settings → Models) ──────────────────────────────────────
+  // README calls local models "fully private", yet a role kept on Local handed
+  // its prompt (Vault passages included) to every configured cloud provider
+  // when Local failed, and roulette shuffled them in (audit A072).
+  // settings.local_only makes that a switch: the fallback list holds only local
+  // candidates, and a role or caller that names a cloud provider is refused
+  // with the reason instead of answered. Off by default, so the failover the
+  // operator relies on is unchanged until they turn it on.
+  //
+  // Local is this computer's runtime, or an LM Studio / custom connection whose
+  // address is on this machine or the LAN, judged by the registry's own
+  // classifier (isPrivateHost) so routing and the egress check agree. A named
+  // vendor (groq, gemini, openai, claude, grok, openrouter) is cloud whatever
+  // address it carries; an unknown provider counts as cloud.
+  const _localOnly = (settings) => settings?.local_only === true;
+  const _settingsNow = () => { try { return loadSettings() || {}; } catch { return {}; } };
+  // Decided before a provider is resolved, so Local only never draws a cloud
+  // provider's key from its pool.
+  const _mayBeLocal = (p) => {
+    if (p === 'local') return true;
+    const profile = aeonEndpoints?.PROVIDER_TRANSPORT?.[p];
+    return !!profile && (!!profile.requiresBaseUrl || !(profile.reach || []).includes('cloud'));
+  };
+  const _isLocalCandidate = (c) => {
+    if (!c || !_mayBeLocal(c.provider)) return false;
+    if (c.provider === 'local') return true;
+    const address = c.base_url || aeonEndpoints.PROVIDER_TRANSPORT[c.provider].base;
+    try { return !!address && !!aeonEndpoints.isPrivateHost(new URL(address).hostname); } catch { return false; }
+  };
+  const _localOnlyRefusal = (role, provider, namedByCaller) => {
+    const err = new Error(
+      'Local only is on (Settings → Models), so nothing is sent to a cloud model. '
+      + (namedByCaller ? `This request asked for ${provider}` : `The ${role} role is set to ${provider}`)
+      + ', which is not on this computer. Assign a local model in Settings → Models, or turn Local only off.'
+    );
+    err.localOnly = true;
+    // The routers' "nothing configured can answer" status (503) and remedy.
+    err.noProviderAvailable = true;
+    return err;
+  };
+  // The provider a call names (the caller's, else the role's declaration);
+  // null when nothing real is named ("none", "Same as Chat" with no Chat).
+  const _namedProvider = (settings, role, opts) => {
+    const p = opts.provider || _declaredFor(settings?.models, role)?.provider;
+    return p && p !== 'none' ? p : null;
+  };
+
   const _fallbackCandidates = async (settings, exclude = [], opts = {}) => {
+    const localOnly = _localOnly(settings);
     let registryPs = [];
     try { registryPs = (aeonEndpoints?.configuredProviders?.() || []).filter((p) => p !== 'local'); } catch {}
     let ps = [...new Set([...registryPs, ..._ENV_CHAIN])]
-      .filter((p) => !exclude.includes(p) && isHealthy(p) && (registryPs.includes(p) || isConfigured(p)));
+      .filter((p) => !exclude.includes(p) && isHealthy(p) && (registryPs.includes(p) || isConfigured(p))
+        && (!localOnly || _mayBeLocal(p)));
     if (settings.roulette && !opts.provider) {
       for (let i = ps.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
@@ -1436,13 +1493,19 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       }
       if (_ENV_CHAIN.includes(p) && isConfigured(p)) out.push({ provider: p, model: prefer[0], source });
     }
-    return out;
+    // A custom connection is only known to be local once its address is.
+    return localOnly ? out.filter(_isLocalCandidate) : out;
   };
 
   const _streamCandidates = async (role, opts = {}) => {
     const settings = loadSettings() || {};
     const candidates = [];
     let primary = null;
+    const localOnly = _localOnly(settings);
+    const named = _namedProvider(settings, role, opts);
+    // Local only: a cloud provider named by the caller or declared for the
+    // role is refused here, before its key is drawn from a pool.
+    if (localOnly && named && !_mayBeLocal(named)) throw _localOnlyRefusal(role, named, !!opts.provider);
 
     if (opts.provider && !LEGACY_CHAIN_PROVIDERS.has(opts.provider) && aeonEndpoints) {
       // A named custom/lmstudio endpoint carries its own address and key; an
@@ -1483,6 +1546,14 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       const models = settings.models || {};
       const roleConfig = _declaredFor(models, role) || { provider: 'local', model: defaultLocalModel() };
       primary = { provider: roleConfig.provider || 'local', model: roleConfig.model, source: 'settings' };
+    }
+    if (localOnly && !primary.error && !_isLocalCandidate(primary)) {
+      // A custom connection named for this role at a non-local address is
+      // refused like any cloud provider. The registry's auto-pick (nothing
+      // declared, or Local declared with no runtime) gives way to Local.
+      // A named connection that does not exist keeps its own error.
+      if (named && named !== 'local') throw _localOnlyRefusal(role, named, !!opts.provider);
+      primary = { provider: 'local', model: named === 'local' ? _declaredFor(settings.models, role)?.model : undefined, source: 'settings' };
     }
     candidates.push(primary);
 
@@ -1599,7 +1670,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     }
     // The configured provider's failure is the cause; a later rung that could
     // not even start ("no local model is installed") is not.
-    throw _chainExhaustedError(attempts, primaryErr || lastErr);
+    throw _chainExhaustedError(attempts, primaryErr || lastErr, { localOnly: _localOnly(_settingsNow()) });
   };
 
   // The provider/model the role WOULD stream through, and the context window
@@ -1649,6 +1720,12 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     const settings = loadSettings();
     if (settings.prefs?.vision_enabled === false) {
       throw new Error('Vision is disabled in Settings (toggle it on under Vision).');
+    }
+    // Every transport below is a cloud provider; Local only sends none of them an image.
+    if (_localOnly(settings)) {
+      const err = new Error('Local only is on (Settings → Models), and images are read only by cloud models here (Groq, Gemini, OpenRouter, Claude), so the image was not sent. Turn Local only off to read images.');
+      err.localOnly = true;
+      throw err;
     }
     const _visionFallback = { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct' };
     // Vision never borrows Chat (a chat model need not read images): a role
@@ -1745,6 +1822,12 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
 
     if (_isCloud()) opts = { ...opts, _vercelStrict: true };
 
+    // Local only — the same refusal the stream path gives (_streamCandidates).
+    const settingsAtStart = _settingsNow();
+    const localOnly = _localOnly(settingsAtStart);
+    const named = _namedProvider(settingsAtStart, role, opts);
+    if (localOnly && named && !_mayBeLocal(named)) throw _localOnlyRefusal(role, named, !!opts.provider);
+
     // ── Registry path (preferred) ──
     // Its failure is kept. It used to be logged and dropped, so when nothing
     // else could serve, the operator read the LAST rung's error — "No local
@@ -1768,13 +1851,19 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
         registryErr = new Error(r.error);
         registryAttempt = { provider: opts.provider, status: null, message: r.error, configured: false };
       }
+      if (r && r.ok && localOnly && !_isLocalCandidate(r)) {
+        // As in _streamCandidates: a named connection at a non-local address
+        // is refused; an auto-pick is dropped and the chain below serves Local.
+        if (named && named !== 'local') throw _localOnlyRefusal(role, named, !!opts.provider);
+        r = null;
+      }
       if (r && r.ok) {
         if (r.via === 'relay') {
           throw new Error(`Model "${r.model}" is desktop-only; relay required (desktop must be online).`);
         }
         // A resting registry provider is skipped while another can serve —
         // the same rule the chain below applies to every other provider.
-        if (isHealthy(r.provider) || !_anotherCanServe(r.provider)) {
+        if (isHealthy(r.provider) || !_anotherCanServe(r.provider, localOnly)) {
           try {
             const text = await _dispatchResolved(prompt, r, opts);
             noteProviderSuccess(r.provider);
@@ -1909,7 +1998,8 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     if (namedLocal) throw lastErr || _noLocalModelError();
     // The configured (registry) provider's failure is the cause; a later rung
     // that could not even start ("no local model is installed") is not.
-    throw _chainExhaustedError(attempts, registryErr || lastErr);
+    // Under Local only, Local not being installed is the whole answer.
+    throw _chainExhaustedError(attempts, registryErr || lastErr || (localOnly ? _noLocalModelError() : null), { localOnly });
   };
 
   // BO-SHIP P8c — say which provider failed and why.
@@ -1933,7 +2023,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   //
   // Shared by kernelLLM and kernelLLM.stream so a streaming chat and a blocking
   // call report the same failure the same way.
-  function _chainExhaustedError(attempts, lastErr) {
+  function _chainExhaustedError(attempts, lastErr, o = {}) {
     const throttled = attempts.find((a) => a.status === 429);
     if (throttled) {
       const err = new Error(
@@ -1952,6 +2042,14 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       return err;
     }
 
+    // Local only, and the only thing that failed is Local not being
+    // installed: that sentence is the answer.
+    if (o.localOnly && lastErr?.localOnly && attempts.every((a) => a.provider === 'local')) {
+      lastErr.noProviderAvailable = true;
+      lastErr.attempts = attempts;
+      return lastErr;
+    }
+
     // Every candidate provider was tried and none could serve. That is a
     // configuration state, not an internal fault — a clean install with no API
     // keys and no local chat model lands here on the very first request. The
@@ -1963,7 +2061,10 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     if (attempts.some((a) => a.configured !== false)) {
       // One line per provider, in words — the raw bodies are in the server log.
       const summary = attempts.map((a) => `${a.provider} ${_plainReason(a.status || { message: a.message })}`).join(', ');
-      const plain = new Error(`No provider could answer right now — ${summary}. Add a key or credits in Settings, or try again shortly.`);
+      // "Add a key" is the wrong remedy when Local only kept every cloud key out.
+      const plain = new Error(o.localOnly
+        ? `Local only is on, so no cloud model was tried, and the local one could not answer — ${summary}. Check the local model in Cookbook, or turn Local only off in Settings → Models.`
+        : `No provider could answer right now — ${summary}. Add a key or credits in Settings, or try again shortly.`);
       plain.cause = exhausted;
       if (exhausted.partialText) plain.partialText = exhausted.partialText;
       exhausted = plain;

@@ -1203,10 +1203,9 @@ function buildReportHTML(data) {
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AEON Research: ${esc(data.query || 'Report')}</title>
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
   :root { --bg: #0a0a0a; --surface: #141414; --surface2: #1a1a1a; --border: #222; --text: #e8e8e8; --accent: #00f2ff; --accent2: #0099aa; --dim: #666; --red: #ff4466; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: 'Inter', -apple-system, sans-serif; background: var(--bg); color: var(--text); line-height: 1.8; }
+  body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); line-height: 1.8; }
 
   /* Header */
   .header { background: linear-gradient(135deg, #0a0a0a 0%, #0d1117 100%); border-bottom: 1px solid var(--border); padding: 40px 0 32px; }

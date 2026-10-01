@@ -10,6 +10,12 @@ function getDomain(url) {
   try { return new URL(url).hostname.replace('www.', ''); } catch { return url; }
 }
 
+// The link's icon: the first letter or digit of its domain (else its name).
+function badgeLetter(href, label) {
+  const ch = [...`${getDomain(href)}${label || ''}`].find(c => /[\p{L}\p{N}]/u.test(c));
+  return ch ? ch.toUpperCase() : '•';
+}
+
 export default function QuickLinks() {
   const { links, linksError, manageLinks, updateLinks } = useAeonContext();
   const [showAdd, setShowAdd] = useState(false);
@@ -177,9 +183,11 @@ export default function QuickLinks() {
                     onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.03)'}
                     onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
 
-                    {href && <img src={`https://www.google.com/s2/favicons?domain=${getDomain(href)}&sz=16`} width="16" height="16"
-                      alt="" aria-hidden="true"
-                      style={{ borderRadius: '2px', flexShrink: 0 }} onError={e => e.target.style.display = 'none'} />}
+                    {/* A letter drawn here, not a favicon fetched: the icon used
+                        to come from google.com/s2/favicons, which sent every
+                        saved link's domain to Google whenever this page
+                        rendered (audit A018/A070). */}
+                    {href && <span aria-hidden="true" style={badgeStyle}>{badgeLetter(href, label)}</span>}
 
                     {href ? (
                       <a href={href} target="_blank" rel="noopener noreferrer"
@@ -243,6 +251,13 @@ export default function QuickLinks() {
 const iconBtn = {
   display: 'flex', background: 'none', border: 'none', color: 'var(--text-dim)',
   cursor: 'pointer', padding: '2px', opacity: 0.3, flexShrink: 0,
+};
+
+const badgeStyle = {
+  width: '16px', height: '16px', borderRadius: '3px', flexShrink: 0,
+  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+  fontSize: '10px', fontWeight: 700, lineHeight: 1,
+  background: 'rgba(0,242,255,0.1)', color: 'var(--color-primary, #00f2ff)',
 };
 
 const inputStyle = {

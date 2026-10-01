@@ -10,7 +10,32 @@
 /* JetBrains Mono was loaded without a 700 face, so every `font-weight: bold`
    on mono text fell back to 600 or a synthesized faux-bold — the reason Bold
    in the Writer was nearly invisible. 700 added. */
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap');
+/* Self-hosted (public/fonts/, each family's OFL.txt beside it). These came
+   from a fonts.googleapis.com @import, so every UI load sent the operator's
+   IP to Google — against README's "no phone-home" (audit A007/A018/A070).
+   One variable file per family covers 400–700, the weights the @import
+   asked for. Latin subset only: other scripts use the fallback stack. */
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('/fonts/space-grotesk/space-grotesk-latin-wght.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('/fonts/jetbrains-mono/jetbrains-mono-latin-wght.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('/fonts/inter/inter-latin-wght.woff2') format('woff2');
+}
 
 /* ── AURORA TOKENS — "Aurora" clear glass on gradient glow ──────────── */
 :root {

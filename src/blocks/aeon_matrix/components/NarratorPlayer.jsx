@@ -7,6 +7,36 @@ const THEMES = {
   cyberpunk: { name: 'Cyberpunk', bg: '#0b0f19', text: '#00ffcc', primary: '#ff00ff', panelBg: '#111827', panelBorder: '#374151', muted: '#4b5563' }
 };
 
+// Chrome's "Google …" voices and Edge's "… Online (Natural)" voices are
+// network voices (localService false): reading with one sends each sentence of
+// the document to the browser vendor's speech service. The default used to be
+// "Google UK English Female" in Chrome, so pressing Play sent Vault text to
+// Google. The default is now picked only from voices that run on this
+// computer, and online voices are marked in the picker (audit A070 review).
+export function pickDefaultVoice(voices) {
+  const local = (voices || []).filter(v => v && v.localService === true);
+  return local.find(v => v.name.includes('UK English Female') || (v.lang === 'en-GB' && v.name.includes('Female')))
+    || local.find(v => v.lang === 'en-GB')
+    || local.find(v => v.default)
+    || local[0]
+    || null;
+}
+
+export const isOnlineVoice = (v) => !!v && v.localService === false;
+
+export function voiceLabel(v) {
+  return isOnlineVoice(v) ? `${v.name} (online: text leaves this computer)` : v.name;
+}
+
+// Every voice is online (Chrome on Linux without a system speech engine) and
+// none was chosen: the browser default would be one of them, so Play waits
+// for the operator to pick one.
+export function needsVoiceChoice(voices, chosen) {
+  return !chosen && (voices || []).length > 0 && !(voices || []).some(v => v && v.localService === true);
+}
+
+const ONLINE_NOTE = 'Online voice: each sentence is sent to the browser\'s speech service to be spoken.';
+
 const NarratorPlayer = ({ nodeId, content, onClose }) => {
   const [sentences, setSentences] = useState([]);
   const [wordsCount, setWordsCount] = useState(0);
@@ -64,11 +94,9 @@ const NarratorPlayer = ({ nodeId, content, onClose }) => {
     const loadVoices = () => {
       const v = synth.getVoices();
       setVoices(v);
-      if (v.length > 0) {
-        const ukVoice = v.find(voice => voice.name.includes('UK English Female') || voice.lang === 'en-GB' && voice.name.includes('Female'));
-        const gbVoice = v.find(voice => voice.lang === 'en-GB');
-        setSelectedVoice(ukVoice || gbVoice || v.find(voice => voice.default) || v[0]);
-      }
+      // Never an online voice by default (pickDefaultVoice); null leaves the
+      // choice to the operator when this browser has only online ones.
+      if (v.length > 0) setSelectedVoice(prev => prev || pickDefaultVoice(v));
     };
     if (synth.onvoiceschanged !== undefined) synth.onvoiceschanged = loadVoices;
     loadVoices();
@@ -135,9 +163,13 @@ const NarratorPlayer = ({ nodeId, content, onClose }) => {
       saveState(idxRef.current);
       setStatus('Paused.');
     } else {
+      if (needsVoiceChoice(synth.getVoices(), voiceRef.current)) {
+        setStatus('This browser has only online voices, which send the text to its speech service. Choose one under Voice to read aloud.');
+        return;
+      }
       playingRef.current = true;
       setIsPlaying(true);
-      setStatus('Playing...');
+      setStatus(isOnlineVoice(voiceRef.current) ? ONLINE_NOTE : 'Playing...');
       playSentence(idxRef.current);
     }
   };
@@ -297,7 +329,13 @@ const NarratorPlayer = ({ nodeId, content, onClose }) => {
             </div>
 
             <select
-                value={selectedVoice ? selectedVoice.name : ''} onChange={(e) => setSelectedVoice(voices.find(v => v.name === e.target.value))}
+                value={selectedVoice ? selectedVoice.name : ''}
+                onChange={(e) => {
+                  const v = voices.find(x => x.name === e.target.value) || null;
+                  setSelectedVoice(v);
+                  if (isOnlineVoice(v)) setStatus(ONLINE_NOTE);
+                }}
+                title={isOnlineVoice(selectedVoice) ? ONLINE_NOTE : undefined}
                 aria-label="Narration voice"
                 className="input"
                 style={{
@@ -306,7 +344,7 @@ const NarratorPlayer = ({ nodeId, content, onClose }) => {
                 }}
             >
                 <option value="">Default Voice</option>
-                {voices.map(v => <option key={v.name} value={v.name}>{v.name}</option>)}
+                {voices.map(v => <option key={v.name} value={v.name}>{voiceLabel(v)}</option>)}
             </select>
             </div>
         </div>

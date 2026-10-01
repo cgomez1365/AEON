@@ -205,7 +205,12 @@ describe('the CSS defines what the applier stamps', () => {
   });
 
   it('every font the builder offers is loaded or generic', () => {
-    // Inter is a webfont and must be imported; the rest are generic families.
-    expect(css).toMatch(/fonts\.googleapis\.com[^'"]*Inter/);
+    // Inter is a webfont and must be loaded; the rest are generic families.
+    // It is self-hosted under public/fonts/ (a fonts.googleapis.com @import
+    // sent every UI load's IP to Google — audit A007), so the face must point
+    // at a local file that exists.
+    const face = /@font-face\s*\{[^}]*font-family:\s*'Inter'[^}]*url\('(\/fonts\/[^']+\.woff2)'\)/.exec(css);
+    expect(face, 'no local @font-face for Inter').not.toBeNull();
+    expect(fs.existsSync(path.join(ROOT, 'public', face[1]))).toBe(true);
   });
 });

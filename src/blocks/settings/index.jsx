@@ -3526,6 +3526,34 @@ export default function SystemSettings() {
             />
           ))}
 
+          {/* Local only — services/ai.js reads settings.local_only: the
+              fallback list keeps only local candidates and a role set to a
+              cloud provider refuses instead of answering (audit A072).
+              src/kernel/embed.cjs reads it too, so the Vault scan and /ask
+              never embed with a hosted model while it is on. Off by default, so
+              a failed Local still hands over to the cloud as before
+              (tests/sweep-routing-kernel.test.js C10). Kept
+              outside the collapsed Automation panel so it can be found. */}
+          <div className="admin-card roulette-card">
+            <div className="roulette-row">
+              <Lock size={14} color="var(--accent)" />
+              <div className="roulette-info">
+                <span className="roulette-label">Local only</span>
+                <span className="roulette-desc">Only models on this computer or your own network answer, the Vault's embeddings included. No cloud model is tried, not even as a fallback; a role set to one says so instead of answering. Web search and downloads still go online when you ask.</span>
+              </div>
+              <button
+                type="button"
+                className={`roulette-btn ${settings.local_only ? 'roulette-btn--on' : ''}`}
+                onClick={() => { setDirty(true); addPatch({ local_only: !settings.local_only }); setSettings(prev => ({ ...prev, local_only: !prev.local_only })); }}
+                role="switch"
+                aria-checked={!!settings.local_only}
+                aria-label="Local only"
+              >
+                {settings.local_only ? <><ToggleRight size={14} /> ON</> : <><ToggleLeft size={14} /> OFF</>}
+              </button>
+            </div>
+          </div>
+
           {/* Automation knobs (advanced) */}
           <details className="role-defaults-details">
             <summary className="role-defaults-summary">
@@ -3539,7 +3567,12 @@ export default function SystemSettings() {
                 <Zap size={14} color="var(--accent)" />
                 <div className="roulette-info">
                   <span className="roulette-label">Roulette mode</span>
-                  <span className="roulette-desc">Cycle through free API keys automatically</span>
+                  {/* It shuffles the fallback PROVIDERS (services/ai.js
+                      _fallbackCandidates); a connection's own keys rotate
+                      whether it is on or off. It said "Cycle through free API
+                      keys automatically", which hid that a prompt can go to
+                      another provider (audit A072). */}
+                  <span className="roulette-desc">When the assigned model cannot answer, try your other configured providers in random order instead of priority order. Your assigned model is still tried first unless it is resting after failures.</span>
                 </div>
                 <button
                   type="button"

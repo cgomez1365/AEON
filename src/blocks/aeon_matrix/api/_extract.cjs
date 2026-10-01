@@ -11,7 +11,8 @@
  *   - images (png/jpg/webp/bmp)       → OCR'd with tesseract.js
  *
  * OCR results are cached on disk (keyed by path + mtime) because OCR is slow.
- * Tesseract language data downloads once on first use, then lives in the cache dir.
+ * Tesseract language data is read from disk (src/kernel/tesseractLang.cjs);
+ * it is downloaded from cdn.jsdelivr.net only with AEON_OCR_DOWNLOAD=1.
  */
 const fs = require('fs');
 const path = require('path');
@@ -90,10 +91,14 @@ let _workerPromise = null;
 async function getOcrWorker() {
   if (_worker) return _worker;
   if (_workerPromise) return _workerPromise;
-  const { createWorker } = require('tesseract.js');
   ensureCacheDir();
-  _workerPromise = createWorker('eng', 1, { cachePath: CACHE_DIR, logger: () => {} })
-    .then(w => { _worker = w; _workerPromise = null; return w; });
+  // With no langPath, tesseract.js fetches its language data from
+  // cdn.jsdelivr.net, and the boot scan OCRs on its own (audit A070).
+  const lang = require('../../../kernel/tesseractLang.cjs').ocrWorkerOptions({ cacheDir: CACHE_DIR });
+  if (!lang.ok) throw Object.assign(new Error(lang.error), { code: lang.code });
+  const { createWorker } = require('tesseract.js');
+  _workerPromise = createWorker('eng', 1, { ...lang.options, logger: () => {} })
+    .then(w => { _worker = w; _workerPromise = null; return w; }, (e) => { _workerPromise = null; throw e; });
   return _workerPromise;
 }
 

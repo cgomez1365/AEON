@@ -113,7 +113,7 @@ const loadSettings = () => {
       m = rt?.models?.find(x => x.ready !== false)?.id || null;
     } catch {}
     const role = { provider: 'local', model: m };
-    return { models: { chat: role, grading: role, research: role, creative: role, agent_worker: role, agent_heavy: role, agent_final: role }, roulette: false, prefs: {} };
+    return { models: { chat: role, grading: role, research: role, creative: role, agent_worker: role, agent_heavy: role, agent_final: role }, roulette: false, local_only: false, prefs: {} };
   }
 };
 
