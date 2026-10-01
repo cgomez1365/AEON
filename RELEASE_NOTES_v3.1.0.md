@@ -1,10 +1,5 @@
 # AEON 3.1.0 — release notes
-
-<!-- Draft until the v3.1.0 tag exists. At tagging: put the tag's commit SHA and the date
-     in the line below, confirm CI is green on that exact commit, and mark the release
-     Latest so /releases/latest resolves to it. -->
-
-**Status:** not tagged yet (planned for 2026-10-01). Free core: the AEON app itself. The
+**Released:** 2026-10-01. Free core: the AEON app itself. The
 block store is a pilot and **nothing in it is for sale.**
 
 ## What AEON is
