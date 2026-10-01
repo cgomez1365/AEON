@@ -54,7 +54,8 @@ reachable two different ways.
    nice label or it falls back to an auto-derived one). Each `RoleCard` has
    a Provider `<select>` and a searchable `ModelPicker`. Below the role
    cards: an "Automation (advanced)" `<details>` for Roulette mode
-   (auto-rotate free API keys) and agent step-review, then Vision
+   (when the serving provider fails, the other providers you added are
+   tried in random order instead of by priority) and agent step-review, then Vision
    settings. **Every block that declares `contract.ai.role` inherits
    whichever model is set for that role here** — there is deliberately no
    second per-block model dial.

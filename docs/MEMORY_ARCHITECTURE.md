@@ -55,8 +55,8 @@ one scan runs at a time; a second caller joins the one in flight.
 ### Embeddings
 
 Vectors come from whatever serves the `embed` role (`src/kernel/embed.cjs`,
-`src/kernel/endpoints.cjs`) — normally the bundled llama.cpp runtime with
-nomic-embed-text, installed from Cookbook, or a hosted embedding endpoint.
+`src/kernel/endpoints.cjs`) — normally the local llama.cpp runtime with
+nomic-embed-text, both downloaded from Cookbook (not bundled), or a hosted embedding endpoint.
 
 - **No embedder yet:** documents are still indexed and found by keyword. Vectors are
   backfilled on the first run after a model appears, without re-reading the files.

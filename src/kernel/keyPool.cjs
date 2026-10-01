@@ -3,11 +3,19 @@
  *
  * WHY THIS EXISTS. An endpoint used to carry exactly one credential: the
  * resolver read a single `auth_ref` out of the vault (endpoints.cjs) and every
- * transport in services/ai.js consumed that one key. The rotation the operator
- * actually configured — "several free accounts, and AEON moves between them" —
- * lived in services/ai.js as a Gemini-shaped special case over process.env,
- * and nothing that resolved through the registry could reach it. Real code,
- * unreachable from the path every chat turn takes.
+ * transport in services/ai.js consumed that one key. Keys the operator had
+ * added beyond the first lived in services/ai.js as a Gemini-shaped special
+ * case over process.env, and nothing that resolved through the registry could
+ * reach them. Real code, unreachable from the path every chat turn takes.
+ *
+ * WHAT A POOL IS FOR. Failover across the operator's own credentials — keys
+ * from accounts or projects they are entitled to use. When one key is rate-
+ * limited, out of credit or rejected, the turn moves to the next instead of
+ * failing. It is not a way around a provider's limits: whether a provider
+ * allows more than one account or key is set by that provider's terms, and
+ * the user-facing text (README, .env.example) says to check them. Nothing in
+ * this module may be described as raising what any one key or account is
+ * allowed.
  *
  * So rotation is a kernel concern now, not a provider's. This module works on
  * vault REFS and never on key material: choosing a credential decrypts
@@ -15,14 +23,16 @@
  * is handed, which is why a pool of ten keys costs the same single decrypt per
  * turn that a pool of one always did.
  *
- * ROUND-ROBIN, not sticky-until-failure. The budget being spread is a per-key
- * one: three free keys at 15 rpm are 45 rpm only if the calls are spread
- * across them. Sticky spends one key to its limit, burns a request discovering
- * the 429, and leaves the other two idle until it does.
+ * ROUND-ROBIN, not sticky-until-failure. Calls take turns across the keys the
+ * operator configured. That decides which key serves a call; it does not
+ * change what any key is allowed. Sticky would leave a spare that has gone
+ * bad (revoked, out of credit) unnoticed until the active key fails and the
+ * spare is needed most; taking turns uses every key in ordinary traffic, so a
+ * bad one is found and cooled early.
  *
  * A 429/402/401 is a fact about the KEY, not about the provider. Cooling the
- * key and moving on is what keeps one exhausted free account from taking a
- * whole provider — and the operator's other five accounts — out of service.
+ * key and moving on is what keeps one exhausted or revoked key from taking a
+ * whole provider — and the operator's other keys for it — out of service.
  *
  * Module-scope state, on the same reasoning as pacing.cjs: the rotation
  * belongs to the endpoint, not to whichever subsystem happens to be calling.

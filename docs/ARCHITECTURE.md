@@ -25,7 +25,7 @@ machine; a cloud mirror is optional and off unless configured.
 ├──────────────────────────────────────────────────────────────┤
 │ STORAGE     Vault · data/ · secrets/ · .env                   │  every root redirectable by env var
 ├──────────────────────────────────────────────────────────────┤
-│ PROVIDERS   cloud endpoints · bundled llama.cpp runtime       │  resolved per role by endpoints.cjs
+│ PROVIDERS   cloud endpoints · llama.cpp runtime (downloaded)  │  resolved per role by endpoints.cjs
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -64,9 +64,9 @@ Blocks never name a provider. They call `kernelLLM(prompt, { role })` (`services
 which asks `src/kernel/endpoints.cjs` which endpoint and model serve that role. Roles
 include `chat`, `grading`, `vision`, `research`, `creative`, the agent roles, and `embed`
 for the Second Brain. An endpoint is either a cloud provider the operator added a key for,
-or the bundled llama.cpp runtime managed inside the data root
-(`services/local-runtime/paths.cjs`). Every call is recorded once in the LLM ledger
-(`src/kernel/llm-ledger.cjs`).
+or the llama.cpp runtime managed inside the data root (`services/local-runtime/paths.cjs`).
+The runtime is not bundled: Cookbook downloads a pinned, hash-checked release from GitHub
+on first use. Every call is recorded once in the LLM ledger (`src/kernel/llm-ledger.cjs`).
 
 The kernel's AI routes are `POST /api/ai` (a bare prompt), `POST /api/ai/converse` (a
 conversational turn with memory and vault recall, policy in `src/kernel/context.cjs`) and
@@ -82,8 +82,11 @@ own.
 ## Storage
 
 Every writable root defaults to a child of the **AEON home** — `~/AEON` on every OS,
-or `AEON_HOME`. The install directory holds code and tracked seeds only, so it can be
-read-only and a reinstall is `git pull`.
+or `AEON_HOME`. The install directory holds code and tracked seeds — plus two things of
+the operator's: the packs they install (`src/blocks/<id>`, the one blocks root, see
+`src/kernel/blocksDir.cjs`) and builds waiting for approval (`staging/`). An update is
+`git pull`, `npm ci` and `npm run build`; replacing the folder must carry those two across
+(see [Updating AEON](../README.md#updating-aeon)).
 
 | Root | Default | Override | Holds |
 |---|---|---|---|

@@ -185,7 +185,14 @@ documentation reported the suite as "1,100 / 1,106" — it had taken 1,100 as th
 total. The correction was published rather than quietly patched, because a
 number that was never right must be re-taken, not carried forward.
 
-**Current reading — 2026-09-14, macOS, after the stale-file sweep:** 1,523 passing
+**Current reading — 2026-09-30, macOS, `fe93dbf` with the 3.1.0 docs pass on top:**
+2,694 passing and 1 skipped of 2,695 tests across 265 files, 0 failures (the skip is the
+real-PowerShell test that runs only on Windows). Release gate passes: 0 undeclared block
+filesystem access, 22 declared and audited; cloud conditionals 90 across 21 files. This is
+the tree before the other launch fixes land; the tagged 3.1.0 tree will differ, and
+CI's run on the tagged commit is the reading for that tree.
+
+**Previous reading — 2026-09-14, macOS, after the stale-file sweep:** 1,523 passing
 and 1 skipped of 1,524 tests across 132 files, 0 failures. 58 dead files retired
 (no consumer, proven by scan and by hand; `tests/retired-files.test.js`). Gates and
 audit pass.

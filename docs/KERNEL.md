@@ -52,7 +52,7 @@ a model:
 1. Resolve the role through the endpoint registry (`src/kernel/endpoints.cjs`, stored in
    `secrets/aeon-endpoints.json`). Roles include `chat`, `grading`, `vision`, `research`,
    `creative`, the agent roles and `embed`.
-2. Dispatch to the resolved endpoint — a cloud provider or the bundled llama.cpp runtime.
+2. Dispatch to the resolved endpoint — a cloud provider or the local llama.cpp runtime (downloaded by Cookbook, not bundled).
 3. Only if the registry cannot resolve the role, fall back to the legacy per-role settings.
 
 HTTP surface (`src/kernel/routers/ai.cjs`):

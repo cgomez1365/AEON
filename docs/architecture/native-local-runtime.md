@@ -7,9 +7,11 @@
 
 ## Decision
 
-AEON runs local inference through a **version-pinned, self-bundled `llama.cpp`**
-executed as a child process by absolute path. No machine-wide service, no TCP
-listener, no PATH lookup, no external installer.
+AEON runs local inference through a **version-pinned `llama.cpp` that AEON installs
+into its own data root** (Cookbook downloads the release from GitHub on first use and
+checks its SHA-256; it does not ship inside the AEON download), executed as a child
+process by absolute path. No machine-wide service, no TCP listener, no PATH lookup,
+no external installer.
 
 | Axis | Target |
 |---|---|

@@ -72,7 +72,7 @@ and `/api/*` unless noted otherwise.
   RAM (`ranking_basis_gb`); until 2026-09-23 they used os.freemem() whenever
   it was non-zero, so the verdict flipped minute to minute on macOS.
   Cookbook declares `requires.blocks: ["fleet_control"]` for these routes.
-- **`api/local-status.js`** — reports whether the bundled local runtime and a
+- **`api/local-status.js`** — reports whether the local runtime (downloaded by Cookbook) and a
   ready model are available. (An earlier status probe for a system-wide model
   daemon was deleted with that dependency, but this file kept documenting it —
   docs/ sat outside every scanner until 2026-08-01.)

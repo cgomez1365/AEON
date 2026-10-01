@@ -1,0 +1,154 @@
+# AEON 3.1.0 — release notes
+
+<!-- Draft until the v3.1.0 tag exists. At tagging: put the tag's commit SHA and the date
+     in the line below, confirm CI is green on that exact commit, and mark the release
+     Latest so /releases/latest resolves to it. -->
+
+**Status:** not tagged yet (planned for 2026-10-01). Free core: the AEON app itself. The
+block store is a pilot and **nothing in it is for sale.**
+
+## What AEON is
+
+A local-first AI workspace that runs on your own computer. Your documents, notes and
+API keys stay on it, in one folder (`~/AEON`); nothing syncs to a cloud unless you connect
+your own. You talk to it in a terminal, it indexes your files and answers from them with
+sources, and it runs AI either through cloud providers you add a key for (Gemini and Groq
+offer free keys) or through local models it downloads for you. Everything is built from
+blocks — Terminal, Aeon Matrix, Cookbook, Writer, Council, Deep Research and more — and
+you can write your own.
+
+## Who it is for
+
+People who want an AI workspace that keeps their files and keys on their own machine,
+and who are comfortable installing Node.js and double-clicking a launcher. Developers
+who want to build blocks. It is not a hosted service: there is no account with us, and
+AEON listens only on this computer (`127.0.0.1`) unless you set `AEON_BIND` or turn on
+Remote Access.
+
+## What is new since 3.0.0
+
+The full list, with commits, is in [CHANGELOG.md](CHANGELOG.md). In short:
+
+- **Security fixes.** An auth-guard bypass by letter case (`/API/...`), `/blocks/*` and
+  `/ws` reachable without a session, `.env` (the vault master key) not written
+  owner-only, a tunnel that could start with no login protecting it, and a "Require login"
+  switch that switched nothing. **Do not keep running 3.0.0.**
+- **Your data moved out of the install folder** into `~/AEON`, so replacing AEON no
+  longer replaces your data.
+- **Data-safety fixes.** A file AEON cannot read is no longer treated as empty and
+  written over — vault, memories, indexes, Writer, settings.
+- **Settings decides each role's model**, a connection can hold several keys with
+  failover between them, and fallback uses every provider you added.
+- **Blocks can be stopped, removed and restored** while AEON runs.
+- **Store install (pilot):** install and update packs from a store by id, checked
+  against the store's SHA-256.
+- **Carry AEON on a drive** (macOS launcher run; Windows and Linux not yet).
+
+## Requirements
+
+Full table in the [README](README.md#requirements). The short version:
+
+- **Node.js 22.13 or newer.**
+- **macOS 13.5 or newer** with the current Node LTS; **macOS 11 to 13.4** with Node 22
+  LTS. Local models need macOS 13.3 or newer.
+- **Windows 10 or 11, 64-bit.** Windows on ARM is not supported.
+- **Linux x64** (other architectures untested).
+- **About 1 GB of disk** for AEON and its dependencies, plus 0.15–4.9 GB per local model.
+- **Internet** to install, and for cloud AI and downloads.
+
+## Installing
+
+1. Install Node.js from [nodejs.org](https://nodejs.org) (on macOS 11 to 13.4, Node 22).
+2. Download this release's source ZIP and unzip it anywhere.
+3. Double-click `LAUNCH.bat` (Windows) or `launch.command` (macOS), or run `./launch.sh`
+   (Linux). The first launch installs dependencies and builds the interface, which takes
+   a few minutes.
+
+**On macOS** the launcher is not signed by Apple, so the first double-click is blocked.
+On macOS 15 and newer: dismiss the warning, then **System Settings → Privacy & Security →
+Open Anyway**. On macOS 14 and older: Control-click `launch.command` → **Open**. Or run
+`xattr -dr com.apple.quarantine` on the unzipped folder. `chmod +x` does not help.
+
+This release is source code: there are no signed installers.
+
+## Upgrading from 3.0.0 safely
+
+3.0.0 kept your Vault, keys and settings **inside its own folder**. 3.1.0 moves them into
+`~/AEON` the first time it starts — but only out of **its own** folder.
+
+- **If you installed with `git clone`:** quit AEON, then in the AEON folder run
+  `git pull`, `npm ci` and `npm run build`, and launch. The launcher moves your data into
+  `~/AEON` and lists what it moved.
+- **If you installed from a ZIP:**
+  1. Quit AEON and rename the old folder, for example to `AEON-old`.
+  2. Unzip 3.1.0 next to it. **Do not launch it yet.**
+  3. Copy each of these that exists from `AEON-old` into the same place in the new folder:
+     `.env`, `secrets`, `data`, `db`, `src/aeon-settings.json`,
+     `src/blocks/aeon_matrix/data` (your Vault), and any block folder in
+     `AEON-old/src/blocks/` that the new `src/blocks/` does not have (packs you
+     installed). `.env` is hidden in Finder; press Cmd+Shift+. to show it.
+  4. Launch. The launcher moves your data into `~/AEON` and lists what it moved.
+  5. Check your Vault and your keys (Settings → Keys) before deleting `AEON-old`.
+
+**If you launch 3.1.0 from a fresh folder first,** it creates a new, empty `~/AEON` with
+a new vault key, and moving your 3.0.0 data in afterwards is refused rather than merged.
+If that happened: quit AEON, move the new `~/AEON` aside, copy your 3.0.0 data in as in
+step 3, and launch again.
+
+Going back from 3.1.0 to 3.0.0 is not supported: 3.0.0 does not read `~/AEON`.
+
+## Updating after 3.1.0
+
+See *Updating AEON* in the [README](README.md#updating-aeon). Two things to know: packs
+you installed live in the AEON folder (`src/blocks/`), not in `~/AEON`, so carry them
+across when you replace the folder; and after a `git pull` run `npm ci` and
+`npm run build` yourself — the launcher installs dependencies only when they are missing
+or an install did not finish, and builds the interface only when no build exists, so a
+pull's new dependencies and interface are not picked up.
+
+## Known limits
+
+- **The store is a pilot. Nothing is for sale**, and prices, checkout and licensing are
+  not decided yet. AEON installs from a store only when you point `AEON_STORE` at one.
+- **macOS:** the launcher is unsigned (Gatekeeper steps above). The browser-ZIP path has
+  not yet been run end to end on a real Mac; the `git clone` path has.
+- **Windows:** the 3.1.0 launcher has not been run on real Windows hardware (the last
+  recorded real run, 2026-09-06, used an earlier launcher). CI runs Windows on every
+  push. Windows on ARM is not supported.
+- **Linux:** not verified on real hardware — run under WSL2 (2026-08-08) and in CI only.
+- **Carried drive:** its Windows and Linux launchers have never run on real hardware.
+- **No automatic updates** and no in-app notice of a new version.
+- **Installed packs live in the install folder**, so replacing the folder without
+  copying them removes them.
+- **Vault recovery code:** AEON prints one when the vault is created. Only the launcher
+  (`LAUNCH.bat`, `launch.command`, `launch.sh`) asks for it, when the key in `.env` is
+  missing or does not open the vault; a carried drive's launchers do not. It reopens the
+  vault only while `secrets/aeon-keyslots.json` is still there. Back up `~/AEON` (or at
+  least `.env` together with `secrets/`): see [Backup and recovery](docs/DISASTER_RECOVERY.md).
+- **Blocks share one Node process.** A block's manifest governs what the kernel gives it;
+  it is not a sandbox against hostile code. Install blocks you trust.
+- **Before you create a login, the global guard is off by design.** Create one if anyone
+  else can use this computer. Remote Access refuses to start until one exists.
+- **Several keys per provider** are for failover across accounts or projects you are
+  entitled to use, not a way around a provider's limits. Check each provider's terms.
+- **Dependency advisories still open.** `npm audit` on 2026-09-30 reports six, to be
+  measured again at tagging:
+  - **vite 5 and its esbuild:** one high, three moderate. All are in the Vite
+    *development server*, which the installed app does not run: it serves the built
+    interface through Express. Fixing them needs a major Vite upgrade.
+  - **@grpc/grpc-js:** one high, one low. It arrives through `firebase`. AEON uses
+    firebase only in the browser interface, whose build does not include grpc-js, and
+    no server code loads firebase. `npm audit` offers no fix yet.
+
+  Reasons and review dates: [docs/DEPENDENCY_DECISIONS.md](docs/DEPENDENCY_DECISIONS.md).
+
+## Reporting problems
+
+Bugs: [GitHub issues](https://github.com/cgomez1365/AEON/issues). Security problems:
+report privately, as the [security policy](.github/SECURITY.md) describes — not in a
+public issue.
+
+## License
+
+[AEON Community License](LICENSE) — free to use and modify; no resale or redistribution.
+See [Terms of Use](TERMS_OF_USE.md).

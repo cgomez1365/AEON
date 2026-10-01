@@ -68,7 +68,7 @@ rather than fixed — two schemas is the defect, not their disagreement.
 
 ### Deployment Tags
 - `universal` — Needs no OS access and no local files, so it would run on a read-only host. (No cloud target is deployed today.)
-- `local_required` — Needs OS access, hardware, or local services (FFmpeg, Python, the bundled local runtime).
+- `local_required` — Needs OS access, hardware, or local services (FFmpeg, Python, the local runtime Cookbook downloads).
 - `hybrid` — Core features work on cloud, advanced features need local.
 
 ### What Blocks Cannot Do
