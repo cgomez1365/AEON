@@ -54,6 +54,51 @@ module.exports = function createFsRouter(deps) {
     'secrets', '.env', '.git',
   ];
 
+  // A denied name is matched the way the disk matches it, not byte for byte.
+  // macOS (APFS), Windows (NTFS) and the carried drive (exFAT) ignore case, so
+  // `===` let `.SSH/id_ed25519` and `AEON/.ENV` through while `.ssh` and `.env`
+  // were refused (audit A056, reproduced on fe93dbf). APFS also folds `ß` to
+  // `ss` and `ſ` to `s` (measured 2026-09-30: `.ßh` opens `.ssh`), which plain
+  // toLowerCase() misses; upper-then-lower case folds both. Windows drops
+  // trailing dots and spaces from a name, so `.env.` is `.env` there. On a
+  // case-sensitive disk these spellings are other folders, and refusing them
+  // costs nothing a file manager needs.
+  const foldName = (s) => String(s).normalize('NFKC').toUpperCase().toLowerCase().replace(/[. ]+$/, '');
+  const DENIED_PARTS = DENIED.map(label => ({ label, parts: label.split('/').map(foldName) }));
+
+  function deniedIn(segments) {
+    const folded = segments.map(foldName);
+    for (const { label, parts } of DENIED_PARTS) {
+      for (let i = 0; i + parts.length <= folded.length; i++) {
+        if (parts.every((p, j) => folded[i + j] === p)) return label;
+      }
+    }
+    return null;
+  }
+
+  // What the disk will actually open: the deepest existing part of the path,
+  // resolved by the filesystem itself (its own case, symlinks, Windows short
+  // names), with the not-yet-existing rest appended. Folding by hand can only
+  // guess at every rule a filesystem has; asking it cannot miss one. null when
+  // nothing along the path resolves.
+  function onDisk(p) {
+    const rest = [];
+    let probe = p;
+    for (;;) {
+      try { return path.join(fs.realpathSync.native(probe), ...rest); }
+      catch {
+        const up = path.dirname(probe);
+        if (up === probe) return null;
+        rest.unshift(path.basename(probe));
+        probe = up;
+      }
+    }
+  }
+
+  function deniedError(label) {
+    return { ok: false, status: 403, error: `"${label}" holds credentials or shell configuration and is not reachable through the file manager.` };
+  }
+
   function containmentError(resolved, roots) {
     return `Path is outside the allowed area. "${resolved}" is not within ${roots.join(' or ')}.`;
   }
@@ -94,13 +139,18 @@ module.exports = function createFsRouter(deps) {
     // ("my.env.notes" is not ".env", "sshkeys" is not ".ssh").
     const root = roots.find(r => resolved === r || resolved.startsWith(r + path.sep));
     const rel = path.relative(root, resolved);
-    const segments = rel.split(path.sep).filter(Boolean);
-    for (const denied of DENIED) {
-      const parts = denied.split('/');
-      for (let i = 0; i + parts.length <= segments.length; i++) {
-        if (parts.every((p, j) => segments[i + j] === p)) {
-          return { ok: false, status: 403, error: `"${denied}" holds credentials or shell configuration and is not reachable through the file manager.` };
-        }
+    const hit = deniedIn(rel.split(path.sep).filter(Boolean));
+    if (hit) return deniedError(hit);
+
+    // The same list against the path the disk resolves it to, inside every
+    // root that holds it. Containment above is unchanged: this only refuses.
+    const real = onDisk(resolved);
+    if (real) {
+      for (const r of roots) {
+        const realRoot = onDisk(r);
+        if (!realRoot || !(real === realRoot || real.startsWith(realRoot + path.sep))) continue;
+        const realHit = deniedIn(path.relative(realRoot, real).split(path.sep).filter(Boolean));
+        if (realHit) return deniedError(realHit);
       }
     }
 

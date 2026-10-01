@@ -102,7 +102,15 @@ export default defineConfig({
   ],
   server: {
     port: 3000,
-    host: true,
+    // This machine only. The proxy below forwards to AEON from 127.0.0.1 under
+    // AEON's own Host and adds no forwarding headers, so AEON cannot tell a
+    // request relayed from another device from one made here. With `host: true`
+    // (every interface, until 2026-09-30) a phone on the same Wi-Fi took the
+    // pre-account credential export, vault master key included, through this
+    // proxy. 127.0.0.1, not 'localhost': on macOS that resolves to ::1 alone,
+    // which would leave http://127.0.0.1:3000 unanswered. `vite --host` still
+    // opens it to the network, and with it this machine's access to AEON.
+    host: '127.0.0.1',
     strictPort: true,
     proxy: {
       '/api': {

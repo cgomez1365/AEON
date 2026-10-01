@@ -507,17 +507,30 @@ module.exports = (app, deps) => {
   // itself may act, the network may not. The moment an account exists, this
   // passes straight through to the password check below.
   //
-  // Loopback is only the socket. The Vite dev server (host: true) forwards a
-  // LAN device's request from 127.0.0.1, and a cloudflared tunnel arrives from
-  // localhost too; before an account exists either could take the full export
-  // (master key, keyslots, provider keys). A request that carries a proxy's
-  // headers, or a browser Origin that is not this machine, is the network.
-  const LOCAL_HOSTNAME = /^(?:localhost|127(?:\.\d{1,3}){3}|\[::1\]|::1)$/i;
+  // Loopback is only the socket. A cloudflared tunnel arrives from localhost,
+  // and so does everything the Vite dev server's proxy relays; before an
+  // account exists either could take the full export (master key, keyslots,
+  // provider keys). A request that carries a proxy's headers, a non-loopback
+  // Host, or a browser Origin that is not this machine, is the network. A
+  // proxy that adds none of those cannot be told apart from this machine, and
+  // the dev server's adds none (no xfwd): measured 2026-09-30, curl with no
+  // Origin from the LAN address through it took the token and the export.
+  // That is why vite.config.js listens on 127.0.0.1 only.
+  //
+  // "This machine" is AEON's own page, not any page on it. The check used to
+  // accept any localhost Origin, so a page another program served on
+  // localhost:8080 took the token and then the export, master key included
+  // (audit A058, measured on fe93dbf). Now the Origin must be this server's
+  // own loopback origin (same port) or the Vite dev server, by the rule /ws
+  // and the HTTP request guard use (src/kernel/ws.cjs). The Host header only
+  // ever narrows this (a rebinding name is the network); it never grants it.
+  const originRule = require('../../../kernel/ws.cjs');
   const cameFromNetwork = (req) => {
     const h = req.headers || {};
     if (h['cf-connecting-ip'] || h['x-forwarded-for'] || h['x-real-ip'] || h.forwarded || h.via) return true;
+    if (h.host && !originRule.isLoopbackHost(String(h.host).replace(/:\d+$/, ''))) return true;
     if (h.origin) {
-      try { return !LOCAL_HOSTNAME.test(new URL(h.origin).hostname); } catch { return true; }
+      return !(originRule.DEV_ORIGINS.includes(h.origin) || originRule.isOwnLoopbackOrigin(h.origin, h.host));
     }
     return false;
   };

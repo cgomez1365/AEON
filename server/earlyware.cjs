@@ -109,7 +109,89 @@ function bodyTooLargeReply(err) {
   return { status: 413, body: { error, limit: has(limit) ? limit : null, length: has(length) ? length : null } };
 }
 
+// ── Host + Origin, ahead of everything ────────────────────────────────────
+//
+// Measured on a fresh install at e44058b and again at fe93dbf (no account):
+//  - `Host: evil.example:PORT` (DNS rebinding) read GET /api/settings,
+//    /api/store/source and /api/build/queue — 200.
+//  - A page on another localhost port (Origin http://localhost:8080) was let
+//    in with credentials: it read /api/settings, reached POST
+//    /api/store/install, and took the pre-account credential export, vault
+//    master key included (audit A055, A058).
+//  - Origin https://aeon-cortex.vercel.app, a Vercel name that serves nothing
+//    and was never deployed, was trusted the same way (A117).
+//  - A refused origin came back 500 "Internal Core Error" (the cors package
+//    hands its refusal to the error handler), as if AEON had broken.
+//
+// Now one rule, src/kernel/ws.cjs (checkHost, checkOrigin) — the one /ws
+// already used for origins — answers every request: a Host AEON does not
+// answer to is 421, a browser page from anywhere but AEON itself, the Vite
+// dev server or AEON_ALLOWED_ORIGINS is 403, each with the reason. CORS
+// headers are then sent only for an origin that passed.
+//
+// A tunnel visitor arrives from 127.0.0.1, like this machine (the tunnel gate,
+// rate limiter and pre-account rules all read the socket). Their Host is the
+// tunnel's name, so it is told apart here: refused while login is off.
+// Settings refuses to START a tunnel without login, but login can be switched
+// off while one runs.
+function createRequestGuard({ policy = require('../src/kernel/ws.cjs'), sessions, log = console, env = process.env } = {}) {
+  const getSessions = () => sessions || require('../src/kernel/server-utils/sessionValidator.cjs');
+  // One line per refused value per minute: a page that loops on a refused
+  // request must not flood the console.
+  const lastSaid = new Map();
+  const say = (key, line) => {
+    const now = Date.now();
+    if (now - (lastSaid.get(key) || 0) < 60 * 1000) return;
+    if (lastSaid.size > 200) lastSaid.clear();
+    lastSaid.set(key, now);
+    try { log.warn(line); } catch { /* console gone */ }
+  };
+  const refuse = (req, res, status, reason, error) => res.status(status).json({
+    correlation_id: req.correlationId || 'AEON-SYS', error, reason,
+  });
+
+  function requestGuard(req, res, next) {
+    const hostHeader = req.headers.host;
+    const port = req.socket && req.socket.localPort;
+    const host = policy.checkHost(hostHeader, { port, env });
+    if (!host.ok) {
+      say(`host:${hostHeader}`, `[SECURITY] Refused ${req.method} ${req.path}: ${host.reason}.`);
+      return refuse(req, res, 421, 'host-not-allowed',
+        `This AEON answers to localhost, 127.0.0.1, [::1] or an IP address on port ${port}, not to "${hostHeader}". `
+        + 'To reach it under another name, list that origin in AEON_ALLOWED_ORIGINS.');
+    }
+    const origin = policy.checkOrigin(req.headers.origin, hostHeader, { env });
+    if (!origin.ok) {
+      say(`origin:${req.headers.origin}`, `[SECURITY] Refused ${req.method} ${req.path}: ${origin.reason}.`);
+      return refuse(req, res, 403, 'origin-not-allowed',
+        `This AEON does not answer pages served from ${req.headers.origin}. `
+        + 'It answers its own pages, the Vite dev server (http://localhost:3000) and origins listed in AEON_ALLOWED_ORIGINS.');
+    }
+    if (host.via === 'tunnel') {
+      let loginOn = false;
+      try { loginOn = getSessions().guardActive(); } catch { loginOn = false; }
+      if (!loginOn) {
+        say('tunnel', `[SECURITY] Refused ${req.method} ${req.path} through the tunnel: login is off.`);
+        return refuse(req, res, 403, 'tunnel-without-login',
+          'Remote access is closed while login is off. Turn "Require login" back on (Security) on the computer running AEON.');
+      }
+    }
+    return next();
+  }
+
+  // CORS headers for what passed above. The delegate form sees the request,
+  // which "is this the page's own origin" needs; an origin the guard would
+  // refuse gets no CORS headers even if this runs without it.
+  const cors = require('cors')((req, cb) => cb(null, {
+    origin: !!req.headers.origin && policy.checkOrigin(req.headers.origin, req.headers.host, { env }).ok,
+    credentials: true,
+  }));
+
+  return { requestGuard, cors };
+}
+
 module.exports = {
   createEarlyware,
   createAppJsonParser, bodyTooLargeReply, APP_JSON_LIMIT, OWN_JSON_LIMIT_PATHS,
+  createRequestGuard,
 };

@@ -1,4 +1,5 @@
 const WebSocket = require('ws');
+const net = require('net');
 
 /**
  * /ws — the live terminal event stream.
@@ -12,12 +13,16 @@ const WebSocket = require('ws');
  * the stream.
  *
  * The rule (checked here, before the upgrade completes):
- *  1. Origin. A browser always sends one. Allowed: this server's own loopback
- *     origin (localhost / 127.0.0.1 / [::1] on the port the request came in on),
- *     the Vite dev server, and AEON_ALLOWED_ORIGINS. Anything else is 403 —
+ *  0. Host. The name the request was sent to must be one this AEON answers
+ *     to (checkHost below — the same check every HTTP request gets).
+ *  1. Origin. A browser always sends one. Allowed: this server's own origin
+ *     (localhost / 127.0.0.1 / [::1] on the port the request came in on, or
+ *     the running tunnel's name), the Vite dev server, and
+ *     AEON_ALLOWED_ORIGINS. Anything else is 403 —
  *     including other localhost ports and a DNS-rebinding hostname, whether or
  *     not an account exists. No Origin header = not a browser (CLI, script);
  *     that is not a cross-site risk and goes on to step 2.
+ *     A tunnel visitor is refused while login is off.
  *  2. Session. Once an operator account exists, the same validateSession() the
  *     HTTP guard uses must pass: aeon_session cookie, Bearer, ?token=, or the
  *     AEON_MOBILE_SECRET machine bearer. Otherwise 401.
@@ -27,8 +32,12 @@ const WebSocket = require('ws');
  *     manifest routes declared auth:true, which also stay closed once an
  *     account exists.
  */
-const DEV_ORIGINS = ['http://localhost:3000', 'http://127.0.0.1:3000'];
+const DEV_ORIGINS = Object.freeze(['http://localhost:3000', 'http://127.0.0.1:3000']);
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
+
+// The process-wide tunnel registry Settings keeps (src/blocks/settings/api/
+// connectivity.js, TUNNELS). Read, never written, from here.
+const TUNNELS_KEY = Symbol.for('aeon.settings.tunnels');
 
 function envOrigins(env = process.env) {
   return String(env.AEON_ALLOWED_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
@@ -38,7 +47,70 @@ function hostPort(value, defaultPort) {
   // "127.0.0.1:3001" / "[::1]:3001" / "localhost"
   const m = /^(\[[^\]]+\]|[^:]+)(?::(\d+))?$/.exec(String(value || '').trim().toLowerCase());
   if (!m) return null;
-  return { host: m[1], port: Number(m[2] || defaultPort) };
+  return { host: m[1], port: Number(m[2] || defaultPort), explicit: m[2] !== undefined };
+}
+
+/** A name or address that only ever means this machine. */
+function isLoopbackHost(host) {
+  const h = String(host || '').toLowerCase();
+  return LOOPBACK_HOSTS.has(h) || h.endsWith('.localhost') || /^127(?:\.\d{1,3}){3}$/.test(h);
+}
+
+/** An IP address literal ("192.168.1.5", "[fe80::1]"), not a DNS name. */
+function isAddress(host) {
+  return net.isIP(String(host || '').replace(/^\[|\]$/g, '')) !== 0;
+}
+
+/** Hostnames of the Cloudflare tunnels running in this process right now. */
+function liveTunnelHosts() {
+  const hosts = new Set();
+  const reg = globalThis[TUNNELS_KEY];
+  if (!reg || typeof reg.values !== 'function') return hosts;
+  for (const t of reg.values()) {
+    if (!t || !t.proc || !t.url) continue;
+    try { hosts.add(new URL(t.url).hostname.toLowerCase()); } catch { /* not a URL */ }
+  }
+  return hosts;
+}
+
+/**
+ * Does this AEON answer to the name in a request's Host header?
+ *
+ * DNS rebinding (measured at e44058b, 2026-09-29): a page on evil.example
+ * re-points its own name at 127.0.0.1, and the browser then treats AEON as
+ * evil.example — same origin, so no CORS and no Origin header on a GET. The
+ * one thing it cannot change is the Host header, which still says
+ * evil.example. GET /api/settings, /api/store/source and /api/build/queue
+ * answered such a request 200 before an account existed.
+ *
+ * Answered:
+ *  - localhost, *.localhost, 127.x.x.x, [::1], or any IP address, on the port
+ *    the request arrived on. An address cannot be re-pointed by DNS, and
+ *    AEON_BIND=0.0.0.0 is reached by one (http://192.168.1.5:3001).
+ *  - the hostname of a Cloudflare tunnel Settings is running right now.
+ *    cloudflared passes the public name through as Host.
+ *  - a hostname named in AEON_ALLOWED_ORIGINS (a reverse proxy, a LAN name).
+ * No Host header at all is answered: only an HTTP/1.0 client can send that,
+ * never a browser, and this check exists for browsers.
+ *
+ * `port` is the port the connection arrived on (req.socket.localPort), not a
+ * configured value — the drive's launchers pick 3001-3020.
+ *
+ * @returns {{ok: true, via: string} | {ok: false, reason: string}}
+ */
+function checkHost(hostHeader, { port, env = process.env, tunnelHosts = liveTunnelHosts() } = {}) {
+  if (hostHeader === undefined || hostHeader === null || hostHeader === '') return { ok: true, via: 'none' };
+  const h = hostPort(hostHeader, 80);
+  if (!h) return { ok: false, reason: `unreadable Host "${hostHeader}"` };
+  if (isLoopbackHost(h.host) || isAddress(h.host)) {
+    if (port === undefined || h.port === Number(port)) return { ok: true, via: isLoopbackHost(h.host) ? 'loopback' : 'address' };
+    return { ok: false, reason: `Host "${hostHeader}" names port ${h.port}; this AEON is on ${port}` };
+  }
+  if (tunnelHosts.has(h.host)) return { ok: true, via: 'tunnel' };
+  for (const o of envOrigins(env)) {
+    try { if (new URL(o).hostname.toLowerCase() === h.host) return { ok: true, via: 'configured' }; } catch { /* skip */ }
+  }
+  return { ok: false, reason: `Host "${hostHeader}" is not a name this AEON answers to` };
 }
 
 /** Is `origin` this server's own page, served over loopback? */
@@ -52,16 +124,52 @@ function isOwnLoopbackOrigin(origin, hostHeader) {
 }
 
 /**
+ * Is `origin` the page this request's Host serves? Loopback names are one
+ * machine, so localhost and 127.0.0.1 on the same port match. Any other name
+ * must match exactly; a Host with no port (a tunnel or a reverse proxy, where
+ * the page is https on 443 and the hop to AEON is http) matches on the name.
+ * Only meaningful AFTER checkHost passed: a rebinding page's Origin and Host
+ * are both evil.example, and match each other.
+ */
+function isOwnOrigin(origin, hostHeader) {
+  if (isOwnLoopbackOrigin(origin, hostHeader)) return true;
+  let u;
+  try { u = new URL(origin); } catch { return false; }
+  const o = hostPort(u.host, u.protocol === 'https:' ? 443 : 80);
+  const h = hostPort(hostHeader, 80);
+  if (!o || !h || isLoopbackHost(o.host)) return false;
+  return o.host === h.host && (!h.explicit || o.port === h.port);
+}
+
+/**
+ * Does this AEON answer a browser page served from `origin`?
+ *
+ * Its own page (above), the Vite dev server (`npm start`, :3000) and
+ * AEON_ALLOWED_ORIGINS. Not "any localhost port": a page another program
+ * serves on this machine is not AEON, and until 2026-09-30 HTTP let every
+ * one of them in with credentials (audit A055) while /ws already refused it.
+ * "null" (sandboxed frames, file://) is refused.
+ */
+function checkOrigin(origin, hostHeader, { env = process.env, allowedOrigins = [] } = {}) {
+  if (origin === undefined || origin === null || origin === '') return { ok: true };
+  if ([...DEV_ORIGINS, ...envOrigins(env), ...allowedOrigins].includes(origin)) return { ok: true };
+  if (isOwnOrigin(origin, hostHeader)) return { ok: true };
+  return { ok: false, reason: `origin not allowed: ${origin}` };
+}
+
+/**
  * Decide an upgrade. Pure apart from validateSession's own lastSeen touch.
  * @returns {{ok: true} | {ok: false, status: number, reason: string}}
  */
 function checkUpgrade(req, { sessions, allowedOrigins = [] } = {}) {
-  const origin = req.headers?.origin;
-  if (origin) {
-    const allow = [...DEV_ORIGINS, ...envOrigins(), ...allowedOrigins];
-    if (!allow.includes(origin) && !isOwnLoopbackOrigin(origin, req.headers?.host)) {
-      return { ok: false, status: 403, reason: `origin not allowed: ${origin}` };
-    }
+  const host = checkHost(req.headers?.host, { port: req.socket?.localPort });
+  if (!host.ok) return { ok: false, status: 403, reason: host.reason };
+  const origin = checkOrigin(req.headers?.origin, req.headers?.host, { allowedOrigins });
+  if (!origin.ok) return { ok: false, status: 403, reason: origin.reason };
+  // A tunnel visitor is the internet. With no account, or the guard off,
+  // nothing would stand between them and the stream (see server/earlyware.cjs).
+  if (host.via === 'tunnel' && sessions && !sessions.guardActive()) {
+    return { ok: false, status: 403, reason: 'tunnel request while login is off' };
   }
   if (sessions && sessions.hasAccount()) {
     let query = {};
@@ -120,3 +228,11 @@ module.exports = function attachWS(server, deps) {
 
 module.exports.checkUpgrade = checkUpgrade;
 module.exports.isOwnLoopbackOrigin = isOwnLoopbackOrigin;
+// The same rule for HTTP: server/earlyware.cjs (Host + Origin on every request)
+// and the Security block's pre-account export check.
+module.exports.checkHost = checkHost;
+module.exports.checkOrigin = checkOrigin;
+module.exports.isLoopbackHost = isLoopbackHost;
+module.exports.liveTunnelHosts = liveTunnelHosts;
+module.exports.DEV_ORIGINS = DEV_ORIGINS;
+module.exports.TUNNELS_KEY = TUNNELS_KEY;

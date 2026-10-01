@@ -240,11 +240,17 @@ const system = require('../services/system.js')({
 // ── App + middleware stack (order preserved from the monolith) ──
 const app = express();
 app.use(security.correlationId);
-app.use(security.corsMiddleware);
+// Host (DNS rebinding) and Origin, then CORS headers for what passed — before
+// anything else answers. Replaces security.corsMiddleware, which let in every
+// localhost port and a dead Vercel name, and answered a refusal with a 500.
+// See server/earlyware.cjs.
+const { createAppJsonParser, bodyTooLargeReply, createRequestGuard } = require('./earlyware.cjs');
+const _requestGuard = createRequestGuard();
+app.use(_requestGuard.requestGuard);
+app.use(_requestGuard.cors);
 app.use(security.helmetMiddleware);
 // 10 MB app-wide, except the routes that parse their own larger body — the
 // app-wide parser used to refuse those first (server/earlyware.cjs).
-const { createAppJsonParser, bodyTooLargeReply } = require('./earlyware.cjs');
 app.use(createAppJsonParser({ json: express.json }));
 // An interface older than its source is served, never refused — but every
 // response says so, for the UI to show and the operator to rebuild.
