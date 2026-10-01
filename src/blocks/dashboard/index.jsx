@@ -562,8 +562,10 @@ export default function Dashboard({ chatHistory = [], auditLogs = [], blockLayou
           }));
           return (
             <div style={{ display: 'grid', gridTemplateColumns: '220px 1fr', gap: '20px', minHeight: '200px' }}>
-              {/* Pie Chart */}
-              <div style={{ position: 'relative' }}>
+              {/* Pie Chart. Fixed height and no stretch: the grid row is as tall
+                  as the bar chart plus its wrapped legend, and a stretched box
+                  put the centred label (top: 50%) below the ring's middle. */}
+              <div style={{ position: 'relative', height: 200, alignSelf: 'start' }}>
                 <ResponsiveContainer width="100%" height={200}>
                   <PieChart>
                     <Pie data={pieData} cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={2} dataKey="value"
@@ -582,11 +584,14 @@ export default function Dashboard({ chatHistory = [], auditLogs = [], blockLayou
 
               {/* Bar Chart + Legend */}
               <div>
-                <ResponsiveContainer width="100%" height={140}>
-                  <BarChart data={barData} margin={{ top: 5, right: 5, left: -20, bottom: 0 }}>
+                {/* Eight names tilted 20° collided, and the negative left margin
+                    clipped the first; the legend below carries the full names. */}
+                <ResponsiveContainer width="100%" height={160}>
+                  <BarChart data={barData} margin={{ top: 5, right: 5, left: 0, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
-                    <XAxis dataKey="name" tick={{ fontSize: 8, fill: '#666' }} interval={0} angle={-20} textAnchor="end" height={35} />
-                    <YAxis tick={{ fontSize: 9, fill: '#666' }} />
+                    <XAxis dataKey="name" tick={{ fontSize: 8, fill: '#666' }} interval={0} angle={-45} textAnchor="end" height={55}
+                      tickFormatter={(n) => (n.length > 10 ? `${n.slice(0, 9)}…` : n)} />
+                    <YAxis tick={{ fontSize: 9, fill: '#666' }} width={36} />
                     <Tooltip contentStyle={{ background: '#1a1a1a', border: '1px solid #333', borderRadius: '6px', fontSize: '11px' }} />
                     <Bar dataKey="requests" name="Requests" radius={[3, 3, 0, 0]}>
                       {barData.map((d, i) => <Cell key={i} fill={d.color} />)}
