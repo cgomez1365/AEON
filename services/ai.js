@@ -247,6 +247,20 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   const PAID_REST_MS = 30 * 60 * 1000;
   const paidRest = {}; // { openrouter: { blockedUntil, model, reason, plain } }
   const _isFreeOpenRouterModel = (m) => m === 'openrouter/free' || /:free$/.test(String(m || ''));
+  // OpenRouter reserves max_tokens against the credit balance even for a free
+  // model: a 4096 reservation 402s on an account with minimal credits
+  // (c79b974). Only the env-key rung and the stream capped it, so a registry
+  // connection's paid→free hand-off on the blocking path asked openrouter/free
+  // for 4096, was refused, and benched all of OpenRouter for 30 minutes — the
+  // next chat turn skipped it. Every transport that can reach OpenRouter caps
+  // a free model's reservation here.
+  const OPENROUTER_FREE_MAX_TOKENS = 1024;
+  const _reachesOpenRouter = (provider, baseUrl) => provider === 'openrouter'
+    || /^https?:\/\/(?:[a-z0-9-]+\.)*openrouter\.ai(?:[:/]|$)/i.test(String(baseUrl || ''));
+  const _maxTokensFor = (provider, baseUrl, model, requested) => (
+    _reachesOpenRouter(provider, baseUrl) && _isFreeOpenRouterModel(model)
+      ? Math.min(requested || OPENROUTER_FREE_MAX_TOKENS, OPENROUTER_FREE_MAX_TOKENS)
+      : (requested || 4096));
   const _paidResting = (p) => Date.now() < (paidRest[p]?.blockedUntil || 0);
   const _paidOutOfCredits = (c, status) => c?.provider === 'openrouter' && status === 402
     && !!c.model && !_isFreeOpenRouterModel(c.model);
@@ -892,14 +906,10 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     if (!apiKey) throw new Error('OPENROUTER_API_KEY missing in .env');
     // Free-tier models (openrouter/free, or any :free suffix) are $0/token
     // but OpenRouter still reserves max_tokens against your credit balance to
-    // prevent abuse — a large reservation 402s even with zero cost. Cap at 1024
-    // so any free-tier key works without prepaid credits.
-    const isFree = model === 'openrouter/free' || model.endsWith(':free');
-    const effectiveOpts = isFree
-      ? { ...opts, max_tokens: Math.min(opts.max_tokens || 1024, 1024) }
-      : opts;
+    // prevent abuse — a large reservation 402s even with zero cost.
+    // genericOpenAIRequest caps it (_maxTokensFor).
     try {
-      return await genericOpenAIRequest(prompt, model, 'https://openrouter.ai/api/v1', apiKey, effectiveOpts);
+      return await genericOpenAIRequest(prompt, model, 'https://openrouter.ai/api/v1', apiKey, opts);
     } catch (e) {
       if (/error (429|402)/i.test(e.message)) rotateKeyPool('openrouter');
       throw e;
@@ -982,11 +992,12 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
     const messages = _toMessages(prompt, opts);
     if (opts.system) messages.unshift({ role: 'system', content: opts.system });
+    const maxTokens = _maxTokensFor(opts.provider, baseUrl, model, opts.max_tokens);
     // Pace before the call, not after the 429.
     await _pace(_paceKey(baseUrl, opts.provider, opts.credential_ref), opts.rpm_limit);
     const response = await fetch(url, {
       method: 'POST', headers,
-      body: JSON.stringify({ model, messages, max_tokens: opts.max_tokens || 4096 }),
+      body: JSON.stringify({ model, messages, max_tokens: maxTokens }),
       signal: fetchTimeout(opts),
     });
     if (!response.ok) {
@@ -1010,7 +1021,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     const msg = choice?.message;
     const content = msg?.content || choice?.text || data?.message?.content || '';
     if ((typeof content !== 'string' || content.trim() === '') && choice?.finish_reason === 'length') {
-      const err = _reasoningBudgetError(opts.max_tokens || 4096);
+      const err = _reasoningBudgetError(maxTokens);
       _trackLLM(opts.provider || 'openai-compat', model, 0, Date.now() - _t0, false, { error: err.message });
       throw err;
     }
@@ -1247,10 +1258,9 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     if (!base) throw new Error(`No base URL for provider "${provider}".`);
     const headers = { 'Content-Type': 'application/json' };
     if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
-    // Same clamp as openRouterRequest: free-tier models reserve max_tokens
-    // against the credit balance and 402 on a large reservation.
-    const isFree = provider === 'openrouter' && (model === 'openrouter/free' || String(model).endsWith(':free'));
-    const maxTokens = isFree ? Math.min(opts.max_tokens || 1024, 1024) : (opts.max_tokens || 4096);
+    // Free-tier models reserve max_tokens against the credit balance and 402
+    // on a large reservation (_maxTokensFor).
+    const maxTokens = _maxTokensFor(provider, base, model, opts.max_tokens);
     await _pace(_paceKey(base, provider, opts.credential_ref), opts.rpm_limit);
     const { signal, connected } = _streamSignal(opts);
     let response;

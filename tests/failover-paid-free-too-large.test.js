@@ -74,14 +74,20 @@ const answer = (req, res, text) => {
 // OpenRouter: 'paid402' — the account the CEO had (paid 402s, free answers);
 // 'free503' — paid 402s and the free router is down; 'all402' — nothing at
 // all can be afforded, free models included.
+// A free model still reserves max_tokens against the balance: on an account
+// with minimal credits a reservation above 1024 is refused (c79b974), so the
+// fake refuses it too.
 let orMode = 'paid402';
 const orSeen = [];
+const orMaxTokens = [];
+const FREE_RESERVE_CAP = 1024;
 const fakeOpenRouter = express();
 fakeOpenRouter.use(express.json({ limit: '5mb' }));
 fakeOpenRouter.post('/v1/chat/completions', (req, res) => {
   const m = req.body.model;
   orSeen.push(m);
-  if (orMode === 'all402' || !isFree(m)) {
+  orMaxTokens.push(req.body.max_tokens);
+  if (orMode === 'all402' || !isFree(m) || !(req.body.max_tokens <= FREE_RESERVE_CAP)) {
     return res.status(402).json({ error: { code: 402, message: `This request requires more credits, or fewer max_tokens. You requested up to ${req.body.max_tokens} tokens, but can only afford 4. To increase, visit https://openrouter.ai/settings/credits and upgrade to a paid account` } });
   }
   if (orMode === 'free503') return res.status(503).json({ error: { code: 503, message: 'No endpoints available for this free model right now' } });
@@ -199,7 +205,7 @@ beforeEach(() => {
   keyPool._reset(); ai._resetProviderHealth();
   orMode = 'paid402'; groqLimit = 8000;
   Object.assign(local, { on: true, window: 8192, fail: null });
-  orSeen.length = 0; groqSeen.length = 0; localSeen.length = 0; notices.length = 0;
+  orSeen.length = 0; orMaxTokens.length = 0; groqSeen.length = 0; localSeen.length = 0; notices.length = 0;
   settingsNow = { models: { chat: { provider: 'openrouter', model: OPUS } }, roulette: false, prefs: {} };
 });
 
@@ -250,6 +256,38 @@ describe('a paid OpenRouter model out of credits → the same connection on a fr
     expect(groqSeen).toHaveLength(0);
     expect(notices.join('\n')).toContain(`openrouter (${OPUS}) out of credits → openrouter free model`);
     expect(notices.join('\n')).not.toMatch(/can only afford/);
+  });
+
+  it('non-stream: the free model is asked within its reservation cap, OpenRouter stays up, and the next streamed turn is served by it', async () => {
+    // The CEO's setup is a registry connection. Its blocking hand-off asked
+    // openrouter/free for 4096 tokens, was refused like the paid model, and
+    // benched all of OpenRouter — the next chat turn went straight to Groq.
+    const r = await ai.kernelLLM('hello', { role: 'chat', max_tokens: 3000, returnMeta: true });
+    expect(r).toMatchObject({ provider: 'openrouter', model: 'openrouter/free' });
+    expect(orSeen).toEqual([OPUS, 'openrouter/free']);
+    // The paid model keeps the reservation the caller asked for.
+    expect(orMaxTokens).toEqual([3000, FREE_RESERVE_CAP]);
+    expect(ai.getProviderHealth().openrouter.healthy).toBe(true);
+
+    orSeen.length = 0;
+    const switches = [];
+    const next = await stream([{ role: 'user', content: 'and now?' }], switches);
+    expect(next).toMatchObject({ provider: 'openrouter', model: 'openrouter/free' });
+    expect(orSeen).toEqual(['openrouter/free']);
+    expect(groqSeen).toHaveLength(0);
+    expect(switches.map(noticeOf)).toEqual([`openrouter (${OPUS}) out of credits → openrouter free model`]);
+  });
+
+  it('non-stream while paid rests: a background call that asks for a long answer starts on the free model within the cap', async () => {
+    await stream([{ role: 'user', content: 'first' }]);   // rests paid
+    orSeen.length = 0; orMaxTokens.length = 0;
+    // Auto-memory extraction, Writer and Council call the blocking path.
+    const r = await ai.kernelLLM('extract the facts', { role: 'chat', max_tokens: 8192, returnMeta: true });
+    expect(r).toMatchObject({ provider: 'openrouter', model: 'openrouter/free' });
+    expect(orSeen).toEqual(['openrouter/free']);
+    expect(orMaxTokens).toEqual([FREE_RESERVE_CAP]);
+    expect(groqSeen).toHaveLength(0);
+    expect(ai.getProviderHealth().openrouter.healthy).toBe(true);
   });
 
   it('a 402 on the free model as well keeps today\'s rule: OpenRouter rests and the next provider answers', async () => {
