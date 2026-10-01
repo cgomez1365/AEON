@@ -189,7 +189,20 @@ function ensureKeyslots() {
     createdAt: new Date().toISOString(),
   });
   _pendingRecoveryCode = code;
-  console.log(`\n${'='.repeat(64)}\n[VAULT] Recovery code (write this down — shown once):\n\n        ${code}\n\n[VAULT] Restores vault access if this device or its .env is lost.\n${'='.repeat(64)}\n`);
+  // Says where the code is used, because that place is real: launch.js asks
+  // for it when the .env key no longer opens this vault — on its own as
+  // `node launch.js --recover-vault`, which every layout has (the carried
+  // drive's and USB builds' launchers run server.cjs, never launch.js), and
+  // during a desktop launch — and calls recoverWithCode. It used to promise
+  // recovery that nothing in AEON could perform (A045).
+  console.log(
+    `\n${'='.repeat(64)}\n[VAULT] Recovery code (write this down — it is shown once):\n\n        ${code}\n\n` +
+    `[VAULT] If this computer's .env is lost or replaced, run\n` +
+    `            node launch.js --recover-vault\n` +
+    `        in the AEON app folder and paste this code when it asks. It\n` +
+    `        reopens the vault and writes a new key to .env. (The desktop\n` +
+    `        install's LAUNCH.bat, launch.command and launch.sh also ask.)\n` +
+    `${'='.repeat(64)}\n`);
   return { created: true };
 }
 

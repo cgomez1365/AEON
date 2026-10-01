@@ -186,6 +186,30 @@ module.exports = function retrieveFactory(deps) {
     const all = Object.values(index.documents || {});
     const docs = all.filter(d => Array.isArray(d.embedding));
     if (!docs.length) {
+      // With no embedder, /index-brain indexes but embeds nothing, so sending
+      // the operator there was a loop: /ask → "run /index-brain" → "0
+      // embedded" → /ask → the same advice (A047, measured 2026-09-30). The
+      // remedy then is a model. Asked of the same sync readiness check the
+      // Index panel uses (index-status), so the two cannot disagree. An
+      // injected embedder (tests; nothing injects in production) is present.
+      let embedder = { ok: true };
+      try {
+        const readiness = deps?.embedReadiness
+          || (deps?.embed ? () => ({ ok: true }) : require('../../../kernel/embed.cjs').embedReadiness);
+        embedder = readiness() || embedder;
+      } catch { /* cannot tell — keep the index advice */ }
+      if (!embedder.ok) {
+        return {
+          documents: [],
+          unavailable: {
+            reason: 'no_embedding_model',
+            message: all.length
+              ? `${all.length} document${all.length === 1 ? ' is' : 's are'} in the Vault, but none can be searched by meaning: no embedding model is available.`
+              : 'Nothing has been indexed from the Vault yet, and no embedding model is available to search it by meaning.',
+            action: 'Install nomic-embed-text in Cookbook (about 150 MB, runs on CPU), or assign an endpoint that serves embeddings to the Embedding role in Settings → Models. Then run /index-brain.',
+          },
+        };
+      }
       return {
         documents: [],
         unavailable: {

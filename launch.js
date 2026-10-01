@@ -10,7 +10,8 @@
  *   3. Vault bootstrap    — master key auto-generated, never asked for
  *   4. Dependencies       — npm install on first run
  *   5. Frontend build     — one-time vite build (then cached)
- *   6. Boot               — kernel on :3001, browser opens itself
+ *   6. Boot               — kernel on :3001 (or the next free port), browser
+ *                           opens itself once AEON answers there
  *
  * Design rule: the user should never NEED to type anything. Every prompt
  * has a safe default reachable by pressing Enter.
@@ -33,7 +34,8 @@ const ROOT = __dirname;
 const ENV_PATH = envFilePath({ appRoot: ROOT });
 // The template ships WITH the install and is read-only — it stays put.
 const ENV_EXAMPLE = path.join(ROOT, '.env.example');
-const PORT = process.env.PORT || 3001;
+// The port is chosen in main() (choosePort below), not here: 3001 may belong
+// to another program.
 
 // ── .env is owner-only ──────────────────────────────────────────────────────
 // It holds AEON_VAULT_MASTER_KEY, half of what unlocks every stored API key.
@@ -105,10 +107,226 @@ function checkProviderVault({ envText, listFile, generate }) {
   }
 }
 
+// ── Dependencies: finished, or only started ─────────────────────────────────
+// npm install used to run only when node_modules did not exist. An install cut
+// short — the window closed, the laptop slept, Wi-Fi dropped, a 504 on a
+// package's download script — leaves node_modules half full, and every
+// relaunch then said "Dependencies ready" and failed in the build (measured
+// 2026-09-30: 574 entries, no multer, "Cannot find module 'multer'"), while
+// the failure message told the customer to run LAUNCH again (A098).
+//
+// npm writes node_modules/.package-lock.json only once the whole tree is on
+// disk and its install scripts have run (arborist reify saves it after
+// _build), so its presence means an install finished. INSTALL_MARKER is this
+// launcher's own record of the same fact, written after npm exits 0, so an npm
+// that skips the hidden lockfile cannot send every launch into a reinstall.
+const INSTALL_MARKER = '.aeon-install-complete';
+function dependenciesReady(root) {
+  const nm = path.join(root, 'node_modules');
+  if (!fs.existsSync(nm)) return { ready: false, reason: 'missing' };
+  if (fs.existsSync(path.join(nm, '.package-lock.json')) || fs.existsSync(path.join(nm, INSTALL_MARKER))) {
+    return { ready: true, reason: null };
+  }
+  return { ready: false, reason: 'incomplete' };
+}
+function markDependenciesInstalled(root) {
+  try { fs.writeFileSync(path.join(root, 'node_modules', INSTALL_MARKER), `${new Date().toISOString()}\n`); return true; }
+  catch { return false; }
+}
+
+// ── Which port, and whether AEON is what answers there ─────────────────────
+// Every launcher assumed 3001 and opened the browser on the first HTTP reply
+// of any kind. With another program on 3001 the customer got that program's
+// page, then AEON gave up and told them to set PORT (A046, measured
+// 2026-09-30). The carried drive's launchers already take the first free port
+// (tools/free-port.cjs); this one now does too. PORT, when set, still wins.
+async function choosePort({ env = process.env, from = 3001, to = 3020, find } = {}) {
+  const asked = String(env.PORT || '').trim();
+  if (asked) return { port: asked, chosen: false };
+  const port = await (find || require('./tools/free-port.cjs').firstFreePort)(from, to);
+  return { port: port == null ? null : String(port), chosen: true };
+}
+
+// Only AEON's own /api/ping counts as AEON — the same answers
+// src/kernel/runtime.cjs accepts when it asks a lock's port.
+function isAeonPing(statusCode, body) {
+  let j = null;
+  try { j = JSON.parse(body); } catch { return false; }
+  return !!j && ((statusCode === 200 && j.name === 'aeon')
+    || (statusCode === 401 && (j.error === 'UNAUTHORIZED_SESSION' || /^AEON-/.test(String(j.correlation_id)))));
+}
+
+/** @returns {Promise<'aeon'|'other'|'none'>} none: nothing answered (yet). */
+function probeAeon(base, { timeoutMs = 1500 } = {}) {
+  return new Promise((resolve) => {
+    const req = require('http').get(`${base}/api/ping`, (res) => {
+      let body = '';
+      res.setEncoding('utf8');
+      res.on('data', (d) => { if (body.length < 8192) body += d; });
+      res.on('end', () => resolve(isAeonPing(res.statusCode, body) ? 'aeon' : 'other'));
+      res.on('error', () => resolve('none'));
+    });
+    req.on('error', () => resolve('none'));
+    req.setTimeout(timeoutMs, () => { req.destroy(); resolve('none'); });
+  });
+}
+
+// ── The vault master key, before the server boots ──────────────────────────
+// .env holds one half of the vault key, secrets/aeon-keyslots.json the other.
+// This launcher filled AEON_VAULT_MASTER_KEY whenever .env had none — also
+// when keyslots already existed, i.e. when .env had been lost or replaced. The
+// new key unwrapped nothing and the vault stayed locked without a word:
+// server.js refuses (vaultBootGuard) only when the key is MISSING, and the
+// launcher had just made it present. P0-01's defect, in the launcher (A017).
+//
+// And the recovery code printed once when the vault was made had nowhere to
+// go: no route, command or screen called vault.recoverWithCode (A045/A017).
+// The launcher is that place now. It runs before the server, in the window
+// where the code was first shown, and it is what a customer double-clicks.
+//
+//   mint     no vault yet                                → generate a key
+//   keep     the key opens the vault, or there is no vault to check
+//   recover  a vault the key cannot open, with a recovery slot → ask for the code
+//   sealed   a vault the key cannot open, no usable recovery slot → say so
+//
+// Only 'mint' writes a new key: a fresh key cannot open an existing vault.
+function envValue(envText, key) {
+  const m = String(envText || '').match(new RegExp('^' + key + '=(.*)$', 'm'));
+  return m ? m[1].trim().replace(/^(['"])(.*)\1$/, '$2') : '';
+}
+function withMasterKey(key, fn) {
+  const prev = process.env.AEON_VAULT_MASTER_KEY;
+  try {
+    if (key) process.env.AEON_VAULT_MASTER_KEY = key; else delete process.env.AEON_VAULT_MASTER_KEY;
+    return fn();
+  } finally {
+    if (prev === undefined) delete process.env.AEON_VAULT_MASTER_KEY;
+    else process.env.AEON_VAULT_MASTER_KEY = prev;
+  }
+}
+// The server reads process.env first (dotenv never overrides it), so this does.
+function vaultKeyPlan({ envText, vault }) {
+  const key = process.env.AEON_VAULT_MASTER_KEY || envValue(envText, 'AEON_VAULT_MASTER_KEY');
+  let status = null;
+  try { status = vault ? vault.getRecoveryStatus() : null; } catch { status = null; }
+  if (!status || !status.hasKeyslots) return key ? 'keep' : 'mint';
+  let opens = false;
+  try { opens = !!key && withMasterKey(key, () => vault.isUnlocked()); } catch { opens = false; }
+  if (opens) return 'keep';
+  return status.hasRecoverySlot ? 'recover' : 'sealed';
+}
+
+// Ask for the recovery code until it opens the vault, the operator skips, or
+// the tries run out. recoverWithCode unwraps the data key with the code and
+// writes a NEW AEON_VAULT_MASTER_KEY to .env (the file this launcher writes);
+// nothing stored is re-encrypted, so every saved key comes back.
+async function recoverVault({ vault, ask, say = () => {}, tries = 3 }) {
+  for (let i = 0; i < tries; i++) {
+    const code = String((await ask('  Recovery code (or press Enter to skip): ')) || '').trim();
+    if (!code) return { ok: false, error: 'skipped' };
+    let r;
+    try { r = vault.recoverWithCode(code); } catch (e) { return { ok: false, error: e.message }; }
+    if (r && r.ok) return r;
+    if (!r || r.error !== 'invalid-code') return r || { ok: false, error: 'unknown' };
+    say('That code does not open this vault. Check it and try again.');
+  }
+  return { ok: false, error: 'invalid-code' };
+}
+
+// The recovery code is minted with the keyslots and printed once. Made here,
+// the launcher can stop on it before the browser opens over this window; made
+// by the server mid-boot, it scrolled away with the rest of the log (A045).
+// Returns the code, or null when keyslots already existed or could not be made
+// here (the server then makes them, as before).
+function createKeyslots({ vault, envText }) {
+  const key = process.env.AEON_VAULT_MASTER_KEY || envValue(envText, 'AEON_VAULT_MASTER_KEY');
+  if (!vault || !key) return null;
+  try {
+    return withMasterKey(key, () => {
+      const r = vault.ensureKeyslots();
+      const code = vault.consumePendingRecoveryCode();
+      return r && r.created ? code : null;
+    });
+  } catch { return null; }
+}
+
+// ── `node launch.js --recover-vault` ───────────────────────────────────────
+// The recovery step on its own: no packages, no build, no server. The carried
+// drive's and USB builds' launchers run `node server.cjs`, never this file's
+// full launch, so the code needs a way in that works on every layout.
+// vault.cjs needs only Node built-ins, and the vault and .env resolve through
+// the same authorities the server uses (aeonHome.cjs, envFile.cjs), a carried
+// drive's home included. Returns the exit code.
+async function recoverOnly({ vault, envText, ask, log }) {
+  const plan = vaultKeyPlan({ envText, vault });
+  if (plan === 'keep') { log.ok('The key in .env already opens this vault. Nothing to recover.'); return 0; }
+  if (plan === 'mint') { log.info('There is no vault here yet (no keyslot file), so there is nothing to recover.'); return 0; }
+  if (plan === 'sealed') {
+    log.warn('The key in .env does not open this vault, and the vault has no readable recovery');
+    log.warn('slot (secrets/aeon-keyslots.json), so a recovery code cannot open it either.');
+    log.warn('Restore the original .env and the secrets folder beside it.');
+    return 1;
+  }
+  log.info('The key in .env does not open this vault. Paste the recovery code shown when');
+  log.info('the vault was created.');
+  const r = await recoverVault({ vault, ask, say: log.warn });
+  if (!r.ok) {
+    log.warn(r.error === 'skipped' ? 'Skipped. The vault stays sealed.' : `The vault was not reopened (${r.error}).`);
+    return 1;
+  }
+  if (r.envKeyReissued === false) {
+    // The recovery slot is unchanged, so the same code works again.
+    log.warn(`The code was right, but the new key could not be written to .env (${r.warn}).`);
+    log.warn('Make that file writable and run this again with the same code.');
+    return 1;
+  }
+  log.ok('Vault reopened. A new key was written to .env; your stored keys are back.');
+  log.info('If AEON is running, close its window and start it again so it uses the new key.');
+  return 0;
+}
+
+// ── Already running on this home? ──────────────────────────────────────────
+// A second double-click (the Desktop icon, launch.command) while AEON ran went
+// through the whole launch: it found 3001 busy — held by that very AEON —
+// printed "AEON will use 3002 instead" and "AEON IS STARTING", started a
+// server that refused at the home lock, and opened the running AEON only when
+// that server's minute-long redirect ended: about 65 s (review 2026-09-30).
+// The home lock names the running AEON's port (src/kernel/runtime.cjs), so
+// the launcher asks it first.
+function runningAeon(home, { holderOf } = {}) {
+  let holder = null;
+  try { holder = (holderOf || require('./src/kernel/runtime.cjs').homeHolder)(home); } catch { return null; }
+  const port = holder ? Number(holder.port) : NaN;
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) return null;
+  return { port, pid: holder.pid || null, starting: !!holder.starting };
+}
+
+/** Ask `base` until AEON answers there or the tries run out; the last answer. */
+async function waitForAeon(base, { tries = 120, everyMs = 500, probe = probeAeon } = {}) {
+  let who = 'none';
+  for (let i = 0; i < tries; i++) {
+    who = await probe(base);
+    if (who === 'aeon') break;
+    if (i < tries - 1) await new Promise((r) => setTimeout(r, everyMs));
+  }
+  return who;
+}
+
+function openInBrowser(to) {
+  const cmd = os.platform() === 'win32' ? `start "" "${to}"`
+            : os.platform() === 'darwin' ? `open "${to}"` : `xdg-open "${to}"`;
+  try { execSync(cmd, { stdio: 'ignore', shell: true }); return true; } catch { return false; }
+}
+
 // Required (tests) rather than run: export the helpers, run nothing — the rest
 // of this file is the interactive launcher and ends by booting the server.
 if (require.main !== module) {
-  module.exports = { writeEnvFile, secureEnvFile, ENV_MODE, ensureEnvKey, checkProviderVault };
+  module.exports = {
+    writeEnvFile, secureEnvFile, ENV_MODE, ensureEnvKey, checkProviderVault,
+    INSTALL_MARKER, dependenciesReady, markDependenciesInstalled,
+    choosePort, isAeonPing, probeAeon, runningAeon, waitForAeon,
+    envValue, vaultKeyPlan, recoverVault, createKeyslots, recoverOnly,
+  };
   return;
 }
 
@@ -184,6 +402,21 @@ const ask = (q) => new Promise((res) => {
 });
 
 async function main() {
+  // --recover-vault on a portable USB build: its launchers export
+  // AEON_PORTABLE=true before starting AEON, and its .env (made from .env.usb
+  // at each boot) says the same. Do that before any path resolves, or this
+  // would look for a home on the host — and move the drive's vault there —
+  // instead of opening the drive's vault. .env.usb counts too: it is the
+  // .env this mode may be recovering from the loss of.
+  const recoverMode = process.argv.includes('--recover-vault');
+  if (recoverMode && !process.env.AEON_PORTABLE) {
+    for (const f of ['.env', '.env.usb']) {
+      try {
+        if (envValue(fs.readFileSync(path.join(ROOT, f), 'utf8'), 'AEON_PORTABLE') === 'true') { process.env.AEON_PORTABLE = 'true'; break; }
+      } catch { /* not there: not a portable build, or not this file */ }
+    }
+  }
+
   // ── 1b. AEON home ─────────────────────────────────────────────────────────
   // Your data lives in ~/AEON (or AEON_HOME), not in this folder, so a
   // reinstall is `git pull`. An install from before that has its Vault, models,
@@ -207,6 +440,45 @@ async function main() {
     }
     for (const w of mig.warnings) warn(w);
     if (mig.moved.length) ok(`Your data now lives in ${homeBoot.roots.home}`);
+  }
+
+  // ── 1c. vault recovery only (`node launch.js --recover-vault`) ───────────
+  // Before the running check: a sealed AEON may be running, and this is how
+  // it gets its key back.
+  if (recoverMode) {
+    p('');
+    p('  VAULT RECOVERY', PU);
+    // Resolved again: ENV_PATH above was fixed before AEON_PORTABLE could be.
+    const envPath = envFilePath({ appRoot: ROOT });
+    info(`Vault keys: ${homeBoot.roots.secrets}`);
+    info(`Key file:   ${envPath}`);
+    let vault = null;
+    try { vault = require('./src/kernel/vault.cjs'); }
+    catch (e) { fail(`The vault module did not load: ${e.message}`); process.exit(1); }
+    const envText = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : '';
+    process.exit(await recoverOnly({ vault, envText, ask, log: { ok, info, warn } }));
+  }
+
+  // ── 1d. AEON already running on this home ────────────────────────────────
+  // Open it and end here; nothing below may start a second one (see
+  // runningAeon above).
+  const running = runningAeon(homeBoot.roots.home);
+  if (running) {
+    const at = `http://localhost:${running.port}`;
+    p('');
+    p('  ALREADY RUNNING', PU);
+    info(running.starting
+      ? `AEON is starting on this computer at ${at}. Waiting for it to answer...`
+      : `AEON is already running on this computer at ${at}.`);
+    const who = await waitForAeon(at);
+    if (who === 'aeon') {
+      openInBrowser(at);
+      ok('Opened in your browser. This window can be closed: AEON runs in its own window.');
+      process.exit(0);
+    }
+    warn(`AEON did not answer at ${at} within a minute${who === 'other' ? ' (another program answers there)' : ''}.`);
+    warn('This launch did not start a second AEON. The running one\'s window may say why.');
+    process.exit(1);
   }
 
   // ── 2. Local AI models ────────────────────────────────────────────────────
@@ -309,7 +581,37 @@ async function main() {
     return true;
   };
 
-  const madeVault = ensure('AEON_VAULT_MASTER_KEY', () => crypto.randomBytes(32).toString('hex'));
+  // vault.cjs needs only Node built-ins, so it loads before npm install has
+  // ever run. null if it cannot: the launcher then mints as it always did.
+  let vault = null;
+  try { vault = require('./src/kernel/vault.cjs'); } catch { vault = null; }
+  const plan = vaultKeyPlan({ envText: env, vault });
+  let recovered = false;
+  if (plan === 'recover') {
+    p('');
+    warn('AEON already has a vault on this computer, but the key in .env does not open it.');
+    warn('(.env was lost or replaced, or restored without the secrets folder beside it.)');
+    info('If you saved the recovery code shown when the vault was created, paste it');
+    info('below to reopen the vault. Press Enter to skip: AEON still starts, but the');
+    info('keys stored in the vault stay locked until it is reopened.');
+    const r = await recoverVault({ vault, ask, say: warn });
+    if (r.ok) {
+      // recoverWithCode wrote the new key to .env and into this process;
+      // put it in the text this launcher writes back below as well, so that
+      // write cannot undo it (and so it lands even if its own write failed).
+      const line = `AEON_VAULT_MASTER_KEY=${process.env.AEON_VAULT_MASTER_KEY}`;
+      env = fs.readFileSync(ENV_PATH, 'utf8');
+      env = /^AEON_VAULT_MASTER_KEY=.*$/m.test(env)
+        ? env.replace(/^AEON_VAULT_MASTER_KEY=.*$/m, () => line)
+        : `${env}${env.endsWith('\n') || !env ? '' : '\n'}${line}\n`;
+      recovered = true;
+    }
+  } else if (plan === 'sealed') {
+    p('');
+    warn('AEON already has a vault on this computer, but the key in .env does not open it,');
+    warn('and the vault has no readable recovery slot (secrets/aeon-keyslots.json).');
+  }
+  const madeVault = plan === 'mint' && ensure('AEON_VAULT_MASTER_KEY', () => crypto.randomBytes(32).toString('hex'));
   const newMobile = () => crypto.randomBytes(24).toString('hex');
   // The vault's copy first: rotated there if it is known-exposed, and a vault
   // copy means .env gets no second one (see checkProviderVault above).
@@ -330,7 +632,25 @@ async function main() {
   }
   writeEnvFile(ENV_PATH, env);
   if (madeVault) ok('Vault created — your API keys will be encrypted on this computer.');
-  else ok('Vault key present.');
+  else if (recovered) ok('Vault reopened with your recovery code. A new key was written to .env; your stored keys are back.');
+  else if (plan === 'keep') ok('Vault key present.');
+  else {
+    // Nothing was minted: a new key cannot open this vault, it would only
+    // hide the problem. The server says the same and stays up (vaultBootGuard).
+    warn('Vault left SEALED — the keys stored in it cannot be read this session.');
+    if (plan === 'recover') {
+      warn('To reopen it: restore the original .env and run LAUNCH again,');
+      warn('or run LAUNCH again and paste the recovery code when asked.');
+    } else warn('To reopen it: restore the original .env (and the secrets folder beside it) and run LAUNCH again.');
+  }
+  // Only once .env holds the key: keyslots wrapped under a key that was never
+  // saved would seal the vault on the next start.
+  const recoveryCode = createKeyslots({ vault, envText: env });
+  if (recoveryCode) {
+    // vault.ensureKeyslots printed the code just above. Stop on it while the
+    // window still shows it — the browser opens over this window later.
+    await ask('  Write the recovery code down, then press Enter to continue. ');
+  }
   // Every launch, not only the first: an install from before this fix has a
   // 0644 .env that nothing else would ever tighten. Said out loud (R-05).
   const envMode = secureEnvFile(ENV_PATH);
@@ -348,13 +668,24 @@ async function main() {
   // ── 5. dependencies ───────────────────────────────────────────────────────
   p('');
   p('  DEPENDENCIES', PU);
-  if (!fs.existsSync(path.join(ROOT, 'node_modules'))) {
-    info('First run — installing packages (one time, a few minutes)...');
-    try { execSync('npm install --prefer-offline --no-audit --no-fund', { cwd: ROOT, stdio: 'inherit', shell: true }); }
+  const deps = dependenciesReady(ROOT);
+  if (!deps.ready) {
+    // A half-finished tree gets `npm ci`: it empties node_modules and installs
+    // exactly what package-lock.json names, so a package cut off mid-download
+    // cannot pass for an installed one.
+    let first = 'npm install --prefer-offline --no-audit --no-fund';
+    if (deps.reason === 'incomplete') {
+      warn('The last package install did not finish (the window was closed, the computer');
+      warn('slept, or a download failed). Installing the packages again from the start.');
+      info('A few minutes; needs internet...');
+      first = 'npm ci --prefer-offline --no-audit --no-fund';
+    } else info('First run — installing packages (one time, a few minutes)...');
+    try { execSync(first, { cwd: ROOT, stdio: 'inherit', shell: true }); }
     catch {
       try { execSync('npm install', { cwd: ROOT, stdio: 'inherit', shell: true }); }
       catch { fail('npm install failed. Check your internet connection and run LAUNCH again.'); process.exit(1); }
     }
+    markDependenciesInstalled(ROOT);
   }
   ok('Dependencies ready.');
 
@@ -390,6 +721,12 @@ async function main() {
   }
 
   // ── 7. boot ───────────────────────────────────────────────────────────────
+  const { port: PORT, chosen } = await choosePort();
+  if (PORT == null) {
+    fail('Ports 3001-3020 are all in use by other programs. Close one and run LAUNCH again.');
+    process.exit(1);
+  }
+  if (chosen && PORT !== '3001') info(`Port 3001 is in use — AEON will use ${PORT} instead.`);
   p('');
   p('  ────────────────────────────────────────────────────────────', DG);
   p(`   AEON IS STARTING  ->  http://localhost:${PORT}`, PU);
@@ -400,7 +737,7 @@ async function main() {
   // AEON_SUPERVISED: Settings → RESTART exits with 75 and startServer()
   // below brings it back; any other exit ends the launcher.
   const startServer = () => {
-    const child = spawn('node', ['server/server.js'], { cwd: ROOT, stdio: 'inherit', env: { ...process.env, AEON_SUPERVISED: '1' } });
+    const child = spawn('node', ['server/server.js'], { cwd: ROOT, stdio: 'inherit', env: { ...process.env, PORT, AEON_SUPERVISED: '1' } });
     child.on('exit', (code) => {
       if (code === 75) { p('   Restarting AEON...', GR); startServer(); return; }
       // A second double-click while AEON runs: this server refuses at once
@@ -423,24 +760,40 @@ async function main() {
   // Open the browser only AFTER the kernel is actually listening. A fixed
   // timer raced the boot: on a slower machine Chrome hit the port before the
   // server bound it and flashed "can't reach this site" before recovering.
-  // We poll the health endpoint and open exactly once it answers.
-  const http = require('http');
+  // We poll AEON's /api/ping and open exactly once AEON answers. Any HTTP
+  // reply used to count, so another program on the port got its page opened.
+  //
+  // The probe asks `localhost`, as the browser will: whatever answers the
+  // probe is what the browser would show.
   const openBrowser = (to = url) => {
-    const cmd = os.platform() === 'win32' ? `start "" "${to}"`
-              : os.platform() === 'darwin' ? `open "${to}"` : `xdg-open "${to}"`;
-    try { execSync(cmd, { stdio: 'ignore', shell: true }); } catch {}
+    openInBrowser(to);
     ok('Opened in your browser.');
   };
   let opened = false;
-  const waitForServer = (attempt = 0) => {
+  let sawOther = false;
+  const waitForServer = async (attempt = 0) => {
     if (opened) return;
-    if (attempt > 120) { openBrowser(); return; } // ~60s ceiling — open anyway
-    const req = http.get(url, (res) => {
-      res.resume();
-      if (!opened) { opened = true; openBrowser(); }
-    });
-    req.on('error', () => setTimeout(() => waitForServer(attempt + 1), 500));
-    req.setTimeout(1500, () => { req.destroy(); setTimeout(() => waitForServer(attempt + 1), 500); });
+    // ~60s ceiling — open anyway, unless what answers there is not AEON.
+    if (attempt > 120) {
+      if (!sawOther) { opened = true; openBrowser(); }
+      else warn(`AEON never answered at ${url}; another program does. The browser was not opened.`);
+      return;
+    }
+    const who = await probeAeon(url);
+    if (opened) return;
+    if (who === 'aeon') { opened = true; openBrowser(); return; }
+    if (who === 'other' && !sawOther) {
+      sawOther = true;
+      // Two launches at the same moment: the other one took this home first,
+      // and this server only redirects to it. Open that AEON.
+      const first = runningAeon(homeBoot.roots.home);
+      if (first && String(first.port) !== String(PORT)) {
+        opened = true; openBrowser(`http://localhost:${first.port}`); return;
+      }
+      // Said, not just remembered (R-05): a silent minute reads as a hang.
+      warn(`Another program answers at ${url}. The browser will open only once AEON does.`);
+    }
+    setTimeout(() => waitForServer(attempt + 1), 500);
   };
   setTimeout(() => waitForServer(), 600); // small head start before first probe
 

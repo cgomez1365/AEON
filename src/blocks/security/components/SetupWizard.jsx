@@ -1,16 +1,25 @@
 /**
- * SetupWizard — first-run cloud setup, done once, inside AEON.
+ * SetupWizard — the first screen of a fresh install.
  *
- * The operator pastes Supabase/Firebase keys here and never opens either
- * dashboard again: AEON validates the keys, stores them encrypted in the
- * Vault (services/settings.js createCloudCredentialStore — already existed;
- * this wizard is the UI on top of it), and self-creates its own database
- * schema via the existing /api/settings/connectivity/supabase/setup route.
+ * Step 0 is local-first: what AEON keeps on this computer, how to get AI
+ * answers (a key, or a local model), and that there is no password until an
+ * account exists. Cloud sync is one optional button on it. It used to open on
+ * "Set up AEON's cloud — AEON needs Supabase", with local use as the ghost
+ * button, in an app whose README says nothing syncs unless you connect your
+ * own (A043), and it never mentioned the account that actually protects the
+ * install (A020).
+ *
+ * The cloud steps: the operator pastes Supabase/Firebase keys, AEON validates
+ * them, stores them encrypted in the Vault (services/settings.js
+ * createCloudCredentialStore — this wizard is the UI on top of it), and tries
+ * to create its own database schema via
+ * /api/settings/connectivity/supabase/setup.
  *
  * The Supabase service-role key is shown exactly once (Step 3) — AEON never
  * displays it again after this screen.
  */
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import ModalPortal from '../../../components/ModalPortal.jsx';
 import { resetSupabase } from '../../../kernel/supabase';
 
@@ -29,6 +38,8 @@ const S = {
   dots: { display: 'flex', gap: 6, marginBottom: 18 },
   dot: (active, done) => ({ width: 8, height: 8, borderRadius: '50%', background: done ? '#39ff14' : active ? '#00f2ff' : '#33445c' }),
   keyBox: { background: '#050912', border: '1px dashed #f59e0b', borderRadius: 8, padding: 14, margin: '14px 0', fontFamily: 'monospace', fontSize: 12.5, wordBreak: 'break-all', color: '#f5c977' },
+  points: { display: 'grid', gap: 10, fontSize: 13, color: '#c8d4e0', lineHeight: 1.6, margin: '0 0 6px' },
+  warn: { color: '#f5c977' },
 };
 
 const STEPS = ['Welcome', 'Supabase', 'Key', 'Firebase', 'Apply'];
@@ -48,6 +59,7 @@ export default function SetupWizard({ onComplete, onSkip }) {
   const [firebaseSkipped, setFirebaseSkipped] = useState(false);
 
   const [applyLog, setApplyLog] = useState([]);
+  const navigate = useNavigate();
 
   const say = (kind, text) => setMsg({ kind, text });
 
@@ -61,6 +73,13 @@ export default function SetupWizard({ onComplete, onSkip }) {
   const skipEntirely = () => {
     try { localStorage.setItem('aeon_setup_wizard_skipped', '1'); } catch {}
     onSkip && onSkip();
+  };
+
+  // The account form lives on the Security page (/api/auth/setup). Leaving
+  // the wizard records first-run as done, the same as "Start using AEON".
+  const setPasswordFirst = () => {
+    navigate('/security');
+    skipEntirely();
   };
 
   const testSupabase = async () => {
@@ -142,7 +161,7 @@ export default function SetupWizard({ onComplete, onSkip }) {
       // than skipping it. Completion is now recorded server-side by the gate's
       // onComplete; the legacy flag is left alone rather than deleted.
       try { await fetch('/api/settings/first-run/complete', { method: 'POST' }); } catch {}
-      say('ok', 'Setup complete. AEON now owns your cloud connection — you will not need to open Supabase or Firebase again.');
+      say('ok', 'Setup complete. Your cloud connection is saved, encrypted, in AEON.');
       setStep(5);
     } catch (e) {
       say('err', e.message);
@@ -159,23 +178,36 @@ export default function SetupWizard({ onComplete, onSkip }) {
 
           {step === 0 && (
             <>
-              <h1 style={S.h1}>Set up AEON's cloud</h1>
+              <h1 style={S.h1}>Welcome to AEON</h1>
               <p style={S.sub}>
-                AEON needs Supabase (and optionally Firebase) credentials to enable sync and cloud features.
-                You do this once, right here. After this screen, you will never need to open those dashboards
-                again — AEON owns the connection from now on.
+                AEON runs on this computer. Your Vault, chats and settings are stored here, and nothing
+                syncs to a cloud database unless you connect one of your own.
               </p>
+              <div style={S.points}>
+                <div>
+                  <strong>AI answers.</strong> Add a key in Settings → Keys (Gemini and Groq offer free ones),
+                  or install a local model in the Cookbook block. A cloud AI provider receives what you send it;
+                  a local model runs on this computer.
+                </div>
+                <div style={S.warn}>
+                  <strong>No password yet.</strong> Until you create an account on the Security page, anyone
+                  using this computer can open AEON.
+                </div>
+              </div>
               <div style={S.btnRow}>
-                <button style={S.btnGhost} onClick={skipEntirely}>Skip — use AEON locally</button>
-                <button style={S.btn} onClick={() => setStep(1)}>Begin setup</button>
+                <button style={S.btnGhost} onClick={() => setStep(1)}>Connect a cloud database (optional)</button>
+                <div style={{ display: 'flex', gap: 10 }}>
+                  <button style={S.btnGhost} onClick={setPasswordFirst}>Set a password first</button>
+                  <button style={S.btn} onClick={skipEntirely}>Start using AEON</button>
+                </div>
               </div>
             </>
           )}
 
           {step === 1 && (
             <>
-              <h1 style={S.h1}>Supabase</h1>
-              <p style={S.sub}>Go to supabase.com → your project → Settings → API. Copy the Project URL and the anon (public) key. The service role key is optional but unlocks AEON's automatic database setup.</p>
+              <h1 style={S.h1}>Supabase (optional)</h1>
+              <p style={S.sub}>Cloud sync is optional; AEON works without it. To connect your own database, go to supabase.com → your project → Settings → API. Copy the Project URL and the anon (public) key. The service role key is optional but unlocks AEON's automatic database setup.</p>
               <label style={S.label}>Project URL</label>
               <input style={S.input} placeholder="https://xxxx.supabase.co" value={supabase.url}
                 onChange={e => { setSupabase(s => ({ ...s, url: e.target.value })); setSupabaseTested(false); }} />
@@ -201,7 +233,7 @@ export default function SetupWizard({ onComplete, onSkip }) {
           {step === 2 && (
             <>
               <h1 style={S.h1}>Save this key — it will not be shown again</h1>
-              <p style={S.sub}>AEON stores this key encrypted in your local Vault. It never leaves this machine and is never displayed again after you leave this screen. Save a copy in your password manager now.</p>
+              <p style={S.sub}>AEON stores this key encrypted on this computer and does not display it again after you leave this screen. Save a copy in your password manager now.</p>
               <div style={S.keyBox}>{supabase.serviceRoleKey}</div>
               <label style={{ ...S.label, display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
                 <input type="checkbox" checked={keyAcknowledged} onChange={e => setKeyAcknowledged(e.target.checked)} />
@@ -270,7 +302,7 @@ export default function SetupWizard({ onComplete, onSkip }) {
           {step === 5 && (
             <>
               <h1 style={S.h1}>You're set.</h1>
-              <p style={S.sub}>AEON owns the cloud connection from here. You will not need Supabase or Firebase's dashboards again — everything runs from inside AEON.</p>
+              <p style={S.sub}>Your cloud connection is saved in AEON. If a line below says the database needs a manual step, that step is done once in your Supabase project.</p>
               {applyLog.length > 0 && (
                 <div style={{ fontSize: 12, color: '#8aa0b8', lineHeight: 1.8, marginBottom: 16 }}>{applyLog.map((l, i) => <div key={i}>{l}</div>)}</div>
               )}

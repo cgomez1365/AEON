@@ -6,7 +6,7 @@
     },
     "grading": {
       "provider": "local",
-      "model": "qwen3-1.7b-q4"
+      "model": "qwen3-1.7b-q8"
     },
     "research": {
       "provider": "groq",
@@ -14,11 +14,11 @@
     },
     "creative": {
       "provider": "local",
-      "model": "qwen3-1.7b-q4"
+      "model": "qwen3-1.7b-q8"
     },
     "agent_worker": {
       "provider": "local",
-      "model": "qwen3-1.7b-q4"
+      "model": "qwen3-1.7b-q8"
     },
     "agent_heavy": {
       "provider": "local",

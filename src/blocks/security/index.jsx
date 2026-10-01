@@ -215,7 +215,12 @@ export default function Security() {
               ? `Password required ${p.lockEveryLaunch ? 'every time AEON opens' : 'after sign-out'} · auto-locks after ${p.idleMinutes} min away${policy && policy.syncConfigured ? ' · data syncs to your cloud on lock' : ''}.`
               : status.configured
                 ? 'Your account exists but the guard is off. Anyone at this computer can open AEON.'
-                : 'Create your local account below. From then on, AEON asks for your password — even if the laptop is stolen.'}
+                // What the password does, and what it does not (A044). It
+                // gates AEON's screens and API. Vault documents are plain
+                // files in your AEON home, and the key that decrypts stored
+                // API keys sits beside them, so it cannot stop someone who
+                // has the disk itself — only disk encryption does that.
+                : 'Anyone at this computer can open AEON. Create your local account below to put AEON behind a password. The password protects AEON\'s screens; it does not encrypt the files on this computer. To protect those if the computer is lost or stolen, turn on disk encryption (FileVault on a Mac, BitLocker on Windows).'}
           </div>
         </div>
         {status.configured && (
@@ -253,7 +258,7 @@ export default function Security() {
       {!status.configured && (
         <div style={S.card}>
           <h2 style={S.h2}>Create your operator account</h2>
-          <p style={S.sub}>This air-gapped account stays in the local AEON Vault. Your password and recovery answers are saved only as salted hashes.</p>
+          <p style={S.sub}>This account stays on this computer, in your AEON Vault folder. Your password and recovery answers are saved only as salted hashes.</p>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 10 }}>
             <label style={S.label}>Username<input aria-label="Username" autoComplete="username" style={S.input} value={form.username} onChange={e => setForm({ ...form, username: e.target.value })} /></label>
             <label style={S.label}>Display name<input aria-label="Display name" autoComplete="name" style={S.input} value={form.displayName} onChange={e => setForm({ ...form, displayName: e.target.value })} /></label>
@@ -339,7 +344,7 @@ export default function Security() {
           <div style={S.row}>
             <div>
               <div style={S.label}>Ask for my password every time AEON opens</div>
-              <div style={S.hint}>Stolen-laptop defense. Closing AEON (or restarting the computer) always locks it.</div>
+              <div style={S.hint}>Closing AEON (or restarting the computer) locks it; you sign in again when it starts.</div>
             </div>
             <Toggle id="lockEveryLaunch" checked={!!p.lockEveryLaunch} onChange={v => setPolicyField({ lockEveryLaunch: v })} />
           </div>
@@ -369,7 +374,7 @@ export default function Security() {
               <div style={S.hint}>
                 {policy.syncConfigured
                   ? 'Encrypted with your vault key, pushed to YOUR Supabase (free tier). Nothing goes to us.'
-                  : 'Needs a free Supabase connection — add it in Settings → Connections. Locking works either way.'}
+                  : 'Needs a free Supabase connection — add it in Settings → Services. Locking works either way.'}
               </div>
             </div>
             <Toggle id="flushOnLock" checked={!!p.flushOnLock} onChange={v => setPolicyField({ flushOnLock: v })} />

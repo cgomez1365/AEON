@@ -807,17 +807,30 @@ module.exports = function ingestFactory(deps) {
       manifest[vaultRelative(dest)] = { hash: fileHash(stat), indexedAt: Date.now() };
       writeManifest(manifest);
 
+      // Why there is no summary. It always said "no model is assigned to the
+      // chat role", also when one was assigned and could not answer (a model
+      // with no key, measured 2026-09-30, A047).
       let summary = null;
+      let noSummary = 'no model is assigned to the chat role';
       if (typeof deps?.kernelLLM === 'function') {
         try {
           const body = text.length > 14000 ? `${text.slice(0, 14000)}\n\n[… ${text.length - 14000} more characters not shown]` : text;
           summary = String(await deps.kernelLLM(`Summarize this document for its owner in plain English — what it is, what it says, anything to act on. Quote exact figures, names and dates. 4 to 8 sentences.\n\nFILE: ${displayName}\n\n${body}`, { role: 'chat' }) || '').trim() || null;
-        } catch { summary = null; }
+          if (!summary) noSummary = 'the chat model returned nothing';
+        } catch (e) {
+          summary = null;
+          noSummary = `the chat model did not answer (${String(e?.message || e).slice(0, 200)})`;
+        }
       }
+      // "indexed" alone read as "searchable". Without a vector it is not.
+      const entry = index.documents[relPosix];
+      const embedded = Array.isArray(entry?.embedding) && entry.embedding.length > 0;
       const where = relPosix;
       res.json({
-        ok: true, file: where, chars: text.length, indexed: true, summary,
-        text: `Added ${displayName} to the Second Brain as ${where} (${text.length.toLocaleString()} characters, indexed).${summary ? `\n\n${summary}` : '\n\nNo summary — no model is assigned to the chat role.'}`,
+        ok: true, file: where, chars: text.length, indexed: true, embedded, summary,
+        text: `Added ${displayName} to the Second Brain as ${where} (${text.length.toLocaleString()} characters, indexed).`
+          + (embedded ? '' : ' It has no embedding yet, so /ask and /recall cannot find it by meaning. If no embedding model is installed, install nomic-embed-text in Cookbook (about 150 MB, runs on CPU), then run /index-brain.')
+          + (summary ? `\n\n${summary}` : `\n\nNo summary — ${noSummary}.`),
       });
     } catch (err) {
       console.error('[UPLOAD] error:', err.message);
@@ -949,7 +962,7 @@ module.exports = function ingestFactory(deps) {
   const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
   /** The scan's result as one sentence an operator can act on. Counts only what the run reported. */
-  function describeScan(r, tally, totalDocs, joined) {
+  function describeScan(r, tally, totalDocs, joined, unembedded = 0) {
     if (r.reason) return `The Vault was not indexed — ${r.reason}.`;
     // A caller that joined a run in flight saw none of its per-file events,
     // so it cannot split new from backfilled — it says so rather than guess.
@@ -963,6 +976,12 @@ module.exports = function ingestFactory(deps) {
     const needed = joined ? r.ingested : tally.fresh + tally.vectors;
     if (needed > 0 && !r.embedded) {
       lines.push(`None of them were embedded — no embedding model answered, so /recall and /ask cannot find them by meaning yet. Install one in Cookbook or assign the Embedding role in Settings, then run /index-brain again.`);
+    } else if (unembedded > 0 && !r.embedded) {
+      // Documents indexed earlier without a vector count as "unchanged", and
+      // their backfill fails quietly when no model answers. The summary said
+      // "0 embedded, 1 unchanged" and nothing else, so /ask's advice to run
+      // /index-brain went round in a circle (A047).
+      lines.push(`${plural(unembedded, 'document')} in the index ${unembedded === 1 ? 'has' : 'have'} no embedding yet and none could be made — no embedding model answered, so /recall and /ask cannot find ${unembedded === 1 ? 'it' : 'them'} by meaning. Install nomic-embed-text in Cookbook (about 150 MB, runs on CPU) or assign the Embedding role in Settings, then run /index-brain again.`);
     }
     const errs = r.errors || [];
     if (errs.length) {
@@ -991,8 +1010,10 @@ module.exports = function ingestFactory(deps) {
           if (ev.action !== 'chunk-backfill') tally.vectors++;
         } else if (!ev.action) tally.fresh++;
       });
-      const totalDocs = Object.keys(readIndex().documents || {}).length;
-      body = { ok: true, ...r, fresh: tally.fresh, backfilled: tally.backfilled, totalDocs, text: describeScan(r, tally, totalDocs, joined) };
+      const indexed = Object.values(readIndex().documents || {});
+      const totalDocs = indexed.length;
+      const unembedded = indexed.filter((d) => !(Array.isArray(d.embedding) && d.embedding.length)).length;
+      body = { ok: true, ...r, fresh: tally.fresh, backfilled: tally.backfilled, totalDocs, unembedded, text: describeScan(r, tally, totalDocs, joined, unembedded) };
     } catch (e) {
       body = { ok: false, error: e.message, text: `The index run failed: ${e.message}` };
     } finally {
