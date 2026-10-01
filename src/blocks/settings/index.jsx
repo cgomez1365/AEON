@@ -3020,24 +3020,32 @@ function BlockSettingsPanel({ blockSettings, onChange }) {
 // Bar: a 75-year-old CEO gets a key, connects Supabase, and goes.
 // ═══════════════════════════════════════════════════════════════════════
 
-// The "what do I do?" answer. Two real steps, live status, no jargon.
+// The "what do I do?" answer. One real step (a key, or a local model), live
+// status, no jargon. Supabase is optional, so it never holds back "running":
+// a first-run user who skipped it was told AEON was not set up.
 function GetStartedStrip() {
-  const [st, setSt] = useState({ key: false, supabase: false, blocks: 0 });
+  const [st, setSt] = useState({ key: false, local: false, supabase: false, blocks: 0 });
   useEffect(() => {
     (async () => {
       try {
-        const [s, conn, blks] = await Promise.all([
+        const [s, conn, blks, health] = await Promise.all([
           fetch('/api/settings').then(r => r.json()).catch(() => ({})),
           fetch('/api/settings/connectivity').then(r => r.json()).catch(() => ({})),
           fetch('/api/settings/blocks').then(r => r.json()).catch(() => []),
+          fetch('/core/provider-health').then(r => r.json()).catch(() => ({})),
         ]);
         const envKeys = s.envKeys || {};
-        const hasKey = Object.entries(envKeys).some(([k, v]) => /KEY|TOKEN/.test(k) && (v === 'configured' || v === 'vault'));
-        setSt({ key: hasKey, supabase: !!conn?.supabase?.attached, blocks: Array.isArray(blks) ? blks.length : 0 });
+        const providers = health?.providers || {};
+        // A key in .env or the vault, or a connection added in Settings → Keys.
+        const hasKey = Object.entries(envKeys).some(([k, v]) => /KEY|TOKEN/.test(k) && (v === 'configured' || v === 'vault'))
+          || Object.entries(providers).some(([p, v]) => p !== 'local' && v?.configured);
+        // `configured` for local is the runtime plus a ready chat model.
+        const localReady = !!providers.local?.configured;
+        setSt({ key: hasKey, local: localReady, supabase: !!conn?.supabase?.attached, blocks: Array.isArray(blks) ? blks.length : 0 });
       } catch {}
     })();
   }, []);
-  const allDone = st.key && st.supabase;
+  const allDone = st.key || st.local;
   const Step = ({ n, done, title, desc }) => (
     <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', flex: 1, minWidth: 190 }}>
       <div style={{ width: 26, height: 26, borderRadius: '50%', flexShrink: 0, display: 'grid', placeItems: 'center', fontSize: 13, fontWeight: 700,
@@ -3053,7 +3061,7 @@ function GetStartedStrip() {
         {allDone ? '✓ AEON IS LIVE' : 'GET STARTED'}
       </div>
       <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
-        <Step n="1" done={st.key} title="Add a key" desc="One AI provider — or run local models, no key needed." />
+        <Step n="1" done={st.key || st.local} title="Add a key or a local model" desc="One AI provider — or run local models, no key needed." />
         <Step n="2" done={st.supabase} title="Connect Supabase (optional)" desc="Cloud sync to a database you own. AEON works without it." />
         <Step n="3" done={allDone} title="You're running" desc={`${st.blocks} blocks ready. Pick your models below.`} />
       </div>

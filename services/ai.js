@@ -864,6 +864,20 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     return text;
   };
 
+  // Gemini refuses a bad key with HTTP 400 and API_KEY_INVALID in the body,
+  // where the other providers answer 401. Carried as a 400, the credential
+  // pool read it as the provider's fault: no move to the next key, no rest,
+  // and a two-key connection failed every other turn. The error carries 401
+  // so the pool, its cooldown and the wording all see a rejected key; the
+  // message keeps the status Google actually sent.
+  const _geminiError = (response, body) => {
+    const err = new Error(`Gemini error ${response.status}: ${_redactKeys(body.slice(0, 200))}`);
+    const keyRejected = response.status === 400 && /API_KEY_INVALID|API key not valid/i.test(body);
+    err.status = keyRejected ? 401 : response.status;
+    if (keyRejected) { err.keyRejected = true; err.httpStatus = 400; }
+    return err;
+  };
+
   const genericGeminiRequest = async (prompt, model, baseUrl, apiKey, opts = {}) => {
     const _t0 = Date.now();
     const base = (baseUrl || 'https://generativelanguage.googleapis.com/v1beta').replace(/\/$/, '');
@@ -883,8 +897,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       _trackLLM('gemini', model, 0, Date.now() - _t0, false);
       // Structured, so the credential pool classifies this without scraping
       // the message — a 429 here is the KEY's minute, not the provider's.
-      const err = new Error(`Gemini error ${response.status}: ${_redactKeys((await response.text().catch(() => '')).slice(0, 200))}`);
-      err.status = response.status;
+      const err = _geminiError(response, await response.text().catch(() => ''));
       const ra = _parseRetryAfter(response.headers.get('retry-after'));
       if (ra) err.retryAfterMs = ra;
       throw err;
@@ -963,7 +976,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
           ).catch(() => null);
           if (next) {
             notify(
-              `🔁 ${r.provider}: key ${ref} ${e.keyUnsendable ? 'cannot be sent (not a valid header value)' : `answered ${status}`} — switching to key ${next.credential_index + 1} of ${next.credential_count}`,
+              `🔁 ${r.provider}: key ${ref} ${e.keyUnsendable ? 'cannot be sent (not a valid header value)' : e.keyRejected ? 'was rejected' : `answered ${status}`} — switching to key ${next.credential_index + 1} of ${next.credential_count}`,
               { provider: r.provider },
             );
             apiKey = next.apiKey;
@@ -1179,9 +1192,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     }
     if (!response.ok) {
       _trackLLM('gemini', model, 0, Date.now() - _t0, false);
-      const err = new Error(`Gemini error ${response.status}: ${_redactKeys((await response.text().catch(() => '')).slice(0, 200))}`);
-      err.status = response.status;
-      throw err;
+      throw _geminiError(response, await response.text().catch(() => ''));
     }
     let text = '';
     let usageTotal = 0;

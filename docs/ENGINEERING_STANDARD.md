@@ -185,12 +185,16 @@ documentation reported the suite as "1,100 / 1,106" — it had taken 1,100 as th
 total. The correction was published rather than quietly patched, because a
 number that was never right must be re-taken, not carried forward.
 
-**Current reading — 2026-09-30, macOS, the release-prep commit ("Release 3.1.0:
-cross-file follow-ups and release prep", parent `0c80a7c`):** 2,927 passing and 1 skipped
-of 2,928 tests across 292 files, 0 failures (the skip is the real-PowerShell test that
-runs only on Windows). Release gate passes: 0 undeclared block filesystem access, 22
-declared and audited; cloud conditionals 90 across 21 files. Production build clean. This
-is one Mac, before CI: CI's run on the tagged commit is the reading for the tagged tree.
+**Current reading — 2026-09-30, macOS, the review-fix commit ("Release 3.1.0: review
+fixes", parent `7c73e1a`):** 2,937 passing and 1 skipped of 2,938 tests across 294 files,
+0 failures (the skip is the real-PowerShell test that runs only on Windows). Release gate
+passes: 0 undeclared block filesystem access, 22 declared and audited; cloud conditionals
+90 across 21 files. Production build clean. This is one Mac, before CI: CI's run on the
+tagged commit is the reading for the tagged tree.
+
+**Previous reading — 2026-09-30, macOS, `7c73e1a` ("Release 3.1.0: cross-file
+follow-ups and release prep"):** 2,927 passing and 1 skipped of 2,928 tests across 292
+files, 0 failures. Release gate passed with the same counts.
 
 **Previous reading — 2026-09-30, macOS, `fe93dbf` with the 3.1.0 docs pass on top:**
 2,694 passing and 1 skipped of 2,695 tests across 265 files, 0 failures. Release gate

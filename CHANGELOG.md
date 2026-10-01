@@ -6,8 +6,8 @@ tagged; until then its heading says so.
 
 <!-- Range of the 3.1.0 entry: v3.0.0 (e25f5ee, 2026-09-14) to fe93dbf (2026-09-30),
      169 commits; then dc8e3a1, the five launch commits 6defca4, 2b4b364, 801fda5,
-     601155b and 0c80a7c, and the release-prep commit on top of 0c80a7c ("release prep"
-     below; 176 commits in all). Anything merged after that and before the v3.1.0 tag
+     601155b and 0c80a7c, and the two release-prep commits on top of 0c80a7c (7c73e1a and
+     its review fixes, "release prep" below; 177 commits in all). Anything merged after that and before the v3.1.0 tag
      is added here before tagging, and the heading's "not tagged yet" is replaced by
      the date. -->
 
@@ -78,7 +78,8 @@ from 3.1.0 to 3.0.0 is not supported.
   as not read, with that remedy (2b4b364).
 - The Narrator's default voice runs on this computer; online voices are marked (2b4b364).
 - New [PRIVACY.md](PRIVACY.md): what AEON keeps and what it sends, to whom (601155b,
-  updated in release prep).
+  updated in release prep, which added Orion Search reading its top web results from
+  their own sites, packs installed from a link, and the launchers' Node.js install).
 
 ### Your data
 
@@ -132,8 +133,9 @@ from 3.1.0 to 3.0.0 is not supported.
 - With no embedding model, `/ask` names the remedy (install nomic-embed-text in Cookbook)
   instead of sending you to `/index-brain` (0c80a7c).
 - A key saved in Settings → Keys joins the running key pool at once, as the reply already
-  said; a Gemini key Google rejects reads "key rejected", and the Test button shows
-  Google's reason (release prep).
+  said; a Gemini key Google rejects reads "key rejected" and hands the turn to the
+  connection's next key (Google answers a bad key with 400, not 401, so it had not failed
+  over), and the Test button shows Google's reason (release prep).
 - Cookbook shows each model's licence before Install; Llama and Gemma rows link Meta's or
   Google's licence and use policy (601155b).
 
@@ -164,6 +166,8 @@ from 3.1.0 to 3.0.0 is not supported.
   database is optional; Settings no longer calls Supabase "the one setup that matters",
   and its pointers name tabs that exist (0c80a7c, release prep). The Security page no
   longer claims to protect a stolen laptop (0c80a7c).
+- Settings' Get Started strip counts AEON as running once a key or a ready local model
+  exists; Supabase, which is optional, no longer holds it back (release prep).
 - On macOS older than 13.5, `launch.command` installs Node 22 LTS, which that macOS can
   run, instead of the current LTS, which it cannot (release prep).
 
