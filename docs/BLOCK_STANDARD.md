@@ -85,9 +85,22 @@ rather than fixed — two schemas is the defect, not their disagreement.
 - `local_required` — Needs OS access, hardware, or local services (FFmpeg, Python, the local runtime Cookbook downloads).
 - `hybrid` — Core features work on cloud, advanced features need local.
 
-### What Blocks Cannot Do
-- Access the filesystem outside of `/api/fs/*` endpoints
-- Execute shell commands outside of `/api/exec` (allowlisted)
-- Import or require other block modules directly
-- Hardcode API keys, Supabase URLs, or file paths
+### What Blocks Must Not Do — conventions, partly checked by `aeon lint`, not enforced
+
+Blocks share one Node.js process, so nothing below is a sandbox. `aeon lint`
+pattern-checks some of these rules and `aeon promote` refuses a HIGH finding;
+a block already in `src/blocks/` is not re-linted at runtime. The rest are
+review items.
+
+- Reach the filesystem outside the block's own namespace without declaring it in
+  the manifest. `npm run scan:block-fs` reports undeclared access in shipped
+  blocks; browsing the operator's files goes through host_os's `/api/fs/*` routes.
+- Run shell commands. There is no shell route (`/api/exec` was deleted); named OS
+  operations are `POST /api/os/action`. `aeon lint` flags `child_process`,
+  `execSync` and `spawnSync` as HIGH unless the manifest declares
+  `contract.permissions.shell: true`.
+- Import or require other block modules directly (any `../../` path other than an
+  import of a kernel module is a HIGH `path-traversal` finding).
+- Hardcode API keys, Supabase URLs, or file paths (`hardcoded-secret` catches
+  key-shaped strings only).
 - Assume any other block is installed

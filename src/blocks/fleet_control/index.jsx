@@ -1,7 +1,7 @@
 /**
  * Fleet Control — live ops for everything that runs: LLM engines, provider
- * health, key pools, the video autopilot, this machine's hardware fit, and VP
- * mission history (read from the Vault).
+ * health, key pools, the video autopilot, this machine's hardware fit, and
+ * every agent with what it was last asked (Memory Core's GET /api/agents).
  * Read-only by design: it reports what exists and never calls what doesn't.
  */
 import React, { useState, useEffect, useCallback } from 'react';

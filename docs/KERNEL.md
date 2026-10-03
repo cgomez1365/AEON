@@ -11,7 +11,8 @@ logic of its own. `server.cjs` at the repo root is a one-line shim that re-expor
 ## Boot sequence
 
 1. **Configuration.** The `.env` path is resolved once by `src/kernel/envFile.cjs`
-   (`AEON_ENV_FILE` or the install root) and loaded with dotenv.
+   (`AEON_ENV_FILE`, else `.env` in the AEON home — `~/AEON` or `AEON_HOME`; a portable
+   install keeps it in the install, see `src/kernel/aeonHome.cjs`) and loaded with dotenv.
 2. **Vault.** With no master key, a first-run guard mints one — unless keyslots already
    exist, in which case it refuses and leaves the vault sealed for recovery rather than
    writing a key that unlocks nothing (`src/kernel/vaultBootGuard.cjs`). Keyslots (file +
@@ -58,9 +59,12 @@ a model:
 HTTP surface (`src/kernel/routers/ai.cjs`):
 
 ```
-POST /api/ai            { prompt, role? }            a bare prompt
-POST /api/ai/converse   { line, history? }           a conversational turn with memory + vault recall
-POST /api/ai/vision     { image, prompt }            vision role
+POST /api/ai            { prompt, role?, provider?, model?, background?, advisorModel?, agent? }
+                                                     a bare prompt
+POST /api/ai/converse   { message, history?, contextTokens?, agent? }
+                                                     a conversational turn with memory + vault recall
+POST /api/ai/vision     { image, prompt, provider?, model? }
+                                                     vision role
 ```
 
 Every call crosses one seam, `_trackLLM`, and is appended once to the LLM ledger
