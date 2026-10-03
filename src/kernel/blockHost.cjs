@@ -53,12 +53,29 @@ function createBlockHost({ blocksDir, baseDeps, createScopedDeps, registry, read
   // no remount. A one-shot setTimeout that comes due while the block is
   // stopped is dropped, not deferred. Work already in flight is not cancelled:
   // block code calls lifecycle.isRunning() again before an irreversible step.
+  //
+  // A fault in a block's timer or listener is the block's, not the process's.
+  // Uncaught, a ReferenceError (one typo in a job) is "process-fatal" to
+  // server.js's guard: AEON exits 1, and the launcher restarts only on 75 —
+  // so one block's scheduled job could take every block down until someone
+  // relaunched by hand. It is logged with the block's id instead; a rejected
+  // promise from an async job is caught the same way.
   function makeLifecycle(blockId) {
     const lc = { cleanups: [], timers: new Set(), listeners: [] };
     lifecycles.set(blockId, lc);
     const isRunning = () => !runState || runState.isRunning(blockId);
+    const report = (e) => {
+      try { log.error(`[BLOCK HOST] ${blockId}: a lifecycle callback failed — ${(e && e.stack) || e}`); } catch { /* never throw from the reporter */ }
+    };
     const whileRunning = (fn) => (typeof fn === 'function'
-      ? (...args) => (isRunning() ? fn(...args) : undefined)
+      ? (...args) => {
+        if (!isRunning()) return undefined;
+        try {
+          const out = fn(...args);
+          if (out && typeof out.then === 'function') out.then(undefined, report);
+          return out;
+        } catch (e) { report(e); return undefined; }
+      }
       : fn);
     return {
       onCleanup: (fn) => { if (typeof fn === 'function') lc.cleanups.push(fn); },

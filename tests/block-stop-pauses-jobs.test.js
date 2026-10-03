@@ -32,7 +32,7 @@ const hosts = [];
 
 // One block per host, each with its own id, so the global tick counters and
 // the run-state entries cannot leak between tests.
-function mountTicker(id, { stoppedAtMount = false } = {}) {
+function mountTicker(id, { stoppedAtMount = false, job = null, log = { log() {}, warn() {}, error() {} } } = {}) {
   const root = path.join(TMP, `blocks_${id}`);
   const dir = path.join(root, id);
   fs.mkdirSync(path.join(dir, 'api'), { recursive: true });
@@ -48,7 +48,7 @@ const express = require(${JSON.stringify(EXPRESS_PATH)});
 module.exports = (deps) => {
   const t = (globalThis.__aeonTicks ||= {});
   t[${JSON.stringify(id)}] = { interval: 0, event: 0, lifecycle: deps.lifecycle };
-  deps.lifecycle.setInterval(() => { t[${JSON.stringify(id)}].interval++; }, 10);
+  deps.lifecycle.setInterval(${job || `() => { t[${JSON.stringify(id)}].interval++; }`}, 10);
   deps.lifecycle.listen(process, 'aeon-test-${id}', () => { t[${JSON.stringify(id)}].event++; });
   const router = express.Router();
   router.get('/${id}/status', (_q, s) => s.json({ ok: true }));
@@ -61,7 +61,7 @@ module.exports = (deps) => {
     createScopedDeps: (b) => ({ ...b }),
     registry: [], readiness: {},
     getSyncCtx: () => ({ apiBase: '/api', runtime: 'local', models: {}, writeRuntime: false }),
-    log: { log() {}, warn() {}, error() {} },
+    log,
     enforceRouteAuth: false,
   });
   host.rescan('test');
@@ -73,6 +73,22 @@ afterAll(() => {
   for (const h of hosts) h.dispose();
   delete globalThis.__aeonTicks;
   fs.rmSync(TMP, { recursive: true, force: true });
+});
+
+describe('a block\'s failing job stays the block\'s', () => {
+  // One typo in a job is a ReferenceError, which server.js's uncaught-
+  // exception guard treats as process-fatal: AEON exited, and the launcher
+  // restarts only on exit code 75. Here, vitest itself would fail the run on
+  // the uncaught error or the unhandled rejection.
+  it('a throwing or rejecting job is logged with the block id, not thrown', async () => {
+    const errors = [];
+    const log = { log() {}, warn() {}, error: (m) => errors.push(m) };
+    mountTicker('job_throws', { log, job: '() => { notDefinedAnywhere += 1; }' });
+    mountTicker('job_rejects', { log, job: 'async () => { throw new Error("listing site down"); }' });
+    await sleep(60);
+    expect(errors.some((m) => /job_throws: a lifecycle callback failed — ReferenceError/.test(m))).toBe(true);
+    expect(errors.some((m) => /job_rejects: a lifecycle callback failed — Error: listing site down/.test(m))).toBe(true);
+  });
 });
 
 describe('a stopped block\'s lifecycle timers and listeners do not fire', () => {
