@@ -1,9 +1,17 @@
 # 🧬 Master — the canonical block
 
-Every new block starts as a copy of this folder. This README is written so a
-new block builder — human or automated — can read **only this file** and
-correctly build a working block. If something here disagrees with the code,
-the code wins and this file is out of date; fix the file.
+This folder is the reference block, and this README is the one guide to
+building a block on AEON: a new block builder — human or automated — can read
+**only this file** and correctly build a working block. (`npm run aeon new <id>`
+starts a new block from `src/blocks/_template/`, not from this folder.) If
+something here disagrees with the code, the code wins and this file is out of
+date; fix the file.
+
+What a block can use from AEON — storage, settings, scheduled jobs, models,
+the audit log — and what AEON does **not** give a block yet (approvals, spend
+caps, notifications, a headless browser) are in
+[What a block can use from AEON](#what-a-block-can-use-from-aeon) below. Read
+that before you design a block that runs unattended or spends money.
 
 ## Start here — the Block Builder agent
 
@@ -148,7 +156,7 @@ exist.
   | Key | Values | What happens if false/none |
   |---|---|---|
   | `filesystem` | `none \| read \| write` | `"none"` strips `deps.WORKSPACE` and `deps.ALLOWED_ROOTS` — your API can't touch the filesystem at all. |
-  | `network` | `none \| internal \| external` | Informational today; `"external"` documents that the block calls out to third-party APIs. |
+  | `network` | `none \| internal \| external` | Informational today; `"external"` documents that the block calls out to third-party APIs. Nothing enforces it: a block's global `fetch` reaches any host whatever this says. |
   | `secrets` | boolean | `false` strips `deps.GEMINI_KEY_POOL` — no vault key access. |
   | `shell` | boolean | `false` strips `deps.requireShellAuth`, `deps.SAFE_EXEC_PREFIXES`, `deps.INSTANT_PATTERNS` — no shell execution path. |
   | `ai` | boolean | `false` strips `deps.kernelLLM`, `deps.geminiRequest`, `deps.groqRequest` — your API literally cannot call an LLM. |
@@ -193,9 +201,12 @@ exist.
   }
   ```
 
-  - `role` must be one of the role keys configured in Settings → Models
-    (`chat`, `grading`, `research`, `creative`, `agent_*`, …) — whichever
-    role your block's `kernelLLM(..., { role })` calls actually use.
+  - `role` is whichever role your block's `kernelLLM(..., { role })` calls
+    actually use: a shared one from Settings → Models (`chat`, `grading`,
+    `research`, `creative`, `agent_*`, …), or the block's own (`"card_watch"`)
+    so the operator can give this block its own model. Settings → Models lists
+    every role an installed block declares; until a model is assigned to it,
+    the kernel answers that role with the Chat model.
   - `blurb` is a one-line, user-facing description of *what the AI does for
     this block* (not a restatement of `description`) — shown directly under
     the block's name in Settings.
@@ -415,15 +426,86 @@ if (fallback) console.warn(`Downgraded from configured provider to ${provider}/$
 
 | Key | Type | What it does |
 |-----|------|-------------|
-| `role` | string | Routes to the model assigned in Settings (chat/grading/research/creative/agent_*). This is the *same* role vocabulary as `contract.ai.role` above — if you call `kernelLLM` with `role: 'chat'` somewhere in your API, declare `contract.ai.role: "chat"` in the manifest so Settings shows it. |
+| `role` | string | Routes to the model assigned in Settings (chat/grading/research/creative/agent_*, or your block's own role). This is the *same* role vocabulary as `contract.ai.role` above — if you call `kernelLLM` with `role: 'card_watch'` somewhere in your API, declare `contract.ai.role: "card_watch"` in the manifest so Settings shows it. An unassigned role is answered with the Chat model. |
 | `system` | string | System prompt — injected as system message. Overrides the default AEON identity. |
 | `messages` | array | Multi-turn `[{role,content},...]` — replaces the flat prompt string |
 | `returnMeta` | bool | Returns `{text, provider, model, fallback}` instead of plain string |
-| `background` | bool | Skips the /allow-local gate (for autonomous/background tasks) |
 | `max_tokens` | number | Cap output length (default 4096) |
-| `provider` | string | Force a specific provider (bypasses role assignment) |
+| `provider` | string | Start with this provider instead of the role's. Only `'local'` (the Cookbook runtime) is *pinned*: its failure is the answer. Any other name is tried first and then falls back like a role would. |
 | `model` | string | Force a specific model |
 | `advisorModel` | string | Claude-only: attach a stronger advisor model |
+
+(`background` used to skip an "/allow-local" gate. The gate was removed and
+kernelLLM ignores the option.)
+
+### What happens when a call cannot be answered
+
+The role's model is tried first, rotating through every key in that
+connection's pool on a 429/402; then every *other* connection that holds a
+key, in `prefs.provider_priority` order (shuffled when Roulette is on); then
+the Cookbook runtime, if one is installed, as the floor. Measured 2026-10-02
+against a mock provider: key A 429 → key B answered; both keys 429 → the next
+keyed connection answered with `fallback: true`. A connection with **no** key
+(an LM Studio or llama.cpp server you added by address) can be a role's model
+but is never a fallback rung.
+
+When nothing can answer, kernelLLM **throws**. The error's message is a sentence for the operator; its flags say
+what kind of failure it was:
+
+| Flag | Meaning | What an unattended job should do |
+|---|---|---|
+| `err.rateLimited` (+ `err.retryable`) | every candidate is throttled | wait and retry later |
+| `err.providerFailed` | a configured provider ran and failed | log it, retry on the next run |
+| `err.noProviderAvailable` | nothing is configured to answer this role | stop and tell the operator (assign a model) |
+| `err.localOnly` | Local only refused a cloud model | assign a local model to the role |
+| `err.attempts` | one entry per provider tried, with its status | write it to your run log |
+
+### Keeping a block's prompts on this computer
+
+- **Every block:** Settings → Models → **Local only**. Only this computer's
+  runtime and connections on this machine or your LAN answer; a role set to a
+  cloud provider is refused with `err.localOnly` instead of answered.
+- **One call:** `kernelLLM(prompt, { role, provider: 'local' })` uses only the
+  Cookbook runtime and throws if it cannot answer — no cloud fallback.
+- There is no per-block or per-role "local only" yet: naming a local
+  connection with `provider: 'custom'` / `'lmstudio'` still falls back to
+  other providers, cloud ones included, when it fails.
+
+## What a block can use from AEON
+
+Everything below arrives as `deps` in `module.exports = (deps) => router`. A
+block requires nothing from `src/kernel/`, `server/` or `services/` by path
+(the Builder guide's rule 7).
+
+| Need | Use | Notes |
+|---|---|---|
+| Its own files | `deps.blockStorage` — `readJSON(name, fallback)`, `writeJSON(name, value)`, and an fs-shaped `deps.blockStorage.fs` | Needs `permissions.filesystem: "write"` to write. Lives at `<AEON home>/data/<id>/`, survives restarts and `aeon block remove`. Writes are atomic. |
+| Its settings | `deps.blockSettings()` → `{ key: value }` | Declared in `contract.settings` (`toggle`, `text`, `secret`, `select`, `number`); the operator sets them in Settings → Blocks. A `secret` value is never sent to the browser (the API answers `""` plus `secretsSet`), but it is stored in plain text in `aeon-settings.json` (mode 0600), **not in the encrypted vault**. |
+| A job every N minutes | `deps.lifecycle.setInterval(fn, ms)` in the factory | Re-armed every time AEON starts or rescans; cleared on rescan and on remove. **Stop** pauses it (the callback is skipped while stopped); a job already running is not interrupted — call `deps.lifecycle.isRunning()` again before an irreversible step. There is no catch-up for runs missed while AEON was off, no overlap guard (keep a `busy` flag), and no run history: write your own to `blockStorage`. |
+| Cleanup | `deps.lifecycle.onCleanup(fn)`, `deps.lifecycle.listen(emitter, evt, fn)` | Run/removed on teardown. A listener is also skipped while the block is stopped. |
+| A model | `deps.kernelLLM(prompt, { role })` | Needs `permissions.ai: true`. See "Using kernelLLM" above. |
+| Outbound HTTP | Node's global `fetch` | Nothing wraps it: set your own timeout (`AbortSignal.timeout(ms)`), User-Agent, retries, per-site rate limit, and robots.txt check. |
+| An audit line | `deps.writeOSAudit(action, details, status, 0)` | Writes `<AEON home>/db/audit_log.json`, which keeps only the **last 100** entries from all of AEON, records no block id, and is copied to Supabase when a cloud project is linked. Not a ledger: keep your own append-only log in `blockStorage` for anything that spends money. |
+| A dashboard card | manifest `widget` + `GET /api/<id>/widget` | The dashboard polls it. Today this is the only place an unattended block can show the operator something. |
+
+**Not provided yet** — build around these, or wait for the platform:
+
+- **No approval queue or spend cap for actions.** `/api/build/queue` approves
+  *block installs*, not a block's actions; the `dangerous` confirmation in
+  `contract.commands` applies only to terminal dispatch, never to a direct
+  call or a timer. A block that bids, buys or sends must hold its own dry-run
+  switch (default on), its own per-day cap, and its own pending-approval list
+  — or wait for the kernel to provide them.
+- **No notification that reaches the screen.** `global.broadcastTerminalEvent`
+  feeds `/events` (SSE) and `/ws`, and no shipped screen subscribes to
+  either. Use a widget.
+- **No headless browser.** Puppeteer/Playwright are not dependencies, and a
+  manifest cannot declare an npm dependency. A `node_modules/` inside the
+  block folder resolves when it runs, but lint does not scan it and
+  `aeon pack` leaves it out, so the block runs only on the machine it was
+  installed on.
+- **No scheduler beyond `lifecycle`**: nothing persists a schedule, records
+  runs, or shows them. AEON must be running for any job to run.
 
 ## Self-test before you ship
 

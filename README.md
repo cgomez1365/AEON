@@ -171,7 +171,7 @@ src/blocks/my_block/
   api/*.cjs             ← optional Express routes; every non-underscore file here is mounted by the kernel
 ```
 
-Nothing about a block is hardcoded anywhere else. Copy `src/blocks/_template/` to start (routes are optional — see `src/blocks/_template/api/README.md`), and run `npm run aeon -- lint my_block` before you share it.
+Nothing about a block is hardcoded anywhere else. Start one with `npm run aeon -- new my_block` (a copy of `src/blocks/_template/` in `staging/`), then `npm run aeon -- lint my_block` and `npm run aeon -- promote my_block`. The whole path — and what a block can and cannot get from AEON (storage, settings, scheduled jobs, models; no approvals, spend caps or notifications yet) — is one guide: [`src/blocks/master/README.md`](src/blocks/master/README.md).
 
 The manifest is not documentation — it is the source of truth the kernel reads at boot, and gates check it against the code. A route your manifest declares but your code does not serve fails the build: `npm run build` checks the route table and stops on drift, and `npm run prep:routes` regenerates it. → [`docs/BLOCK_STANDARD.md`](docs/BLOCK_STANDARD.md)
 
