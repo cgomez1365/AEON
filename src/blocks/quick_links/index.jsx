@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { ExternalLink, Plus, Trash2, Link2, X, Search, ChevronDown, ChevronUp, Pencil, ArrowUp, ArrowDown, Check } from 'lucide-react';
 import { useAeonContext } from '../../kernel/contexts/AeonContext';
+import { authFetch } from '../../kernel/auth';
 import { safeHref, normalizeUrl, moveLink, editLink, storeProblem } from './linkOps.js';
 
 const DEFAULT_LINKS = [];
@@ -30,7 +31,9 @@ export default function QuickLinks() {
   useEffect(() => {
     if (!linksError) { setStoreStatus(undefined); return; }
     let live = true;
-    fetch('/api/sync/quick_links', { headers: { 'x-aeon-self-reported': '1' } })
+    // Signed in, like the load it explains: an unsigned probe answered 401
+    // whatever the real fault was.
+    authFetch('/api/sync/quick_links', { headers: { 'x-aeon-self-reported': '1' } })
       .then(r => { if (live) setStoreStatus(r.status); })
       .catch(() => { if (live) setStoreStatus(0); });
     return () => { live = false; };

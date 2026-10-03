@@ -30,13 +30,21 @@ const Security = lazy(() =>
  */
 export default function AuthGate({ children }) {
   const [state, setState] = useState({ ready: false, mode: 'open' });
+  const wasLockedRef = React.useRef(false);
 
   const check = useCallback(async () => {
     const d = await securityAvailability();
     if (!d.hasAccount || !d.guardActive || d.authenticated) {
+      // Providers above this gate (AeonContext) load before sign-in and get
+      // 401s. Sign-in is announced so they can load again.
+      if (wasLockedRef.current) {
+        wasLockedRef.current = false;
+        try { window.dispatchEvent(new Event('aeon:authed')); } catch { /* no window */ }
+      }
       setState({ ready: true, mode: 'open' });
       return;
     }
+    wasLockedRef.current = true;
     setState({ ready: true, mode: d.blockPresent ? 'login' : 'block-missing' });
   }, []);
 

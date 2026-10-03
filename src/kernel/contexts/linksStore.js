@@ -30,11 +30,47 @@ async function post(fetcher, items) {
   return { ok: false, error: `Links were not saved (HTTP ${r.status}${detail ? `: ${detail}` : ''})` };
 }
 
-/** Save the whole list. Always refreshes the local cache; reports server failure. */
-export async function saveLinks(items, { fetcher, storage }) {
-  writeLocalLinks(storage, items);
-  try { return await post(fetcher, items); }
-  catch (e) { return { ok: false, error: `Links were not saved to the server (${e.message})` }; }
+/**
+ * The server's list with this browser's changes laid over it: every server
+ * link is kept, a link with the same id (or, lacking one, the same address)
+ * takes this browser's version, and links only this browser has are added.
+ * A delete made while the store was out of reach can come back; a link the
+ * server holds can never be lost to a stale cache.
+ */
+export function mergeLinks(server, local) {
+  const key = (l) => (l && (l.id ?? l.url)) ?? null;
+  const mine = new Map(local.filter(key).map((l) => [key(l), l]));
+  const out = server.map((l) => (mine.has(key(l)) ? mine.get(key(l)) : l));
+  const seen = new Set(server.map(key));
+  for (const l of local) if (!seen.has(key(l))) out.push(l);
+  return out;
+}
+
+/**
+ * Save the whole list. Always refreshes the local cache; reports server failure.
+ *
+ * `lastSource` is where the list being saved came from. Anything but
+ * 'server' means the page was showing this browser's cache because the store
+ * could not be read (a load before sign-in answers 401, found live
+ * 2026-10-02). Posting that list as it stood would REPLACE the server's with
+ * whatever this browser happened to hold, so the server's list is read first
+ * and the two are merged. The merged list is returned for the page to show.
+ */
+export async function saveLinks(items, { fetcher, storage, lastSource = 'server' }) {
+  let list = items;
+  if (lastSource !== 'server') {
+    try {
+      const r = await fetcher(LINKS_URL, { headers: { ...OWN } });
+      if (r.ok) {
+        const body = await r.json();
+        const server = Array.isArray(body && body.data) ? body.data : [];
+        list = mergeLinks(server, items);
+      }
+    } catch { /* still unreachable: the post below reports it */ }
+  }
+  writeLocalLinks(storage, list);
+  try { return { ...(await post(fetcher, list)), items: list }; }
+  catch (e) { return { ok: false, error: `Links were not saved to the server (${e.message})`, items: list }; }
 }
 
 /** Load from the server; migrate legacy local-only links up; fall back to cache with an error. */

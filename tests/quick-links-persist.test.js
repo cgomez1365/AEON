@@ -21,7 +21,7 @@ import path from 'path';
 import express from 'express';
 import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
-import { loadLinks, saveLinks, readLocalLinks } from '../src/kernel/contexts/linksStore.js';
+import { loadLinks, saveLinks, readLocalLinks, mergeLinks } from '../src/kernel/contexts/linksStore.js';
 
 const require = createRequire(import.meta.url);
 const syncFactory = require('../src/blocks/aeon_matrix/api/sync.cjs');
@@ -125,5 +125,56 @@ describe('AeonContext wiring', () => {
     expect(src).toMatch(/from '\.\/linksStore'/);
     expect(src).toMatch(/loadLinks\(/);
     expect(src).toMatch(/saveLinks\(/);
+  });
+});
+
+// Found live 2026-10-02: AEON restarted, the page loaded before sign-in, the
+// links store answered 401, and Quick Links showed "Could not reach the links
+// store … (HTTP 401)" for the rest of the session. AeonContext sits outside
+// AuthGate, so its one load at mount always ran signed out.
+describe('a load before sign-in is not the last word', () => {
+  const strip = (p) => fs.readFileSync(fileURLToPath(new URL(p, import.meta.url)), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  it('AuthGate announces sign-in and AeonContext loads the links again on it', () => {
+    expect(strip('../src/components/AuthGate.jsx')).toMatch(/dispatchEvent\(new Event\('aeon:authed'\)\)/);
+    const ctx = strip('../src/kernel/contexts/AeonContext.jsx');
+    expect(ctx).toMatch(/addEventListener\('aeon:authed'/);
+    expect(ctx).toMatch(/lastSource: linksSourceRef\.current/);
+  });
+  it('the Quick Links status probe is signed in', () => {
+    const page = strip('../src/blocks/quick_links/index.jsx');
+    expect(page).toMatch(/authFetch\('\/api\/sync\/quick_links'/);
+    expect(page).not.toMatch(/[^.\w]fetch\('\/api\/sync\/quick_links'/);
+  });
+});
+
+describe('a save after a failed load never replaces the server list', () => {
+  it('mergeLinks keeps every server link, takes local edits, adds local-only links', () => {
+    const edited = { ...L('b'), name: 'B edited' };
+    const out = mergeLinks([L('a'), L('b'), L('c')], [edited, L('d')]);
+    expect(out.map((l) => l.id)).toEqual(['a', 'b', 'c', 'd']);
+    expect(out[1].name).toBe('B edited');
+  });
+  it('lastSource local-cache: reads the server first and posts the merge', async () => {
+    const posted = [];
+    const fetcher = async (u, o = {}) => {
+      if (o.method === 'POST') { posted.push(JSON.parse(o.body).data); return res(200, { ok: true }); }
+      return res(200, { data: [L('a'), L('b'), L('c')] });
+    };
+    // This browser's cache held one link; the operator added another.
+    const r = await saveLinks([L('b'), L('new')], { fetcher, storage: memStorage(), lastSource: 'local-cache' });
+    expect(r.ok).toBe(true);
+    expect(posted[0].map((l) => l.id)).toEqual(['a', 'b', 'c', 'new']);
+    expect(r.items.map((l) => l.id)).toEqual(['a', 'b', 'c', 'new']);
+  });
+  it('lastSource server: posts the list as given (deletes still work)', async () => {
+    const posted = [];
+    const fetcher = async (u, o = {}) => {
+      if (o.method === 'POST') { posted.push(JSON.parse(o.body).data); return res(200, { ok: true }); }
+      throw new Error('a save from a good load must not read first');
+    };
+    const r = await saveLinks([L('a')], { fetcher, storage: memStorage(), lastSource: 'server' });
+    expect(r.ok).toBe(true);
+    expect(posted[0].map((l) => l.id)).toEqual(['a']);
   });
 });

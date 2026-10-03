@@ -134,20 +134,39 @@ export function AeonProvider({ children }) {
   }, [user]);
 
   // ── Links: server-backed (local file in the data home), Firebase optional ──
-  useEffect(() => {
-    let alive = true;
-    loadLinks({ fetcher: authFetch, storage: localStorage }).then(r => {
-      if (!alive) return;
-      setLinks(r.items);
-      setLinksError(r.error);
-      if (r.error) console.error('[AEON] Links load:', r.error);
-    });
-    return () => { alive = false; };
+  //
+  // This provider sits OUTSIDE AuthGate, so it mounts before sign-in. A
+  // single load at mount answered 401 on every fresh start and the page kept
+  // showing the browser's cache for the whole session (found live
+  // 2026-10-02). The links load again when sign-in completes (AuthGate's
+  // 'aeon:authed'), and on focus while the last load did not reach the server.
+  const linksSourceRef = React.useRef('local-cache');
+  const reloadLinks = useCallback(async () => {
+    const r = await loadLinks({ fetcher: authFetch, storage: localStorage });
+    linksSourceRef.current = r.source;
+    setLinks(r.items);
+    setLinksError(r.error);
+    if (r.error) console.error('[AEON] Links load:', r.error);
+    return r;
   }, []);
+  useEffect(() => {
+    reloadLinks();
+    const onAuthed = () => { reloadLinks(); };
+    const onFocus = () => { if (linksSourceRef.current !== 'server') reloadLinks(); };
+    window.addEventListener('aeon:authed', onAuthed);
+    window.addEventListener('focus', onFocus);
+    return () => {
+      window.removeEventListener('aeon:authed', onAuthed);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [reloadLinks]);
 
   const persistLinks = useCallback(async (items) => {
     syncToFirestore('links', { items });
-    const r = await saveLinks(items, { fetcher: authFetch, storage: localStorage });
+    const r = await saveLinks(items, { fetcher: authFetch, storage: localStorage, lastSource: linksSourceRef.current });
+    if (r.ok) linksSourceRef.current = 'server';
+    // A save after a failed load merges with the server's list; show that.
+    if (r.items && r.items !== items) setLinks(r.items);
     setLinksError(r.error);
     if (!r.ok) console.error('[AEON] Links save:', r.error);
     return r;
