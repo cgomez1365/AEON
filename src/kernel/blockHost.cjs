@@ -40,16 +40,52 @@ function createBlockHost({ blocksDir, baseDeps, createScopedDeps, registry, read
   // Stable trampoline — the ONLY thing server.cjs ever mounts.
   const trampoline = (req, res, next) => inner(req, res, next);
 
+  // A STOPPED block's scheduled work stops too, not only its routes.
+  //
+  // Stop used to be enforced in gateRunning() alone, which guards HTTP. A
+  // block's lifecycle.setInterval kept firing while its routes answered 503 —
+  // and after a restart, because mounting re-arms it whatever the run state
+  // says (measured 2026-10-02 with a 3 s job: 6 → 10 runs in the 10 s after
+  // stop, and still ticking after a reboot with the block stopped). For a block
+  // that acts on a timer (a scraper that bids), "Stop" has to mean stop.
+  //
+  // Callbacks are gated when they fire, so Start resumes the same timers with
+  // no remount. A one-shot setTimeout that comes due while the block is
+  // stopped is dropped, not deferred. Work already in flight is not cancelled:
+  // block code calls lifecycle.isRunning() again before an irreversible step.
+  //
+  // A fault in a block's timer or listener is the block's, not the process's.
+  // Uncaught, a ReferenceError (one typo in a job) is "process-fatal" to
+  // server.js's guard: AEON exits 1, and the launcher restarts only on 75 —
+  // so one block's scheduled job could take every block down until someone
+  // relaunched by hand. It is logged with the block's id instead; a rejected
+  // promise from an async job is caught the same way.
   function makeLifecycle(blockId) {
     const lc = { cleanups: [], timers: new Set(), listeners: [] };
     lifecycles.set(blockId, lc);
+    const isRunning = () => !runState || runState.isRunning(blockId);
+    const report = (e) => {
+      try { log.error(`[BLOCK HOST] ${blockId}: a lifecycle callback failed — ${(e && e.stack) || e}`); } catch { /* never throw from the reporter */ }
+    };
+    const whileRunning = (fn) => (typeof fn === 'function'
+      ? (...args) => {
+        if (!isRunning()) return undefined;
+        try {
+          const out = fn(...args);
+          if (out && typeof out.then === 'function') out.then(undefined, report);
+          return out;
+        } catch (e) { report(e); return undefined; }
+      }
+      : fn);
     return {
       onCleanup: (fn) => { if (typeof fn === 'function') lc.cleanups.push(fn); },
-      setInterval: (fn, ms, ...a) => { const t = setInterval(fn, ms, ...a); lc.timers.add(t); return t; },
-      setTimeout:  (fn, ms, ...a) => { const t = setTimeout(fn, ms, ...a); lc.timers.add(t); return t; },
+      setInterval: (fn, ms, ...a) => { const t = setInterval(whileRunning(fn), ms, ...a); lc.timers.add(t); return t; },
+      setTimeout:  (fn, ms, ...a) => { const t = setTimeout(whileRunning(fn), ms, ...a); lc.timers.add(t); return t; },
       clearInterval: (t) => { clearInterval(t); lc.timers.delete(t); },
       clearTimeout:  (t) => { clearTimeout(t); lc.timers.delete(t); },
-      listen: (emitter, evt, fn) => { emitter.on(evt, fn); lc.listeners.push({ emitter, evt, fn }); return fn; },
+      // Returns the function actually registered: pass THAT to removeListener.
+      listen: (emitter, evt, fn) => { const g = whileRunning(fn); emitter.on(evt, g); lc.listeners.push({ emitter, evt, fn: g }); return g; },
+      isRunning,
     };
   }
 

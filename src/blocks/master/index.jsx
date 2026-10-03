@@ -359,7 +359,7 @@ If neither exists, nav.icon (a lucide-react name or an emoji) is used.
 8. Check it: GET /api/my_block/status answers; the block is in the sidebar and renders.
 
 ## Run it, stop it, remove it
-aeon block stop my_block      its API answers 503 until started
+aeon block stop my_block      its API answers 503 and its timers pause until started
 aeon block start my_block
 aeon block remove my_block --yes   moved aside to <data>/removed-blocks/, never deleted
   (a block git tracks — a shipped block in a checkout — also needs --tracked; restore it

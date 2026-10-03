@@ -46,7 +46,7 @@ Open the copied `block.manifest.json`. Change ONLY these 8 fields (every one cur
 | A. UI-only | `"none"` | `"none"` | `false` | `false` | `false` | Pure front-end tool, no server calls (like shift_scheduler) |
 | B. Standard | `"read"` | `"internal"` | `false` | `false` | `true` | Reads own data + calls kernel AI (like writer, tasks, staff — the most common) |
 | C. Web-connected | `"read"` | `"external"` | `false` | `false` | `true` | Also calls outside APIs/web (like research, trading, outreach) |
-| D. System | `"workspace"` | `"internal"` | `false` | `true` | `true` | Needs shell or broad file access (like host_os, agent_core) — AVOID unless the goal demands it |
+| D. System | `"write"` | `"internal"` | `false` | `true` | `true` | Needs shell or broad file access (like host_os, agent_core) — AVOID unless the goal demands it |
 
 VERIFY: parse the file as JSON (it must parse) AND confirm `id` equals the folder name AND confirm no field still contains `__BLANK__`.
 

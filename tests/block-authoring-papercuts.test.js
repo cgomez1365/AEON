@@ -69,6 +69,23 @@ describe('aeon new', () => {
     const m = JSON.parse(fs.readFileSync(path.join(staged, 'block.manifest.json'), 'utf8'));
     expect(m.api_routes).toBe(false);
   });
+
+  // 2026-10-02 (block-builder readiness audit, scaffolding card_watch): the
+  // label came out "card watch" though the guides promise `deal_finder` →
+  // "Deal Finder", the category stayed "Template", provides.api said true
+  // beside api_routes false, and README.md was the template's own README.
+  it('derives the label from the folder and leaves no template leftovers', () => {
+    const r = spawnSync(process.execPath, [path.join(ROOT, 'tools', 'aeon-cli.cjs'), 'new', id], { encoding: 'utf8', timeout: 20000 });
+    expect(r.status, r.stderr).toBe(0);
+    const m = JSON.parse(fs.readFileSync(path.join(staged, 'block.manifest.json'), 'utf8'));
+    expect(m.label).toBe(`Zz Papercut ${process.pid}`);
+    expect(m.nav.label).toBe(m.label);
+    expect(m.category).toBe('tools');
+    expect(m.provides.api).toBe(m.api_routes);
+    const readme = fs.readFileSync(path.join(staged, 'README.md'), 'utf8');
+    expect(readme.startsWith(`# ${m.label}`)).toBe(true);
+    expect(readme).not.toMatch(/_template/);
+  });
 });
 
 describe('the route generator skips scaffolds the way the kernel does', () => {
