@@ -43,23 +43,11 @@ const AUDIT_COMMAND = 'npm audit --json';
  * Removed 2026-09-30: 1124282 (react-router, RSC Mode CSRF). npm audit no
  * longer reports it against react-router 7.18.2, and an acceptance for an
  * advisory that is not there would silently cover it if it came back.
+ *
+ * Removed 2026-10-03: 1123525 (vite, dev server server.fs.deny bypass). vite
+ * is 6.4.3 now, which fixes it, and npm audit no longer reports it.
  */
 const ACCEPTED = {
-  1123525: {
-    pkg: 'vite',
-    reason: 'server.fs.deny bypass on Windows alternate paths, in the Vite DEV '
-          + 'server only. Re-reviewed 2026-09-30: the customer path is launch.js, '
-          + 'which runs `vite build` once and then `node server/server.js`; that '
-          + 'serves dist/ through Express and never starts the dev server. The '
-          + 'dev server runs only under `npm start` / `npm run dev` (developer '
-          + 'entry points). It listens on 127.0.0.1 only (vite.config.js '
-          + 'server.host, since 6defca4), so the remaining exposure is a '
-          + 'contributor on Windows who starts it with --host on an untrusted '
-          + 'network. Fixed in vite 6.4.3; a '
-          + 'scratch `vite build` under 6.4.3 passed on 2026-09-30 but the '
-          + 'upgrade is not taken yet (see docs/DEPENDENCY_DECISIONS.md).',
-    review: '2026-10-31',
-  },
   1240623: {
     pkg: '@grpc/grpc-js',
     reason: 'getAuthContext can report an unauthorized peer certificate as '

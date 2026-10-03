@@ -38,6 +38,12 @@ const REPORT_AT_LAUNCH = {
     firebase: { name: 'firebase', severity: 'high', via: ['@firebase/firestore', '@firebase/firestore-compat'] },
   },
 };
+// The same report after vite moved to 6.4.3 (2026-10-03): the vite and
+// esbuild advisories are gone, grpc-js through firebase is still there.
+const REPORT_AFTER_VITE6 = {
+  vulnerabilities: Object.fromEntries(Object.entries(REPORT_AT_LAUNCH.vulnerabilities)
+    .filter(([name]) => name !== 'vite' && name !== 'esbuild')),
+};
 const dayAfter = (iso) => new Date(Date.parse(`${iso}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
 
 describe('audit gate', () => {
@@ -46,17 +52,25 @@ describe('audit gate', () => {
     expect(typeof gate.evaluate).toBe('function');
   });
 
-  it('passes on 2026-10-02 with the advisories open at launch', () => {
-    const r = gate.evaluate(REPORT_AT_LAUNCH, '2026-10-02');
+  it('passes on 2026-10-03 with the advisories open after the vite 6.4.3 upgrade', () => {
+    const r = gate.evaluate(REPORT_AFTER_VITE6, '2026-10-03');
     expect(r.blocking).toEqual([]);
     expect(r.expired).toEqual([]);
+    expect(r.unused).toEqual([]);
     expect(r.ok).toBe(true);
-    expect(r.accepted.map(a => a.id).sort()).toEqual([1123525, 1240623]);
+    expect(r.accepted.map(a => a.id).sort()).toEqual([1240623]);
+  });
+
+  it('no longer accepts the vite advisory 6.4.3 fixed: it blocks if it comes back', () => {
+    expect(Object.keys(gate.ACCEPTED)).not.toContain('1123525');
+    const r = gate.evaluate(REPORT_AT_LAUNCH, '2026-10-03');
+    expect(r.blocking.map(b => b.id)).toEqual([1123525]);
+    expect(r.ok).toBe(false);
   });
 
   it('still fails the day after an acceptance\'s review date', () => {
     for (const [id, a] of Object.entries(gate.ACCEPTED)) {
-      const r = gate.evaluate(REPORT_AT_LAUNCH, dayAfter(a.review));
+      const r = gate.evaluate(REPORT_AFTER_VITE6, dayAfter(a.review));
       expect(r.expired.map(e => String(e.id)), id).toContain(id);
       expect(r.ok, id).toBe(false);
     }
