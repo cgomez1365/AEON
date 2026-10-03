@@ -151,8 +151,13 @@ const commands = {
     fs.cpSync(path.join(BLOCKS_DIR, '_template'), dst, { recursive: true });
     const mPath = path.join(dst, 'block.manifest.json');
     const m = JSON.parse(fs.readFileSync(mPath, 'utf8'));
-    m.id = arg; m.route = `/${arg}`; m.label = arg.replace(/_/g, ' ');
+    // The display name derives from the folder (`deal_finder` → "Deal Finder",
+    // as every guide says); this stamped "deal finder". The template's own
+    // category ("Template") is not a category a real block belongs to.
+    m.id = arg; m.route = `/${arg}`;
+    m.label = arg.split('_').filter(Boolean).map((w) => w[0].toUpperCase() + w.slice(1)).join(' ');
     m.nav.hidden = false; m.nav.label = m.label;
+    m.category = 'tools';
     // Left empty on purpose. This line used to stamp
     //   [{ method: 'ALL', path: `/${arg}/*`, auth: true }]
     // and 15 of 17 manifests still carried that placeholder untouched — a
@@ -169,7 +174,11 @@ const commands = {
     // module exists — set it when you add api/<id>.cjs.
     const apiDir = path.join(dst, 'api');
     m.api_routes = fs.existsSync(apiDir) && fs.readdirSync(apiDir).some((f) => /\.(cjs|js|mjs)$/.test(f));
+    if (m.provides) m.provides.api = m.api_routes;
     fs.writeFileSync(mPath, JSON.stringify(m, null, 2));
+    // The copied README described the template, not this block. A block's
+    // README says what it owns, reads and writes (the Master guide, Phase C).
+    fs.writeFileSync(path.join(dst, 'README.md'), `# ${m.label}\n\nOwns: …\nReads: …\nWrites: …\n\nHow to build it: src/blocks/master/README.md.\n`);
     console.log(`✓ staging/${arg} created from _template. Edit it, then: aeon lint ${arg} && aeon promote ${arg}`);
   },
 
@@ -177,13 +186,51 @@ const commands = {
     const dir = resolveBlockDir(arg);
     if (!dir) { console.error(`block not found: ${arg}`); process.exit(1); }
     const express = require('express');
+    const { createRootedStorage } = require('../src/kernel/blockStorage.cjs');
     const app = express();
     app.use(express.json());
+    const dataDir = path.join(dir, 'data');
     let mounted = [];
+    // Swapped wholesale on every remount, the way the block host does it. The
+    // old remount filtered layers on an `_aeonDev` tag nothing ever set, so
+    // each save stacked another router BEHIND the first and the code from the
+    // first mount kept answering (found 2026-10-02).
+    let inner = express.Router();
+    app.use((req, res, next) => inner(req, res, next));
+    let timers = new Set();
+    let cleanups = [];
+    const teardown = () => {
+      for (const fn of cleanups) { try { fn(); } catch (e) { console.error(`  cleanup threw: ${e.message}`); } }
+      for (const t of timers) { clearTimeout(t); clearInterval(t); }
+      timers = new Set(); cleanups = [];
+    };
 
     const mount = () => {
-      app._router && (app._router.stack = app._router.stack.filter(l => !l._aeonDev));
+      teardown();
+      const fresh = express.Router();
       mounted = [];
+      let manifest = {};
+      try { manifest = JSON.parse(fs.readFileSync(path.join(dir, 'block.manifest.json'), 'utf8')); } catch (e) { console.error(`  manifest unreadable: ${e.message}`); }
+      // The deps a block is written against (block.manifest.json decides, as in
+      // AEON): blockStorage, blockSettings and lifecycle. Without them a block
+      // using the sanctioned storage threw on its first request here. Storage
+      // is this folder's own data/ — still isolated from the operator's AEON.
+      // No kernelLLM: the dev server has no models; a route that needs one
+      // answers its own "no model" (424) path.
+      const devDeps = {
+        isVercel: false, fs, path, getLocalFile: (n) => path.join(dataDir, n),
+        blockStorage: createRootedStorage(dataDir, { write: manifest.contract?.permissions?.filesystem === 'write' }),
+        blockSettings: () => Object.fromEntries((manifest.contract?.settings || []).map((d) => [d.key, d.default])),
+        lifecycle: {
+          onCleanup: (fn) => { if (typeof fn === 'function') cleanups.push(fn); },
+          setInterval: (fn, ms, ...a) => { const t = setInterval(fn, ms, ...a); timers.add(t); return t; },
+          setTimeout: (fn, ms, ...a) => { const t = setTimeout(fn, ms, ...a); timers.add(t); return t; },
+          clearInterval: (t) => { clearInterval(t); timers.delete(t); },
+          clearTimeout: (t) => { clearTimeout(t); timers.delete(t); },
+          listen: (emitter, evt, fn) => { emitter.on(evt, fn); cleanups.push(() => emitter.removeListener(evt, fn)); return fn; },
+          isRunning: () => true,
+        },
+      };
       const apiDir = path.join(dir, 'api');
       if (fs.existsSync(apiDir)) {
         for (const f of fs.readdirSync(apiDir).filter(f => /\.(cjs|js)$/.test(f) && !f.startsWith('_') && !f.startsWith('.'))) {
@@ -191,21 +238,20 @@ const commands = {
           delete require.cache[require.resolve(full)]; // hot-remount = full module cache purge (B6)
           try {
             const factory = require(full);
-            // dev deps are deliberately empty-ish: isolated block sees no production state (DX2)
-            const devDeps = { isVercel: false, fs, path, getLocalFile: (n) => path.join(dir, 'data', n) };
             if (typeof factory === 'function') {
-              if (factory.length === 1) { const r = factory(devDeps); if (r) { const layer = app.use('/api', r); } }
-              else factory(app, devDeps);
+              if (factory.length === 1) { const r = factory(devDeps); if (r) fresh.use('/api', r); }
+              else factory(fresh, devDeps);
               mounted.push(f);
             }
           } catch (e) { console.error(`  mount failed ${f}: ${e.message}`); }
         }
       }
+      inner = fresh;
       console.log(`[aeon dev] mounted: ${mounted.join(', ') || '(no api files)'}`);
     };
 
+    fs.mkdirSync(dataDir, { recursive: true });
     mount();
-    fs.mkdirSync(path.join(dir, 'data'), { recursive: true });
     fs.watch(dir, { recursive: true }, (_evt, file) => {
       if (file && /\.(cjs|js|jsx|json)$/.test(file) && !file.includes('data')) {
         console.log(`[aeon dev] change: ${file} → remounting`);
@@ -213,7 +259,11 @@ const commands = {
       }
     });
     app.get('/', (_req, res) => res.json({ dev: true, block: path.basename(dir), apis: mounted, note: 'isolated dev server — sees its own data/ only (DX2)' }));
-    app.listen(3002, () => console.log(`[aeon dev] ${path.basename(dir)} on http://localhost:3002 (isolated, staging-safe)`));
+    // Loopback only: this listened on every interface (0.0.0.0), which put a
+    // block's routes — with no auth in front of them — on the LAN.
+    // --port 0 (or AEON_DEV_PORT=0) takes any free port and prints it.
+    const port = Number(flagValue('--port') ?? process.env.AEON_DEV_PORT ?? 3002);
+    const server = app.listen(port, '127.0.0.1', () => console.log(`[aeon dev] ${path.basename(dir)} on http://127.0.0.1:${server.address().port} (isolated, staging-safe)`));
   },
 
   // ── Operator Console (BO-TGM) ────────────────────────────────────────────────────
@@ -587,7 +637,7 @@ ${c.bold('CONSOLE')} ${c.dim('(operate a running AEON, no browser)')}
 ${c.bold('BLOCK AUTHORING')} ${c.dim('(deterministic, never calls a model)')}
   aeon new <id>             scaffold into staging/
   aeon lint <id>            deterministic gate checks
-  aeon dev <id>             isolated dev server :3002
+  aeon dev <id> [--port N]  isolated dev server, 127.0.0.1:3002
   aeon pack <id>            build .aeon cartridge
   aeon promote <id>         staging → src/blocks via airlock
 
