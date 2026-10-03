@@ -24,7 +24,7 @@ describe('install help', () => {
 
   it('the welcome screen and the README both offer it, with the same link', () => {
     const wizard = read('src/blocks/security/components/SetupWizard.jsx');
-    expect(wizard).toMatch(/import \{ HELP_URL \} from '\.\.\/\.\.\/\.\.\/utils\/help\.js'/);
+    expect(wizard).toMatch(/import \{[^}]*\bHELP_URL\b[^}]*\} from '\.\.\/\.\.\/\.\.\/utils\/help\.js'/);
     expect(wizard).toMatch(/href=\{HELP_URL\} target="_blank" rel="noopener noreferrer"/);
     const readme = read('README.md');
     expect(readme).toContain('## Need help?');

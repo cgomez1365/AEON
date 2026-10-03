@@ -19,7 +19,7 @@
  * displays it again after this screen.
  */
 import React, { useState } from 'react';
-import { HELP_URL } from '../../../utils/help.js';
+import { HELP_URL, TERMS_URL, LICENSE_URL, PRIVACY_URL } from '../../../utils/help.js';
 import { useNavigate } from 'react-router-dom';
 import ModalPortal from '../../../components/ModalPortal.jsx';
 import { resetSupabase } from '../../../kernel/supabase';
@@ -191,9 +191,20 @@ export default function SetupWizard({ onComplete, onSkip }) {
                   a local model runs on this computer.
                 </div>
                 <div>
+                  <strong>Your Vault and cloud keys.</strong> With no local embedding model, a cloud key that offers
+                  embeddings (Gemini's does) is also used to index your Vault, so its text goes to that provider.
+                  To keep it here, install nomic-embed-text in the Cookbook, or turn on Settings → Models → Local only.
+                </div>
+                <div>
                   <strong>Need a hand?</strong> Install help is free —{' '}
                   <a href={HELP_URL} target="_blank" rel="noopener noreferrer" style={{ color: 'inherit', textDecoration: 'underline' }}>ask us</a>.
                   We can also set AEON up for you or build a block for your work, as a paid service.
+                </div>
+                <div>
+                  Read the{' '}
+                  <a href={TERMS_URL} target="_blank" rel="noopener noreferrer" style={{ color: 'inherit', textDecoration: 'underline' }}>Terms of Use</a>, the{' '}
+                  <a href={LICENSE_URL} target="_blank" rel="noopener noreferrer" style={{ color: 'inherit', textDecoration: 'underline' }}>License</a> and the{' '}
+                  <a href={PRIVACY_URL} target="_blank" rel="noopener noreferrer" style={{ color: 'inherit', textDecoration: 'underline' }}>Privacy notice</a>.
                 </div>
                 <div style={S.warn}>
                   <strong>No password yet.</strong> Until you create an account on the Security page, anyone

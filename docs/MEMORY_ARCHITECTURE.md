@@ -92,4 +92,6 @@ model for classes 3 and 4. It is a different path from the recall above and is d
 ## Cloud sync (optional)
 
 With Supabase configured, Matrix can mirror indexed documents to a `vault_docs` table
-(`src/blocks/aeon_matrix/api/cloudvault.cjs`). Without it, nothing leaves the machine.
+(`src/blocks/aeon_matrix/api/cloudvault.cjs`). Without it, no document is synced to a cloud
+database. That is cloud sync only: a cloud embedding model (used when no local one is assigned)
+receives each indexed document's text, and a cloud chat model receives what a turn sends it.
