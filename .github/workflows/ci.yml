@@ -1,22 +1,45 @@
 name: AEON CI
 
-# Runs on EVERY branch push, not just main.
+# When it runs (audit #11, #42, 2026-10-03):
 #
-# This used to be `push: branches: [main]`, so work in progress got no signal
-# until a pull request was opened — the branch where the code is actually
-# written was the one place the gates never ran. Combined with a workflow that
-# had never parsed (fixed 2026-08-01) and an audit set to continue-on-error,
-# that made three checks in a row which could not fail.
-#
-# Branch pushes run the full matrix. A PR to main additionally re-runs it
-# against the merge result, which is a different commit and worth checking.
+# - push: main and v* tags only. Every branch push used to run the full
+#   matrix, so a release commit ran it three times (branch, main, tag) and a
+#   Dependabot branch twice (push, then its pull request). Each extra run was
+#   one more chance for a flaky leg to paint a red X on a good commit. Work on
+#   a branch gets its signal from the pull request below, which also checks
+#   the merge result: a different commit, and the one that lands.
+# - pull_request to main.
+# - schedule, weekly: an advisory published while nobody pushes still reaches
+#   the security job, and a waiver's review date passing still shows up as red.
 on:
   push:
+    branches: [ main ]
+    tags: [ 'v*' ]
   pull_request:
     branches: [ main ]
+  schedule:
+    # Mondays 09:17 UTC. Off the hour, when scheduled runs queue the longest.
+    - cron: '17 9 * * 1'
+
+# Nothing here writes to the repo, opens an issue or reads a secret. Read-only
+# no longer depends on the repo's default token setting (audit #43).
+permissions:
+  contents: read
+
+# A newer push to the same pull request cancels the run it replaces. A push to
+# main, a tag and the weekly run are keyed on the commit as well, so every
+# commit on main and every release keeps its own result; nothing there is
+# cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}-${{ github.event_name != 'pull_request' && github.sha || 'latest' }}
+  cancel-in-progress: true
 
 jobs:
   build:
+    # A hung test or install used to hold a runner for GitHub's default of six
+    # hours. The slowest green leg, Windows, took 3 min 13 s in run
+    # 37102458513 (v3.2.0).
+    timeout-minutes: 20
     # Windows is the platform AEON actually ships on, and Linux is what CI used
     # to run exclusively — a test that resolved paths with pathname.slice(1) was
     # green on every dev box and broken only in CI, which is the same gap in the
@@ -30,28 +53,29 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # npm ci is the reproducible install and the one that must gate a
-          # merge. The lockfile is written by npm 11, which ships with Node 24.
+          # Every leg installs with `npm ci` (the step below): the
+          # reproducible install, and the one that must gate a merge.
           - os: ubuntu-latest
             node: '24'
-            install: npm ci
           - os: windows-latest
             node: '24'
-            install: npm ci
-          # The floor leg uses `npm install`, deliberately — because that is
-          # what a real user runs. launch.js:203 shells out to
-          # `npm install --prefer-offline`, never `npm ci`.
+          # The floor leg runs `npm ci`, as the README's update steps and the
+          # v3.2.0 notes tell a git-clone user to, and as launch.js does when
+          # the last install did not finish.
           #
-          # Node 22.13 bundles npm 10, which resolves esbuild's optional
-          # platform packages differently from the npm 11 that wrote the
-          # lockfile, so `npm ci` refuses it. That is a lockfile/tooling
-          # mismatch, not a broken floor — and using `npm ci` here would test a
-          # command no consumer ever runs while claiming to verify the consumer
-          # path. This leg answers the question that actually matters: can
-          # someone on the version we DECLARE in engines install and build?
+          # Node 22.13 bundles npm 10, and macOS 11 to 13.4 users are sent to
+          # Node 22 by the README. This leg used `npm install` because npm 10
+          # refused the lockfile npm 11 wrote ("Missing: esbuild@0.28.2 ...",
+          # 27 lines); `npm install` hid exactly the failure those users hit
+          # (audit #6). The lockfile is now one both npm 10 and npm 11 accept,
+          # and this leg is what keeps it that way.
           - os: ubuntu-latest
             node: '22.13'
-            install: npm install --no-audit --no-fund
+          # Node 26 becomes LTS on 2026-10-28. From then LAUNCH.bat (winget),
+          # launch.sh (setup_lts.x) and Homebrew install it, and engines has no
+          # upper bound, so it gets a leg before customers get it (audit #13).
+          - os: ubuntu-latest
+            node: '26'
           # macOS. launch.command ran once, by hand, on real Apple hardware on
           # 2026-08-12 — which is what closed DoD §20 #1 on clean physical
           # hardware. One manual run proves it worked that day; it cannot prove
@@ -72,7 +96,6 @@ jobs:
           # friction stays an open defect rather than a solved one.
           - os: macos-latest
             node: '24'
-            install: npm ci
     # Windows runners default to PowerShell; the node -e and grep steps below
     # are bash. GitHub's Windows images ship bash, so pin it for every step
     # rather than maintaining two dialects of the same check.
@@ -80,16 +103,22 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v7
+      # Actions are pinned to a commit: a tag can be moved to other code, a
+      # commit cannot. Dependabot (github-actions, monthly) bumps the pin and
+      # the version comment together. persist-credentials: false keeps the
+      # job token out of .git/config, where every later step could read it.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ matrix.node }}
           cache: 'npm'
 
       - name: Install dependencies
-        run: ${{ matrix.install }}
+        run: npm ci
 
       - name: Syntax-check server
         run: node --check server.cjs
@@ -147,9 +176,12 @@ jobs:
 
   security:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '24'
           cache: 'npm'
