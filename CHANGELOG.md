@@ -12,6 +12,119 @@ tagged; until then its heading says so.
      is added here before tagging, and the heading's "not tagged yet" is replaced by
      the date. -->
 
+## 3.2.1 — 2026-10-03
+
+Fixes from the 2026-10-03 audit of the public repository: the privacy switches now do
+what they say, a Supabase setup function is locked to the service role, the launchers
+install the right Node, and the docs match the code. Your data in `~/AEON` is
+untouched; upgrade as for 3.2.0.
+
+### If you connected your own Supabase project
+
+- **`exec_sql` is locked to the service role.** The SQL that Settings → Cloud and
+  `tools/migrate.cjs` asked you to paste created `exec_sql`, a function that runs any
+  SQL as its owner, and left it callable with the public anon key. The text AEON shows
+  now revokes it from `PUBLIC`, `anon` and `authenticated`, grants it to
+  `service_role` only and pins its `search_path` (95ac5bb). **If you created
+  `exec_sql` with an earlier AEON:** run Settings → Cloud setup once, or
+  `node tools/migrate.cjs`; AEON now runs the revoke through `exec_sql` itself before
+  it applies anything, and stops with the SQL to paste if that fails (1e76efb). Or
+  paste this in the Supabase SQL Editor yourself:
+  `REVOKE ALL ON FUNCTION public.exec_sql(text) FROM PUBLIC, anon, authenticated;
+  GRANT EXECUTE ON FUNCTION public.exec_sql(text) TO service_role;`
+- `match_second_brain` in `db/migrations/second_brain_chunks.sql` is revoked from
+  `PUBLIC` the same way, and a test now fails on any SQL function AEON ships for you to
+  run that is not revoked from `PUBLIC` (95ac5bb, 1e76efb).
+
+### Privacy: Local only and Off
+
+- **Local only, per agent.** For an agent you set to Local only in Memory Core, its
+  chats, the chat titles and distils made from them and, while it is the terminal's
+  agent, `/ask`, `/recall`, `/ask-doc`, `/read` and the sentence that reads a
+  command's result back go only to a model on this computer or your own network.
+  For an agent you created, that includes its own memory, which is no longer indexed
+  with a cloud embedder or recalled into another agent's prompt. Its turns are no
+  longer sent to another agent's model after an `/agent` switch, and an image sent
+  in its chat is refused, since images are read only by cloud models
+  (ddfd30c, ba87a8e).
+- **Still not covered:** other slash commands use the models set in Settings → Models;
+  your own AEON's memory is the shared memory, so an agent set to Roulette that reads
+  it still sends it to its own model (ddfd30c, ba87a8e).
+- **Off.** A switched-off memory is kept and listed, and is not sent to a model or
+  recalled: it is left out of indexing (the next scan takes it out if it was in), and
+  never comes back from `/recall`, `/ask`, `/ask-doc` or chat recall. `/memory`,
+  `/doc` and `/read` show it to you without passing it to a model. Aeon Matrix's own
+  search box still lists it, to you only (ddfd30c, ba87a8e).
+- A path typed in another letter case, or through a symlink, is judged as the disk
+  resolves it, so it cannot get round either switch (ba87a8e).
+- Cloud sync of the Vault skips switched-off memories and Local only agents' folders,
+  and deletes the copies of them it had uploaded (ba87a8e).
+- A memory with no `<id>.md` copy on disk gets one written when Memory Core loads, so
+  it can still be found (ba87a8e).
+
+### Corrections to the 3.2.0 notes
+
+- 3.2.0 said an agent set to Local only "is refused a cloud model — for chat, distil
+  and automatic capture alike". That was true of those three calls only. In 3.2.0 the
+  same agent's chat titles, image reading, history carried over after switching
+  agents, slash commands, and the indexing and recall of its memory folder could
+  still reach a cloud model. 3.2.1 closes those, with the exceptions listed above.
+- 3.2.0 said Off "keeps a memory saved and searchable but never sends it to the
+  model". In 3.2.0 a switched-off memory was still indexed, which sends its text to a
+  cloud embedding model when that is what serves the Embedding role, and `/recall`,
+  `/ask` and chat recall could still put it into a model's prompt. From 3.2.1 it is
+  kept and listed, not sent to a model or recalled.
+
+### Install and launch
+
+- `launch.command` installs `node@24` from Homebrew (`node@22` below macOS 13.5)
+  instead of the unpinned `node`, which is now 26; launch.js's "Node too old" message
+  names Node 22 LTS on macOS below 13.5 (80ba301).
+- The Desktop `AEON.app` takes its version from `package.json` (it said 3.0), and an
+  older one is updated (80ba301).
+- `LAUNCH.bat` can now actually offer to install Node with winget, and says "installed"
+  only when winget succeeded (b1f22f3).
+- `ACE-Step-Launcher.bat`, a personal music-generator launcher that nothing in AEON
+  uses, is gone from the download (09f86cc).
+- `package-lock.json` is accepted, and left unchanged, by both npm 10 (Node 22) and
+  npm 11 (Node 24 and 26), so a first launch no longer rewrites a tracked file and
+  blocks the next `git pull`; npm 10 refused the 3.2.0 lockfile (a41ab59, c9a9c32).
+- A drive built with `scripts/build-usb.js` carries `THIRD_PARTY_NOTICES.txt` naming
+  the licenses of FFmpeg, Node.js, llama.cpp and the catalogue models on it (affe245,
+  be15e97).
+
+### Dependencies and CI
+
+- vite 6.4.3 (was 5.4.21) closes the dev-server advisory the audit gate had accepted;
+  the acceptance is removed. `@vitest/coverage-v8` added (a41ab59).
+- CI runs on pushes to `main`, `v*` tags, pull requests to `main`, weekly, and by hand
+  — no longer on every branch push. Six legs: a Node 26 leg is added, and the Node
+  22.13 floor now installs with `npm ci`. Read-only token, actions pinned to commit
+  SHAs, 20-minute timeouts, and a check that `npm install` leaves the lockfile as
+  committed (49fb717, bfd7aab, fc22bde).
+- A Windows-only timing test retries once (7c4d942).
+
+### Docs and licenses
+
+- `THIRD_PARTY_NOTICES.md` names what ships with or is fetched by AEON and under which
+  license, and the graph bundle in Aeon Matrix carries its 35 packages' license texts
+  (942216a, be15e97).
+- Welcome screen: the cloud-key indexing line says what happens, and it links the
+  Terms of Use, License and Privacy notice. `PRIVACY.md` says Local only and Off as the
+  code does them; block secret settings are stated as plain text in
+  `aeon-settings.json`, owner-only (cdde378, 1d8b2b7).
+- Resume Grader no longer calls itself EEOC-safe or EEOC-compliant (cdde378).
+- Developer docs say what the code does: the terminal's two verbs, `/api/os/action`,
+  the `/api/ai` request bodies, where `.env` lives, what `aeon lint` checks, the
+  Fleet Control, Settings and Memory Core READMEs (593b8c9, ddfd30c, be15e97).
+- README: what AEON is for, a screenshot, Agents, *Privacy, in short*, and *Updating
+  AEON* (558837c); its images moved out of `public/` (59badfd). New
+  `CODE_OF_CONDUCT.md`; the security policy asks for the release you downloaded and
+  lists supported versions; the install-help form says the issue is public (558837c,
+  d9dd9e8).
+- `.claude/` is left out of release archives (593b8c9). A test fixture that looked
+  like a real OpenAI key is now built at runtime (95ac5bb).
+
 ## 3.2.0 — 2026-10-02
 
 Agents with memory of their own, a switch on every memory, and blocks you can build on.
@@ -26,9 +139,11 @@ Your data in `~/AEON` is untouched; upgrade as for 3.1.x.
   (bd7c9d9).
 - **Local only, per agent.** An agent set to Local only is refused a cloud model — for
   chat, distil and automatic capture alike — even with the global switch off (bd7c9d9).
+  *Overstated: other calls still reached a cloud model; see 3.2.1.*
 - **A switch on every memory.** Off keeps a memory saved and searchable but never sends
   it to the model; Memory Core shows what the switched-on memories cost every turn, with
-  all on / all off. New setting: *New memories start on* (bd7c9d9).
+  all on / all off. New setting: *New memories start on* (bd7c9d9). *Overstated: an Off
+  memory was still indexed and recalled; see 3.2.1.*
 - **Calling an agent:** `/agent` lists them, `/agent <name>` switches, `/agent off`
   returns. Any wake-up call works — "aeon - come online" did nothing before, because only
   a space, a comma or "!" could separate the words — and an agent wakes by its own name
