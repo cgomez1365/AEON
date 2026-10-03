@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef, Suspense } from "react";
+import { versionLabel } from '../utils/version.js';
 import { Routes, Route, Navigate, useNavigate, useLocation } from "react-router-dom";
 import { requestRestart } from "../utils/restartRequest.js";
 import { useAuth } from "../kernel/hooks/useAuth";
@@ -205,7 +206,7 @@ function DesktopNav({ user, groups, iconOverrides }) {
           }
           <div>
             <div style={{ fontSize: 11, fontWeight: 700, color: "#e5e2e1" }}>{user?.displayName || "You"}</div>
-            <div style={{ fontSize: 9, color: "rgba(0,242,255,0.7)", fontFamily: "monospace", marginTop: 2 }}>v5.0 · AUTH</div>
+            <div style={{ fontSize: 9, color: "rgba(0,242,255,0.7)", fontFamily: "monospace", marginTop: 2 }}>{versionLabel()} · AUTH</div>
           </div>
         </div>
         <div style={{ display: "flex", gap: "4px" }}>
@@ -393,7 +394,7 @@ export default function DesktopLayout({ chatHistory, auditLogs }) {
           </button>
           <div className="nav-title">AEON</div>
           <div style={{ fontSize: "10px", color: "rgba(0,242,255,0.7)", fontFamily: "monospace", border: "1px solid rgba(0,242,255,0.3)", padding: "2px 6px", borderRadius: "4px", background: "rgba(0,242,255,0.1)" }}>
-            v5.0
+            {versionLabel()}
           </div>
         </div>
         

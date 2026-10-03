@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { versionLabel } from '../utils/version.js';
 import { signInWithPopup, GoogleAuthProvider } from "firebase/auth";
 import { auth } from '../kernel/firebase';
 
@@ -54,7 +55,7 @@ export default function GoogleSignIn() {
         </button>
 
         <p style={{ fontSize: "11px", color: "rgba(229,226,225,0.3)", marginTop: "8px" }}>
-          AEON v5.0 · Authorized access only
+          AEON {versionLabel()} · Authorized access only
         </p>
       </div>
     </div>

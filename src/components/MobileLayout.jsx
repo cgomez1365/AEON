@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef, Suspense } from "react";
+import { versionLabel } from '../utils/version.js';
 import { Routes, Route, Navigate, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "../kernel/hooks/useAuth";
 import MobileNav from "./MobileNav";
@@ -158,7 +159,7 @@ function DrawerMenu({ open, onClose, groups }) {
             }
             <div>
               <div style={{ fontSize: 13, fontWeight: 600, color: "#e5e2e1" }}>{user?.displayName || "You"}</div>
-              <div style={{ fontSize: 10, color: "rgba(229,226,225,0.4)", fontFamily: "monospace" }}>v5.0</div>
+              <div style={{ fontSize: 10, color: "rgba(229,226,225,0.4)", fontFamily: "monospace" }}>{versionLabel()}</div>
             </div>
           </div>
         <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
@@ -204,7 +205,7 @@ function DrawerMenu({ open, onClose, groups }) {
 
         {/* Version footer */}
         <div style={{ padding: "12px 16px", borderTop: "1px solid rgba(255,255,255,0.06)", fontSize: "10px", color: "rgba(229,226,225,0.25)", fontFamily: "monospace" }}>
-          AEON OS v5.0 · Hive Mind Active
+          AEON {versionLabel()}
         </div>
       </aside>
     </>
