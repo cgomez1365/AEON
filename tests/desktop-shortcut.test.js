@@ -133,7 +133,7 @@ describe('macOS: AEON.app on the Desktop', () => {
     const { version } = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
     const plist = fs.readFileSync(path.join(APP(), 'Contents', 'Info.plist'), 'utf8');
     expect(version).toMatch(/^\d+\.\d+\.\d+$/);
-    expect(plist).toMatch(new RegExp(`<key>CFBundleShortVersionString</key><string>${version.replace(/\./g, '\\.')}</string>`));
+    expect(plist).toContain(`<key>CFBundleShortVersionString</key><string>${version}</string>`);
     expect(shortcut.APP_VERSION).toBe(version);
   });
 

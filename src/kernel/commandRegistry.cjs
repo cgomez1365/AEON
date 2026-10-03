@@ -54,12 +54,35 @@ function unwrap(v) {
   return m ? (m[1] ?? m[2] ?? m[3] ?? '').trim() : t;
 }
 
-/** Split typed arguments on whitespace, keeping quoted and <bracketed> groups whole and unwrapped. */
+/**
+ * Split typed arguments on whitespace, keeping quoted and <bracketed> groups whole and unwrapped.
+ *
+ * One linear pass. The regex this replaced (/"([^"]*)"|'([^']*)'|<([^>]*)>|(\S+)/g)
+ * rescanned the rest of the line for every unclosed "<", so "<= <= <= …"
+ * took quadratic time (CodeQL, 2026-10-03). The next closing character after
+ * every position is found once, from the right; the tokens are the same.
+ */
 function tokenizeArgs(text) {
+  const s = String(text || '');
+  const nextOf = {};
+  for (const ch of ['"', "'", '>']) {
+    const at = new Array(s.length + 1).fill(-1);
+    for (let i = s.length - 1; i >= 0; i--) at[i] = s[i] === ch ? i : at[i + 1];
+    nextOf[ch] = at;
+  }
+  const isSpace = (c) => /\s/.test(c);
   const out = [];
-  const re = /"([^"]*)"|'([^']*)'|<([^>]*)>|(\S+)/g;
-  let m;
-  while ((m = re.exec(String(text || '')))) out.push((m[1] ?? m[2] ?? m[3] ?? m[4] ?? '').trim());
+  let i = 0;
+  while (i < s.length) {
+    if (isSpace(s[i])) { i++; continue; }
+    const close = s[i] === '<' ? '>' : (s[i] === '"' || s[i] === "'") ? s[i] : null;
+    const j = close ? nextOf[close][i + 1] : -1;
+    if (j !== -1) { out.push(s.slice(i + 1, j).trim()); i = j + 1; continue; }
+    let k = i;
+    while (k < s.length && !isSpace(s[k])) k++;
+    out.push(s.slice(i, k).trim());
+    i = k;
+  }
   return out;
 }
 
@@ -471,3 +494,6 @@ module.exports = function ({ blockReadiness = {}, isVercel = false, writeOSAudit
 
   return { router, rescan };
 };
+
+// Exposed for tests (the factory above is the module).
+module.exports.tokenizeArgs = tokenizeArgs;
