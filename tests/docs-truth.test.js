@@ -55,6 +55,7 @@ const HISTORICAL = new Map([
 
 const DOCS = [
   'README.md',
+  'THIRD_PARTY_NOTICES.md',
   '.github/AGENTS.md',
   '.github/CONTRIBUTING.md',
   '.github/SECURITY.md',
