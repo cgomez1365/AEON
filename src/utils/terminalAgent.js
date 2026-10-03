@@ -54,7 +54,11 @@ export function resolveAgentArg(arg, agents = []) {
 export function describeAgent(a) {
   if (!a) return '';
   const model = a.model && a.model.provider ? `${a.model.provider}${a.model.model ? ` · ${a.model.model}` : ''}` : 'the model Settings picks';
-  const privacy = a.privacy === 'local-only' ? ', local only (never a cloud model)' : '';
+  // The operator's own AEON holds the shared memory, which an agent set to
+  // Roulette may still read and send to its model — so for it, only the chats.
+  const privacy = a.privacy !== 'local-only' ? ''
+    : a.self ? ', local only (its chats never go to a cloud model)'
+      : ', local only (its chats and its own memory never go to a cloud model)';
   const shared = a.sharedMemory === false ? 'its own memory only' : 'its own memory plus the shared memory';
   return `${a.name} — ${model}${privacy}; ${shared}.`;
 }

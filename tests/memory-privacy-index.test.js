@@ -28,6 +28,10 @@ const { narrate } = require('../src/kernel/commandNarrator.cjs');
 const { buildRecallContext } = require('../src/kernel/context.cjs');
 const matrixFactory = require('../src/blocks/aeon_matrix/api/index.cjs');
 const createChatRouter = require('../src/blocks/dashboard/api/chat.cjs');
+const createStreamRouter = require('../src/blocks/dashboard/api/chat-stream.cjs');
+const agentsKernel = require('../src/kernel/agents.cjs');
+const createFsRouter = require('../src/blocks/host_os/api/fs.cjs');
+const createAIRouter = require('../src/kernel/routers/ai.cjs');
 
 let root, vault, dataRoot, embedded, servers;
 const embed = async (text, opts = {}) => {
@@ -244,6 +248,9 @@ describe('the terminal never reads a switched-off memory back into the conversat
     const base = await listen(app);
     const data = await (await fetch(`${base}/memory?agent=scout`)).json();
     expect(data.modelText).toBeNull();
+    const ctx = await (await fetch(`${base}/memory/context?agent=scout`)).json();
+    expect(ctx.text).toContain('Charizard');
+    expect(ctx.modelText).toBeNull();
     const n = await narrate({ cmd: '/memory', ok: true, text: data.text, data }, async () => 'x');
     expect(n.narration).not.toContain('Charizard');
   });
@@ -338,5 +345,166 @@ describe('a Local only agent\'s saved chats stay off cloud models', () => {
     const r = await fetch(`${base}/memory/distill`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: 'scout-chat' }) });
     expect(r.status).toBe(409);
     expect(prompts).toHaveLength(1);
+  });
+});
+
+describe('one feed, several agents: a Local only agent\'s turns reach only a Local only model', () => {
+  const SCOUT_LINE = 'Scout, keep the Charizard ceiling at four hundred tonight.';
+  const feedTurns = [
+    { role: 'user', content: SCOUT_LINE, agent: 'scout' },
+    { role: 'assistant', content: 'Holding the Charizard ceiling.', agent: 'scout' },
+    { role: 'user', content: 'Back to you: when is the store packs gate due?', agent: 'aeon' },
+    { role: 'assistant', content: 'Friday.', agent: 'aeon' },
+    { role: 'user', content: 'An untagged line from a chat saved before tags existed.' },
+  ];
+
+  it('shareableTurns drops the tagged turns of a Local only agent, unless the call is Local only', () => {
+    const agents = agentsKernel.list(vault, { withStats: false });
+    const scout = agents.find((a) => a.id === 'scout');
+    expect(scout.privacy).toBe('local-only');
+    const toCloud = agentsKernel.shareableTurns(feedTurns, agents.find((a) => a.self), agents);
+    expect(toCloud.map((m) => m.content).join('\n')).not.toContain('Charizard');
+    expect(toCloud).toHaveLength(3);
+    expect(agentsKernel.shareableTurns(feedTurns, null, agents)).toHaveLength(3);
+    expect(agentsKernel.shareableTurns(feedTurns, scout, agents)).toHaveLength(5);
+  });
+
+  it('the terminal tags each turn it sends with its agent', async () => {
+    const { chatHistory, liveTurns } = await import('../src/components/Terminal2.jsx');
+    const feed = [
+      { id: 1, type: 'msg', role: 'system', content: 'boot' },
+      { id: 2, type: 'msg', role: 'user', content: SCOUT_LINE, agent: 'scout' },
+      { id: 3, type: 'msg', role: 'assistant', content: 'x'.repeat(500), agent: 'scout' },
+      { id: 4, type: 'msg', role: 'user', content: 'untagged' },
+    ];
+    expect(chatHistory(feed)).toEqual([
+      { role: 'user', content: SCOUT_LINE, agent: 'scout' },
+      { role: 'assistant', content: 'x'.repeat(500), agent: 'scout' },
+      { role: 'user', content: 'untagged' },
+    ]);
+    expect(liveTurns(feed)[1].content).toHaveLength(400);
+  });
+
+  it('the chat stream leaves them out of the history it sends a Roulette agent\'s model, and keeps them for Scout', async () => {
+    const sent = [];
+    const kernelLLM = {
+      describeRole: async () => ({ provider: 'stub', model: 'stub-model', contextTokens: 8192 }),
+      stream: async (messages, { onToken }) => { sent.push(messages); onToken('ok'); return { text: 'ok', tokens: 1, latencyMs: 1, provider: 'stub', model: 'stub-model' }; },
+    };
+    const kernel = express();
+    kernel.use(express.json());
+    kernel.post('/api/crn/second-brain/retrieve', (_req, res) => res.json({ documents: [] }));
+    const kernelBase = await listen(kernel);
+    const saved = process.env.AEON_KERNEL_URL;
+    process.env.AEON_KERNEL_URL = kernelBase.replace(/\/api$/, '');
+    try {
+      const app = express();
+      app.use(express.json());
+      app.use('/api', createStreamRouter({ kernelLLM, loadSettings: () => ({ prefs: {} }), VAULT_ROOT: vault }));
+      const base = await listen(app);
+      const ask = async (agent) => {
+        const r = await fetch(`${base}/chat/stream`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: 'what did we settle?', history: feedTurns, ...(agent ? { agent } : {}) }) });
+        await r.text();
+      };
+      await ask(null);
+      expect(JSON.stringify(sent[0])).not.toContain('Charizard');
+      expect(JSON.stringify(sent[0])).toContain('store packs gate');
+      await ask('scout');
+      expect(JSON.stringify(sent[1])).toContain('Charizard');
+    } finally {
+      if (saved === undefined) delete process.env.AEON_KERNEL_URL; else process.env.AEON_KERNEL_URL = saved;
+    }
+  });
+
+  it('distil of the live turns leaves a Local only agent\'s turns out', async () => {
+    const prompts = [];
+    const app = express();
+    app.use(express.json());
+    app.use('/api', memoryFactory({ VAULT_ROOT: vault, TERMINAL_HISTORY_FILE: null,
+      kernelLLM: async (prompt) => { prompts.push(prompt); return '[]'; } }));
+    const base = await listen(app);
+    await post(`${base}/memory/distill`, { messages: feedTurns });
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).not.toContain('Charizard');
+    expect(prompts[0]).toContain('store packs gate');
+
+    const r = await fetch(`${base}/memory/distill`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: feedTurns.slice(0, 2) }) });
+    expect(r.status).toBe(400);
+    expect(prompts).toHaveLength(1);
+  });
+
+  it('a saved chat that switched agents is titled and remembered without the Local only turns', async () => {
+    const calls = [];
+    const app = express();
+    app.use(express.json());
+    app.use('/api', createChatRouter({
+      isVercel: false, supabase: null, VAULT_ROOT: vault,
+      kernelLLM: async (prompt, opts) => { calls.push({ prompt, opts }); return 'Gate Dates'; },
+      getLocalFile: () => null, getDailyCost: () => 0, addRunCost: () => {}, KILL_SWITCH_THRESHOLD: 999, writeOSAudit: () => {},
+    }));
+    const base = await listen(app);
+    const ingested = [];
+    const matrix = express();
+    matrix.use(express.json());
+    matrix.post('/api/crn/second-brain/ingest/chat', (req, res) => { ingested.push(req.body); res.json({ ok: true, ingested: 1 }); });
+    const matrixBase = await listen(matrix);
+    const saved = process.env.AEON_KERNEL_URL;
+    process.env.AEON_KERNEL_URL = matrixBase.replace(/\/api$/, '');
+    try {
+      const dir = path.join(vault, 'Agents', 'Aeon', 'chat_sessions');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'mixed.json'), JSON.stringify({ id: 'mixed', name: 'mixed', messages: feedTurns }));
+
+      await post(`${base}/terminal/sessions/mixed/name`);
+      expect(calls[0].prompt).not.toContain('Charizard');
+      expect(calls[0].opts.localOnly).toBeUndefined();
+
+      const r = await post(`${base}/terminal/sessions/mixed/remember`);
+      expect(r.ok).toBe(true);
+      expect(JSON.stringify(ingested)).not.toContain('Charizard');
+      expect(JSON.stringify(ingested)).toContain('store packs gate');
+    } finally {
+      if (saved === undefined) delete process.env.AEON_KERNEL_URL; else process.env.AEON_KERNEL_URL = saved;
+    }
+  });
+});
+
+describe('/read does not summarise a withheld Vault file with a model', () => {
+  it('a Local only agent\'s memory and a switched-off memory are shown, not summarised or read back; other files are', async () => {
+    const asked = [];
+    const app = express();
+    app.use(express.json());
+    app.use('/api', createFsRouter({ isVercel: false, WORKSPACE: root, HOME_ROOT: root, VAULT_ROOT: vault,
+      kernelLLM: async (prompt) => { asked.push(prompt); return 'A summary.'; }, getDataFile: (n) => path.join(root, n) }));
+    const base = await listen(app);
+    for (const rel of ['Agents/Scout/memory/s1.md', 'Agents/Aeon/memory/off1.md']) {
+      const out = await post(`${base}/fs/read`, { filePath: path.join(vault, ...rel.split('/')) });
+      expect(out.summary, rel).toBeNull();
+      expect(out.modelText, rel).toBeNull();
+    }
+    expect(asked).toEqual([]);
+    const plain = await post(`${base}/fs/read`, { filePath: path.join(vault, 'Notes', 'plan.md') });
+    expect(plain.summary).toBe('A summary.');
+    expect('modelText' in plain).toBe(false);
+  });
+});
+
+describe('an image in a Local only agent\'s chat is not sent to a vision model', () => {
+  it('refuses for Scout, reads it for the operator\'s Roulette AEON', async () => {
+    const seen = [];
+    const app = express();
+    app.use(express.json());
+    app.use('/api/ai', createAIRouter({ VAULT_ROOT: vault, kernelVision: async (image, prompt) => { seen.push(prompt); return 'a chart'; } }));
+    const base = await listen(app);
+    const ask = (agent) => fetch(`${base}/ai/vision`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: 'data:image/png;base64,AAAA', prompt: 'What is the Charizard ceiling here?', ...(agent ? { agent } : {}) }) });
+    const r = await ask('scout');
+    expect(r.status).toBe(409);
+    expect(seen).toEqual([]);
+    const ok = await ask(null);
+    expect(ok.status).toBe(200);
+    expect(seen).toHaveLength(1);
   });
 });

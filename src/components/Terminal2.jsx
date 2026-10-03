@@ -401,6 +401,31 @@ export function distillSummary(d) {
  * both buttons fingerprint the same transcript, so "already distilled" holds
  * across them. null until there is a conversation (two turns).
  */
+/**
+ * A chat turn as it is sent back to the server: role, content, and the agent
+ * it was with (`agent`, from the stream's meta). One feed can switch agents,
+ * and the server leaves out the turns a Local only agent had whenever it sends
+ * history to a model that is not Local only (agents.cjs shareableTurns).
+ */
+export function turnForServer(t, maxChars = Infinity) {
+  const content = String(t.content ?? '');
+  return { role: t.role, content: content.length > maxChars ? content.slice(0, maxChars) : content, ...(typeof t.agent === 'string' ? { agent: t.agent } : {}) };
+}
+
+/** The last `n` turns of the feed, for the chat stream's history. */
+export function chatHistory(feed, n = 20) {
+  return (Array.isArray(feed) ? feed : []).filter(isTurn).slice(-n).map((t) => turnForServer(t));
+}
+
+/**
+ * The turns the DISTIL button sends (POST /api/memory/distill `messages`),
+ * cut the way the distil transcript cuts them. More than the 30 it reads, so
+ * the server still has 30 after leaving out a Local only agent's turns.
+ */
+export function liveTurns(feed, n = 60) {
+  return (Array.isArray(feed) ? feed : []).filter(isTurn).slice(-n).map((t) => turnForServer(t, 400));
+}
+
 export function liveTranscript(feed) {
   const turns = (Array.isArray(feed) ? feed : []).filter(isTurn);
   if (turns.length < 2) return null;
@@ -569,7 +594,9 @@ const Terminal2 = ({ onUsageUpdate }) => {
       const r = await fetch('/api/memory/distill', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         // Into the current agent's own memory; none: the shared memory.
-        body: JSON.stringify({ transcript, ...agentBody() }),
+        // The turns, not the transcript: the server leaves out a Local only
+        // agent's turns before they reach this distil's model.
+        body: JSON.stringify({ messages: liveTurns(feedRef.current || []), ...agentBody() }),
       });
       const d = (await r.json().catch(() => null)) || {};
       if (!r.ok || d.error) throw new Error(d.error || `HTTP ${r.status}`);
@@ -998,6 +1025,8 @@ const Terminal2 = ({ onUsageUpdate }) => {
       const res = await fetch('/api/ai/vision', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          // The agent this chat is with: one set to Local only sends no image.
+          ...agentBody(),
           image: img.dataUri,
           prompt: query
             ? `The user is asking: "${query}". Describe this image with that question in mind — focus on whatever is relevant (error messages, UI elements, text, layout).`
@@ -1033,7 +1062,9 @@ const Terminal2 = ({ onUsageUpdate }) => {
   // screen (§08). A server that explained itself gets its own words; only a
   // genuine transport failure gets a transport label, and the words are the
   // ones App.jsx already uses so both surfaces speak one vocabulary (§05).
-  const runChat = async (text) => {
+  // userMsgId: the operator's line this answers, tagged with the agent that
+  // answered it once the server says (meta.agent).
+  const runChat = async (text, userMsgId = null) => {
     const msgId = push({ type: 'msg', role: 'assistant', content: '', streaming: true });
     let streamed = '';
     let meta = {};
@@ -1047,7 +1078,7 @@ const Terminal2 = ({ onUsageUpdate }) => {
       const res = await fetch('/api/chat/stream', {
         method: 'POST', headers: { 'Content-Type': 'application/json', [SELF_REPORTED_HEADER]: '1' },
         signal: controller.signal,
-        body: JSON.stringify({ message: text, role: 'chat', ...agentBody(), history: feed.filter(e => e.type === 'msg' && (e.role === 'user' || e.role === 'assistant')).slice(-20).map(e => ({ role: e.role, content: e.content })) }),
+        body: JSON.stringify({ message: text, role: 'chat', ...agentBody(), history: chatHistory(feed) }),
       });
       if (!res.ok || !res.body) {
         // The chat backend lives in the Dashboard block; with it removed the
@@ -1085,6 +1116,9 @@ const Terminal2 = ({ onUsageUpdate }) => {
             // The server says who answered. A wake that named an agent
             // ("scout come online") hands it the terminal from here on.
             if (payload.agent) {
+              // Both sides of this turn carry the agent they were with.
+              patch(msgId, { agent: payload.agent.id });
+              if (userMsgId != null) patch(userMsgId, { agent: payload.agent.id });
               const was = agentRef.current ? agentRef.current.id : null;
               const now = payload.agent.self ? null : payload.agent.id;
               if (was !== now) {
@@ -1354,7 +1388,7 @@ const Terminal2 = ({ onUsageUpdate }) => {
     const echo = text.startsWith('/addkey')
       ? text.replace(/(\/addkey\s+\S+\s+)(\S{4})\S+/, '$1$2••••••••')
       : text;
-    push({ type: 'msg', role: 'user', content: echo });
+    const userMsgId = push({ type: 'msg', role: 'user', content: echo });
     setInput('');
     setShowPalette(false);
     setIsLoading(true);
@@ -1363,7 +1397,7 @@ const Terminal2 = ({ onUsageUpdate }) => {
       else if (text.startsWith('/')) await runCommand(text);
       else {
         const imageContext = await resolveImageContext(text);
-        await runChat(text + imageContext);
+        await runChat(text + imageContext, userMsgId);
       }
     } finally {
       setIsLoading(false);

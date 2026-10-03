@@ -82,7 +82,9 @@ module.exports = function createAIRouter(deps) {
     const prompt = kernelContext.composePrompt({
       identity: agentsKernel.identityFor(agent, IDENTITY),
       memoryText: assembled.memory.text,
-      history,
+      // A turn tagged with an agent set to Local only reaches only a Local
+      // only agent's model.
+      history: agentsKernel.shareableTurns(history, agent, agents),
       query: assembled.query,
       recallContext: assembled.recall.context,
     });
@@ -155,9 +157,22 @@ module.exports = function createAIRouter(deps) {
   // Model Assignment). Single entry point shared by the Neural Terminal's
   // image upload and the Mission Runner's read_image tool.
   router.post('/vision', async (req, res) => {
-    const { image, prompt, provider, model } = req.body || {};
+    const { image, prompt, provider, model, agent: agentRef = null } = req.body || {};
     if (!image) return res.status(400).json({ error: 'image (data: URI) required' });
     if (!kernelVision) return res.status(501).json({ error: 'vision not available on this deployment' });
+    // Images are read only by cloud models here (kernelVision), so a chat
+    // with an agent set to Local only — the caller's, else the operator's
+    // own AEON — sends none, and neither does the question that rides with it.
+    let agents = [];
+    try { agents = agentsKernel.list(VAULT_ROOT, { withStats: false }); } catch {}
+    const agent = (agentRef ? agentsKernel.get(VAULT_ROOT, agentRef, agents) : null) || agents.find((a) => a.self) || null;
+    if (agent && agent.privacy === 'local-only') {
+      return res.status(409).json({
+        error: `${agent.name} is set to Local only, and images are read only by cloud models here, so the image was not sent.`,
+        remedy: `Set ${agent.name} to Roulette in Memory Core to read images, or describe the image in words.`,
+        localOnly: true,
+      });
+    }
     try {
       const text = await kernelVision(image, prompt || 'Describe this image in detail.', provider ? { provider, model } : {});
       res.json({ text });

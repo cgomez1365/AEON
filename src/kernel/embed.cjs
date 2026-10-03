@@ -157,7 +157,10 @@ function isLocalEmbedder(r) {
   try { return !!endpoints.isPrivateHost(new URL(r.base_url || profile.base).hostname); } catch { return false; }
 }
 
-async function kernelEmbed(text, { supabase = null, kind = 'document' } = {}) {
+// `localOnly` is the same refusal for one call: a query asked for an agent set
+// to Local only is embedded on this computer or the LAN, whatever the global
+// switch says.
+async function kernelEmbed(text, { supabase = null, kind = 'document', localOnly = false } = {}) {
   if (typeof text !== 'string' || !text.trim()) {
     throw embedError('empty_input', 'Nothing to embed.');
   }
@@ -176,6 +179,13 @@ async function kernelEmbed(text, { supabase = null, kind = 'document' } = {}) {
       'local_only',
       `Local only is on (Settings → Models), so documents are not sent to ${r.provider} for embedding.`,
       'Install a local embedder in Cookbook (nomic-embed-text, about 150 MB, runs on CPU), or turn Local only off.',
+    );
+  }
+  if (!isLocalEmbedder(r) && localOnly === true) {
+    throw embedError(
+      'local_only',
+      `This agent is set to Local only, so its question is not sent to ${r.provider} for embedding.`,
+      'Install a local embedder in Cookbook (nomic-embed-text, about 150 MB, runs on CPU), or set the agent to Roulette in Memory Core.',
     );
   }
 

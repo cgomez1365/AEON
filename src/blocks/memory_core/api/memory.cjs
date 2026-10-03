@@ -14,8 +14,10 @@
  * store. Agents themselves: GET/POST /agents, PUT/DELETE /agents/:id
  * (src/kernel/agents.cjs owns the layout).
  * Record: { id, text, category, type, title, tags, pinned, active, timestamp, source, refs }
- *   - active: the manual switch — false keeps the memory saved and
- *     searchable but never sends it to a model (missing = on)
+ *   - active: the manual switch — false keeps the memory saved and listed
+ *     here, but never sends it to a model, and keeps it (and its .md mirror)
+ *     out of the Second Brain index and recall (kernel/vaultPrivacy.cjs).
+ *     Missing = on
  *   - category: legacy taxonomy (fact|identity|preference|contact|project|goal)
  *   - type: operator taxonomy (outline|algorithm|decision|milestone) — optional
  *   - refs: provenance, citation-doctrine style — [{kind, ...locator}] so a
@@ -255,10 +257,19 @@ module.exports = function createMemoryRouter(deps) {
       inactive: all.length - on.length,
       activeTokens: on.reduce((n, m) => n + withCost(m).tokens, 0),
     };
+    // What the terminal's narrator may read back into the conversation — and
+    // the conversation goes to a model. The list without the memories that are
+    // switched off; nothing of a Local only agent's memory. `text` (the chip
+    // the operator sees) keeps everything.
+    const off = out.filter((m) => m.active === false).length;
+    const modelText = agent && agent.privacy === 'local-only'
+      ? null
+      : off ? `${sections.renderList(out.filter((m) => m.active !== false))}\n(${off} switched off — not repeated here.)` : undefined;
     res.json({
       memories: listed, count: listed.length, dir: st.dir, summary,
       agent: agent ? { id: agent.id, name: agent.name } : null,
       ...(section ? { section } : {}), text: sections.renderList(out), verbatim: true,
+      ...(modelText !== undefined ? { modelText } : {}),
     });
   });
 
@@ -345,7 +356,8 @@ module.exports = function createMemoryRouter(deps) {
 
   // ── POST /memory/:id/active — the manual switch ─────────────────────
   // { active: true|false } sets it; no body flips it. Off keeps the memory
-  // saved, searchable and in Aeon Matrix; it is only never sent to a model.
+  // saved, listed here and in Aeon Matrix; it is never sent to a model and
+  // leaves the Second Brain index (and so recall) on the scan this asks for.
   // This is how the operator keeps a growing store from slowing every chat.
   router.post('/memory/:id/active', (req, res) => {
     const scope = scopeFor(req, res); if (!scope) return;
@@ -356,7 +368,9 @@ module.exports = function createMemoryRouter(deps) {
     const want = req.body?.active;
     m.active = want === undefined ? m.active === false : want !== false;
     st.save(all); st.mdMirror(m);
-    res.json({ ok: true, id: m.id, active: m.active, text: `Memory ${m.active ? 'on — sent to the model again' : 'off — kept, but not sent to the model'}: ${m.text.slice(0, 80)}` });
+    // Off takes the memory's file out of the Second Brain index; on puts it back.
+    requestIndex('memory-active');
+    res.json({ ok: true, id: m.id, active: m.active, text: `Memory ${m.active ? 'on — sent to the model again' : 'off — kept, but not sent to a model or recalled'}: ${m.text.slice(0, 80)}` });
   });
 
   // ── POST /memory/active — many switches at once ─────────────────────
@@ -374,7 +388,7 @@ module.exports = function createMemoryRouter(deps) {
       if (want && !want.has(m.id)) continue;
       if ((m.active !== false) !== active) { m.active = active; changed++; st.mdMirror(m); }
     }
-    if (changed) st.save(list);
+    if (changed) { st.save(list); requestIndex('memory-active'); }
     res.json({ ok: true, changed, active });
   });
 
@@ -442,6 +456,9 @@ module.exports = function createMemoryRouter(deps) {
       tokensUsed: selection.tokensUsed,
       budget: budgetTokens,
       budgetUnit: 'tokens',
+      // A Local only agent's memory is not read back into the terminal's
+      // conversation, which may go to a cloud model (commandNarrator).
+      ...(agent && agent.privacy === 'local-only' ? { modelText: null } : {}),
     });
   });
 
@@ -451,7 +468,31 @@ module.exports = function createMemoryRouter(deps) {
     const scope = scopeFor(req, res); if (!scope) return;
     const { st, agent } = scope;
     const folder = agent ? agent.folder : agentsKernel.SELF_FOLDER;
+    // An agent's distil runs on that agent's model and privacy — the
+    // operator's own AEON's too (scopeFor names no agent for it).
+    const caller = agent || agentsKernel.get(VAULT, agentsKernel.SELF_ID);
+    const callerLocal = caller?.privacy === 'local-only';
+    let agentList = null;
+    const allAgents = () => {
+      if (!agentList) { try { agentList = agentsKernel.list(VAULT, { withStats: false }); } catch { agentList = []; } }
+      return agentList;
+    };
     let transcript = req.body?.transcript;
+    // The terminal's DISTIL button sends its live turns, each tagged with the
+    // agent it was with, so the turns a Local only agent had are left out
+    // here unless this distil runs Local only too. Same transcript shape as a
+    // saved chat's, so "already distilled" holds across both buttons.
+    if (!transcript && Array.isArray(req.body?.messages)) {
+      const turns = agentsKernel.shareableTurns(req.body.messages, caller, allAgents())
+        .filter((m) => m && (m.role === 'user' || m.role === 'assistant'));
+      if (!turns.length) {
+        return res.status(400).json({
+          ok: false, code: 'local_only',
+          error: 'Nothing to distil: every turn of this chat was with an agent set to Local only, and this distil does not run Local only.',
+        });
+      }
+      transcript = sessionTranscript(turns);
+    }
     // Provenance rides on every distilled memory: cite the transcript span (or
     // caller-supplied refs) so no memory is ever flat/no-provenance.
     let refs = Array.isArray(req.body?.refs) ? req.body.refs.slice(0, 5) : null;
@@ -477,18 +518,41 @@ module.exports = function createMemoryRouter(deps) {
         // Compared with values only — never joined into a path — so it cannot
         // reach outside the folder.
         const wanted = typeof req.body?.sessionId === 'string' ? req.body.sessionId : null;
+        // A chat with an agent set to Local only is not sent to a distil that
+        // may run on a cloud model: every agent's chats are saved in this one
+        // folder, and the newest is not necessarily the caller's own. Nor are
+        // a Local only agent's turns in a chat that switched agents.
+        const withheldWith = (rec) => {
+          if (callerLocal) return null;
+          const owner = agentsKernel.get(VAULT, (rec && !Array.isArray(rec) && rec.agent) || agentsKernel.SELF_ID, allAgents());
+          return owner && owner.privacy === 'local-only' ? owner : null;
+        };
         let best = null;
+        let withheld = null;
         for (const f of files) {
           let rec;
           try { rec = JSON.parse(fs.readFileSync(path.join(sessionsDir, f), 'utf8')); } catch { continue; }
-          const msgs = Array.isArray(rec) ? rec : (rec?.messages || []);
-          if (!Array.isArray(msgs) || !msgs.length) continue;
+          const all = Array.isArray(rec) ? rec : (rec?.messages || []);
+          if (!Array.isArray(all) || !all.length) continue;
           if (wanted && rec?.id !== wanted && f !== `${wanted}.json`) continue;
+          const owner = withheldWith(rec);
+          if (owner) { withheld = withheld || owner; continue; }
+          const msgs = agentsKernel.shareableTurns(all, caller, allAgents());
+          if (!msgs.length) continue;
           const t = Date.parse(rec?.updatedAt || rec?.savedAt);
           const rank = Number.isFinite(t) ? t : -Infinity;
           if (!best || rank > best.rank) best = { f, rec, msgs, rank };
         }
-        if (!best) throw new Error(wanted ? 'that session has no messages' : 'every saved session is empty');
+        if (!best && wanted && withheld) {
+          return res.status(409).json({
+            ok: false, code: 'local_only',
+            error: `That chat is with ${withheld.name}, which is set to Local only, so it is not sent to the model this distil runs on.`,
+          });
+        }
+        if (!best) {
+          throw new Error(wanted ? 'that session has no messages'
+            : withheld ? 'every saved session is empty or with an agent set to Local only' : 'every saved session is empty');
+        }
         // Both sides of the conversation, on purpose. R09 keeps assistant
         // output out of the document index so the model's own words never
         // come back as evidence; a distilled memory is a short item the
@@ -549,8 +613,7 @@ ${String(transcript).slice(0, 8000)}`;
     // for a model call whose results would have nowhere to go.
     if (!st.loadFor(res)) return;
     try {
-      // An agent's distil runs on that agent's model and privacy.
-      const out = await kernelLLM(prompt, { role: 'chat', background: true, max_tokens: 2048, ...agentsKernel.callOptions(agent) });
+      const out = await kernelLLM(prompt, { role: 'chat', background: true, max_tokens: 2048, ...agentsKernel.callOptions(caller) });
       const raw = (typeof out === 'string' ? out : out?.text || '') + '';
       // No list in the reply is a failed run, not an empty one. It read as
       // "[]", the transcript was recorded as distilled, and every later click
@@ -642,8 +705,13 @@ ${String(transcript).slice(0, 8000)}`;
   });
 
   router.put('/agents/:id', (req, res) => {
-    try { res.json({ ok: true, agent: agentsKernel.update(VAULT, req.params.id, req.body || {}) }); }
-    catch (e) { agentErr(res, e); }
+    try {
+      const agent = agentsKernel.update(VAULT, req.params.id, req.body || {});
+      // Local only takes the agent's folder out of the Second Brain index on
+      // this scan; Roulette puts it back.
+      requestIndex('agent-update');
+      res.json({ ok: true, agent });
+    } catch (e) { agentErr(res, e); }
   });
 
   router.delete('/agents/:id', (req, res) => {

@@ -4,6 +4,7 @@ const path = require('path');
 const { loadSettings } = require('../../../../services/settings.js');
 const { isCloud: _isCloud } = require('../../../kernel/runtime.cjs');
 const kernelContext = require('../../../kernel/context.cjs');
+const agentsKernel = require('../../../kernel/agents.cjs');
 
 module.exports = function createChatRouter(deps) {
   const router = express.Router();
@@ -27,10 +28,19 @@ module.exports = function createChatRouter(deps) {
   // turns and R09 forbids those entering the record automatically — a model
   // turn stored as an ordinary document becomes a source a later answer can
   // cite. A conversation joins the record only when the operator says so.
-  const SESSIONS_DIR = path.join(
-    VAULT_ROOT || path.join(__dirname, '..', '..', 'aeon_matrix', 'data', 'Vault'),
-    'Agents', 'Aeon', 'chat_sessions'
-  );
+  const VAULT = VAULT_ROOT || path.join(__dirname, '..', '..', 'aeon_matrix', 'data', 'Vault');
+  const SESSIONS_DIR = path.join(VAULT, 'Agents', 'Aeon', 'chat_sessions');
+  // The agent a saved chat was with, when it is set to Local only (none
+  // recorded: the operator's own AEON). Its chats are not sent to a model
+  // that may be a cloud one, and do not enter the indexed record.
+  const listAgents = () => { try { return agentsKernel.list(VAULT, { withStats: false }); } catch { return []; } };
+  const localOnlyAgentOf = (record, agents = listAgents()) => {
+    const a = agentsKernel.get(VAULT, record?.agent || agentsKernel.SELF_ID, agents);
+    return a && a.privacy === 'local-only' ? a : null;
+  };
+  // The turns of a saved chat that may leave it for a call that is not a
+  // Local only agent's: without the ones a Local only agent had.
+  const shareableOf = (record, agents = listAgents()) => agentsKernel.shareableTurns(record?.messages || [], null, agents);
   const ensureSessionsDir = () => { try { if (!fs.existsSync(SESSIONS_DIR)) fs.mkdirSync(SESSIONS_DIR, { recursive: true }); } catch {} };
 
   // A session id becomes a filename, so it is validated before it touches a
@@ -241,7 +251,12 @@ module.exports = function createChatRouter(deps) {
       });
     }
 
-    const turns = (record.messages || [])
+    // A Local only agent's chat is titled by its own (local) model, or not
+    // at all — the naming role may be a cloud model. Any other chat is titled
+    // without the turns a Local only agent had in it.
+    const agents = listAgents();
+    const privateTo = localOnlyAgentOf(record, agents);
+    const turns = (privateTo ? (record.messages || []) : shareableOf(record, agents))
       .filter(m => m && m.role === 'user' && typeof m.content === 'string')
       .slice(0, 3)
       .map(m => m.content.replace(/\s+/g, ' ').slice(0, 300))
@@ -251,7 +266,7 @@ module.exports = function createChatRouter(deps) {
     try {
       const raw = await kernelLLM(
         `Title this conversation in 2 to 6 words. Reply with the title alone: no quotes, no punctuation at the end, no preamble.\n\n${turns}`,
-        { role: 'naming' },
+        { role: 'naming', ...(privateTo ? agentsKernel.callOptions(privateTo) : {}) },
       );
       const name = String(raw || '').trim().split('\n')[0].replace(/^["'“]|["'”.]$/g, '').slice(0, 80).trim();
       // A model that answers with a sentence, an apology, or nothing usable
@@ -288,9 +303,24 @@ module.exports = function createChatRouter(deps) {
   router.post('/terminal/sessions/:id/remember', async (req, res) => {
     const record = readSession(req.params.id);
     if (!record) return res.status(404).json({ error: 'Session not found' });
-    const messages = (record.messages || []).filter(m => m && m.role === 'user');
-    if (!messages.length) {
-      return res.status(400).json({ error: 'This conversation has nothing of yours to remember yet.' });
+    // The record is indexed (possibly by a cloud embedder) and recalled into
+    // every agent's chats, so a Local only agent's chat — or its turns in a
+    // chat that switched agents — does not enter it.
+    const agents = listAgents();
+    const privateTo = localOnlyAgentOf(record, agents);
+    const messages = shareableOf(record, agents).filter(m => m && m.role === 'user');
+    if (!privateTo && !messages.length) {
+      const anyOfYours = (record.messages || []).some(m => m && m.role === 'user');
+      return res.status(400).json({ error: anyOfYours
+        ? 'Everything you said in this conversation was to an agent set to Local only, so none of it is added to the indexed record.'
+        : 'This conversation has nothing of yours to remember yet.' });
+    }
+    if (privateTo) {
+      return res.status(409).json({
+        ok: false, code: 'local_only',
+        error: `This chat is with ${privateTo.name}, which is set to Local only, so it is not added to the indexed record.`,
+        remedy: `Set ${privateTo.name} to Roulette in Memory Core first if you want it there.`,
+      });
     }
     try {
       const base = process.env.AEON_KERNEL_URL || `http://127.0.0.1:${process.env.PORT || 3001}`;

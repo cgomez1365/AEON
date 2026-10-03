@@ -161,7 +161,7 @@ export default function MemoryCore() {
   const pin = (id) => act(() => must(post(`/api/memory/${id}/pin`)));
   const del = (id) => act(() => must(fetch(scoped(`/api/memory/${id}`), { method: 'DELETE' })), 'deleted');
   const toggle = (m) => act(() => must(post(`/api/memory/${m.id}/active`, { active: !m.active })),
-    m.active ? 'switched off — kept, not sent to the model' : 'switched on');
+    m.active ? 'switched off — kept, not sent to a model or recalled' : 'switched on');
   // On or off for everything the filter shows (or the whole store).
   const bulk = (active) => act(async () => {
     const ids = shown.map(m => m.id);
@@ -252,7 +252,7 @@ export default function MemoryCore() {
       </div>
       <div style={{ fontSize: 12, color: 'var(--text-dim, #8aa)', marginBottom: 14 }}>
         <b>All agents</b> is the shared memory every agent reads. Each agent also has its own. Switch a memory off to keep it
-        without sending it to the model — the fewer switched on, the faster every chat. Each memory is a vault file.
+        without sending it to a model or recalling it — the fewer switched on, the faster every chat. Each memory is a vault file.
       </div>
 
       {/* Agent tabs */}
@@ -325,10 +325,18 @@ export default function MemoryCore() {
             <label style={{ display: 'grid', gap: 3, fontSize: 11, flex: '1 1 200px' }}>Privacy
               <select value={agentForm.privacy} onChange={e => setAgentForm({ ...agentForm, privacy: e.target.value })} style={field}>
                 <option value="roulette">Roulette — any configured provider, failover on</option>
-                <option value="local-only">Local only — never leaves this computer</option>
+                <option value="local-only">{agentForm.self
+                  ? 'Local only — its chats never go to a cloud model'
+                  : 'Local only — its chats and its own memory never go to a cloud model'}</option>
               </select>
             </label>
           </div>
+          {agentForm.self && agentForm.privacy === 'local-only' && (
+            <div style={{ fontSize: 11, color: 'var(--text-dim, #8aa)' }}>
+              Your AEON's memory is the shared memory: it stays out of the Second Brain index and recall, but an agent set to
+              Roulette that reads the shared memory still sends it to its own model.
+            </div>
+          )}
           {!agentForm.self && (
             <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 11 }}>
               <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
@@ -425,7 +433,7 @@ export default function MemoryCore() {
         <div key={m.id} style={{ border: '1px solid var(--border, #223)', borderLeft: m.pinned ? '3px solid var(--accent, #00ff40)' : '1px solid var(--border, #223)', borderRadius: 6, padding: '10px 12px', marginBottom: 8, display: 'flex', gap: 10, alignItems: 'flex-start', opacity: m.active === false ? 0.55 : 1 }}>
           <div style={{ paddingTop: 2 }}>
             <Switch on={m.active !== false} disabled={busy} onChange={() => toggle(m)}
-              label={m.active !== false ? 'On — sent to the model. Switch off.' : 'Off — kept, not sent to the model. Switch on.'} />
+              label={m.active !== false ? 'On — sent to the model and recalled. Switch off.' : 'Off — kept, not sent to a model or recalled. Switch on.'} />
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
             {editingId === m.id ? (

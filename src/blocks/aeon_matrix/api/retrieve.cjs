@@ -42,6 +42,7 @@ const { loadExtractors, extractText, embed, cosineSimilarity, EMBED_MODEL } = re
 // requires _lib.cjs and nothing else in this block.
 const { chunkText } = require('./ingest.cjs');
 const memorySections = require('../../../kernel/memorySections.cjs');
+const vaultPrivacy = require('../../../kernel/vaultPrivacy.cjs');
 
 const DEFAULT_K        = 5;
 const MATCH_THRESHOLD   = 0.35; // cosine similarity floor
@@ -119,9 +120,21 @@ module.exports = function retrieveFactory(deps) {
     } catch { return {}; }
   }
 
+  // Every route below reads the index through this, so nothing the operator
+  // withheld in Memory Core — a memory switched off, a Local only agent's
+  // folder — is ever a candidate, even in the moments between flipping the
+  // switch and the scan that takes its entry out of vault_index.json.
   function readIndex() {
+    let idx;
     if (!fs.existsSync(INDEX_FILE)) return { documents: {} };
-    try { return JSON.parse(fs.readFileSync(INDEX_FILE, 'utf8')); } catch { return { documents: {} }; }
+    try { idx = JSON.parse(fs.readFileSync(INDEX_FILE, 'utf8')); } catch { return { documents: {} }; }
+    if (!idx || typeof idx !== 'object' || !idx.documents || typeof idx.documents !== 'object') return idx || { documents: {} };
+    const privacy = vaultPrivacy.createScope(VAULT_ROOT);
+    const documents = {};
+    for (const [rel, d] of Object.entries(idx.documents)) {
+      if (!privacy.withheld(d?.path || rel)) documents[rel] = d;
+    }
+    return { ...idx, documents };
   }
 
   /**
@@ -181,7 +194,7 @@ module.exports = function retrieveFactory(deps) {
    *
    * @returns {{documents: Array, unavailable?: {reason, message, action}}}
    */
-  async function retrieve(query, k = DEFAULT_K) {
+  async function retrieve(query, k = DEFAULT_K, { localOnly = false } = {}) {
     const index = readIndex();
     const all = Object.values(index.documents || {});
     const docs = all.filter(d => Array.isArray(d.embedding));
@@ -227,7 +240,9 @@ module.exports = function retrieveFactory(deps) {
       // Injectable for the same reason ingest's is (BO-SHIP P10): a test of
       // ranking must not need a model, and query and index must share one
       // embedder or the comparison is meaningless.
-      ({ vector: queryEmbedding, model: queryModel } = await (deps?.embed || embed)(query, { kind: 'query' }));
+      // localOnly: the question comes from an agent set to Local only, so it
+      // is embedded on this computer or not at all (kernel/embed.cjs).
+      ({ vector: queryEmbedding, model: queryModel } = await (deps?.embed || embed)(query, { kind: 'query', ...(localOnly ? { localOnly: true } : {}) }));
     } catch (e) {
       console.warn('[RETRIEVE] query embed failed:', e.code || 'error', e.message);
       // The kernel owns the remedy: it knows whether nothing is assigned, the
@@ -392,6 +407,9 @@ module.exports = function retrieveFactory(deps) {
   // whole subsystem exists to avoid.
   router.post('/crn/second-brain/ask', async (req, res) => {
     const { query, k, model: modelOverride } = req.body || {};
+    // Sent for an agent set to Local only: the question is embedded and
+    // answered on this computer, or not at all.
+    const localOnly = req.body?.localOnly === true;
     if (!query || typeof query !== 'string') {
       return res.status(400).json({ ok: false, error: 'query required' });
     }
@@ -407,7 +425,7 @@ module.exports = function retrieveFactory(deps) {
 
     let docs, unavailable;
     try {
-      ({ documents: docs, unavailable } = await retrieve(query, k || DEFAULT_K));
+      ({ documents: docs, unavailable } = await retrieve(query, k || DEFAULT_K, { localOnly }));
     } catch (e) {
       return res.status(500).json({ ok: false, error: 'retrieval_failed', message: e.message });
     }
@@ -523,7 +541,7 @@ module.exports = function retrieveFactory(deps) {
     ].join('\n');
 
     try {
-      const out = await kernelLLM(prompt, { role: 'chat', ...(modelOverride ? { model: modelOverride } : {}) });
+      const out = await kernelLLM(prompt, { role: 'chat', ...(modelOverride ? { model: modelOverride } : {}), ...(localOnly ? { localOnly: true } : {}) });
       const answer = typeof out === 'string' ? out : (out?.text || '');
       if (!answer.trim()) {
         return res.status(502).json({
@@ -574,6 +592,7 @@ module.exports = function retrieveFactory(deps) {
   // footer, never through /recall itself.
   router.post('/crn/second-brain/retrieve', async (req, res) => {
     const { query, k } = req.body || {};
+    const localOnly = req.body?.localOnly === true;
     if (!query) return res.status(400).json({ error: 'query required' });
 
     // A query that is ONLY a memory section name ("preferences",
@@ -585,6 +604,11 @@ module.exports = function retrieveFactory(deps) {
       const memFile = path.join(VAULT_ROOT, 'Agents', 'Aeon', 'memory', 'memories.json');
       let mems = [];
       try { const raw = JSON.parse(fs.readFileSync(memFile, 'utf8')); if (Array.isArray(raw)) mems = raw; } catch { /* no store */ }
+      // A memory switched off is not recalled, here either: this answer goes
+      // into a chat turn. Nor is any of it while the operator's own AEON is
+      // set to Local only — the same rule as its file in the index.
+      const privacy = vaultPrivacy.createScope(VAULT_ROOT);
+      mems = mems.filter((m) => m && !privacy.withheld(`Agents/Aeon/memory/${m.id}.md`));
       const sec = memorySections.parseSectionQuery(query, mems);
       if (sec) {
         const { entries, missing } = memorySections.selectSection(mems, sec);
@@ -605,7 +629,7 @@ module.exports = function retrieveFactory(deps) {
     }
 
     try {
-      const { documents, unavailable, matched, k: kUsed } = await retrieve(query, k || DEFAULT_K);
+      const { documents, unavailable, matched, k: kUsed } = await retrieve(query, k || DEFAULT_K, { localOnly });
       // `unavailable` rides alongside the (empty) documents rather than
       // replacing them with an error status: retrieval is best-effort for its
       // callers — the terminal must not fail a chat turn because the index is

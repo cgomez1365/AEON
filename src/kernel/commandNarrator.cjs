@@ -134,6 +134,19 @@ async function narrate(result, llm) {
   const { cmd = '/command', ok = false, text = null, data = null, error = null, title = null } = result || {};
   const raw = { ok, text, data, error };
 
+  // A result that holds what the operator withheld from models — a memory
+  // switched off, a Local only agent's memory (memory_core's /memory) — says
+  // what may be read back as `modelText`. The narration joins the conversation
+  // and the conversation goes to a model, so nothing else of it is used, and
+  // no model is asked to narrate it. null: nothing may be read back.
+  if (ok && data && typeof data === 'object' && Object.prototype.hasOwnProperty.call(data, 'modelText')) {
+    const said = typeof data.modelText === 'string' ? data.modelText.trim() : '';
+    return {
+      narration: said ? clip(said, MAX_VERBATIM_CHARS) : `${cmd} listed it above; it is not repeated to the model.`,
+      source: 'handler', raw,
+    };
+  }
+
   // A handler that already wrote a sentence has said it better than a model
   // will, and for free.
   if (ok && typeof text === 'string' && text.trim() && text.trim().length <= 400) {

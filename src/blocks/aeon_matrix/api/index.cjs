@@ -9,6 +9,7 @@ const express = require('express');
 const path    = require('path');
 const fs      = require('fs');
 const { isInside } = require('../../../kernel/pathContainment.cjs');
+const vaultPrivacy = require('../../../kernel/vaultPrivacy.cjs');
 
 module.exports = function secondBrainFactory(deps) {
   const router = express.Router();
@@ -308,6 +309,10 @@ module.exports = function secondBrainFactory(deps) {
         // 8,000 chars) instead of asking a model to paraphrase it. Opening a
         // document should show the document, not a summary of it.
         verbatim: true,
+        // A file withheld in Memory Core (a memory switched off, a Local only
+        // agent's folder) is shown to the operator and never read back into
+        // the conversation, which goes to a model (commandNarrator).
+        ...(vaultPrivacy.withheld(BRAIN_DIR, rel) ? { modelText: null } : {}),
       });
     } catch (e) {
       const text = `${rel} was found but could not be read: ${e.message}`;

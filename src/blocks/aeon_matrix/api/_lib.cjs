@@ -32,8 +32,8 @@ const EMBED_MODEL = process.env.AEON_EMBED_MODEL || 'nomic-embed-text-q8';
  * @returns {Promise<{vector: number[], model: string}>} `model` is the model
  * the kernel actually used, so the caller can tag the vector with its space.
  */
-async function embed(text, { kind = 'document' } = {}) {
-  const { vector, model } = await kernelEmbed(text, { kind });
+async function embed(text, { kind = 'document', localOnly = false } = {}) {
+  const { vector, model } = await kernelEmbed(text, { kind, localOnly });
   return { vector, model };
 }
 
