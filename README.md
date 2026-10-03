@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-reduced-motion: reduce)" srcset=".github/assets/aeon-banner.png">
-    <img src=".github/assets/aeon-banner.webp" alt="AEON — Modular. Local. Yours. A local-first AI workspace." width="100%">
+    <source media="(prefers-reduced-motion: reduce)" srcset=".github/assets/aeon-hero.png">
+    <img src=".github/assets/aeon-hero.webp" alt="AEON — Modular. Local. Yours. In AEON's terminal an agent wakes by name and answers from its memory, and when one AI provider is rate-limited a quiet notice hands the chat to another." width="100%">
   </picture>
 </p>
 

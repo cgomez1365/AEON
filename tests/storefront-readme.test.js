@@ -160,7 +160,7 @@ describe('community files', () => {
 });
 
 describe('README-only images live out of public/', () => {
-  const images = ['aeon-banner.webp', 'aeon-banner.png', 'aeon-primary-logo.png'];
+  const images = ['aeon-hero.webp', 'aeon-hero.png', 'aeon-banner.webp', 'aeon-banner.png', 'aeon-primary-logo.png'];
 
   it.each(images)('%s is in .github/assets, not public/brand', (f) => {
     expect(tracked.has(`.github/assets/${f}`)).toBe(true);
