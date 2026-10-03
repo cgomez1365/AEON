@@ -75,3 +75,59 @@ describe('the Get Started strip agrees with its own copy', () => {
     expect(strip).toMatch(/Object\.entries\(providers\)\.some\(\(\[p, v\]\) => p !== 'local' && v\?\.configured\)/);
   });
 });
+
+// GitHub audit 2026-10-03 #14. Checking that the winget command is in the file
+// (above) passed while the offer could never appear: cmd expands %VAR% once,
+// when it parses a whole parenthesised block, so inside LAUNCH.bat's "no Node"
+// block %errorlevel% and %INSTALL_NODE% still held their values from before
+// the block ran. With delayed expansion on, !VAR! is read when the line runs.
+// Read from the file and cmd's documented behaviour; not run on Windows here.
+describe('LAUNCH.bat reads values set inside a block when the line runs', () => {
+  const bat = read('LAUNCH.bat');
+  const lines = bat.split(/\r?\n/);
+
+  // Lines inside a parenthesised block: a line ending in "(" opens one, a line
+  // starting with ")" closes it. Escaped ^( ^) in echo text do neither.
+  const inBlock = [];
+  let depth = 0;
+  for (const [i, raw] of lines.entries()) {
+    const line = raw.trim();
+    if (line.startsWith(')')) depth--;
+    if (depth > 0) inBlock.push({ n: i + 1, line });
+    if (/(?<!\^)\($/.test(line)) depth++;
+  }
+  const setInBlock = [...new Set(inBlock
+    .map(({ line }) => /^set\s+(?:\/p\s+)?"?([A-Za-z_][A-Za-z0-9_]*)=/i.exec(line)?.[1])
+    .filter(Boolean))];
+
+  it('turns on delayed expansion before the first block', () => {
+    const setlocal = lines.findIndex((l) => /^\s*setlocal\s+enabledelayedexpansion\s*$/i.test(l));
+    const firstBlock = lines.findIndex((l) => /(?<!\^)\(\s*$/.test(l));
+    expect(setlocal, 'no "setlocal enabledelayedexpansion"').toBeGreaterThanOrEqual(0);
+    expect(setlocal).toBeLessThan(firstBlock);
+  });
+
+  it('never reads %errorlevel%, or a variable the block sets, with %...% inside a block', () => {
+    expect(setInBlock).toContain('INSTALL_NODE');
+    const names = ['errorlevel', ...setInBlock];
+    const offenders = inBlock
+      .filter(({ line }) => names.some((v) => new RegExp(`%${v}%`, 'i').test(line)))
+      .map(({ n, line }) => `${n}: ${line}`);
+    expect(offenders).toEqual([]);
+  });
+
+  it('the winget answer and its exit code are read with !...!', () => {
+    expect(bat).toMatch(/if !errorlevel! equ 0 \(\r?\n(?:[^\n]*\n)?[^\n]*set \/p INSTALL_NODE=/);
+    expect(bat).toMatch(/if \/i "!INSTALL_NODE!"=="y" \(/);
+  });
+
+  it('says Node.js is installed only when winget exits 0', () => {
+    expect(bat).toMatch(/winget install [^\n]*\r?\n\s*if !errorlevel! equ 0 \(\r?\n(?:[^\n]*\n){0,2}[^\n]*Node\.js installed\./);
+    expect(bat).toMatch(/winget exited with code !errorlevel!/);
+  });
+
+  it('no command line has a "!" that delayed expansion would eat', () => {
+    const other = lines.filter((l) => !/^\s*rem\b/i.test(l)).filter((l) => l.replace(/!(errorlevel|INSTALL_NODE)!/gi, '').includes('!'));
+    expect(other).toEqual([]);
+  });
+});

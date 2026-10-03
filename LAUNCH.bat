@@ -1,4 +1,8 @@
 @echo off
+rem Delayed expansion: inside a ( ) block, %VAR% is read once when cmd parses
+rem the whole block. !VAR! is read when the line runs, so the winget offer
+rem below sees the real exit code and the answer typed at the prompt.
+setlocal enabledelayedexpansion
 title AEON - Console
 cd /d "%~dp0"
 
@@ -8,17 +12,22 @@ if %errorlevel% neq 0 (
   echo  Node.js is not installed. AEON needs it to run.
   echo.
   where winget >nul 2>nul
-  if %errorlevel% equ 0 (
+  if !errorlevel! equ 0 (
+    set "INSTALL_NODE="
     set /p INSTALL_NODE="  Install Node.js LTS now via winget? [Y]es / [N]o (manual install): "
-    if /i "%INSTALL_NODE%"=="y" (
+    if /i "!INSTALL_NODE!"=="y" (
       echo.
       echo  Installing Node.js LTS...
       winget install -e --id OpenJS.NodeJS.LTS --accept-source-agreements --accept-package-agreements
+      if !errorlevel! equ 0 (
+        echo.
+        echo  Node.js installed. Close this window and double-click LAUNCH.bat again
+        echo  ^(Windows needs a fresh window to see the updated PATH^).
+        pause
+        exit /b 0
+      )
+      echo  winget exited with code !errorlevel!. Install Node.js by hand instead:
       echo.
-      echo  Node.js installed. Close this window and double-click LAUNCH.bat again
-      echo  ^(Windows needs a fresh window to see the updated PATH^).
-      pause
-      exit /b 0
     )
   )
   echo  Download the LTS version at: https://nodejs.org
@@ -33,3 +42,4 @@ node launch.js
 echo.
 echo  AEON has stopped. You can close this window.
 pause
+endlocal

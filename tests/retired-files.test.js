@@ -79,6 +79,11 @@ const RETIRED = {
   // /api/llm-telemetry (and /api/telemetry) every 10 s on every page and priced
   // every token at one flat rate. The Dashboard reads the ledger directly.
   'src/kernel/contexts/TelemetryContext.jsx': 'no consumer of its context; a 10 s poll per tab for nothing',
+  // 2026-10-03 (GitHub audit #15): a personal ACE-Step music-generator launcher
+  // that came in with security commit 7aba43f and shipped at the root of every
+  // download, beside LAUNCH.bat. Nothing references it, and it runs a program
+  // from %USERPROFILE%\Desktop\ACE-Step-1.5, which is not part of AEON.
+  'ACE-Step-Launcher.bat': 'not part of AEON; nothing references it',
 };
 
 // The depth-map images whose only consumer was mathModels.js.

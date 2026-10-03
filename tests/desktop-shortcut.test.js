@@ -127,6 +127,26 @@ describe('macOS: AEON.app on the Desktop', () => {
     expect(fs.statSync(exe).mtimeMs).toBe(before);
   });
 
+  // GitHub audit 2026-10-03 #32: the bundle said "3.0" through 3.2.0.
+  it("Info.plist carries this install's version from package.json", () => {
+    shortcut.ensureDesktopShortcut(base());
+    const { version } = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+    const plist = fs.readFileSync(path.join(APP(), 'Contents', 'Info.plist'), 'utf8');
+    expect(version).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(plist).toMatch(new RegExp(`<key>CFBundleShortVersionString</key><string>${version.replace(/\./g, '\\.')}</string>`));
+    expect(shortcut.APP_VERSION).toBe(version);
+  });
+
+  it('an icon made by an older AEON gets this version, not left at the old one', () => {
+    shortcut.ensureDesktopShortcut(base());
+    const plistFile = path.join(APP(), 'Contents', 'Info.plist');
+    const current = fs.readFileSync(plistFile, 'utf8');
+    fs.writeFileSync(plistFile, current.replace(/(CFBundleShortVersionString<\/key><string>)[^<]*/, '$13.0'));
+    const r = shortcut.ensureDesktopShortcut(base());
+    expect(r.status).toBe('updated');
+    expect(fs.readFileSync(plistFile, 'utf8')).toBe(current);
+  });
+
   it('a moved install updates its own icon to the new location', () => {
     shortcut.ensureDesktopShortcut(base());
     const moved = makeInstall(path.join(TMP, 'AEON moved'));
