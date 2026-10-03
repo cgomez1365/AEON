@@ -229,10 +229,14 @@ describe('asking the OS and the port (real processes)', () => {
   // Windows only: one retry. processStartedAt asks PowerShell with a 10 s
   // timeout (runtime.cjs), and a cold PowerShell on a CI runner sometimes
   // takes longer, so the OS "will not say" and the CI assertion below fails —
-  // about 1 Windows run in 19 to 27 (v3.1.1 tag, run 36837612895, 11.27 s; audit #41).
-  // One retry, on Windows only: a pid the OS really cannot date still fails
-  // twice in a row, and on macOS and Linux a first failure still fails.
-  it('processStartedAt says when a live process started, and null for a dead pid', { retry: process.platform === 'win32' ? 1 : 0, timeout: 30000 }, async () => {
+  // about 1 Windows run in 19 to 27 (v3.1.1 tag, run 36837612895, 11.27 s;
+  // audit #41). One retry, on Windows only: a pid the OS really cannot date
+  // still fails twice in a row, and on macOS and Linux a first failure still
+  // fails.
+  it('processStartedAt says when a live process started, and null for a dead pid', {
+    retry: process.platform === 'win32' ? 1 : 0,
+    timeout: 30000,
+  }, async () => {
     const p = child('console.log(Date.now() - process.uptime() * 1000); setInterval(() => {}, 1e6);');
     try {
       const childStart = Number(await p.ready);

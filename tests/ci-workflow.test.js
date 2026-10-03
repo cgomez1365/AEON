@@ -33,11 +33,12 @@ function jobs() {
 }
 
 describe('.github/workflows/ci.yml', () => {
-  it('runs on main, release tags, pull requests to main and a weekly schedule — not every branch push', () => {
+  it('runs on main, release tags, pull requests to main, weekly and by hand — not every branch push', () => {
     const on = code.slice(code.indexOf('\non:\n'), code.indexOf('\npermissions:'));
     expect(on).toMatch(/push:\n\s+branches: \[ main \]\n\s+tags: \[ 'v\*' \]/);
     expect(on).toMatch(/pull_request:\n\s+branches: \[ main \]/);
     expect(on).toMatch(/schedule:\n\s+- cron: '[^']+'/);
+    expect(on).toMatch(/\n {2}workflow_dispatch:\s*\n/);
   });
 
   it('gives the job token read access only', () => {
@@ -61,7 +62,8 @@ describe('.github/workflows/ci.yml', () => {
   });
 
   it('pins every action to a full commit, with its tag beside it', () => {
-    const uses = [...ci.matchAll(/uses:\s*(\S+)(.*)$/gm)];
+    // A `uses:` key only: a comment that mentions one is not a step.
+    const uses = [...ci.matchAll(/^\s*(?:- )?uses:\s*(\S+)(.*)$/gm)];
     expect(uses.length).toBeGreaterThan(0);
     for (const [, ref, rest] of uses) {
       expect(ref, ref).toMatch(/^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/);
@@ -76,10 +78,21 @@ describe('.github/workflows/ci.yml', () => {
   });
 
   it('every install is npm ci, the floor leg included', () => {
-    expect(code).not.toMatch(/npm install/);
+    // `npm install --package-lock-only` writes no node_modules: it is the
+    // lockfile check below, not an install.
+    expect(code.replace(/npm install --package-lock-only/g, '')).not.toMatch(/npm install/);
     expect(code).not.toMatch(/matrix\.install/);
     const installs = [...code.matchAll(/^\s+run: (npm ci.*)$/gm)].map((m) => m[1]);
     expect(installs).toEqual(['npm ci', 'npm ci --ignore-scripts']);
+  });
+
+  it('fails a Linux leg whose npm would rewrite the committed lockfile', () => {
+    const build = jobs().build;
+    const step = build.slice(build.indexOf('- name: Lockfile stays as committed'));
+    expect(step).toMatch(/^- name: Lockfile stays as committed[^\n]*\n\s+if: runner\.os == 'Linux'\n\s+run: \|\n/);
+    expect(step).toMatch(/\n\s+npm install --package-lock-only --ignore-scripts[^\n]*\n\s+git diff --exit-code package-lock\.json\n/);
+    // After the install, so the lockfile is the one npm ci just accepted.
+    expect(build.indexOf('run: npm ci\n')).toBeLessThan(build.indexOf('- name: Lockfile stays as committed'));
   });
 
   it('builds on the engines floor, on Node 24, and on Node 26 before it becomes LTS', () => {
@@ -90,6 +103,15 @@ describe('.github/workflows/ci.yml', () => {
     expect(legs).toContain('windows-latest 24');
     expect(legs).toContain('macos-latest 24');
     expect(legs).toContain('ubuntu-latest 26');
+  });
+
+  it('the README counts the legs the workflow has', () => {
+    const builds = [...code.matchAll(/- os: (\S+)\n\s+node: '([^']+)'/g)].length;
+    const total = builds + Object.keys(jobs()).filter((j) => j !== 'build').length;
+    const m = /· (\d+) CI legs \(([^)]+)\)/.exec(read('README.md'));
+    expect(m, 'README has no "· N CI legs (...)" line').toBeTruthy();
+    expect(Number(m[1])).toBe(total);
+    expect(m[2].split(' · ')).toHaveLength(total);
   });
 });
 

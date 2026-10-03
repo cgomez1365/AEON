@@ -11,6 +11,11 @@ name: AEON CI
 # - pull_request to main.
 # - schedule, weekly: an advisory published while nobody pushes still reaches
 #   the security job, and a waiver's review date passing still shows up as red.
+# - workflow_dispatch: Actions > AEON CI > Run workflow, on any branch.
+#
+# The trade-off: a branch pushed with no pull request gets no run at all. The
+# v3.2.0 evidence (run 37102458513) came from a push to release-3.2.0; that
+# run now needs a pull request to main or a manual dispatch.
 on:
   push:
     branches: [ main ]
@@ -18,8 +23,10 @@ on:
   pull_request:
     branches: [ main ]
   schedule:
-    # Mondays 09:17 UTC. Off the hour, when scheduled runs queue the longest.
+    # Mondays 09:17 UTC. Off the hour: GitHub delays scheduled runs most at
+    # the top of the hour.
     - cron: '17 9 * * 1'
+  workflow_dispatch:
 
 # Nothing here writes to the repo, opens an issue or reads a secret. Read-only
 # no longer depends on the repo's default token setting (audit #43).
@@ -36,8 +43,8 @@ concurrency:
 
 jobs:
   build:
-    # A hung test or install used to hold a runner for GitHub's default of six
-    # hours. The slowest green leg, Windows, took 3 min 13 s in run
+    # Without a limit, a hung test or install could hold a runner for GitHub's
+    # default of six hours. The slowest green leg, Windows, took 3 min 13 s in run
     # 37102458513 (v3.2.0).
     timeout-minutes: 20
     # Windows is the platform AEON actually ships on, and Linux is what CI used
@@ -67,13 +74,15 @@ jobs:
           # Node 22 by the README. This leg used `npm install` because npm 10
           # refused the lockfile npm 11 wrote ("Missing: esbuild@0.28.2 ...",
           # 27 lines); `npm install` hid exactly the failure those users hit
-          # (audit #6). The lockfile is now one both npm 10 and npm 11 accept,
-          # and this leg is what keeps it that way.
+          # (audit #6). The lockfile is now one both npm 10 and npm 11 accept.
+          # This leg fails if it drifts back; write the lockfile with npm 10:
+          #   npx -y npm@10.9.2 install --package-lock-only
           - os: ubuntu-latest
             node: '22.13'
-          # Node 26 becomes LTS on 2026-10-28. From then LAUNCH.bat (winget),
-          # launch.sh (setup_lts.x) and Homebrew install it, and engines has no
-          # upper bound, so it gets a leg before customers get it (audit #13).
+          # Node 26 becomes LTS on 2026-10-28. LAUNCH.bat (winget) and launch.sh
+          # (setup_lts.x) install it from then; Homebrew's plain node formula
+          # already does. engines has no upper bound, so it gets a leg before
+          # customers get it (audit #13).
           - os: ubuntu-latest
             node: '26'
           # macOS. launch.command ran once, by hand, on real Apple hardware on
@@ -119,6 +128,17 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      # launch.js runs `npm install` on a first launch. If this leg's npm would
+      # rewrite package-lock.json, it rewrites it in a git-clone user's
+      # checkout too, and their next `git pull` that touches it stops (audit
+      # #6). Linux legs only: npm 10 on the floor leg, npm 11 on Node 24 and 26.
+      # Fix a failure by writing the lockfile with npm 10 (see the floor leg).
+      - name: Lockfile stays as committed under this npm
+        if: runner.os == 'Linux'
+        run: |
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+          git diff --exit-code package-lock.json
 
       - name: Syntax-check server
         run: node --check server.cjs
