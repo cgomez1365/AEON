@@ -51,7 +51,9 @@ describe('updating keeps the operator\'s packs and builds the interface', () => 
     // src/kernel/blocksDir.cjs: the one blocks root is <install>/src/blocks.
     expect(read('src/kernel/blocksDir.cjs')).toMatch(/DEFAULT_BLOCKS_DIR = path\.join\(__dirname, '\.\.', 'blocks'\)/);
     expect(README).toMatch(/packs you installed[^\n]*`src\/blocks\/`/i);
-    const updating = README.slice(README.indexOf('### Updating AEON'));
+    // Its own section, no longer a subsection of Get started (2026-10-03 audit).
+    expect(README).toMatch(/^## Updating AEON$/m);
+    const updating = README.slice(README.indexOf('## Updating AEON'));
     expect(updating).toMatch(/git pull\s+npm ci\s+npm run build/);
     expect(updating).toMatch(/a pull's new dependencies and interface are not picked up/);
   });

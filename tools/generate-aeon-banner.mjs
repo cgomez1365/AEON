@@ -2,8 +2,8 @@
 /**
  * AEON README banner.
  *
- *   npm run brand:banner           public/brand/aeon-banner.png   still, 3840x1056
- *   npm run brand:banner:animate   public/brand/aeon-banner.webp  animated, 1200x330
+ *   npm run brand:banner           .github/assets/aeon-banner.png   still, 3840x1056
+ *   npm run brand:banner:animate   .github/assets/aeon-banner.webp  animated, 1200x330
  *
  * The mark IS the A. In the 512 mark the chevron is 136 tall (y 192..328), so
  * the mark is scaled until that chevron matches the cap height of "EON" set in
@@ -30,7 +30,9 @@
  * The README shows the animation, and the still to readers who ask for reduced
  * motion. Text uses the system's Avenir Next when present (macOS); elsewhere
  * the canvas default sans is used and the output differs, which is why both
- * files are committed rather than generated at build.
+ * files are committed rather than generated at build. They live in
+ * .github/assets, not public/: the app never shows them, and everything in
+ * public/ is copied into every build and every carried drive.
  *
  * The animated WebP is encoded by sharp, which is not a dependency - this is the
  * only thing that would use it. Install it for the run:
@@ -44,7 +46,7 @@ import { createCanvas, loadImage, GlobalFonts } from '@napi-rs/canvas';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const MARK = path.join(ROOT, 'public', 'brand', 'aeon-mark', 'aeon-mark.svg');
 const ANIMATE = process.argv.includes('--animate');
-const OUT = process.env.AEON_BANNER_OUT || path.join(ROOT, 'public', 'brand', ANIMATE ? 'aeon-banner.webp' : 'aeon-banner.png');
+const OUT = process.env.AEON_BANNER_OUT || path.join(ROOT, '.github', 'assets', ANIMATE ? 'aeon-banner.webp' : 'aeon-banner.png');
 
 // Fonts. @napi-rs/canvas registers only the FIRST face of a .ttc, and for
 // Avenir Next that is Bold - the opposite of the poster's hairline lettering.
