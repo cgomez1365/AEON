@@ -432,7 +432,7 @@ const commands = {
     if (!routes[sub] || (sub !== 'removed' && !/^[a-z0-9][a-z0-9_]*$/.test(id || ''))) {
       console.error(`usage: aeon block <stop|start|remove|restore> <id>   ·   aeon block removed
 
-  ${c.dim('aeon block stop council')}       ${c.dim('# its API answers 503; the rest of AEON is untouched')}
+  ${c.dim('aeon block stop council')}       ${c.dim('# its API answers 503, its lifecycle timers pause; the rest of AEON is untouched')}
   ${c.dim('aeon block remove council')}     ${c.dim('# moved aside to <data>/removed-blocks/, never deleted')}
   ${c.dim('aeon block remove council --yes --tracked')} ${c.dim('# a shipped block git tracks: moved aside; restore it before git add -A / commit -a / pull')}
   ${c.dim('aeon block restore council')}    ${c.dim('# the latest removed copy comes back')}
@@ -466,7 +466,7 @@ const commands = {
       return;
     }
     const line = {
-      stop: `${id} stopped — its API answers 503 until started`,
+      stop: `${id} stopped — its API answers 503 and its lifecycle timers pause until started`,
       start: `${id} started`,
       remove: `${id} removed → ${d.movedTo || 'removed-blocks/'}`,
       restore: `${id} restored`,

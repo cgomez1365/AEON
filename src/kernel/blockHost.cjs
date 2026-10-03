@@ -40,16 +40,35 @@ function createBlockHost({ blocksDir, baseDeps, createScopedDeps, registry, read
   // Stable trampoline — the ONLY thing server.cjs ever mounts.
   const trampoline = (req, res, next) => inner(req, res, next);
 
+  // A STOPPED block's scheduled work stops too, not only its routes.
+  //
+  // Stop used to be enforced in gateRunning() alone, which guards HTTP. A
+  // block's lifecycle.setInterval kept firing while its routes answered 503 —
+  // and after a restart, because mounting re-arms it whatever the run state
+  // says (measured 2026-10-02 with a 3 s job: 6 → 10 runs in the 10 s after
+  // stop, and still ticking after a reboot with the block stopped). For a block
+  // that acts on a timer (a scraper that bids), "Stop" has to mean stop.
+  //
+  // Callbacks are gated when they fire, so Start resumes the same timers with
+  // no remount. A one-shot setTimeout that comes due while the block is
+  // stopped is dropped, not deferred. Work already in flight is not cancelled:
+  // block code calls lifecycle.isRunning() again before an irreversible step.
   function makeLifecycle(blockId) {
     const lc = { cleanups: [], timers: new Set(), listeners: [] };
     lifecycles.set(blockId, lc);
+    const isRunning = () => !runState || runState.isRunning(blockId);
+    const whileRunning = (fn) => (typeof fn === 'function'
+      ? (...args) => (isRunning() ? fn(...args) : undefined)
+      : fn);
     return {
       onCleanup: (fn) => { if (typeof fn === 'function') lc.cleanups.push(fn); },
-      setInterval: (fn, ms, ...a) => { const t = setInterval(fn, ms, ...a); lc.timers.add(t); return t; },
-      setTimeout:  (fn, ms, ...a) => { const t = setTimeout(fn, ms, ...a); lc.timers.add(t); return t; },
+      setInterval: (fn, ms, ...a) => { const t = setInterval(whileRunning(fn), ms, ...a); lc.timers.add(t); return t; },
+      setTimeout:  (fn, ms, ...a) => { const t = setTimeout(whileRunning(fn), ms, ...a); lc.timers.add(t); return t; },
       clearInterval: (t) => { clearInterval(t); lc.timers.delete(t); },
       clearTimeout:  (t) => { clearTimeout(t); lc.timers.delete(t); },
-      listen: (emitter, evt, fn) => { emitter.on(evt, fn); lc.listeners.push({ emitter, evt, fn }); return fn; },
+      // Returns the function actually registered: pass THAT to removeListener.
+      listen: (emitter, evt, fn) => { const g = whileRunning(fn); emitter.on(evt, g); lc.listeners.push({ emitter, evt, fn: g }); return g; },
+      isRunning,
     };
   }
 
