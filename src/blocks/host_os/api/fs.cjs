@@ -382,10 +382,10 @@ module.exports = function createFsRouter(deps) {
       let summary = null, summaryReason = null;
       // A Vault file withheld in Memory Core (a memory switched off, a Local
       // only agent's folder) is shown, never summarised by a model nor read
-      // back into the conversation (commandNarrator).
-      const vaultRel = VAULT_ROOT ? path.relative(path.resolve(VAULT_ROOT), resolved) : null;
-      const withheld = vaultRel && !vaultRel.startsWith('..') && !path.isAbsolute(vaultRel)
-        ? vaultPrivacy.withheld(path.resolve(VAULT_ROOT), vaultRel.split(path.sep).join('/')) : null;
+      // back into the conversation (commandNarrator). Judged as the disk
+      // resolves the path, so "agents/scout/…" on a disk that ignores case
+      // is Scout's file too.
+      const withheld = VAULT_ROOT ? vaultPrivacy.withheldAt(path.resolve(VAULT_ROOT), resolved) : null;
       if (withheld) {
         summaryReason = withheld === 'memory-off' ? 'it is a memory switched off in Memory Core'
           : withheld === 'local-only-agent' ? 'it is in the folder of an agent set to Local only' : 'it is a memory store';
@@ -396,7 +396,8 @@ module.exports = function createFsRouter(deps) {
             : content;
           summary = String(await kernelLLM(
             `Summarize the following document for its owner in plain English: what it is, what it says, and anything they need to act on. Be concrete; quote exact figures, names and dates where they appear. 5 to 10 sentences.\n\nFILE: ${path.basename(resolved)}\n\n${body}`,
-            { role: 'chat' },
+            // Sent for an agent set to Local only (commandRegistry).
+            { role: 'chat', ...(req.body?.localOnly === true ? { localOnly: true } : {}) },
           ) || '').trim() || null;
           if (!summary) summaryReason = 'the model returned nothing';
         } catch (e) { summaryReason = e.message; }

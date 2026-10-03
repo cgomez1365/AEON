@@ -26,7 +26,7 @@ import remarkGfm from 'remark-gfm';
 import { Send, Loader, Cpu, Clock, Zap, ChevronRight, ChevronDown, ShieldAlert, Paperclip, Square, X as XIcon, Archive, History, Plus, Trash2, Pencil, BookmarkPlus, Check, Sparkles, Bot } from 'lucide-react';
 import { describeStreamFailure, SELF_REPORTED_HEADER } from '../utils/interceptorPolicy.js';
 import { describeDispatchOutcome, describeDenial, describeCommandOutput } from '../utils/commandOutcome.js';
-import { readStoredAgent, storeAgent, asCurrent, resolveAgentArg, describeAgent, AGENT_SELECT_EVENT } from '../utils/terminalAgent.js';
+import { readStoredAgent, storeAgent, asCurrent, resolveAgentArg, describeAgent, AGENT_SELECT_EVENT, turnAgentId } from '../utils/terminalAgent.js';
 
 // ── Markdown rendering — the panel is a narrow column and nothing leaves it ──
 //
@@ -424,6 +424,20 @@ export function chatHistory(feed, n = 20) {
  */
 export function liveTurns(feed, n = 60) {
   return (Array.isArray(feed) ? feed : []).filter(isTurn).slice(-n).map((t) => turnForServer(t, 400));
+}
+
+/**
+ * What a command's own text may add to the conversation when the narrator
+ * could not be reached. A result that carries `modelText` (memory_core's
+ * /memory, /doc and /read of a withheld file) says it: null means nothing,
+ * since the next chat turn sends the feed to a model. Otherwise its text.
+ */
+export function readBackText(data, text) {
+  const d = data && data.data;
+  if (d && typeof d === 'object' && Object.prototype.hasOwnProperty.call(d, 'modelText')) {
+    return typeof d.modelText === 'string' && d.modelText.trim() ? d.modelText.trim() : null;
+  }
+  return typeof text === 'string' && text ? text : null;
 }
 
 export function liveTranscript(feed) {
@@ -1288,7 +1302,9 @@ const Terminal2 = ({ onUsageUpdate }) => {
       // global banner (a 5xx still does — interceptorPolicy).
       const res = await fetch('/api/commands/dispatch', {
         method: 'POST', headers: { 'Content-Type': 'application/json', [SELF_REPORTED_HEADER]: '1' },
-        body: JSON.stringify({ cmd: cmdToken, arg, confirmed }),
+        // The agent this terminal is with: one set to Local only has /ask,
+        // /recall, /ask-doc and /read run on local models (commandRegistry).
+        body: JSON.stringify({ cmd: cmdToken, arg, confirmed, ...agentBody() }),
       });
       const data = await res.json().catch(() => ({}));
       const outcome = describeDispatchOutcome({ status: res.status, data });
@@ -1328,12 +1344,13 @@ const Terminal2 = ({ onUsageUpdate }) => {
               cmd: cmdToken, ok: outcome.kind === 'ok',
               text: data.text ?? null, data: data.data ?? null,
               error: data.error ?? null, title: data.meta?.block ?? null,
+              ...agentBody(),
             }),
           });
           const n = await nres.json().catch(() => null);
           if (n?.narration) {
             push({
-              type: 'msg', role: 'assistant', content: n.narration,
+              type: 'msg', role: 'assistant', content: n.narration, agent: turnAgentId(agentRef.current),
               meta: {
                 model: n.source === 'model' ? undefined : n.source,
                 provider: n.source === 'model' ? 'AI summary' : 'Block Command',
@@ -1348,8 +1365,10 @@ const Terminal2 = ({ onUsageUpdate }) => {
         } catch {
           // The chip already carries the full result; a missing sentence is a
           // rendering gap, not a lost outcome.
-          if (outcome.kind === 'ok' && outcome.text) {
-            push({ type: 'msg', role: 'assistant', content: outcome.text, meta: { model: data.meta?.block, provider: 'Block Command', latencyMs: Date.now() - t0 } });
+          // Never more than the result allows back into the conversation.
+          const said = outcome.kind === 'ok' ? readBackText(data, outcome.text) : null;
+          if (said) {
+            push({ type: 'msg', role: 'assistant', content: said, agent: turnAgentId(agentRef.current), meta: { model: data.meta?.block, provider: 'Block Command', latencyMs: Date.now() - t0 } });
             setTurnsDone(k => k + 1);
           }
         }
@@ -1388,7 +1407,9 @@ const Terminal2 = ({ onUsageUpdate }) => {
     const echo = text.startsWith('/addkey')
       ? text.replace(/(\/addkey\s+\S+\s+)(\S{4})\S+/, '$1$2••••••••')
       : text;
-    const userMsgId = push({ type: 'msg', role: 'user', content: echo });
+    // A command line is tagged with the agent it ran for now; a chat line
+    // when the server says who answered (runChat).
+    const userMsgId = push({ type: 'msg', role: 'user', content: echo, ...(text.startsWith('/') ? { agent: turnAgentId(agentRef.current) } : {}) });
     setInput('');
     setShowPalette(false);
     setIsLoading(true);

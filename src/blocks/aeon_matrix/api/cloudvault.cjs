@@ -16,6 +16,7 @@ const path = require('path');
 const { isInside } = require('../../../kernel/pathContainment.cjs');
 const fs = require('fs');
 const { loadExtractors, extractText } = require('./_lib.cjs');
+const vaultPrivacy = require('../../../kernel/vaultPrivacy.cjs');
 
 const MAX_CONTENT = 20000; // chars per doc pushed to cloud
 const BATCH = 25;
@@ -72,10 +73,32 @@ module.exports = function cloudVaultFactory(deps) {
       });
     }
     const index = readJSON(INDEX_FILE, { documents: {} });
-    const docs = Object.values(index.documents || {});
-    if (!docs.length) return res.status(400).json({ error: 'vault_index.json empty — run a Second Brain reindex first' });
-
     const state = readJSON(STATE_FILE, { pushed: {} });
+    if (!state.pushed || typeof state.pushed !== 'object') state.pushed = {};
+
+    // What the operator withheld in Memory Core (a memory switched off, a
+    // Local only agent's folder) is not pushed, even when the index still
+    // lists it because no scan has run since the switch. A row pushed before
+    // the switch is deleted from vault_docs.
+    const privacy = vaultPrivacy.createScope(VAULT_ROOT);
+    const all = Object.values(index.documents || {});
+    const docs = all.filter((d) => d && d.path && !privacy.withheld(d.path));
+    const withheld = all.length - docs.length;
+    const toRemove = Object.keys(state.pushed).filter((p) => privacy.withheld(p));
+    let removed = 0, removeError = null;
+    if (toRemove.length) {
+      try {
+        const { error } = await deps.supabase.from('vault_docs').delete().in('path', toRemove);
+        if (error) throw new Error(`Supabase: ${error.message}`);
+        for (const p of toRemove) delete state.pushed[p];
+        removed = toRemove.length;
+      } catch (e) {
+        removeError = e.message;
+        console.warn('[CLOUDVAULT] removing withheld rows failed:', e.message);
+      }
+    }
+    if (!docs.length && !toRemove.length) return res.status(400).json({ error: 'vault_index.json empty — run a Second Brain reindex first' });
+
     // hash = updatedAt+size from the index — cheap change detection
     const changed = docs.filter(d => {
       const h = `${d.updatedAt || 0}:${d.sizeBytes || 0}`;
@@ -117,9 +140,13 @@ module.exports = function cloudVaultFactory(deps) {
     }
 
     state.lastPush = new Date().toISOString();
-    state.lastResult = { total: docs.length, changed: changed.length, pushed, errors };
+    state.lastResult = { total: docs.length, changed: changed.length, pushed, errors, withheld, removed, ...(removeError ? { removeError } : {}) };
     try { fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2)); } catch {}
-    res.json({ ok: errors === 0, ...state.lastResult, hint: errors ? 'check server log; did you run db/vault_docs_schema.sql in Supabase?' : undefined });
+    res.json({
+      ok: errors === 0 && !removeError, ...state.lastResult,
+      hint: errors ? 'check server log; did you run db/vault_docs_schema.sql in Supabase?'
+        : removeError ? `${toRemove.length} withheld document(s) are still in vault_docs; push again, or delete them in Supabase.` : undefined,
+    });
   });
 
   router.get('/crn/second-brain/vault-push/status', (_req, res) => {

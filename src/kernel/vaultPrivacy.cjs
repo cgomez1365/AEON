@@ -5,9 +5,11 @@
  *   Agents/<Folder>/…                     an agent set to Local only: its
  *                                         memory, its chats, its mission log
  *   Agents/<Folder>/memory/<id>.md        a memory switched Off
- *   Agents/<Folder>/memory/memories.json  every memory store: it holds the Off
- *                                         memories too, and each memory is
- *                                         indexed through its own <id>.md
+ *   Agents/<Folder>/memory/memories.json  a memory store that holds an Off
+ *                                         memory, or cannot be read. A store
+ *                                         with every memory on stays indexed:
+ *                                         a memory whose <id>.md mirror was
+ *                                         never written is found through it.
  *
  * Found 2026-10-03 (audit #2): Memory Core said "Local only — never leaves
  * this computer" and "Off — not sent to the model", while the indexer walked
@@ -23,6 +25,14 @@
  * Everything is read from disk once per scope (one scan, one recall), so a
  * switch flipped a moment ago is honoured by the next one.
  *
+ * A path is judged as the disk resolves it, not as it was typed (the A056
+ * class, which fs.cjs's safePath fixed for its denylist): macOS, Windows and
+ * the exFAT drive ignore case, so "agents/scout/memory/s1.md" opens Scout's
+ * file, and a symlink elsewhere in the Vault can lead into Agents/. The path
+ * is judged both as realpath resolves it and as given; a part that does not
+ * exist is matched without regard to case, so a mis-cased path is withheld on
+ * every disk.
+ *
  * Kernel module: relative requires only, takes the vault root as an argument.
  */
 'use strict';
@@ -32,10 +42,55 @@ const path = require('path');
 
 const FRONTMATTER_RE = /^﻿?---\r?\n([\s\S]*?)\r?\n---/;
 
+// The deepest part of `p` that exists, resolved by the disk (its real case,
+// symlinks followed), with the rest appended as given. null: nothing resolves.
+function onDisk(p) {
+  const rest = [];
+  let probe = p;
+  for (;;) {
+    try { return path.join(fs.realpathSync.native(probe), ...rest); }
+    catch {
+      const up = path.dirname(probe);
+      if (up === probe) return null;
+      rest.unshift(path.basename(probe));
+      probe = up;
+    }
+  }
+}
+
+// A Vault-relative POSIX path as its parts, ".." resolved and clamped at the
+// Vault root ("Notes/../Agents/Scout" is Agents/Scout).
+function split(relPosix) {
+  const norm = path.posix.normalize(`/${relPosix}`).slice(1);
+  return norm.split('/').filter(Boolean);
+}
+
+const within = (child, parent) => child === parent || child.startsWith(parent + path.sep);
+
 function createScope(vaultRoot) {
+  const realRoot = onDisk(path.resolve(vaultRoot));
   const agentsRoot = path.join(vaultRoot, 'Agents');
+  let agentFolders = null;
   const localOnly = new Map();
   const stores = new Map();
+
+  // The parts of a Vault-relative path as the disk names them.
+  function resolveParts(parts) {
+    if (realRoot) {
+      const real = onDisk(path.join(path.resolve(vaultRoot), ...parts));
+      if (real && within(real, realRoot)) return path.relative(realRoot, real).split(path.sep).filter(Boolean);
+    }
+    return parts;
+  }
+
+  // A folder under Agents/ by its name on disk, matched without regard to
+  // case when the name as given does not exist. Unchanged when none matches.
+  function folderOnDisk(folder) {
+    if (fs.existsSync(path.join(agentsRoot, folder))) return folder;
+    if (!agentFolders) { try { agentFolders = fs.readdirSync(agentsRoot); } catch { agentFolders = []; } }
+    const lower = folder.toLowerCase();
+    return agentFolders.find((f) => f.toLowerCase() === lower) || folder;
+  }
 
   function isLocalOnly(folder) {
     if (!localOnly.has(folder)) {
@@ -92,14 +147,25 @@ function createScope(vaultRoot) {
    * too ("Agents/Scout"), so a walk can skip a Local only agent whole.
    */
   function withheld(relPosix) {
-    const parts = String(relPosix || '').replace(/\\/g, '/').replace(/^Vault\//, '').split('/').filter(Boolean);
-    if (parts[0] !== 'Agents' || parts.length < 2) return null;
-    const folder = parts[1];
+    const given = split(String(relPosix || '').replace(/\\/g, '/').replace(/^Vault\//, ''));
+    const real = resolveParts(given);
+    // Both: the name the disk gives it, and the one it was reached by (a
+    // symlink named Agents/Scout is Scout's to the operator, wherever it points).
+    return judge(real) || (real.join('/') === given.join('/') ? null : judge(given));
+  }
+
+  function judge(parts) {
+    if (parts.length < 2 || parts[0].toLowerCase() !== 'agents') return null;
+    const folder = folderOnDisk(parts[1]);
     if (folder.startsWith('.')) return null;
     if (isLocalOnly(folder)) return 'local-only-agent';
-    if (parts.length !== 4 || parts[2] !== 'memory') return null;
+    if (parts.length !== 4 || parts[2].toLowerCase() !== 'memory') return null;
     const name = parts[3];
-    if (name === 'memories.json') return 'memory-store';
+    if (name.toLowerCase() === 'memories.json') {
+      // Withheld while it holds a switched-off memory, or cannot be read.
+      const st = store(folder);
+      return !st || st.off.size ? 'memory-store' : null;
+    }
     if (!/\.md$/i.test(name)) return null;
     const id = name.slice(0, -3);
     const st = store(folder);
@@ -107,7 +173,22 @@ function createScope(vaultRoot) {
     return mirrorSaysOff(path.join(agentsRoot, folder, 'memory', name)) ? 'memory-off' : null;
   }
 
-  return { withheld };
+  /** The same, for an absolute path; null when it is not in the Vault. */
+  function withheldAt(absPath) {
+    const abs = path.resolve(String(absPath || ''));
+    const real = onDisk(abs);
+    let rel = null;
+    if (realRoot && real && within(real, realRoot)) rel = path.relative(realRoot, real);
+    else if (within(abs, path.resolve(vaultRoot))) rel = path.relative(path.resolve(vaultRoot), abs);
+    return rel == null ? null : withheld(rel.split(path.sep).join('/'));
+  }
+
+  /** A Vault-relative path as the disk names it (an index key), POSIX. */
+  function canonical(relPosix) {
+    return resolveParts(split(String(relPosix || '').replace(/\\/g, '/'))).join('/');
+  }
+
+  return { withheld, withheldAt, canonical };
 }
 
 /** One-off check, for a caller with a single path. */
@@ -115,4 +196,9 @@ function withheld(vaultRoot, relPosix) {
   return createScope(vaultRoot).withheld(relPosix);
 }
 
-module.exports = { createScope, withheld };
+/** One-off check of an absolute path. */
+function withheldAt(vaultRoot, absPath) {
+  return createScope(vaultRoot).withheldAt(absPath);
+}
+
+module.exports = { createScope, withheld, withheldAt };

@@ -16,7 +16,9 @@
  * CommandSpec (manifest, legacy fields still accepted):
  *   { cmd:"/gpu", desc, route, method, param?, display?,   ← legacy
  *     mode?: "instant"|"stream"|"view", dangerous?: bool,
- *     when?: "ready", template?: "GPU: {name}", category? }
+ *     when?: "ready", template?: "GPU: {name}", category?,
+ *     takesLocalOnly?: bool }   ← the route keeps its model calls on this
+ *                                 computer when its body says localOnly
  *
  * Response envelope (every dispatch): { ok, id, text, data, meta }
  */
@@ -118,6 +120,10 @@ function scanCommands(readiness = {}) {
         // in the registry, which is why /help and the palette get usage
         // strings for free rather than each command inventing one.
         usage: buildUsage(c),
+        // The route honours `localOnly: true` in its body (embeds and asks
+        // only models on this computer or the LAN). The dispatcher sets it
+        // when the terminal's agent is set to Local only.
+        takesLocalOnly: !!c.takesLocalOnly,
       };
       // First declaration wins on a cmd collision; both remain reachable by id.
       if (!registry.has(c.cmd)) registry.set(c.cmd, spec);
@@ -148,7 +154,20 @@ function renderTemplate(tpl, data) {
   });
 }
 
-module.exports = function ({ blockReadiness = {}, isVercel = false, writeOSAudit, kernelLLM = null, isCloudLinked = null, hasEmbedding = null } = {}) {
+module.exports = function ({ blockReadiness = {}, isVercel = false, writeOSAudit, kernelLLM = null, isCloudLinked = null, hasEmbedding = null, vaultRoot = null } = {}) {
+  // The agent a terminal command runs for — the one the terminal names, else
+  // the operator's own AEON (the chat stream's rule) — when it is set to
+  // Local only in Memory Core; else null. Read per request: the switch can
+  // change while AEON runs.
+  const localOnlyAgent = (ref) => {
+    if (!vaultRoot) return null;
+    try {
+      const agentsKernel = require('./agents.cjs');
+      const all = agentsKernel.list(vaultRoot, { withStats: false });
+      const a = (ref ? agentsKernel.get(vaultRoot, ref, all) : null) || all.find((x) => x.self) || null;
+      return a && a.privacy === 'local-only' ? a : null;
+    } catch { return null; }
+  };
   // Live, not cached: the operator can link Supabase in Settings without a restart.
   const cloudLinked = () => { try { return typeof isCloudLinked === 'function' ? !!isCloudLinked() : false; } catch { return false; } };
   // Live as well: the vault commands (/ask /recall /scan /index-brain /upload)
@@ -224,9 +243,18 @@ module.exports = function ({ blockReadiness = {}, isVercel = false, writeOSAudit
   // The raw payload is returned alongside the prose so the UI can reveal it.
   // R-05: the payload stays the source of truth; the sentence is a rendering.
   router.post('/commands/narrate', async (req, res) => {
-    const { cmd = '/command', ok = false, text = null, data = null, error = null, title = null } = req.body || {};
+    const { cmd = '/command', ok = false, text = null, data = null, error = null, title = null, agent = null } = req.body || {};
+    // A Local only agent's command result is narrated by a local model or
+    // not at all (the narrator falls back to its own sentence).
+    const privateTo = localOnlyAgent(agent);
+    const llm = privateTo && typeof kernelLLM === 'function'
+      ? (prompt, opts = {}) => {
+        const { localOnly, localOnlyReason, localOnlyRemedy } = require('./agents.cjs').callOptions(privateTo);
+        return kernelLLM(prompt, { ...opts, localOnly, localOnlyReason, localOnlyRemedy });
+      }
+      : kernelLLM;
     try {
-      const out = await narrator.narrate({ cmd, ok, text, data, error, title }, kernelLLM);
+      const out = await narrator.narrate({ cmd, ok, text, data, error, title }, llm);
       res.json({ ok: true, ...out });
     } catch (e) {
       // Even the narrator failing is narrated honestly rather than 500ing.
@@ -246,7 +274,7 @@ module.exports = function ({ blockReadiness = {}, isVercel = false, writeOSAudit
   // (fs/write: {filePath, content}) — declared as `params` in the manifest.
   // When both are present `body` wins; `arg` alone keeps working unchanged.
   router.post('/commands/dispatch', async (req, res) => {
-    const { cmd, id, arg = '', confirmed = false, body = null } = req.body || {};
+    const { cmd, id, arg = '', confirmed = false, body = null, agent = null } = req.body || {};
     const structured = body && typeof body === 'object' && !Array.isArray(body) ? body : null;
     const spec = registry.get(id) || registry.get(cmd);
     if (!spec) return res.status(404).json({ ok: false, error: `Unknown command: ${id || cmd}` });
@@ -397,9 +425,12 @@ module.exports = function ({ blockReadiness = {}, isVercel = false, writeOSAudit
         : (spec.param && arg ? [[spec.param, arg]] : []);
       for (const [k, v] of qs) url += `${url.includes('?') ? '&' : '?'}${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`;
     } else {
-      init.body = JSON.stringify(
-        fields || (spec.param ? { [spec.param]: unwrap(arg) } : (arg ? { arg } : {})),
-      );
+      const payload = fields || (spec.param ? { [spec.param]: unwrap(arg) } : (arg ? { arg } : {}));
+      // Run for an agent set to Local only: a command whose route can keep
+      // its model calls local is told to. Only routes that declare it get
+      // the field, so it never lands in a body a route saves as given.
+      if (spec.takesLocalOnly && localOnlyAgent(agent)) payload.localOnly = true;
+      init.body = JSON.stringify(payload);
     }
 
     try {

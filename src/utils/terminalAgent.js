@@ -9,6 +9,18 @@ export const AGENT_KEY = 'aeon_terminal_agent';
 export const AGENT_SELECT_EVENT = 'aeon:agent-select';
 const BACK = new Set(['off', 'aeon', 'self', 'vp', 'none', 'exit']);
 
+// The operator's own AEON's agent id (agents.cjs SELF_ID).
+export const SELF_AGENT_ID = 'aeon';
+
+/**
+ * The agent a feed turn was with, for its `agent` tag: the current agent, or
+ * the operator's own AEON. A turn tagged with an agent set to Local only is
+ * left out of what goes to another agent's model (agents.cjs shareableTurns).
+ */
+export function turnAgentId(current) {
+  return current && typeof current.id === 'string' ? current.id : SELF_AGENT_ID;
+}
+
 /** The stored agent ({ id, name }), or null for the operator's own AEON. */
 export function readStoredAgent(storage) {
   try {

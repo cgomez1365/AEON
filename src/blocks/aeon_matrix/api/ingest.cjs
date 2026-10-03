@@ -341,18 +341,24 @@ module.exports = function ingestFactory(deps) {
   // A single-document write into a withheld path — a Local only agent's
   // folder, a switched-off memory's file — is saved and never indexed, and any
   // entry it already had leaves the index. Returns why, or null.
+  // Judged as the disk resolves the path (a mis-cased "agents/scout/…" is
+  // Scout's file on macOS, Windows and exFAT), and its entry is dropped under
+  // either name.
   function dropWithheld(relPosix) {
-    const why = vaultPrivacy.withheld(BRAIN_DIR, relPosix);
+    const privacy = vaultPrivacy.createScope(BRAIN_DIR);
+    const why = privacy.withheld(relPosix);
     if (!why) return null;
     const index = readIndex();
     const manifest = readManifest();
-    if (index.documents[relPosix] || manifest[relPosix]) {
-      delete index.documents[relPosix];
-      delete chunks()[relPosix];
-      delete manifest[relPosix];
-      writeIndex(index);
-      writeManifest(manifest);
+    let changed = false;
+    for (const key of new Set([relPosix, privacy.canonical(relPosix)])) {
+      if (!index.documents[key] && !manifest[key]) continue;
+      delete index.documents[key];
+      delete chunks()[key];
+      delete manifest[key];
+      changed = true;
     }
+    if (changed) { writeIndex(index); writeManifest(manifest); }
     return why;
   }
   const WITHHELD_SAYS = {

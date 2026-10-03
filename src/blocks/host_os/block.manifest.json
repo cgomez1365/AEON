@@ -81,6 +81,7 @@
         "route": "/api/fs/read",
         "param": "filePath",
         "mode": "instant",
+        "takesLocalOnly": true,
         "category": "content",
         "argRequired": true,
         "argHint": "<filePath>"

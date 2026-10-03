@@ -691,6 +691,10 @@ module.exports = function retrieveFactory(deps) {
   //       3, not unbounded.
   router.post('/crn/second-brain/ask-doc', async (req, res) => {
     const { path: docQuery, query: rawQuery, model: modelOverride } = req.body || {};
+    // Sent for an agent set to Local only (commandRegistry): the question is
+    // embedded and answered on this computer, or not at all.
+    const localOnly = req.body?.localOnly === true;
+    const llmOpts = { role: 'chat', ...(modelOverride ? { model: modelOverride } : {}), ...(localOnly ? { localOnly: true } : {}) };
     if (!docQuery || typeof docQuery !== 'string') {
       return res.status(400).json({ ok: false, error: 'path required', message: 'Which document? Pass its title or vault-relative path.' });
     }
@@ -748,7 +752,7 @@ module.exports = function retrieveFactory(deps) {
     if (!full) {
       let queryEmbedding, queryModel;
       try {
-        ({ vector: queryEmbedding, model: queryModel } = await (deps?.embed || embed)(query, { kind: 'query' }));
+        ({ vector: queryEmbedding, model: queryModel } = await (deps?.embed || embed)(query, { kind: 'query', ...(localOnly ? { localOnly: true } : {}) }));
       } catch (e) {
         const msg = 'Searching this document by meaning needs an embedding model, and none is available.';
         return res.json({
@@ -786,7 +790,7 @@ module.exports = function retrieveFactory(deps) {
       ].join('\n');
 
       try {
-        const out = await kernelLLM(prompt, { role: 'chat', ...(modelOverride ? { model: modelOverride } : {}) });
+        const out = await kernelLLM(prompt, llmOpts);
         const answer = (typeof out === 'string' ? out : (out?.text || '')).trim();
         if (!answer) return res.status(502).json({ ok: false, error: 'empty_answer', message: 'The model returned nothing.' });
         return res.json({
@@ -824,7 +828,7 @@ module.exports = function retrieveFactory(deps) {
           '', `QUESTION: ${query}`, '', 'SECTION:', passage,
         ].join('\n');
         try {
-          const out = await kernelLLM(p, { role: 'chat', ...(modelOverride ? { model: modelOverride } : {}) });
+          const out = await kernelLLM(p, llmOpts);
           const a = (typeof out === 'string' ? out : (out?.text || '')).trim();
           if (a && !a.toUpperCase().includes(NOTHING)) extracts[i] = { at, text: a };
         } catch { /* one bad window must not fail the whole read (R-05: nothing silent — it just isn't counted as relevant) */ }
@@ -846,7 +850,7 @@ module.exports = function retrieveFactory(deps) {
     ].join('\n');
 
     try {
-      const out = await kernelLLM(reducePrompt, { role: 'chat', ...(modelOverride ? { model: modelOverride } : {}) });
+      const out = await kernelLLM(reducePrompt, llmOpts);
       const answer = (typeof out === 'string' ? out : (out?.text || '')).trim();
       if (!answer) return res.status(502).json({ ok: false, error: 'empty_answer', message: 'The model returned nothing for the combined read.' });
       return res.json({

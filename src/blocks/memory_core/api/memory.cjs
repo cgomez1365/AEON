@@ -124,11 +124,29 @@ module.exports = function createMemoryRouter(deps) {
   // that one memory over every other. Only a MISSING file is an empty store.
   // Anything else throws, the file stays exactly as it is, and the log and
   // the route both say where it is and what to do.
+  // A memory whose <id>.md mirror is missing (mdMirror's write failed, or the
+  // store was restored or edited by hand) is found by recall only through its
+  // mirror once memories.json is withheld (vaultPrivacy: a store holding an
+  // Off memory), so a read writes the mirrors it finds missing. Each id is
+  // checked once per process; mdMirror marks the ones it writes.
+  const mirrored = new Set();
+  const repairMirrors = (all) => {
+    let wrote = 0;
+    for (const m of all) {
+      if (!m || m.id == null || mirrored.has(String(m.id)) || typeof m.text !== 'string') continue;
+      try {
+        const file = path.join(MEM_DIR, `${m.id}.md`);
+        if (!fs.existsSync(file)) { mdMirror(m); if (fs.existsSync(file)) wrote++; }
+      } catch (e) { console.warn(`[MEMORY] mirror ${m.id}.md was not written (${e.message})`); }
+      mirrored.add(String(m.id));
+    }
+    if (wrote) { console.log(`[MEMORY] wrote ${wrote} missing memory mirror(s) in ${MEM_DIR}`); requestIndex('mirror'); }
+  };
   const load = () => {
     let why;
     try {
       const all = JSON.parse(fs.readFileSync(STORE, 'utf8'));
-      if (Array.isArray(all)) return all;
+      if (Array.isArray(all)) { repairMirrors(all); return all; }
       why = 'not a list of memories';
     } catch (e) {
       if (e.code === 'ENOENT') return [];
@@ -181,7 +199,7 @@ module.exports = function createMemoryRouter(deps) {
       (m.refs && m.refs.length) ? `refs: ${JSON.stringify(m.refs)}` : null,
       '---',
     ].filter(Boolean).join('\n');
-    try { fs.writeFileSync(path.join(MEM_DIR, `${m.id}.md`), `${fm}\n\n${m.text}\n`); } catch {}
+    try { fs.writeFileSync(path.join(MEM_DIR, `${m.id}.md`), `${fm}\n\n${m.text}\n`); mirrored.add(String(m.id)); } catch {}
   };
   const mdRemove = (id) => { try { fs.unlinkSync(path.join(MEM_DIR, `${id}.md`)); } catch {} };
   return { dir: MEM_DIR, STORE, LEDGER, readLedger, recordDistilled, load, loadFor, save, mdMirror, mdRemove };

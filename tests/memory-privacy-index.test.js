@@ -85,7 +85,7 @@ afterEach(() => {
 });
 
 describe('vaultPrivacy — what is withheld', () => {
-  it('a Local only agent\'s folder, a switched-off memory and every memory store; nothing else', () => {
+  it('a Local only agent\'s folder, a switched-off memory and a store that holds one; nothing else', () => {
     const p = vaultPrivacy.createScope(vault);
     expect(p.withheld('Agents/Scout')).toBe('local-only-agent');
     expect(p.withheld('Agents/Scout/memory/s1.md')).toBe('local-only-agent');
@@ -506,5 +506,170 @@ describe('an image in a Local only agent\'s chat is not sent to a vision model',
     const ok = await ask(null);
     expect(ok.status).toBe(200);
     expect(seen).toHaveLength(1);
+  });
+});
+
+describe('a path is judged as the disk resolves it, not as it was typed', () => {
+  // macOS (APFS), Windows and the exFAT drive ignore case: "agents/scout/…"
+  // opens Scout's file there. Mis-cased paths are withheld on every disk.
+  const MIS = 'agents/scout/memory/s1.md';
+
+  it('vaultPrivacy: mis-cased, "..", and a symlink into Agents/', () => {
+    const p = vaultPrivacy.createScope(vault);
+    expect(p.withheld(MIS)).toBe('local-only-agent');
+    expect(p.withheld('AGENTS/Scout')).toBe('local-only-agent');
+    expect(p.withheld('Agents/aeon/MEMORY/off1.md')).toBe('memory-off');
+    expect(p.withheld('Notes/../Agents/Scout/memory/s1.md')).toBe('local-only-agent');
+    expect(p.withheldAt(path.join(vault, 'agents', 'scout', 'memory', 's1.md'))).toBe('local-only-agent');
+    let linked = false;
+    try { fs.symlinkSync(path.join(vault, 'Agents', 'Scout'), path.join(vault, 'Notes', 'scout-link'), 'dir'); linked = true; } catch { /* no symlinks here (Windows without the privilege) */ }
+    if (linked) expect(p.withheld('Notes/scout-link/memory/s1.md')).toBe('local-only-agent');
+  });
+
+  it('/read of a mis-cased Local only path is shown, not summarised or read back', async () => {
+    const asked = [];
+    const app = express();
+    app.use(express.json());
+    app.use('/api', createFsRouter({ isVercel: false, WORKSPACE: root, HOME_ROOT: root, VAULT_ROOT: vault,
+      kernelLLM: async (prompt) => { asked.push(prompt); return 'A summary.'; }, getDataFile: (n) => path.join(root, n) }));
+    const base = await listen(app);
+    const out = await post(`${base}/fs/read`, { filePath: path.join(vault, ...MIS.split('/')) });
+    if (out.success) {
+      // A disk that ignores case opened the file: it must not reach a model.
+      expect(out.summary).toBeNull();
+      expect(out.modelText).toBeNull();
+    }
+    expect(asked).toEqual([]);
+  });
+
+  it('a mis-cased single-document ingest indexes and embeds nothing', async () => {
+    const app = express();
+    app.use(express.json());
+    app.use('/api', ingestMod({ isVercel: false, VAULT_ROOT: vault, DATA_ROOT: dataRoot, embed }));
+    const base = await listen(app);
+    const out = await post(`${base}/crn/second-brain/ingest/document`, { file_path: MIS });
+    expect(out.ingested ?? 0).toBe(0);
+    expect(embedded.map((e) => e.text).join('\n')).not.toContain('Charizard');
+  });
+});
+
+describe('a memory with no <id>.md mirror can still be recalled', () => {
+  const LOST_TEXT = 'The warehouse alarm code changes on the first Monday of every quarter.';
+
+  it('a store with every memory on is indexed; one with a memory switched off is not', async () => {
+    write('Agents/Aeon/memory/memories.json', [
+      { id: 'on1', text: ON_TEXT, category: 'fact', timestamp: 1 },
+      { id: 'lost1', text: LOST_TEXT, category: 'fact', timestamp: 2 },
+    ]);
+    fs.rmSync(path.join(vault, 'Agents', 'Aeon', 'memory', 'off1.md'));
+    expect(vaultPrivacy.withheld(vault, 'Agents/Aeon/memory/memories.json')).toBeNull();
+    await scan();
+    expect(indexed()).toContain('Agents/Aeon/memory/memories.json');
+    expect(embedded.map((e) => e.text).join('\n')).toContain('warehouse alarm');
+
+    // Switched off: the whole store leaves the index on the next scan, and
+    // recall drops it before that.
+    write('Agents/Aeon/memory/memories.json', [
+      { id: 'on1', text: ON_TEXT, category: 'fact', timestamp: 1 },
+      { id: 'lost1', text: LOST_TEXT, category: 'fact', timestamp: 2, active: false },
+    ]);
+    expect(vaultPrivacy.withheld(vault, 'Agents/Aeon/memory/memories.json')).toBe('memory-store');
+    await scan();
+    expect(indexed()).not.toContain('Agents/Aeon/memory/memories.json');
+  });
+
+  it('Memory Core writes the mirror a memory is missing when it reads the store', async () => {
+    write('Agents/Aeon/memory/memories.json', [
+      { id: 'on1', text: ON_TEXT, category: 'fact', timestamp: 1 },
+      { id: 'lost1', text: LOST_TEXT, category: 'fact', timestamp: 2 },
+    ]);
+    const mirrorFile = path.join(vault, 'Agents', 'Aeon', 'memory', 'lost1.md');
+    expect(fs.existsSync(mirrorFile)).toBe(false);
+    const app = express();
+    app.use(express.json());
+    app.use('/api', memoryFactory({ VAULT_ROOT: vault, TERMINAL_HISTORY_FILE: null }));
+    const base = await listen(app);
+    await (await fetch(`${base}/memory`)).json();
+    expect(fs.readFileSync(mirrorFile, 'utf8')).toContain('warehouse alarm');
+  });
+});
+
+describe('slash commands run for a Local only agent stay on local models', () => {
+  const registryFactory = require('../src/kernel/commandRegistry.cjs');
+
+  it('dispatch adds localOnly to a command that declares takesLocalOnly, for that agent only', async () => {
+    const seen = [];
+    const app = express();
+    app.use(express.json());
+    app.post('/api/crn/second-brain/ask', (req, res) => { seen.push(req.body); res.json({ ok: true, text: 'answer' }); });
+    app.use('/api', registryFactory({ vaultRoot: vault, hasEmbedding: () => true }).router);
+    const base = await listen(app);
+    const savedPort = process.env.PORT;
+    process.env.PORT = new URL(base).port;
+    try {
+      await post(`${base}/commands/dispatch`, { cmd: '/ask', arg: 'what is the ceiling', agent: 'scout' });
+      await post(`${base}/commands/dispatch`, { cmd: '/ask', arg: 'what is the ceiling' });
+    } finally { if (savedPort === undefined) delete process.env.PORT; else process.env.PORT = savedPort; }
+    expect(seen).toEqual([{ query: 'what is the ceiling', localOnly: true }, { query: 'what is the ceiling' }]);
+  });
+
+  it('the operator\'s own AEON set to Local only counts too (no agent named)', async () => {
+    write('Agents/Aeon/agent.json', { name: 'Aeon', privacy: 'local-only' });
+    const seen = [];
+    const app = express();
+    app.use(express.json());
+    app.post('/api/crn/second-brain/ask', (req, res) => { seen.push(req.body); res.json({ ok: true, text: 'answer' }); });
+    app.use('/api', registryFactory({ vaultRoot: vault, hasEmbedding: () => true }).router);
+    const base = await listen(app);
+    const savedPort = process.env.PORT;
+    process.env.PORT = new URL(base).port;
+    try { await post(`${base}/commands/dispatch`, { cmd: '/ask', arg: 'q' }); }
+    finally { if (savedPort === undefined) delete process.env.PORT; else process.env.PORT = savedPort; }
+    expect(seen).toEqual([{ query: 'q', localOnly: true }]);
+  });
+
+  it('narration of a Local only agent\'s result asks the model with localOnly', async () => {
+    const calls = [];
+    const kernelLLM = async (prompt, opts) => { calls.push(opts); return 'A sentence.'; };
+    const app = express();
+    app.use(express.json());
+    app.use('/api', registryFactory({ vaultRoot: vault, kernelLLM }).router);
+    const base = await listen(app);
+    const long = 'x'.repeat(600);
+    await post(`${base}/commands/narrate`, { cmd: '/ask', ok: true, text: long, agent: 'scout' });
+    await post(`${base}/commands/narrate`, { cmd: '/ask', ok: true, text: long });
+    expect(calls[0]).toMatchObject({ role: 'chat', localOnly: true });
+    expect(calls[1].localOnly).toBeUndefined();
+  });
+
+  it('/ask-doc and /read honour localOnly', async () => {
+    const llmOpts = [];
+    const kernelLLM = async (_p, opts) => { llmOpts.push(opts); return 'An answer.'; };
+    await scan();
+    const app = express();
+    app.use(express.json());
+    app.use('/api', retrieveFactory({ isVercel: false, VAULT_ROOT: vault, DATA_ROOT: dataRoot, embed, kernelLLM }));
+    app.use('/api', createFsRouter({ isVercel: false, WORKSPACE: root, HOME_ROOT: root, VAULT_ROOT: vault, kernelLLM, getDataFile: (n) => path.join(root, n) }));
+    const base = await listen(app);
+    embedded.length = 0;
+    await post(`${base}/crn/second-brain/ask-doc`, { path: 'Notes/plan.md', query: 'who are the pilots', localOnly: true });
+    expect(embedded.find((e) => e.opts.kind === 'query').opts.localOnly).toBe(true);
+    await post(`${base}/fs/read`, { filePath: path.join(vault, 'Notes', 'plan.md'), localOnly: true });
+    expect(llmOpts.length).toBeGreaterThanOrEqual(2);
+    for (const o of llmOpts) expect(o.localOnly).toBe(true);
+  });
+});
+
+describe('a narration that fails never reads a withheld result back', () => {
+  it('readBackText honours modelText, and command turns carry their agent', async () => {
+    const { readBackText } = await import('../src/components/Terminal2.jsx');
+    const { turnAgentId, SELF_AGENT_ID } = await import('../src/utils/terminalAgent.js');
+    expect(readBackText({ data: { modelText: null } }, 'Scout: the Charizard ceiling is $400')).toBeNull();
+    expect(readBackText({ data: { modelText: '3 memories, 1 switched off.' } }, 'full list')).toBe('3 memories, 1 switched off.');
+    expect(readBackText({ data: { files: [] } }, 'plain result')).toBe('plain result');
+    expect(readBackText({}, '')).toBeNull();
+    expect(SELF_AGENT_ID).toBe(agentsKernel.SELF_ID);
+    expect(turnAgentId(null)).toBe(agentsKernel.SELF_ID);
+    expect(turnAgentId({ id: 'scout', name: 'Scout' })).toBe('scout');
   });
 });
