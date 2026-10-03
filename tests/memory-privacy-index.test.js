@@ -1,0 +1,342 @@
+/**
+ * "Local only" and "Off" keep a memory out of the Second Brain (audit #2,
+ * 2026-10-03).
+ *
+ * Memory Core said an agent set to Local only "never leaves this computer"
+ * and a switched-off memory is "not sent to the model". Neither was true:
+ * every memory is mirrored to a Vault .md file (switched-off ones too), the
+ * indexer walked Agents/ whole and handed each file to the embedder — a cloud
+ * one, by default, when only a cloud key is set — and /recall and /ask quoted
+ * the result into a chat call.
+ *
+ * Drives the REAL ingest, retrieve and memory_core routers against a temp
+ * Vault, with an embedder stub that records every text it is given.
+ */
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import express from 'express';
+import { createRequire } from 'module';
+
+const require = createRequire(import.meta.url);
+const ingestMod = require('../src/blocks/aeon_matrix/api/ingest.cjs');
+const retrieveFactory = require('../src/blocks/aeon_matrix/api/retrieve.cjs');
+const memoryFactory = require('../src/blocks/memory_core/api/memory.cjs');
+const vaultPrivacy = require('../src/kernel/vaultPrivacy.cjs');
+const { narrate } = require('../src/kernel/commandNarrator.cjs');
+const { buildRecallContext } = require('../src/kernel/context.cjs');
+const matrixFactory = require('../src/blocks/aeon_matrix/api/index.cjs');
+const createChatRouter = require('../src/blocks/dashboard/api/chat.cjs');
+
+let root, vault, dataRoot, embedded, servers;
+const embed = async (text, opts = {}) => {
+  embedded.push({ text: String(text), opts });
+  return { vector: [1, 0, 0], model: 'stub' };
+};
+const scan = () => ingestMod({ isVercel: false, VAULT_ROOT: vault, DATA_ROOT: dataRoot, embed }).runSecondBrainScan();
+const indexed = () => Object.keys(JSON.parse(fs.readFileSync(path.join(dataRoot, 'vault_index.json'), 'utf8')).documents).sort();
+const write = (rel, body) => {
+  const full = path.join(vault, ...rel.split('/'));
+  fs.mkdirSync(path.dirname(full), { recursive: true });
+  fs.writeFileSync(full, typeof body === 'string' ? body : JSON.stringify(body, null, 2));
+};
+const mirror = (id, text, off = false) => `---\nid: ${id}\ncategory: fact\npinned: false\n${off ? 'active: false\n' : ''}created: 2026-10-03T00:00:00.000Z\n---\n\n${text}\n`;
+const listen = (app) => new Promise((resolve) => {
+  const s = app.listen(0, '127.0.0.1', () => { servers.push(s); resolve(`http://127.0.0.1:${s.address().port}/api`); });
+});
+const post = async (url, body) => (await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body ?? {}) })).json();
+
+const ON_TEXT = 'The operator ships the store packs on Fridays after the gate runbook passes.';
+const OFF_TEXT = 'The operator keeps the bank PIN reminder phrase written as blue heron seven.';
+const SCOUT_TEXT = 'Scout watches card auctions and the ceiling for a Charizard is four hundred dollars.';
+
+function fixture() {
+  write('Notes/plan.md', '# Plan\n\nThe launch plan names three pilot customers and a refund policy draft.\n');
+  write('Agents/Aeon/memory/memories.json', [
+    { id: 'on1', text: ON_TEXT, category: 'fact', timestamp: 1 },
+    { id: 'off1', text: OFF_TEXT, category: 'fact', timestamp: 2, active: false },
+  ]);
+  write('Agents/Aeon/memory/on1.md', mirror('on1', ON_TEXT));
+  write('Agents/Aeon/memory/off1.md', mirror('off1', OFF_TEXT, true));
+  write('Agents/Scout/agent.json', { id: 'scout', name: 'Scout', privacy: 'local-only', persona: 'Card auction watcher.' });
+  write('Agents/Scout/memory/memories.json', [{ id: 's1', text: SCOUT_TEXT, category: 'fact', timestamp: 3 }]);
+  write('Agents/Scout/memory/s1.md', mirror('s1', SCOUT_TEXT));
+  write('Agents/Scout/missions/log.json', [{ at: '2026-10-03T00:00:00Z', asked: 'what is the Charizard ceiling today' }]);
+}
+
+beforeEach(() => {
+  ingestMod._resetStores();
+  root = fs.mkdtempSync(path.join(os.tmpdir(), 'aeon-mem-privacy-'));
+  vault = path.join(root, 'Vault');
+  dataRoot = path.join(root, 'data');
+  embedded = [];
+  servers = [];
+  fixture();
+});
+afterEach(() => {
+  for (const s of servers) { try { s.close(); } catch {} }
+  ingestMod._resetStores();
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+describe('vaultPrivacy — what is withheld', () => {
+  it('a Local only agent\'s folder, a switched-off memory and every memory store; nothing else', () => {
+    const p = vaultPrivacy.createScope(vault);
+    expect(p.withheld('Agents/Scout')).toBe('local-only-agent');
+    expect(p.withheld('Agents/Scout/memory/s1.md')).toBe('local-only-agent');
+    expect(p.withheld('Agents/Aeon/memory/off1.md')).toBe('memory-off');
+    expect(p.withheld('Agents/Aeon/memory/memories.json')).toBe('memory-store');
+    expect(p.withheld('Agents/Aeon/memory/on1.md')).toBeNull();
+    expect(p.withheld('Notes/plan.md')).toBeNull();
+    expect(p.withheld('Agents/council/debates/x.md')).toBeNull();
+  });
+
+  it('a mirror its store does not list is judged by its own front matter', () => {
+    write('Agents/Aeon/memory/orphan.md', mirror('orphan', 'An orphaned mirror that was switched off by hand.', true));
+    expect(vaultPrivacy.withheld(vault, 'Agents/Aeon/memory/orphan.md')).toBe('memory-off');
+  });
+
+  it('an agent.json that cannot be read withholds its folder (fails closed)', () => {
+    write('Agents/Broken/agent.json', '{ "privacy": "local-only", ');
+    write('Agents/Broken/memory/b1.md', mirror('b1', 'Broken agent memory text.'));
+    expect(vaultPrivacy.withheld(vault, 'Agents/Broken/memory/b1.md')).toBe('local-only-agent');
+  });
+});
+
+describe('the scan never reads, embeds or indexes what is withheld', () => {
+  it('Off memories and a Local only agent\'s memory, chats and missions stay out', async () => {
+    const r = await scan();
+    expect(r.errors).toEqual([]);
+    expect(indexed()).toEqual(['Agents/Aeon/memory/on1.md', 'Notes/plan.md']);
+    const sent = embedded.map((e) => e.text).join('\n');
+    expect(sent).toContain('ships the store packs');
+    expect(sent, 'a switched-off memory reached the embedder').not.toContain('blue heron');
+    expect(sent, 'a Local only agent\'s memory reached the embedder').not.toContain('Charizard');
+  });
+
+  it('a memory switched off after it was indexed leaves the index on the next scan, and comes back when switched on', async () => {
+    const app = express();
+    app.use(express.json());
+    app.use('/api', memoryFactory({ VAULT_ROOT: vault, TERMINAL_HISTORY_FILE: null }));
+    const base = await listen(app);
+
+    await scan();
+    expect(indexed()).toContain('Agents/Aeon/memory/on1.md');
+
+    const off = await post(`${base}/memory/on1/active`, { active: false });
+    expect(off.active).toBe(false);
+    const r = await scan();
+    expect(indexed()).not.toContain('Agents/Aeon/memory/on1.md');
+    expect(r.withheld).toBe(1);
+    expect(r.deleted).toBe(1);
+
+    await post(`${base}/memory/on1/active`, { active: true });
+    await scan();
+    expect(indexed()).toContain('Agents/Aeon/memory/on1.md');
+  });
+
+  it('an agent set to Local only after it was indexed leaves the index on the next scan', async () => {
+    write('Agents/Roam/agent.json', { id: 'roam', name: 'Roam', privacy: 'roulette' });
+    write('Agents/Roam/memory/memories.json', [{ id: 'r1', text: 'Roam tracks the shipping lanes for the logistics pack pilot.', timestamp: 1 }]);
+    write('Agents/Roam/memory/r1.md', mirror('r1', 'Roam tracks the shipping lanes for the logistics pack pilot.'));
+    await scan();
+    expect(indexed()).toContain('Agents/Roam/memory/r1.md');
+
+    write('Agents/Roam/agent.json', { id: 'roam', name: 'Roam', privacy: 'local-only' });
+    await scan();
+    expect(indexed().filter((p) => p.startsWith('Agents/Roam/'))).toEqual([]);
+  });
+
+  it('a single-document ingest into a withheld path saves nothing to the index', async () => {
+    const app = express();
+    app.use(express.json());
+    app.use('/api', ingestMod({ isVercel: false, VAULT_ROOT: vault, DATA_ROOT: dataRoot, embed }));
+    const base = await listen(app);
+    const out = await post(`${base}/crn/second-brain/ingest/document`, { file_path: 'Agents/Scout/memory/s1.md' });
+    expect(out).toMatchObject({ ok: true, ingested: 0, withheld: 'local-only-agent' });
+    expect(embedded.map((e) => e.text).join('\n')).not.toContain('Charizard');
+  });
+});
+
+describe('recall never returns what is withheld', () => {
+  // An index written before the switches were flipped: the entries are still
+  // in vault_index.json, and recall must not hand them over in the meantime.
+  function staleIndex() {
+    const doc = (p, title, summary) => ({ path: p, title, summary, tags: [], type: 'md', embedding: [1, 0, 0], embeddingModel: 'stub', chunks: 0 });
+    fs.mkdirSync(dataRoot, { recursive: true });
+    fs.writeFileSync(path.join(dataRoot, 'vault_index.json'), JSON.stringify({ documents: {
+      'Notes/plan.md': doc('Notes/plan.md', 'Plan', 'launch plan'),
+      'Agents/Aeon/memory/on1.md': doc('Agents/Aeon/memory/on1.md', 'on', ON_TEXT),
+      'Agents/Aeon/memory/off1.md': doc('Agents/Aeon/memory/off1.md', 'off', OFF_TEXT),
+      'Agents/Aeon/memory/memories.json': doc('Agents/Aeon/memory/memories.json', 'store', 'store'),
+      'Agents/Scout/memory/s1.md': doc('Agents/Scout/memory/s1.md', 'scout', SCOUT_TEXT),
+    } }));
+  }
+
+  async function mountRetrieve() {
+    const app = express();
+    app.use(express.json());
+    app.use('/api', retrieveFactory({ isVercel: false, VAULT_ROOT: vault, DATA_ROOT: dataRoot, embed }));
+    return listen(app);
+  }
+
+  it('/retrieve: a switched-off memory and a Local only agent\'s memory are never candidates', async () => {
+    staleIndex();
+    const base = await mountRetrieve();
+    const out = await post(`${base}/crn/second-brain/retrieve`, { query: 'what does the operator keep and ship', k: 10 });
+    const paths = out.documents.map((d) => d.id).sort();
+    expect(paths).toEqual(['Agents/Aeon/memory/on1.md', 'Notes/plan.md']);
+    expect(JSON.stringify(out)).not.toContain('blue heron');
+    expect(JSON.stringify(out)).not.toContain('Charizard');
+  });
+
+  it('/retrieve section lookup ("facts") leaves out a switched-off memory', async () => {
+    const base = await mountRetrieve();
+    const out = await post(`${base}/crn/second-brain/retrieve`, { query: 'facts' });
+    expect(out.source).toBe('memory-store');
+    expect(out.text).toContain('store packs');
+    expect(out.text).not.toContain('blue heron');
+  });
+
+  it('localOnly on the request reaches the embedder for the query', async () => {
+    staleIndex();
+    const base = await mountRetrieve();
+    await post(`${base}/crn/second-brain/retrieve`, { query: 'launch plan customers', localOnly: true });
+    const q = embedded.find((e) => e.opts.kind === 'query');
+    expect(q.opts.localOnly).toBe(true);
+    embedded.length = 0;
+    await post(`${base}/crn/second-brain/retrieve`, { query: 'launch plan customers' });
+    expect(embedded.find((e) => e.opts.kind === 'query').opts.localOnly).toBeUndefined();
+  });
+
+  it('an agent set to Local only asks recall with localOnly', async () => {
+    const bodies = [];
+    const fetchImpl = async (_url, init) => { bodies.push(JSON.parse(init.body)); return new Response(JSON.stringify({ documents: [] }), { status: 200 }); };
+    await buildRecallContext('/matrix what is the ceiling', { fetchImpl, localOnly: true });
+    await buildRecallContext('/matrix what is the ceiling', { fetchImpl });
+    expect(bodies).toEqual([{ query: 'what is the ceiling', localOnly: true }, { query: 'what is the ceiling' }]);
+  });
+});
+
+describe('the terminal never reads a switched-off memory back into the conversation', () => {
+  it('/memory carries modelText without the switched-off memories, and the narrator uses only that', async () => {
+    const app = express();
+    app.use(express.json());
+    app.use('/api', memoryFactory({ VAULT_ROOT: vault, TERMINAL_HISTORY_FILE: null }));
+    const base = await listen(app);
+    const data = await (await fetch(`${base}/memory`)).json();
+    expect(data.text).toContain('blue heron'); // the operator's own chip shows everything
+    expect(data.modelText).not.toContain('blue heron');
+    expect(data.modelText).toContain('1 switched off');
+
+    let asked = 0;
+    const llm = async () => { asked++; return 'should not be called'; };
+    const n = await narrate({ cmd: '/memory', ok: true, text: data.text, data }, llm);
+    expect(n.narration).not.toContain('blue heron');
+    expect(asked).toBe(0);
+  });
+
+  it('a Local only agent\'s /memory is not read back at all', async () => {
+    const app = express();
+    app.use(express.json());
+    app.use('/api', memoryFactory({ VAULT_ROOT: vault, TERMINAL_HISTORY_FILE: null }));
+    const base = await listen(app);
+    const data = await (await fetch(`${base}/memory?agent=scout`)).json();
+    expect(data.modelText).toBeNull();
+    const n = await narrate({ cmd: '/memory', ok: true, text: data.text, data }, async () => 'x');
+    expect(n.narration).not.toContain('Charizard');
+  });
+});
+
+describe('/doc shows a withheld file to the operator and keeps it out of the conversation', () => {
+  async function mountMatrix() {
+    const app = express();
+    app.use(express.json());
+    app.use('/api', matrixFactory({ VAULT_ROOT: vault, DATA_ROOT: dataRoot, getDataFile: () => path.join(dataRoot, 'aeon_matrix') }));
+    return listen(app);
+  }
+  const doc = async (base, p) => (await fetch(`${base}/crn/second-brain/document?resolve=1&path=${encodeURIComponent(p)}`)).json();
+
+  it('a switched-off memory and a Local only agent\'s file carry modelText: null; an ordinary file does not', async () => {
+    const base = await mountMatrix();
+    const off = await doc(base, 'Agents/Aeon/memory/off1.md');
+    expect(off.text).toContain('blue heron');
+    expect(off.modelText).toBeNull();
+    const scout = await doc(base, 'Agents/Scout/memory/s1.md');
+    expect(scout.modelText).toBeNull();
+    const n = await narrate({ cmd: '/doc', ok: true, text: off.text, data: off }, async () => 'x');
+    expect(n.narration).not.toContain('blue heron');
+
+    const plain = await doc(base, 'Notes/plan.md');
+    expect(plain.found).toBe(true);
+    expect('modelText' in plain).toBe(false);
+  });
+});
+
+describe('a Local only agent\'s saved chats stay off cloud models', () => {
+  const SCOUT_CHAT = [
+    { role: 'user', content: 'Scout, what is our private ceiling for the Charizard lot tonight?' },
+    { role: 'assistant', content: 'Four hundred.' },
+  ];
+  const AEON_CHAT = [
+    { role: 'user', content: 'Remind me when the store packs gate runbook is due this week.' },
+    { role: 'assistant', content: 'Friday.' },
+  ];
+  const sessionsDir = () => path.join(vault, 'Agents', 'Aeon', 'chat_sessions');
+  const saveChat = (id, record) => {
+    fs.mkdirSync(sessionsDir(), { recursive: true });
+    fs.writeFileSync(path.join(sessionsDir(), `${id}.json`), JSON.stringify({ id, name: id, ...record }));
+  };
+
+  async function mountChat(kernelLLM) {
+    const app = express();
+    app.use(express.json());
+    app.use('/api', createChatRouter({
+      isVercel: false, supabase: null, VAULT_ROOT: vault, kernelLLM,
+      getLocalFile: () => null, getDailyCost: () => 0, addRunCost: () => {}, KILL_SWITCH_THRESHOLD: 999, writeOSAudit: () => {},
+    }));
+    return listen(app);
+  }
+
+  it('naming a Local only agent\'s chat asks with its privacy (local only); the operator\'s Roulette chat does not', async () => {
+    const calls = [];
+    const base = await mountChat(async (prompt, opts) => { calls.push({ prompt, opts }); return 'Charizard Ceiling'; });
+    saveChat('scout-chat', { agent: 'scout', updatedAt: '2026-10-03T10:00:00Z', messages: SCOUT_CHAT });
+    saveChat('aeon-chat', { updatedAt: '2026-10-03T09:00:00Z', messages: AEON_CHAT });
+
+    await post(`${base}/terminal/sessions/scout-chat/name`);
+    await post(`${base}/terminal/sessions/aeon-chat/name`);
+    expect(calls).toHaveLength(2);
+    expect(calls[0].opts).toMatchObject({ role: 'naming', localOnly: true });
+    expect(calls[1].opts.localOnly).toBeUndefined();
+  });
+
+  it('a Local only agent\'s chat is not added to the indexed record', async () => {
+    const base = await mountChat(async () => 'x');
+    saveChat('scout-chat', { agent: 'scout', messages: SCOUT_CHAT });
+    const r = await fetch(`${base}/terminal/sessions/scout-chat/remember`, { method: 'POST' });
+    expect(r.status).toBe(409);
+    expect((await r.json()).code).toBe('local_only');
+    expect(fs.existsSync(path.join(vault, 'Chat_History'))).toBe(false);
+  });
+
+  it('distil from the shared memory skips a Local only agent\'s chat, and refuses it by id', async () => {
+    const prompts = [];
+    const app = express();
+    app.use(express.json());
+    app.use('/api', memoryFactory({ VAULT_ROOT: vault, TERMINAL_HISTORY_FILE: null,
+      kernelLLM: async (prompt, opts) => { prompts.push({ prompt, opts }); return '[]'; } }));
+    const base = await listen(app);
+    saveChat('scout-chat', { agent: 'scout', updatedAt: '2026-10-03T10:00:00Z', messages: SCOUT_CHAT });
+    saveChat('aeon-chat', { updatedAt: '2026-10-03T09:00:00Z', messages: AEON_CHAT });
+
+    const out = await post(`${base}/memory/distill`, {});
+    expect(out.session).toBe('aeon-chat');
+    expect(prompts.map((p) => p.prompt).join('\n')).not.toContain('Charizard');
+
+    const r = await fetch(`${base}/memory/distill`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: 'scout-chat' }) });
+    expect(r.status).toBe(409);
+    expect(prompts).toHaveLength(1);
+  });
+});

@@ -469,11 +469,18 @@ module.exports = (app, deps) => {
         if (error) {
           // If exec_sql doesn't exist, try the REST fallback
           if (/exec_sql/.test(error.message)) {
+            // PUBLIC too: Postgres grants EXECUTE on a new function to PUBLIC,
+            // and anon and authenticated are members of it, so revoking only
+            // from them left "run any SQL" callable with the public anon key
+            // (audit #1, 2026-10-03).
             return res.status(400).json({
               error: 'exec_sql() RPC not found. Run this once in Supabase SQL Editor:\n\n' +
-                'CREATE OR REPLACE FUNCTION exec_sql(sql text) RETURNS void\n' +
-                '  LANGUAGE plpgsql SECURITY DEFINER AS $$ BEGIN EXECUTE sql; END; $$;\n' +
-                'REVOKE ALL ON FUNCTION exec_sql(text) FROM anon, authenticated;',
+                'CREATE OR REPLACE FUNCTION public.exec_sql(sql text) RETURNS void\n' +
+                '  LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$ BEGIN EXECUTE sql; END; $$;\n' +
+                'REVOKE ALL ON FUNCTION public.exec_sql(text) FROM PUBLIC, anon, authenticated;\n' +
+                'GRANT EXECUTE ON FUNCTION public.exec_sql(text) TO service_role;\n\n' +
+                'If you ran an earlier version of this, run the REVOKE and GRANT lines again: ' +
+                'it left exec_sql callable by anyone holding your anon key.',
             });
           }
           return res.status(500).json({ error: `${file}: ${error.message}` });

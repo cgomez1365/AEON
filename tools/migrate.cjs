@@ -24,10 +24,16 @@ const MIGRATIONS_DIR = path.join(__dirname, '..', 'db', 'migrations');
 const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
 const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
+// Revoked from PUBLIC too: Postgres grants EXECUTE on a new function to
+// PUBLIC, which anon and authenticated belong to, so revoking only from them
+// left "run any SQL" callable with the public anon key (audit #1, 2026-10-03).
 const BOOTSTRAP_RPC = `-- Run ONCE in Supabase SQL Editor to enable automated migrations:
-create or replace function exec_sql(sql text) returns void
-  language plpgsql security definer as $$ begin execute sql; end; $$;
-revoke all on function exec_sql(text) from anon, authenticated;`;
+create or replace function public.exec_sql(sql text) returns void
+  language plpgsql security definer set search_path = public as $$ begin execute sql; end; $$;
+revoke all on function public.exec_sql(text) from public, anon, authenticated;
+grant execute on function public.exec_sql(text) to service_role;
+-- Ran an earlier version of this? Run the revoke and grant lines again:
+-- it left exec_sql callable by anyone holding your anon key.`;
 
 function listMigrations() {
   if (!fs.existsSync(MIGRATIONS_DIR)) return [];

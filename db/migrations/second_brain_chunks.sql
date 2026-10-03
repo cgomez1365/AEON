@@ -65,3 +65,8 @@ BEGIN
   LIMIT match_count;
 END;
 $$;
+
+-- Postgres grants EXECUTE on a new function to PUBLIC (anon and authenticated
+-- included). Nothing in AEON calls it today; only the service role may.
+REVOKE ALL ON FUNCTION match_second_brain(vector, INT, TEXT) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION match_second_brain(vector, INT, TEXT) TO service_role;
