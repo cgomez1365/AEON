@@ -10,8 +10,9 @@
  *
  * This reads every tracked file that can carry SQL for the operator to run —
  * db/ files and the bootstrap strings in code — and fails on a CREATE FUNCTION
- * with no REVOKE … FROM PUBLIC for it, and on a SECURITY DEFINER function with
- * no fixed search_path.
+ * or PROCEDURE, in any schema, with no REVOKE … FROM PUBLIC for it, and on a
+ * SECURITY DEFINER one with no fixed search_path (written before or after its
+ * body).
  */
 import { describe, expect, it } from 'vitest';
 import { execFileSync } from 'child_process';
@@ -27,35 +28,76 @@ const tracked = execFileSync('git', ['ls-files'], { cwd: ROOT, encoding: 'utf8' 
 const CANDIDATES = tracked.filter((f) => /\.(sql|c?js|mjs|md)$/i.test(f)
   && !f.startsWith('tests/') && !f.includes('/vendor/') && !f.startsWith('node_modules/'));
 
-const CREATE_RE = /create\s+(?:or\s+replace\s+)?function\s+(?:"?public"?\.)?"?([a-z_][a-z0-9_]*)"?\s*\(/gi;
+// Any schema (public, extensions, private, a quoted one, none), functions and
+// procedures alike.
+const IDENT = String.raw`(?:"[^"]+"|[a-z_][a-z0-9_$]*)`;
+const CREATE_RE = new RegExp(String.raw`create\s+(?:or\s+replace\s+)?(function|procedure)\s+(?:${IDENT}\s*\.\s*)?"?([a-z_][a-z0-9_$]*)"?\s*\(`, 'gi');
 
-/** Every function a file creates: { file, name, head } — head runs to the body's opening quote. */
-function functionsIn(file) {
-  const text = fs.readFileSync(path.join(ROOT, file), 'utf8');
+/**
+ * The statement that starts at `start`, through the ';' that ends it — a ';'
+ * inside a dollar-quoted body ($$ … $$, $fn$ … $fn$) or a single-quoted body
+ * (AS '…') does not end it. Returns the whole statement and the statement with
+ * its body cut out, so SECURITY DEFINER or SET search_path written after the
+ * body (`AS $$ … $$ LANGUAGE plpgsql SECURITY DEFINER;`) is still seen.
+ */
+function statementAt(text, start) {
+  let i = start;
+  let outside = '';
+  let from = start;
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === '$') {
+      const tag = /^\$(?:[a-z_][a-z0-9_]*)?\$/i.exec(text.slice(i));
+      if (tag) {
+        const end = text.indexOf(tag[0], i + tag[0].length);
+        outside += text.slice(from, i);
+        if (end < 0) return { stmt: text.slice(start), head: outside };
+        i = end + tag[0].length; from = i;
+        continue;
+      }
+    }
+    if (ch === "'" && /\bas\s*$/i.test(text.slice(Math.max(start, i - 8), i))) {
+      let j = i + 1;
+      while (j < text.length && !(text[j] === "'" && text[j + 1] !== "'")) j += text[j] === "'" ? 2 : 1;
+      outside += text.slice(from, i);
+      i = j + 1; from = i;
+      continue;
+    }
+    if (ch === ';') return { stmt: text.slice(start, i + 1), head: outside + text.slice(from, i + 1) };
+    i++;
+  }
+  return { stmt: text.slice(start), head: outside + text.slice(from) };
+}
+
+/** Every function or procedure a text creates: { file, kind, name, head, text } — head is the statement without its body. */
+function routinesIn(text, file = '(inline)') {
   const out = [];
   for (const m of text.matchAll(CREATE_RE)) {
-    const rest = text.slice(m.index);
-    const bodyAt = rest.search(/\bas\s+\$/i);
-    out.push({ file, name: m[1].toLowerCase(), head: bodyAt > 0 ? rest.slice(0, bodyAt) : rest.slice(0, 600), text });
+    const { head } = statementAt(text, m.index);
+    out.push({ file, kind: m[1].toLowerCase(), name: m[2].toLowerCase(), head, text });
   }
   return out;
 }
 
-function revokedFromPublic(text, name) {
-  const re = new RegExp(`revoke\\s+(?:all|execute)(?:\\s+privileges)?\\s+on\\s+function\\s+(?:"?public"?\\.)?"?${name}"?\\s*\\([^;]*?\\)\\s+from\\s+([^;]+);`, 'gi');
+const functionsIn = (file) => routinesIn(fs.readFileSync(path.join(ROOT, file), 'utf8'), file);
+
+function revokedFromPublic(text, name, kind = 'function') {
+  const re = new RegExp(String.raw`revoke\s+(?:all|execute)(?:\s+privileges)?\s+on\s+(?:function|procedure|routine)\s+(?:${IDENT}\s*\.\s*)?"?${name}"?\s*\([^;]*?\)\s+from\s+([^;]+);`, 'gi');
   for (const m of text.matchAll(re)) {
     if (/(^|[\s,])public($|[\s,])/i.test(m[1].replace(/['"]/g, ' '))) return true;
   }
   return false;
 }
 
+const definer = (f) => /security\s+definer/i.test(f.head);
+const pinsSearchPath = (f) => /set\s+search_path\s*(=|to)/i.test(f.head);
+
 const FOUND = CANDIDATES.flatMap(functionsIn);
 
 describe('shipped SQL functions', () => {
   it('the scan sees the functions AEON ships (it is not passing by reading nothing)', () => {
     const names = FOUND.map((f) => `${f.file}:${f.name}`);
-    expect(names).toContain('src/blocks/settings/api/connectivity.js:exec_sql');
-    expect(names).toContain('tools/migrate.cjs:exec_sql');
+    expect(names).toContain('src/kernel/supabaseExecSql.cjs:exec_sql');
     expect(names).toContain('db/migrations/second_brain_chunks.sql:match_second_brain');
   });
 
@@ -64,9 +106,9 @@ describe('shipped SQL functions', () => {
       `${f.file} creates ${f.name}() without REVOKE … ON FUNCTION ${f.name}(…) FROM PUBLIC — Postgres grants EXECUTE to PUBLIC, which anon belongs to`).toBe(true);
   });
 
-  it.each(FOUND.filter((f) => /security\s+definer/i.test(f.head)).map((f) => [`${f.file}: ${f.name}`, f]))(
+  it.each(FOUND.filter(definer).map((f) => [`${f.file}: ${f.name}`, f]))(
     '%s (SECURITY DEFINER) fixes its search_path', (_label, f) => {
-      expect(/set\s+search_path\s*(=|to)/i.test(f.head), `${f.file}: ${f.name}() runs as its owner with the caller's search_path`).toBe(true);
+      expect(pinsSearchPath(f), `${f.file}: ${f.name}() runs as its owner with the caller's search_path`).toBe(true);
     },
   );
 
@@ -74,6 +116,25 @@ describe('shipped SQL functions', () => {
     for (const f of FOUND.filter((x) => x.name === 'exec_sql')) {
       expect(f.text, f.file).toMatch(/grant\s+execute\s+on\s+function\s+(?:public\.)?exec_sql\s*\(\s*text\s*\)\s+to\s+service_role/i);
     }
+  });
+
+  it('the scan itself: any schema, procedures, and clauses written after the body', () => {
+    const one = (sql) => routinesIn(sql)[0];
+    expect(one('CREATE FUNCTION extensions.f(x int) RETURNS int AS $$ select 1; $$ LANGUAGE sql;').name).toBe('f');
+    expect(one('create or replace function private."g"(x int) returns int as $$ select 1; $$ language sql;').name).toBe('g');
+    expect(one('CREATE PROCEDURE p() LANGUAGE plpgsql AS $$ BEGIN NULL; END; $$;')).toMatchObject({ kind: 'procedure', name: 'p' });
+
+    const after = one('CREATE FUNCTION f() RETURNS void AS $body$ BEGIN PERFORM 1; END; $body$ LANGUAGE plpgsql SECURITY DEFINER;');
+    expect(definer(after)).toBe(true);
+    expect(pinsSearchPath(after)).toBe(false);
+    expect(pinsSearchPath(one('CREATE FUNCTION f() RETURNS void AS $$ BEGIN END; $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;'))).toBe(true);
+    // A single-quoted body's ';' does not end the statement either.
+    expect(definer(one("CREATE FUNCTION f() RETURNS int AS 'select 1; select 2' LANGUAGE sql SECURITY DEFINER;"))).toBe(true);
+    // The body's own words are not the header's.
+    expect(pinsSearchPath(one("CREATE FUNCTION f() RETURNS void AS $$ BEGIN EXECUTE 'SET search_path = x'; END; $$ LANGUAGE plpgsql SECURITY DEFINER;"))).toBe(false);
+
+    expect(revokedFromPublic('REVOKE ALL ON FUNCTION extensions.f(int) FROM PUBLIC;', 'f')).toBe(true);
+    expect(revokedFromPublic('REVOKE ALL ON PROCEDURE p() FROM PUBLIC;', 'p')).toBe(true);
   });
 
   it('the revoke check itself: anon and authenticated alone are not PUBLIC', () => {

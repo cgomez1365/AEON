@@ -142,7 +142,8 @@ export default function SetupWizard({ onComplete, onSkip }) {
       if (supabase.serviceRoleKey.trim()) {
         try {
           const schema = await post('/api/settings/connectivity/supabase/setup', {});
-          log.push(`✓ Database ready — ${schema.applied?.length || 0} schema file(s) applied.`);
+          log.push(`✓ Database ready — ${schema.applied?.length || 0} schema file(s) applied.`
+            + (schema.execSqlLocked ? ' exec_sql() can be called with the service role key only.' : ''));
         } catch (e) {
           // Schema RPC may not exist yet on a fresh project — surface the
           // one-time paste-into-SQL-Editor fallback rather than failing setup.

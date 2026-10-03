@@ -24,16 +24,10 @@ const MIGRATIONS_DIR = path.join(__dirname, '..', 'db', 'migrations');
 const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
 const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-// Revoked from PUBLIC too: Postgres grants EXECUTE on a new function to
-// PUBLIC, which anon and authenticated belong to, so revoking only from them
-// left "run any SQL" callable with the public anon key (audit #1, 2026-10-03).
-const BOOTSTRAP_RPC = `-- Run ONCE in Supabase SQL Editor to enable automated migrations:
-create or replace function public.exec_sql(sql text) returns void
-  language plpgsql security definer set search_path = public as $$ begin execute sql; end; $$;
-revoke all on function public.exec_sql(text) from public, anon, authenticated;
-grant execute on function public.exec_sql(text) to service_role;
--- Ran an earlier version of this? Run the revoke and grant lines again:
--- it left exec_sql callable by anyone holding your anon key.`;
+// One text for the bootstrap and the grants, shared with Settings → Cloud:
+// src/kernel/supabaseExecSql.cjs (audit #1, 2026-10-03).
+const execSql = require('../src/kernel/supabaseExecSql.cjs');
+const BOOTSTRAP_RPC = `-- Run ONCE in Supabase SQL Editor to enable automated migrations:\n${execSql.BOOTSTRAP_SQL}`;
 
 function listMigrations() {
   if (!fs.existsSync(MIGRATIONS_DIR)) return [];
@@ -66,11 +60,26 @@ async function main() {
     if (error) throw new Error(error.message);
   };
 
+  // exec_sql is locked to the service role before anything runs through it:
+  // a project bootstrapped with the text printed here before 2026-10-03 has
+  // an exec_sql anyone with the anon key can call, and this closes it.
+  const lock = await execSql.lockDown(db);
+  if (!lock.ok && lock.missing) {
+    console.error(`[migrate] exec_sql RPC missing. Bootstrap it once:\n\n${BOOTSTRAP_RPC}\n`);
+    console.error('Then re-run, or use: node tools/migrate.cjs --print');
+    process.exit(1);
+  }
+  if (!lock.ok) {
+    console.error(`[migrate] exec_sql could not be locked to the service role (${lock.error}). Nothing was applied.`);
+    console.error(`Run this in Supabase SQL Editor, then re-run:\n\n${execSql.LOCKDOWN_SQL}\n`);
+    process.exit(1);
+  }
+  console.log(`[migrate] ${execSql.LOCKED_NOTE}`);
+
   try {
     await run(ensure);
   } catch (e) {
-    console.error(`[migrate] exec_sql RPC missing. Bootstrap it once:\n\n${BOOTSTRAP_RPC}\n`);
-    console.error('Then re-run, or use: node tools/migrate.cjs --print');
+    console.error(`[migrate] could not create schema_migrations: ${e.message}`);
     process.exit(1);
   }
 
