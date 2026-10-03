@@ -185,7 +185,20 @@ documentation reported the suite as "1,100 / 1,106" — it had taken 1,100 as th
 total. The correction was published rather than quietly patched, because a
 number that was never right must be re-taken, not carried forward.
 
-**Current reading — 2026-09-30, macOS, the review-fix commit ("Release 3.1.0: review
+**Current reading — v3.2.0, CI run 37102458513 on `cf73b00` ("Release 3.2.0"), started
+2026-10-03 06:15 UTC (23:15 on 2026-10-02 US Pacific time), all five jobs green:** 313
+test files and 3,235 tests on every build leg, 0 failures. Skips differ by platform:
+
+| Leg | Passed | Skipped | What the skips are |
+|---|---|---|---|
+| Ubuntu, Node 24 | 3,230 | 5 | tests that need macOS or Windows: the real-PowerShell Desktop shortcut, the real `iconutil` icon, the cloudflared `.tgz` unpack (the macOS download), and the two macOS dead-terminal end-to-end tests |
+| Ubuntu, Node 22.13 floor | 3,230 | 5 | the same five |
+| macOS, Node 24 | 3,234 | 1 | the real-PowerShell Desktop shortcut |
+| Windows, Node 24 | 3,171 | 64 | tests marked POSIX-only or macOS-only, 4 whole files among them; Cookbook stop and serve, tunnel clean-up and the old-macOS launcher are not run here |
+
+The security job (dependency audit gate) passed. Taken from the run's own logs.
+
+**Previous reading — 2026-09-30, macOS, the review-fix commit ("Release 3.1.0: review
 fixes", parent `7c73e1a`):** 2,937 passing and 1 skipped of 2,938 tests across 294 files,
 0 failures (the skip is the real-PowerShell test that runs only on Windows). Release gate
 passes: 0 undeclared block filesystem access, 22 declared and audited; cloud conditionals

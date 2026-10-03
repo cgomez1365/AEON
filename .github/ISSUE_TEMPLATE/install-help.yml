@@ -7,6 +7,7 @@ body:
     attributes:
       value: |
         Install help is free. Tell us what you did and what you saw; we answer here.
+        **This issue is public — anyone can read it.** Remove your username from any paths you paste (for example `/Users/<you>/…` or `C:\Users\<you>\…`).
         **Never paste an API key, a password or your `.env` file.** If a log shows one, cut it out first.
   - type: dropdown
     id: os
@@ -43,7 +44,7 @@ body:
     id: output
     attributes:
       label: Launcher window text (optional)
-      description: The last lines of the launcher window, if it showed an error. Remove any keys first.
+      description: The last lines of the launcher window, if it showed an error. Remove any keys and your username first — this issue is public.
       render: shell
   - type: checkboxes
     id: services
