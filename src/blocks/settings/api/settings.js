@@ -126,12 +126,34 @@ module.exports = (app, deps) => {
     // what was saved (a value can still come from its pre-declaration home).
     try {
       const bs = require(path.join(__dirname, '..', '..', '..', 'kernel', 'blockSettings.cjs'));
-      const blocksDir = path.join(__dirname, '..', '..');
+      const blocksDir = require(path.join(__dirname, '..', '..', '..', 'kernel', 'blocksDir.cjs')).BLOCKS_DIR;
       settings.blockSettings = { ...(settings.blockSettings || {}) };
+      settings.blockSecretsSet = {};
       for (const id of fs.readdirSync(blocksDir)) {
-        if (Object.keys(bs.defaults(id)).length) settings.blockSettings[id] = bs.get(id, raw);
+        if (!Object.keys(bs.defaults(id)).length) continue;
+        // A `type: "secret"` value never goes to the browser — only whether
+        // one is saved (kernel/blockSettings.cjs forBrowser).
+        const { values, secretsSet } = bs.forBrowser(id, raw);
+        settings.blockSettings[id] = values;
+        if (Object.keys(secretsSet).length) settings.blockSecretsSet[id] = secretsSet;
       }
     } catch (e) { console.error('[SETTINGS] block settings did not resolve:', e.message); }
+    // The AI roles installed blocks declare (contract.ai.role), so Settings →
+    // Models can offer a block's own role before anything is assigned to it.
+    // Until one is, the kernel answers that role with the Chat model.
+    try {
+      const blocksDir = require(path.join(__dirname, '..', '..', '..', 'kernel', 'blocksDir.cjs')).BLOCKS_DIR;
+      const blockRoles = {};
+      for (const id of fs.readdirSync(blocksDir)) {
+        if (id.startsWith('_')) continue;
+        let m;
+        try { m = JSON.parse(fs.readFileSync(path.join(blocksDir, id, 'block.manifest.json'), 'utf8')); } catch { continue; }
+        const role = m?.contract?.ai?.role;
+        if (typeof role !== 'string' || !/^[a-z0-9_]+$/.test(role)) continue;
+        (blockRoles[role] ||= []).push({ id, label: m.label || id, blurb: m.contract.ai.blurb || '' });
+      }
+      settings.blockRoles = blockRoles;
+    } catch (e) { console.error('[SETTINGS] block roles did not resolve:', e.message); }
     const cloudProviders = cloudCredentials.metadata();
     const envKeys = {};
     // dotenv's reading (parseEnvFile below): a blank "KEY=   # docs…" line is
@@ -354,9 +376,13 @@ module.exports = (app, deps) => {
   // Manifest-declared defaults merged with saved overrides. This is THE
   // way a block reads its settings: one call, always complete, and the
   // shape follows the block wherever it's installed (modularity).
+  // A `type: "secret"` value is blanked here (secretsSet says whether one is
+  // saved): this route answers the browser. A block's server code reads the
+  // real value with deps.blockSettings().
   app.get('/api/settings/block/:id', (req, res) => {
     const id = req.params.id;
-    res.json({ id, values: require(path.join(__dirname, '..', '..', '..', 'kernel', 'blockSettings.cjs')).get(id, loadSettings()) });
+    const { values, secretsSet } = require(path.join(__dirname, '..', '..', '..', 'kernel', 'blockSettings.cjs')).forBrowser(id, loadSettings());
+    res.json({ id, values, secretsSet });
   });
 
   // ── GET /api/capabilities — what each toggle governs, and whether

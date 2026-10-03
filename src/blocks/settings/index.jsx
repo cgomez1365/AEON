@@ -38,16 +38,25 @@ const ROLE_DEFAULTS = {
   naming: { label: 'Chat naming', desc: 'Titles saved chats. A small, fast model is plenty. Uses your Chat model until you set one.', icon: '🏷️' },
   vision: { label: 'Vision (image reading)', desc: 'Reads images for the terminal upload and the agent\'s read_image tool. Needs a vision-capable model — Groq Llama 4 Scout (free), Gemini, or Claude.', icon: '👁️' },
 };
-function deriveRoles(settingsModels) {
+function deriveRoles(settingsModels, blockRoles = {}) {
   if (!settingsModels) return [];
   // Every role code asks for is offered, set or not — an unset role uses Chat.
-  const keys = [...new Set([...Object.keys(settingsModels), ...Object.keys(ROLE_DEFAULTS)])];
-  return keys.map(key => ({
-    key,
-    label: ROLE_DEFAULTS[key]?.label || fieldLabel(key),
-    desc: ROLE_DEFAULTS[key]?.desc || '',
-    icon: ROLE_DEFAULTS[key]?.icon || '⚙️',
-  }));
+  // That includes a role an installed block declares (contract.ai.role, sent
+  // by GET /api/settings as blockRoles): without it a block's own role could
+  // only be assigned through the API.
+  const keys = [...new Set([...Object.keys(settingsModels), ...Object.keys(ROLE_DEFAULTS), ...Object.keys(blockRoles || {})])];
+  return keys.map(key => {
+    const from = (blockRoles || {})[key];
+    const byBlocks = from && !ROLE_DEFAULTS[key]
+      ? `Declared by ${from.map(b => b.label).join(', ')}${from[0]?.blurb ? ` — ${from[0].blurb}` : ''}. Uses your Chat model until you set one.`
+      : '';
+    return {
+      key,
+      label: ROLE_DEFAULTS[key]?.label || fieldLabel(key),
+      desc: ROLE_DEFAULTS[key]?.desc || byBlocks,
+      icon: ROLE_DEFAULTS[key]?.icon || '⚙️',
+    };
+  });
 }
 
 // ── Toast System ─────────────────────────────────────────────────────
@@ -2502,7 +2511,7 @@ function TunnelPanel() {
 // its manifest. Block leaves → its card leaves; block arrives → its card
 // appears. Values live in aeon-settings.json → blockSettings[<id>][<key>]:
 // set once, come back only to change them.
-function BlockSettingControl({ def, value, onChange }) {
+function BlockSettingControl({ def, value, onChange, isSet = false }) {
   const current = value !== undefined ? value : def.default;
   const fieldLabel = def.label || def.key;
   // 'boolean' is accepted alongside 'toggle'. Manifests use both spellings —
@@ -2548,7 +2557,7 @@ function BlockSettingControl({ def, value, onChange }) {
     <input
       className="settings-select"
       type={def.type === 'secret' ? 'password' : 'text'}
-      placeholder={def.type === 'secret' ? '••••••••' : (def.placeholder || '')}
+      placeholder={def.type === 'secret' ? (isSet ? 'saved — type to replace' : 'not set') : (def.placeholder || '')}
       value={current ?? ''}
       onChange={e => onChange(e.target.value)}
       style={{ minWidth: 220 }}
@@ -2966,7 +2975,7 @@ function BlockWidgetsPanel() {
   );
 }
 
-function BlockSettingsPanel({ blockSettings, onChange }) {
+function BlockSettingsPanel({ blockSettings, secretsSet = {}, onChange }) {
   // Manifests come from the frontend registry — the same source as nav, so
   // this list is always exactly the installed blocks (modularity guarantee).
   const withSettings = INSTALLED_BLOCKS.filter(b => (b.manifest?.contract?.settings || []).length > 0);
@@ -3004,6 +3013,7 @@ function BlockSettingsPanel({ blockSettings, onChange }) {
               <BlockSettingControl
                 def={def}
                 value={blockSettings?.[b.id]?.[def.key]}
+                isSet={!!secretsSet?.[b.id]?.[def.key]}
                 onChange={v => onChange(b.id, def.key, v)}
               />
             </div>
@@ -3528,7 +3538,7 @@ export default function SystemSettings() {
             {' '}Don't have cloud keys? Choose a local runtime model and run free.
           </div>
           <EmbedReadiness />
-          {deriveRoles(settings.models).map(role => (
+          {deriveRoles(settings.models, settings.blockRoles).map(role => (
             <RoleCard
               key={role.key}
               role={role}
@@ -3659,7 +3669,7 @@ export default function SystemSettings() {
           </div>
           <BlockLifecyclePanel blocks={blocks} />
           <BlockWidgetsPanel />
-          <BlockSettingsPanel blockSettings={settings.blockSettings} onChange={updateBlockSetting} />
+          <BlockSettingsPanel blockSettings={settings.blockSettings} secretsSet={settings.blockSecretsSet} onChange={updateBlockSetting} />
         </>
       )}
 
