@@ -12,6 +12,62 @@ tagged; until then its heading says so.
      is added here before tagging, and the heading's "not tagged yet" is replaced by
      the date. -->
 
+## 3.2.0 — 2026-10-02
+
+Agents with memory of their own, a switch on every memory, and blocks you can build on.
+Your data in `~/AEON` is untouched; upgrade as for 3.1.x.
+
+### Agents and memory
+
+- **Agents.** Create them in Memory Core: a name, a persona, an optional model of their
+  own, and their own memory in `Vault/Agents/<Name>/memory`. Every agent also reads the
+  shared memory (`Vault/Agents/Aeon/memory`, where it always was) unless told not to.
+  Removing an agent moves its folder to `Vault/Agents/.removed`; nothing is deleted
+  (bd7c9d9).
+- **Local only, per agent.** An agent set to Local only is refused a cloud model — for
+  chat, distil and automatic capture alike — even with the global switch off (bd7c9d9).
+- **A switch on every memory.** Off keeps a memory saved and searchable but never sends
+  it to the model; Memory Core shows what the switched-on memories cost every turn, with
+  all on / all off. New setting: *New memories start on* (bd7c9d9).
+- **Calling an agent:** `/agent` lists them, `/agent <name>` switches, `/agent off`
+  returns. Any wake-up call works — "aeon - come online" did nothing before, because only
+  a space, a comma or "!" could separate the words — and an agent wakes by its own name
+  ("scout come online", "wake up, scout") (bd7c9d9).
+- Fleet Control's *VP missions* panel is now **Recent Agent Missions**: every agent, with
+  what it was last asked; a click loads it into the terminal (bd7c9d9).
+- Your own AEON can be renamed and given a persona, and the wake message no longer calls
+  every install "VP" (bd7c9d9).
+- `POST /api/ai` takes `agent`, so a block can run its own jobs as an agent — its model
+  and its privacy (bd7c9d9).
+
+### Blocks
+
+- Stopping a block pauses its timers and listeners; it used to stop only its routes while
+  its jobs kept running, even after a restart (6ea8e34).
+- A block's secret settings are no longer sent to the browser, and a block's own AI role
+  appears in Settings → Models under the block's name (a0d5110, 4609391).
+- An error in a block's timer is logged with the block's id instead of stopping AEON
+  (fbc6642).
+- Scheduled tasks run at the interval they name: "every 15 min" ran every 5 minutes and
+  "every 6 hours" hourly (11a467f).
+- `aeon dev` listens on this computer only, gives a block its real storage, settings and
+  timers, and reloads on save; `aeon new` writes a clean manifest (10889cb).
+- One block-building guide — the Master README — checked against the code (8bd2adf).
+
+### Fixes
+
+- Quick Links load again after you sign in: a load before sign-in showed "HTTP 401" for
+  the whole session. A save made meanwhile merges with the saved links instead of
+  replacing them (1706a32).
+- The version AEON shows is the release's own; it said "v5.0" (da0f6b5).
+- The streaming chat no longer keeps answering with a reloaded block's old settings
+  (bd7c9d9).
+
+### Help
+
+- **Install help is free:** the welcome screen and the README link an *Install help*
+  form; setup and custom blocks are offered as paid services (7d132ec).
+
 ## 3.1.1 — 2026-10-01
 
 Same behaviour as 3.1.0; four features rebuilt from written specifications.
