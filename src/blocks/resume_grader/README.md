@@ -29,7 +29,7 @@ If it is ever removed, apply the deletion protocol (prove dead, gate first,
 one scoped commit, drive the surface after) — not an ad-hoc `rm`.
 
 One screen: paste (or upload) a résumé and, optionally, the job posting, and
-get a compliance-first fit score. **Nothing is stored** — no candidate
+get a fit score. **Nothing is stored** — no candidate
 records, no history, no database. (The candidate-pipeline routes this README
 used to describe — intake / candidates / grade-all / alert, Supabase storage,
 `pdf-parse` — were removed in the 2026-07-24 cleanup; this file described
@@ -57,7 +57,12 @@ them until 2026-09-23.)
   in a minute) and "no model assigned to grading" (503) each have their own
   message. None is a raw JSON parse error.
 
-### EEOC-compliant grading rubric
+### Grading rubric
+
+**Not a compliance tool.** Nothing checks that the model followed these
+instructions, so a grade is never proof of a fair or lawful decision and must
+not be the sole basis for one. (This section was titled "EEOC-compliant" and
+the screen said "EEOC-safe" until 2026-10-03; the only basis was the prompt.)
 
 The prompt instructs the model to score using **only** job-related criteria
 and to ignore and never mention age, gender, race, ethnicity, religion,

@@ -1,5 +1,7 @@
 // Stateless resume-vs-JD grader — the shipped ATS in its simplest form:
-// paste a resume + a job description, get an instant compliance-first fit score.
+// paste a resume + a job description, get an instant fit score. The prompt
+// instructs the model to judge job-related criteria only; nothing verifies that
+// it did, so this is not a compliance tool.
 // No candidate records, no storage, no pipeline. (The legacy candidate-pipeline
 // endpoints — intake/candidates/grade/grade-all/alert — were removed in the
 // 2026-07-24 cleanup; this comment said they were still mounted.)
@@ -72,9 +74,9 @@ async function handler(req, res) {
   if (!resume || !String(resume).trim()) return res.status(400).json({ error: 'Paste your resume text.' });
   if (!_kernelLLM) return res.status(503).json({ error: 'Grading requires the AEON kernel — no AI provider is available. Add a key in Settings or start a local model.' });
 
-  const prompt = `You are a structured, compliance-first technical recruiter. Evaluate the resume against the job description using ONLY job-related criteria.
+  const prompt = `You are a structured technical recruiter. Evaluate the resume against the job description using ONLY job-related criteria.
 
-COMPLIANCE RULES (mandatory — EEOC):
+JOB-RELATED CRITERIA ONLY (mandatory):
 - Base every judgment ONLY on skills, experience, education, and measurable qualifications relevant to the role.
 - COMPLETELY IGNORE and NEVER mention: age, gender, race, ethnicity, religion, national origin, disability, health, marital/family status, pregnancy, photos, name-based inferences, address/zip, or graduation years used to infer age.
 - If the resume contains such information, exclude it from consideration entirely.

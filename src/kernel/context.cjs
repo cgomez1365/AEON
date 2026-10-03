@@ -289,6 +289,9 @@ function fitDocuments(docs, budgetTokens) {
  * Every return carries `ran` — whether a search actually happened — so no
  * caller can report an absence of documents that were never consulted.
  *
+ * `localOnly` (an agent set to Local only): the question is embedded on this
+ * computer or the search does not run, whatever the global switch says.
+ *
  * @returns {Promise<{query,forced,ran,ok,count,dropped,citations,context,unavailable,error}>}
  */
 async function buildRecallContext(message, {
@@ -297,6 +300,7 @@ async function buildRecallContext(message, {
   timeoutMs = 8000,
   fetchImpl = null,
   manifest = false,
+  localOnly = false,
 } = {}) {
   const parsed = parseRecallInput(message);
   const { query, forced } = parsed;
@@ -315,7 +319,7 @@ async function buildRecallContext(message, {
     const r = await doFetch(`${kernelBase()}/api/crn/second-brain/retrieve`, {
       method: 'POST',
       headers: forwardedAuth(auth),
-      body: JSON.stringify({ query }),
+      body: JSON.stringify(localOnly ? { query, localOnly: true } : { query }),
       signal: AbortSignal.timeout(timeoutMs),
     });
     status = r.status;
@@ -645,6 +649,7 @@ async function assembleContext(message, {
     auth,
     budgetTokens: budgets.recallTokens,
     fetchImpl,
+    localOnly: agent?.privacy === 'local-only',
   });
 
   return {

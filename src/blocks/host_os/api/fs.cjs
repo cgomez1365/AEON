@@ -6,6 +6,7 @@ module.exports = function createFsRouter(deps) {
   const router = express.Router();
   const { isVercel, WORKSPACE, upload, VAULT_ROOT, getDataFile, HOME_ROOT, kernelLLM } = deps;
   const extract = require('../../../kernel/extract.cjs');
+  const vaultPrivacy = require('../../../kernel/vaultPrivacy.cjs');
 
   // ── Path containment ──────────────────────────────────────────────
   // Every route below took a path straight from the request body and handed
@@ -379,14 +380,24 @@ module.exports = function createFsRouter(deps) {
       // response says why there is no summary.
       const PREVIEW = PREVIEW_CHARS, SUMMARY_INPUT = 14000;
       let summary = null, summaryReason = null;
-      if (summarize !== false && typeof kernelLLM === 'function' && content.trim()) {
+      // A Vault file withheld in Memory Core (a memory switched off, a Local
+      // only agent's folder) is shown, never summarised by a model nor read
+      // back into the conversation (commandNarrator). Judged as the disk
+      // resolves the path, so "agents/scout/…" on a disk that ignores case
+      // is Scout's file too.
+      const withheld = VAULT_ROOT ? vaultPrivacy.withheldAt(path.resolve(VAULT_ROOT), resolved) : null;
+      if (withheld) {
+        summaryReason = withheld === 'memory-off' ? 'it is a memory switched off in Memory Core'
+          : withheld === 'local-only-agent' ? 'it is in the folder of an agent set to Local only' : 'it is a memory store';
+      } else if (summarize !== false && typeof kernelLLM === 'function' && content.trim()) {
         try {
           const body = content.length > SUMMARY_INPUT
             ? `${content.slice(0, SUMMARY_INPUT)}\n\n[… ${content.length - SUMMARY_INPUT} more characters not shown]`
             : content;
           summary = String(await kernelLLM(
             `Summarize the following document for its owner in plain English: what it is, what it says, and anything they need to act on. Be concrete; quote exact figures, names and dates where they appear. 5 to 10 sentences.\n\nFILE: ${path.basename(resolved)}\n\n${body}`,
-            { role: 'chat' },
+            // Sent for an agent set to Local only (commandRegistry).
+            { role: 'chat', ...(req.body?.localOnly === true ? { localOnly: true } : {}) },
           ) || '').trim() || null;
           if (!summary) summaryReason = 'the model returned nothing';
         } catch (e) { summaryReason = e.message; }
@@ -407,6 +418,7 @@ module.exports = function createFsRouter(deps) {
         chars: content.length,
         lines: content.split('\n').length,
         truncated: content.length > PREVIEW,
+        ...(withheld ? { modelText: null } : {}),
       });
     } catch (error) {
       // §08 — say WHERE it looked. "Not found" without the path it tried is

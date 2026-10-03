@@ -20,6 +20,7 @@ const express = require('express');
 const path    = require('path');
 const fs      = require('fs');
 const { loadExtractors, extractText, embed, EMBED_MODEL } = require('./_lib.cjs');
+const vaultPrivacy = require('../../../kernel/vaultPrivacy.cjs');
 
 const NIGHTLY_HOUR  = 3; // local hour to auto re-index, once per day
 // .docx dropped 2026-09-12 (CEO) with mammoth and its eight @xmldom/xmldom
@@ -42,6 +43,10 @@ const INDEXABLE_EXT = /\.(md|txt|json|pdf|html?)$/i;
 // parent would remove a feature, not secure one. Only conversations are pruned,
 // and they re-enter through an explicit operator action —
 // POST /crn/second-brain/ingest/chat, which stores operator turns only.
+//
+// What the operator withholds in Memory Core — an agent set to Local only, a
+// memory switched Off — is decided per scan by src/kernel/vaultPrivacy.cjs,
+// not listed here: it changes while AEON runs.
 const NON_INDEXED_VAULT_PATHS = new Set([
   'blocks/security',
   'Agents/Aeon/chat_sessions',
@@ -333,6 +338,35 @@ module.exports = function ingestFactory(deps) {
     return rec.chunks.length ? rec : null;
   }
 
+  // A single-document write into a withheld path — a Local only agent's
+  // folder, a switched-off memory's file — is saved and never indexed, and any
+  // entry it already had leaves the index. Returns why, or null.
+  // Judged as the disk resolves the path (a mis-cased "agents/scout/…" is
+  // Scout's file on macOS, Windows and exFAT), and its entry is dropped under
+  // either name.
+  function dropWithheld(relPosix) {
+    const privacy = vaultPrivacy.createScope(BRAIN_DIR);
+    const why = privacy.withheld(relPosix);
+    if (!why) return null;
+    const index = readIndex();
+    const manifest = readManifest();
+    let changed = false;
+    for (const key of new Set([relPosix, privacy.canonical(relPosix)])) {
+      if (!index.documents[key] && !manifest[key]) continue;
+      delete index.documents[key];
+      delete chunks()[key];
+      delete manifest[key];
+      changed = true;
+    }
+    if (changed) { writeIndex(index); writeManifest(manifest); }
+    return why;
+  }
+  const WITHHELD_SAYS = {
+    'local-only-agent': 'it is in the folder of an agent set to Local only',
+    'memory-off': 'it is a memory that is switched off',
+    'memory-store': 'it is a memory store (each memory is indexed through its own file)',
+  };
+
   let embedWarnedOnce = false;
   async function buildEntry(fullPath, relPosix, text, stat) {
     const summary = deriveSummary(text);
@@ -404,8 +438,9 @@ module.exports = function ingestFactory(deps) {
   }
 
   // Every indexable file under `dir`. With `hashes`, also records each file's
-  // size-mtime hash as it was when listed.
-  function walkVault(dir, hashes) {
+  // size-mtime hash as it was when listed. Withheld paths (vaultPrivacy) are
+  // not listed, so they are never read, embedded or sent anywhere.
+  function walkVault(dir, hashes, privacy = vaultPrivacy.createScope(BRAIN_DIR)) {
     if (!fs.existsSync(dir)) return [];
     const files = [];
     for (const name of fs.readdirSync(dir)) {
@@ -417,8 +452,9 @@ module.exports = function ingestFactory(deps) {
       const full = path.join(dir, name);
       const relPosix = vaultRelative(full).replace(/\\/g, '/');
       if (NON_INDEXED_VAULT_PATHS.has(relPosix)) continue;
+      if (privacy.withheld(relPosix)) continue;
       const stat = fs.statSync(full);
-      if (stat.isDirectory()) { files.push(...walkVault(full, hashes)); continue; }
+      if (stat.isDirectory()) { files.push(...walkVault(full, hashes, privacy)); continue; }
       if (INDEXABLE_EXT.test(name)) { files.push(full); hashes?.set(full, fileHash(stat)); }
     }
     return files;
@@ -438,7 +474,11 @@ module.exports = function ingestFactory(deps) {
   async function _runScan(onEvent = () => {}, listed = new Map()) {
     // embedded counts vectors WRITTEN this run — first ingest, backfill, or space
     // migration. ingested alone could not say whether a model was involved.
-    const results = { ingested: 0, embedded: 0, skipped: 0, deleted: 0, errors: [] };
+    // withheld counts entries this run took OUT of the index because the
+    // operator withheld them since (a memory switched off, an agent set to
+    // Local only). They are counted in deleted too — they left the index —
+    // but the files themselves are untouched.
+    const results = { ingested: 0, embedded: 0, skipped: 0, deleted: 0, withheld: 0, errors: [] };
     if (isVercel) {
       const r = { ...results, reason: 'cloud env — vault lives on the local filesystem only' };
       onEvent({ done: true, ...r });
@@ -592,6 +632,23 @@ module.exports = function ingestFactory(deps) {
         results.errors.push({ file: relPosix, error: err.message });
         onEvent({ file: relPosix, error: err.message });
       }
+    }
+
+    // Withheld since it was indexed: a memory switched off, an agent set to
+    // Local only. The walk no longer lists it, so without this its entry —
+    // summary, vectors and all — would stay searchable forever. Index entries
+    // with no manifest key (ingest/chat writes none) are checked too.
+    const privacy = vaultPrivacy.createScope(BRAIN_DIR);
+    for (const rel of new Set([...Object.keys(manifest), ...Object.keys(index.documents)])) {
+      const relPosix = rel.replace(/\\/g, '/');
+      if (seen.has(relPosix) || !privacy.withheld(relPosix)) continue;
+      delete manifest[rel];
+      delete index.documents[relPosix];
+      delete chunks()[relPosix];
+      results.withheld++;
+      results.deleted++;
+      onEvent({ file: relPosix, deleted: true, withheld: true });
+      checkpoint();
     }
 
     // Deletions: manifest entries whose file no longer exists on disk. Checked
@@ -797,6 +854,16 @@ module.exports = function ingestFactory(deps) {
     catch (e) { try { fs.unlinkSync(dest); } catch {} return res.status(422).json({ error: `Could not read ${displayName}: ${e.message}`, remedy: 'The file may be damaged or password-protected. Export it again and retry.' }); }
     if (!text || text.trim().length < 20) { try { fs.unlinkSync(dest); } catch {} return res.status(422).json({ error: `${displayName} has no readable text to index.` }); }
 
+    // Saved where the operator asked, but not indexed and not summarised: the
+    // summary is a chat-model call, and that folder is withheld from them.
+    const withheldWhy = dropWithheld(vaultRelative(dest));
+    if (withheldWhy) {
+      return res.json({
+        ok: true, file: vaultRelative(dest), chars: text.length, indexed: false, embedded: false, summary: null, withheld: withheldWhy,
+        text: `Saved ${displayName} as ${vaultRelative(dest)}. It was not indexed or summarised: ${WITHHELD_SAYS[withheldWhy]}.`,
+      });
+    }
+
     try {
       const stat = fs.statSync(dest);
       const relPosix = vaultRelative(dest);
@@ -852,6 +919,9 @@ module.exports = function ingestFactory(deps) {
       return res.status(404).json({ error: 'File not found' });
     }
 
+    const withheldWhy = dropWithheld(vaultRelative(resolved));
+    if (withheldWhy) return res.json({ ok: true, ingested: 0, withheld: withheldWhy, reason: `not indexed: ${WITHHELD_SAYS[withheldWhy]}` });
+
     loadExtractors();
     const text = await extractText(resolved);
     if (!text || text.trim().length < 20) return res.json({ ok: true, ingested: 0, reason: 'empty file' });
@@ -894,6 +964,9 @@ module.exports = function ingestFactory(deps) {
 
     try {
       fs.writeFileSync(resolved, content, 'utf8');
+
+      const withheldWhy = dropWithheld(vaultRelative(resolved));
+      if (withheldWhy) return res.json({ ok: true, file: vaultRelative(resolved), withheld: withheldWhy });
 
       loadExtractors();
       const text = await extractText(resolved);
@@ -969,7 +1042,8 @@ module.exports = function ingestFactory(deps) {
     const parts = joined
       ? [`${r.ingested} new, changed or backfilled`]
       : [`${tally.fresh} new or changed`, ...(tally.backfilled ? [`${tally.backfilled} backfilled`] : [])];
-    parts.push(`${r.embedded || 0} embedded`, `${r.skipped} unchanged`, `${r.deleted} removed`);
+    parts.push(`${r.embedded || 0} embedded`, `${r.skipped} unchanged`,
+      `${r.deleted} removed${r.withheld ? ` (${r.withheld} withheld in Memory Core: switched off, or a Local only agent's)` : ''}`);
     const lines = [`${joined ? 'A scan was already running; its result: ' : ''}Vault indexed — ${parts.join(', ')}. ${plural(totalDocs, 'document')} in the index.`];
     // Chunk backfill re-embeds windows of a document that already has its
     // vector, and is not counted in `embedded` — it cannot prove a missing model.

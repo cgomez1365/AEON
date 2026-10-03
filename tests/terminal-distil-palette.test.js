@@ -132,11 +132,13 @@ describe('the component uses them', () => {
     expect(SRC).toMatch(/DISTILLING…/);
   });
 
-  it('sends the live transcript and nothing else', () => {
+  it('sends the live chat and nothing else', () => {
     expect(SRC).toMatch(/liveTranscript\(feedRef\.current/);
-    // The transcript, plus which agent's memory it goes to (2026-10-02) —
-    // a scope, not a different conversation.
-    expect(SRC).toMatch(/body: JSON\.stringify\(\{ transcript, \.\.\.agentBody\(\) \}\)/);
+    // The live turns, plus which agent's memory they go to (2026-10-02) —
+    // a scope, not a different conversation. Turns rather than the joined
+    // transcript since 2026-10-03, so the server can leave out a Local only
+    // agent's turns (audit #2).
+    expect(SRC).toMatch(/body: JSON\.stringify\(\{ messages: liveTurns\(feedRef\.current \|\| \[\]\), \.\.\.agentBody\(\) \}\)/);
     const call = SRC.slice(SRC.indexOf("fetch('/api/memory/distill'"), SRC.indexOf('distillSummary(d)'));
     expect(call).not.toMatch(/force|sessionId/);
   });

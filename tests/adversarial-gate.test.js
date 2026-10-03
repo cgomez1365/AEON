@@ -100,9 +100,14 @@ describe('B2 adversarial gate — 10 malicious specs', () => {
   });
 
   // 5. Hardcoded API key
+  // The fixture is assembled at runtime from obvious filler, so no string in
+  // this repo looks like a real provider key to a secret scanner (GitHub
+  // secret-scanning alert #1, 2026-10-03). It still has the shape the gate
+  // looks for: a key-named assignment of a long quoted token.
   it('case 5: hardcoded API key', () => {
+    const fakeKey = 'sk-' + 'proj-' + 'EXAMPLExEXAMPLE'.repeat(3);
     const env = makeEnvelope({
-      files: [{ path: 'api/svc.cjs', content: "const api_key = 'sk-proj-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef12345678';" }],
+      files: [{ path: 'api/svc.cjs', content: `const api_key = '${fakeKey}';` }],
     });
     const result = gate(env);
     expect(result.score).toBe('HIGH');

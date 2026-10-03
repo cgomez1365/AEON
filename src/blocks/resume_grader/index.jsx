@@ -2,7 +2,8 @@ import React, { useState } from "react";
 
 // =============================================
 //  RESUME GRADER
-//  Paste your resume + a job description -> instant, compliance-first fit score.
+//  Paste your resume + a job description -> instant fit score (the model is
+//  instructed to judge job-related criteria only; not a compliance tool).
 //  Stateless: nothing is stored. A PDF or .txt résumé can be uploaded; its
 //  text is read into the box (api/extract-resume.js) before grading.
 // =============================================
@@ -79,7 +80,8 @@ export default function ResumeGrader() {
           <span aria-hidden="true">🎯</span> RESUME GRADER
         </h2>
         <p style={{ margin: '6px 0 0', color: 'rgba(229,226,225,0.6)', fontSize: '13px' }}>
-          Paste your resume and the job posting — get an instant, compliance-first fit score (EEOC-safe: judged on skills &amp; experience only). Nothing is stored.
+          Paste your resume and the job posting — get an instant fit score. The model is instructed to judge job-related
+          criteria only; this is not a compliance tool, so never use it as the sole basis for a hiring decision. Nothing is stored.
         </p>
       </div>
 

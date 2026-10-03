@@ -432,7 +432,23 @@ function detectWake(message, agents = []) {
   return { wake: false, agent: null, spoken: null };
 }
 
+/**
+ * The turns of a conversation that may go to a model serving `agent`. The
+ * terminal tags each turn with the agent it was with (`agent: <id>`), and one
+ * feed can hold several agents. A turn with an agent set to Local only goes
+ * only to a call that is Local only too; untagged turns are kept. `agent`
+ * null: a call that is not an agent's (a chat title, the indexed record).
+ */
+function shareableTurns(messages, agent, agents) {
+  if (!Array.isArray(messages)) return [];
+  if (agent && agent.privacy === 'local-only') return messages;
+  const hidden = new Set((agents || []).filter((a) => a && a.privacy === 'local-only').map((a) => a.id));
+  if (!hidden.size) return messages;
+  return messages.filter((m) => !(m && typeof m.agent === 'string' && hidden.has(m.agent)));
+}
+
 module.exports = {
   list, get, create, update, remove, memoryDir, sharedMemoryDir, detectWake, callOptions, identityFor, recordMission,
+  shareableTurns,
   folderFor, cleanName, AgentError, SELF_ID, SELF_FOLDER, PRIVACY,
 };

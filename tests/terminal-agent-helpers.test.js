@@ -48,8 +48,11 @@ describe('terminalAgent helpers', () => {
   });
 
   it('describes an agent in words: model, privacy, memory', () => {
-    expect(describeAgent(AGENTS[1])).toBe('Card Scout — local · phi4-mini-q4, local only (never a cloud model); its own memory plus the shared memory.');
+    expect(describeAgent(AGENTS[1])).toBe('Card Scout — local · phi4-mini-q4, local only (its chats and its own memory never go to a cloud model); its own memory plus the shared memory.');
     expect(describeAgent(AGENTS[3])).toBe('Orion — the model Settings picks; its own memory only.');
+    // The operator's own AEON holds the shared memory, which Roulette agents
+    // may still read — so Local only promises its chats, not its memory.
+    expect(describeAgent({ ...AGENTS[0], privacy: 'local-only' })).toMatch(/local only \(its chats never go to a cloud model\)/);
   });
 });
 
@@ -63,7 +66,7 @@ describe('wiring', () => {
     expect(term).toMatch(/fetch\('\/api\/agents'/);
     expect(term).toMatch(/role: 'chat', \.\.\.agentBody\(\)/);
     expect(term).toMatch(/autoSaved, \.\.\.agentBody\(\)/);
-    expect(term).toMatch(/transcript, \.\.\.agentBody\(\)/);
+    expect(term).toMatch(/messages: liveTurns\(feedRef\.current \|\| \[\]\), \.\.\.agentBody\(\)/);
     expect(term).toMatch(/agent: agentRef\.current\?\.id \|\| null/);
   });
 

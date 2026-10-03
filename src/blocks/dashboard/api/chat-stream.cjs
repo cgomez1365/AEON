@@ -50,8 +50,9 @@ module.exports = function ({ kernelLLM, loadSettings: loadSettingsDep, VAULT_ROO
   //     documents were found" for a search that never ran;
   //   * retrieved documents were the only context block outside the token
   //     budget, worth up to four times the memory allowance.
-  const buildSecondBrainContext = (message, auth, budgetTokens) =>
-    kernelContext.buildRecallContext(message, { auth, budgetTokens });
+  // An agent set to Local only searches with a local embedder or not at all.
+  const buildSecondBrainContext = (message, auth, budgetTokens, { localOnly = false } = {}) =>
+    kernelContext.buildRecallContext(message, { auth, budgetTokens, localOnly });
 
   // ── Memory injection ───────────────────────────────────────────────
   // Pinned + recent memories ride along on every message (brain_settings
@@ -203,6 +204,7 @@ module.exports = function ({ kernelLLM, loadSettings: loadSettingsDep, VAULT_ROO
         message,
         { authorization: req.headers.authorization, cookie: req.headers.cookie },
         mem.budgets?.recallTokens,
+        { localOnly: agent?.privacy === 'local-only' },
       );
       const messages = [
         // AEON is a tool, not a staff member. This prompt used to cast the
@@ -215,7 +217,10 @@ module.exports = function ({ kernelLLM, loadSettings: loadSettingsDep, VAULT_ROO
         // src/kernel/context.cjs.
         { role: 'system', content: agentsKernel.identityFor(agent, 'You are AEON, a private AI workspace built by Broken Gear Industries. You are helpful, precise, and concise. When the user asks you to do something, do it directly. ')
           + kernelContext.FORMATTING + mem.text },
-        ...history.slice(-20).map(m => ({ role: m.role === 'error' || m.role === 'system' ? 'user' : m.role, content: m.content })),
+        // A turn the terminal tagged with an agent set to Local only reaches
+        // only a Local only agent's model (one feed can switch agents).
+        ...agentsKernel.shareableTurns(history, agent, agents).slice(-20)
+          .map(m => ({ role: m.role === 'error' || m.role === 'system' ? 'user' : m.role, content: m.content })),
         // Retrieved documents ride with the user's turn, not as a system
         // message: they are material for THIS question, and a system turn
         // would imply they outrank the operator's own instructions.

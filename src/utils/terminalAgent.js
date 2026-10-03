@@ -9,6 +9,18 @@ export const AGENT_KEY = 'aeon_terminal_agent';
 export const AGENT_SELECT_EVENT = 'aeon:agent-select';
 const BACK = new Set(['off', 'aeon', 'self', 'vp', 'none', 'exit']);
 
+// The operator's own AEON's agent id (agents.cjs SELF_ID).
+export const SELF_AGENT_ID = 'aeon';
+
+/**
+ * The agent a feed turn was with, for its `agent` tag: the current agent, or
+ * the operator's own AEON. A turn tagged with an agent set to Local only is
+ * left out of what goes to another agent's model (agents.cjs shareableTurns).
+ */
+export function turnAgentId(current) {
+  return current && typeof current.id === 'string' ? current.id : SELF_AGENT_ID;
+}
+
 /** The stored agent ({ id, name }), or null for the operator's own AEON. */
 export function readStoredAgent(storage) {
   try {
@@ -54,7 +66,11 @@ export function resolveAgentArg(arg, agents = []) {
 export function describeAgent(a) {
   if (!a) return '';
   const model = a.model && a.model.provider ? `${a.model.provider}${a.model.model ? ` · ${a.model.model}` : ''}` : 'the model Settings picks';
-  const privacy = a.privacy === 'local-only' ? ', local only (never a cloud model)' : '';
+  // The operator's own AEON holds the shared memory, which an agent set to
+  // Roulette may still read and send to its model — so for it, only the chats.
+  const privacy = a.privacy !== 'local-only' ? ''
+    : a.self ? ', local only (its chats never go to a cloud model)'
+      : ', local only (its chats and its own memory never go to a cloud model)';
   const shared = a.sharedMemory === false ? 'its own memory only' : 'its own memory plus the shared memory';
   return `${a.name} — ${model}${privacy}; ${shared}.`;
 }

@@ -18,6 +18,7 @@ const os = require('os');
 const path = require('path');
 const { spawn, execFileSync } = require('child_process');
 const { isCloud: _isCloud } = require('../../../kernel/runtime.cjs');
+const execSql = require('../../../kernel/supabaseExecSql.cjs');
 
 const ROOT = path.join(__dirname, '..', '..', '..', '..');
 const BIN_DIR = path.join(ROOT, 'tools', 'bin');
@@ -455,6 +456,23 @@ module.exports = (app, deps) => {
       const { createClient } = require('@supabase/supabase-js');
       const db = createClient(url, key);
 
+      // exec_sql is locked to the service role before anything runs through
+      // it. A project bootstrapped with the text this route printed before
+      // 2026-10-03 has an exec_sql anyone with the anon key can call (audit
+      // #1); this closes it on that project's next setup (kernel/supabaseExecSql.cjs).
+      const lock = await execSql.lockDown(db);
+      if (!lock.ok && lock.missing) {
+        return res.status(400).json({
+          error: `exec_sql() RPC not found. Run this once in Supabase SQL Editor:\n\n${execSql.BOOTSTRAP_SQL}`,
+        });
+      }
+      if (!lock.ok) {
+        return res.status(500).json({
+          error: `exec_sql() is there but could not be locked to the service role (${lock.error}). Nothing was applied. `
+            + `Run this in Supabase SQL Editor, then try again:\n\n${execSql.LOCKDOWN_SQL}`,
+        });
+      }
+
       const schemas = ['supabase_migration_aeon_blocks.sql', 'aeon_vault_schema.sql',
                         'aeon_notes_schema.sql', 'cloud_relay_schema.sql', 'aeon_governance_schema.sql'];
       const dbDir = path.join(ROOT, 'db');
@@ -466,22 +484,11 @@ module.exports = (app, deps) => {
         if (!fs.existsSync(fp)) { skipped.push(file); continue; }
         const sql = fs.readFileSync(fp, 'utf8');
         const { error } = await db.rpc('exec_sql', { sql });
-        if (error) {
-          // If exec_sql doesn't exist, try the REST fallback
-          if (/exec_sql/.test(error.message)) {
-            return res.status(400).json({
-              error: 'exec_sql() RPC not found. Run this once in Supabase SQL Editor:\n\n' +
-                'CREATE OR REPLACE FUNCTION exec_sql(sql text) RETURNS void\n' +
-                '  LANGUAGE plpgsql SECURITY DEFINER AS $$ BEGIN EXECUTE sql; END; $$;\n' +
-                'REVOKE ALL ON FUNCTION exec_sql(text) FROM anon, authenticated;',
-            });
-          }
-          return res.status(500).json({ error: `${file}: ${error.message}` });
-        }
+        if (error) return res.status(500).json({ error: `${file}: ${error.message}`, execSqlLocked: true, applied });
         applied.push(file);
       }
 
-      res.json({ ok: true, applied, skipped, message: `Cloud ready — ${applied.length} schema(s) applied.` });
+      res.json({ ok: true, applied, skipped, execSqlLocked: true, message: `Cloud ready — ${applied.length} schema(s) applied. ${execSql.LOCKED_NOTE}` });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 

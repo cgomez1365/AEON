@@ -6,13 +6,13 @@
 **Nav group:** `agent`
 
 Read-only ops dashboard for everything that runs in AEON: LLM engine telemetry,
-provider health + key pool status, autopilot state, and VP mission history.
+provider health + key pool status, autopilot state, and every agent's recent missions.
 It reports what exists and never calls what doesn't — no writes, no mutating
 API calls, nothing autonomous.
 
 ## What it shows
 
-The UI (`index.jsx`) polls every 8 seconds and renders four panels:
+The UI (`index.jsx`) polls every 8 seconds and renders five panels:
 
 1. **Status cards** — AEON server (ONLINE / SIGNED OUT / UNREACHABLE — it said
    "CLOUD MODE · Supabase relay" for every non-200 before 2026-09-23), LLM

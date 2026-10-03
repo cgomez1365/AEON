@@ -111,6 +111,7 @@
           }
         ],
         "mode": "instant",
+        "takesLocalOnly": true,
         "when": "embed"
       },
       {
@@ -134,6 +135,7 @@
         "route": "/api/crn/second-brain/ask",
         "param": "query",
         "mode": "instant",
+        "takesLocalOnly": true,
         "category": "content",
         "when": "embed"
       },
@@ -155,6 +157,7 @@
           }
         ],
         "mode": "instant",
+        "takesLocalOnly": true,
         "category": "content",
         "when": "embed"
       },

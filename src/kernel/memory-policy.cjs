@@ -102,8 +102,9 @@ function continuityRank(m) {
 /**
  * Is this memory switched on? Every memory has a manual switch in Memory Core
  * (`active`), the operator's answer to a store that grows faster than any
- * context window: a memory switched off stays saved and searchable and is
- * never sent to a model. Missing means on — every memory saved before the
+ * context window: a memory switched off stays saved and listed in Memory
+ * Core, is never sent to a model, and stays out of the Second Brain index and
+ * recall (vaultPrivacy.cjs). Missing means on — every memory saved before the
  * switch existed keeps doing what it did.
  */
 const isActive = (m) => !!m && m.active !== false;
