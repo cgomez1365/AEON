@@ -101,16 +101,22 @@ module.exports = ({ ROOT, getLocalFile, logTrivial, WORKSPACE, writeOSAudit, ker
 
   // ── Task cron daemon — check scheduled tasks every 60s ──
   const TASKS_FILE = path.join(ROOT, 'src', 'aeon-tasks.json');
+  // Substring checks in a fixed order mis-read two of the schedules they
+  // list: "every 15 min" contains "5 min" and ran every 5 minutes, and
+  // "every 6 hours" contains "hour" and ran hourly (found 2026-10-02). The
+  // number is read as a number now; anything unrecognised is still null.
+  const CRON_UNIT_MS = { m: 60000, h: 3600000, d: 86400000, w: 604800000 };
   function parseCronish(schedule) {
     if (!schedule) return null;
-    const s = schedule.toLowerCase().trim();
-    if (s.includes('every') && s.includes('hour')) return 3600000;
-    if (s.includes('every') && (s.includes('6 hour') || s.includes('6h'))) return 21600000;
-    if (s.includes('every') && s.includes('day') || s.includes('daily')) return 86400000;
-    if (s.includes('every') && (s.includes('week') || s.includes('monday'))) return 604800000;
-    if (s.includes('every') && (s.includes('30 min') || s.includes('30m'))) return 1800000;
-    if (s.includes('every') && (s.includes('5 min') || s.includes('5m'))) return 300000;
-    if (s.includes('every') && (s.includes('15 min') || s.includes('15m'))) return 900000;
+    const s = String(schedule).toLowerCase().trim();
+    const n = s.match(/\bevery\s+(\d+)\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days|w|week|weeks)\b/);
+    if (n) {
+      const ms = Number(n[1]) * CRON_UNIT_MS[n[2][0]];
+      return ms > 0 ? ms : null;
+    }
+    if (/\bhourly\b|\bevery\s+hour\b/.test(s)) return CRON_UNIT_MS.h;
+    if (/\bdaily\b|\bevery\s+day\b/.test(s)) return CRON_UNIT_MS.d;
+    if (/\bweekly\b|\bevery\s+(week|monday)\b/.test(s)) return CRON_UNIT_MS.w;
     return null;
   }
 
@@ -141,5 +147,5 @@ module.exports = ({ ROOT, getLocalFile, logTrivial, WORKSPACE, writeOSAudit, ker
     } catch (e) { console.warn('[TASK CRON] error:', e.message); }
   }, 60000);
 
-  return { INSTANT_PATTERNS, startTelemetry, runReaper, startTaskCron };
+  return { INSTANT_PATTERNS, startTelemetry, runReaper, startTaskCron, parseCronish };
 };
