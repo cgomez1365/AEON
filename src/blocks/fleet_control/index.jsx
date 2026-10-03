@@ -5,7 +5,8 @@
  * Read-only by design: it reports what exists and never calls what doesn't.
  */
 import React, { useState, useEffect, useCallback } from 'react';
-import { Activity, Radio, RefreshCw, Server, BarChart3, Wifi, WifiOff, KeyRound, HeartPulse, Rocket, ChevronDown, Cpu } from 'lucide-react';
+import { Activity, Radio, RefreshCw, Server, BarChart3, Wifi, WifiOff, KeyRound, HeartPulse, Rocket, Cpu, Bot, Star, Lock } from 'lucide-react';
+import { AGENT_SELECT_EVENT } from '../../utils/terminalAgent.js';
 import { serverStatus, providerRows, providerCard, hardwareSummary } from './health.js';
 
 const TONE = { ok: '#00ff40', warn: '#ff9800', idle: '#888' };
@@ -15,8 +16,9 @@ export default function FleetControl() {
   const [llm, setLlm] = useState(null);
   const [autopilot, setAutopilot] = useState(null);
   const [health, setHealth] = useState(null);
-  const [missions, setMissions] = useState([]);
-  const [openMission, setOpenMission] = useState(null); // { id, content }
+  // Recent Agent Missions: every agent, most recently active first (Memory
+  // Core's GET /api/agents). null = not loaded; a string = why it could not be.
+  const [agents, setAgents] = useState(null);
   const [probe, setProbe] = useState(null); // { ok, status, uptime }
   const [hardware, setHardware] = useState(null);
   const [hardwareError, setHardwareError] = useState(null);
@@ -45,8 +47,10 @@ export default function FleetControl() {
       setAutopilot(r.ok ? await r.json() : null);
     } catch { setAutopilot(null); }
     try {
-      const r = await fetch('/api/fleet/missions?limit=12');
-      if (r.ok) { const d = await r.json(); setMissions(d.missions || []); }
+      const r = await fetch('/api/agents', { headers: { 'x-aeon-self-reported': '1' } });
+      const d = await r.json().catch(() => null);
+      if (r.ok && d) setAgents(d.agents || []);
+      else setAgents(r.status === 404 ? 'Agents live in Memory Core, which is not installed.' : (d?.error || `HTTP ${r.status}`));
     } catch {}
     setNow(Date.now());
     setLoading(false);
@@ -64,13 +68,16 @@ export default function FleetControl() {
 
   useEffect(() => { refresh(); loadHardware(); const i = setInterval(refresh, 8000); return () => clearInterval(i); }, [refresh, loadHardware]);
 
-  const toggleMission = async (id) => {
-    if (openMission?.id === id) { setOpenMission(null); return; }
-    try {
-      const r = await fetch(`/api/fleet/mission/${id}`);
-      const d = await r.json();
-      setOpenMission({ id, content: d.content || d.error || '(empty)' });
-    } catch (e) { setOpenMission({ id, content: `Failed to load: ${e.message}` }); }
+  // A click hands the agent to the Neural Terminal (it listens for this).
+  const callAgent = (a) => {
+    try { window.dispatchEvent(new CustomEvent(AGENT_SELECT_EVENT, { detail: { id: a.id, name: a.name, self: !!a.self } })); } catch { /* no window */ }
+  };
+  const ago = (iso) => {
+    const t = Date.parse(iso); if (!Number.isFinite(t)) return '';
+    const m = Math.round((now - t) / 60000);
+    if (m < 1) return 'just now'; if (m < 60) return `${m} min ago`;
+    const h = Math.round(m / 60); if (h < 24) return `${h} h ago`;
+    return `${Math.round(h / 24)} d ago`;
   };
 
   const models = llm?.models || [];
@@ -94,7 +101,7 @@ export default function FleetControl() {
         <button onClick={() => { refresh(); loadHardware(); }} style={tinyBtn} aria-label="Refresh fleet telemetry"><RefreshCw size={12} aria-hidden="true" /></button>
       </div>
       <p style={{ fontSize: '12px', color: 'var(--text-dim)', margin: '0 0 20px 0' }}>
-        Engines, providers, key pools, the video autopilot, hardware fit and VP missions — read-only; nothing here starts or stops anything
+        Engines, providers, key pools, the video autopilot, hardware fit and your agents — click an agent to talk to it in the terminal
       </p>
 
       {/* Status Cards */}
@@ -174,42 +181,41 @@ export default function FleetControl() {
         )}
       </div>
 
-      {/* VP Missions (from the Vault — survives any block removal) */}
+      {/* Recent Agent Missions — every agent the operator has, most recently
+          active first. A click loads the agent into the Neural Terminal;
+          /agent <name> does the same from the keyboard. */}
       <div style={{ ...cardStyle, marginTop: '12px', marginBottom: '24px' }}>
-        <div style={sectionTitle}><Rocket size={14} style={{ color: 'var(--accent)' }} /> VP MISSIONS — RECENT</div>
-        {missions.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '18px', color: 'var(--text-dim)', fontSize: '12px' }}>
-            No mission records. This panel lists the <code>*.md</code> files in <code>Vault/Agents/Aeon/missions</code>;
-            nothing in this install writes them today (the Mission Runner that did was retired).
-          </div>
-        ) : missions.map(m => {
-          const statusLabel = m.status === 'failed' ? 'Failed' : m.status === 'pending' ? 'Pending' : 'Done';
-          const expanded = openMission?.id === m.id;
-          return (
-          <div key={m.id} style={{ marginBottom: '6px' }}>
-            <div
-              onClick={() => toggleMission(m.id)}
-              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleMission(m.id); } }}
-              role="button"
-              tabIndex={0}
-              aria-expanded={expanded}
-              aria-label={`Mission: ${m.title}, status ${statusLabel}`}
-              style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 12px', borderRadius: '8px', background: 'rgba(255,255,255,0.02)', cursor: 'pointer', border: '1px solid var(--border-mute)' }}>
-              <div role="img" aria-label={statusLabel} title={statusLabel} style={{ width: '8px', height: '8px', borderRadius: '50%', flexShrink: 0, background: m.status === 'failed' ? '#f44336' : m.status === 'pending' ? '#ff9800' : '#00ff40' }} />
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: '12px', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.title}</div>
-                <div style={{ fontSize: '9px', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>
-                  {new Date(m.modified).toLocaleString()} · {m.done} done{m.pending ? ` · ${m.pending} pending` : ''}{m.failed ? ` · ${m.failed} failed` : ''}
-                </div>
+        <div style={sectionTitle}><Rocket size={14} style={{ color: 'var(--accent)' }} /> RECENT AGENT MISSIONS</div>
+        {agents === null ? (
+          <div style={{ fontSize: '11px', color: 'var(--text-dim)' }}>Reading agents…</div>
+        ) : typeof agents === 'string' ? (
+          <div style={{ fontSize: '11px', color: '#ffaa00' }}>{agents}</div>
+        ) : agents.map(a => (
+          <button key={a.id} type="button" onClick={() => callAgent(a)}
+            aria-label={`Talk to ${a.name} in the terminal`}
+            title={`Talk to ${a.name} in the Neural Terminal`}
+            style={{ display: 'flex', alignItems: 'center', gap: '10px', width: '100%', textAlign: 'left', padding: '8px 12px', marginBottom: '6px', borderRadius: '8px', background: 'rgba(255,255,255,0.02)', cursor: 'pointer', border: '1px solid var(--border-mute)', color: 'var(--text)', font: 'inherit' }}>
+            {a.self ? <Star size={13} aria-hidden="true" style={{ color: 'var(--accent)', flexShrink: 0 }} /> : <Bot size={13} aria-hidden="true" style={{ color: 'var(--accent)', flexShrink: 0 }} />}
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: '12px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.name}{a.self ? ' — your AEON' : ''}</span>
+                {a.privacy === 'local-only' && <Lock size={10} aria-label="local only" style={{ color: '#3ecf8e', flexShrink: 0 }} />}
               </div>
-              <ChevronDown size={13} aria-hidden="true" style={{ color: 'var(--text-dim)', transform: expanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
+              <div style={{ fontSize: '9.5px', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {a.lastMission
+                  ? `${ago(a.lastMission.at)} · "${a.lastMission.asked}"`
+                  : (a.lastActiveAt ? `active ${ago(a.lastActiveAt)}` : 'no missions yet')}
+                {' · '}{a.memoryCount ?? '?'} memories
+                {a.model?.provider ? ` · ${a.model.model || a.model.provider}` : ''}
+              </div>
             </div>
-            {expanded && (
-              <pre style={{ margin: '4px 0 0 18px', padding: '12px', borderRadius: '6px', maxHeight: '280px', overflow: 'auto', background: 'var(--surface-1)', border: '1px solid var(--border-mute)', fontSize: '10.5px', fontFamily: 'var(--font-mono)', whiteSpace: 'pre-wrap', color: 'var(--text)', lineHeight: 1.55 }}>{openMission.content.slice(0, 20000)}</pre>
-            )}
+          </button>
+        ))}
+        {Array.isArray(agents) && agents.length < 2 && (
+          <div style={{ fontSize: '11px', color: 'var(--text-dim)', marginTop: '6px' }}>
+            Create agents in Memory Core. Each gets its own memory under <code>Vault/Agents/&lt;name&gt;</code>, appears here, and answers to its name in the terminal.
           </div>
-          );
-        })}
+        )}
       </div>
     </div>
   );

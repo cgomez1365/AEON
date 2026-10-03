@@ -1615,7 +1615,10 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   // classifier (isPrivateHost) so routing and the egress check agree. A named
   // vendor (groq, gemini, openai, claude, grok, openrouter) is cloud whatever
   // address it carries; an unknown provider counts as cloud.
-  const _localOnly = (settings) => settings?.local_only === true;
+  // An agent can be Local only on its own (Memory Core → agent → Privacy):
+  // its calls carry opts.localOnly and get the same refusal and the same
+  // local-only fallback chain, whatever the global switch says.
+  const _localOnly = (settings, opts) => settings?.local_only === true || opts?.localOnly === true;
   const _settingsNow = () => { try { return loadSettings() || {}; } catch { return {}; } };
   // Decided before a provider is resolved, so Local only never draws a cloud
   // provider's key from its pool.
@@ -1630,11 +1633,12 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     const address = c.base_url || aeonEndpoints.PROVIDER_TRANSPORT[c.provider].base;
     try { return !!address && !!aeonEndpoints.isPrivateHost(new URL(address).hostname); } catch { return false; }
   };
-  const _localOnlyRefusal = (role, provider, namedByCaller) => {
+  const _localOnlyRefusal = (role, provider, namedByCaller, opts = {}) => {
     const err = new Error(
-      'Local only is on (Settings → Models), so nothing is sent to a cloud model. '
+      (opts.localOnlyReason || 'Local only is on (Settings → Models), so nothing is sent to a cloud model. ')
       + (namedByCaller ? `This request asked for ${provider}` : `The ${role} role is set to ${provider}`)
-      + ', which is not on this computer. Assign a local model in Settings → Models, or turn Local only off.'
+      + ', which is not on this computer. '
+      + (opts.localOnlyRemedy || 'Assign a local model in Settings → Models, or turn Local only off.')
     );
     err.localOnly = true;
     // The routers' "nothing configured can answer" status (503) and remedy.
@@ -1649,7 +1653,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   };
 
   const _fallbackCandidates = async (settings, exclude = [], opts = {}) => {
-    const localOnly = _localOnly(settings);
+    const localOnly = _localOnly(settings, opts);
     let registryPs = [];
     try { registryPs = (aeonEndpoints?.configuredProviders?.() || []).filter((p) => p !== 'local'); } catch {}
     let ps = [...new Set([...registryPs, ..._ENV_CHAIN])]
@@ -1690,11 +1694,11 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     const settings = loadSettings() || {};
     const candidates = [];
     let primary = null;
-    const localOnly = _localOnly(settings);
+    const localOnly = _localOnly(settings, opts);
     const named = _namedProvider(settings, role, opts);
     // Local only: a cloud provider named by the caller or declared for the
     // role is refused here, before its key is drawn from a pool.
-    if (localOnly && named && !_mayBeLocal(named)) throw _localOnlyRefusal(role, named, !!opts.provider);
+    if (localOnly && named && !_mayBeLocal(named)) throw _localOnlyRefusal(role, named, !!opts.provider, opts);
 
     if (opts.provider && !LEGACY_CHAIN_PROVIDERS.has(opts.provider) && aeonEndpoints) {
       // A named custom/lmstudio endpoint carries its own address and key; an
@@ -1741,7 +1745,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       // refused like any cloud provider. The registry's auto-pick (nothing
       // declared, or Local declared with no runtime) gives way to Local.
       // A named connection that does not exist keeps its own error.
-      if (named && named !== 'local') throw _localOnlyRefusal(role, named, !!opts.provider);
+      if (named && named !== 'local') throw _localOnlyRefusal(role, named, !!opts.provider, opts);
       primary = { provider: 'local', model: named === 'local' ? _declaredFor(settings.models, role)?.model : undefined, source: 'settings' };
     }
     candidates.push(primary);
@@ -1903,7 +1907,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     }
     // The configured provider's failure is the cause; a later rung that could
     // not even start ("no local model is installed") is not.
-    throw _chainExhaustedError(attempts, primaryErr || lastErr, { localOnly: _localOnly(_settingsNow()) });
+    throw _chainExhaustedError(attempts, primaryErr || lastErr, { localOnly: _localOnly(_settingsNow(), opts) });
   };
 
   // The provider/model the role WOULD stream through, and the context window
@@ -2123,9 +2127,9 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
 
     // Local only — the same refusal the stream path gives (_streamCandidates).
     const settingsAtStart = _settingsNow();
-    const localOnly = _localOnly(settingsAtStart);
+    const localOnly = _localOnly(settingsAtStart, opts);
     const named = _namedProvider(settingsAtStart, role, opts);
-    if (localOnly && named && !_mayBeLocal(named)) throw _localOnlyRefusal(role, named, !!opts.provider);
+    if (localOnly && named && !_mayBeLocal(named)) throw _localOnlyRefusal(role, named, !!opts.provider, opts);
 
     // ── Registry path (preferred) ──
     // Its failure is kept. It used to be logged and dropped, so when nothing
@@ -2155,7 +2159,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       if (r && r.ok && localOnly && !_isLocalCandidate(r)) {
         // As in _streamCandidates: a named connection at a non-local address
         // is refused; an auto-pick is dropped and the chain below serves Local.
-        if (named && named !== 'local') throw _localOnlyRefusal(role, named, !!opts.provider);
+        if (named && named !== 'local') throw _localOnlyRefusal(role, named, !!opts.provider, opts);
         r = null;
       }
       if (r && r.ok) {

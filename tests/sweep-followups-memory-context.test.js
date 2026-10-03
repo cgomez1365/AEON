@@ -87,8 +87,10 @@ describe('Memory Core\'s screen', () => {
   it('drops the list it showed when a reload fails', () => {
     const src = fs.readFileSync(path.join(path.dirname(require.resolve('../src/kernel/context.cjs')), '..', 'blocks', 'memory_core', 'index.jsx'), 'utf8')
       .replace(/^\s*\/\/.*$/gm, '');
-    const load = src.slice(src.indexOf('const load = useCallback('), src.indexOf('}, []);', src.indexOf('const load = useCallback(')));
-    expect(load).toMatch(/const failed = \(why\) => \{ setMemories\(\[\]\); setLoadError\(why\); \};/);
+    // The load now follows the selected agent tab ([scoped]) and also drops
+    // the token summary — still everything it showed (2026-10-02).
+    const load = src.slice(src.indexOf('const load = useCallback('), src.indexOf('}, [', src.indexOf('const load = useCallback(')));
+    expect(load).toMatch(/const failed = \(why\) => \{ setMemories\(\[\]\);[^}]*setLoadError\(why\); \};/);
     expect(load).not.toMatch(/setLoadError\((d\.error|`the memory store did not load: )/);
   });
 });

@@ -90,11 +90,23 @@ function normalizeFactPerson(input) {
 
 /** Continuity outranks recency — operator-authored and settled decisions first. */
 const TYPE_WEIGHT = { decision: 400, algorithm: 300, outline: 300, milestone: 50 };
+// An agent's own memory outranks the shared pool it also reads: it is what
+// makes that agent itself. Set by the caller (scope 'agent'), never stored.
+const AGENT_SCOPE_WEIGHT = 250;
 function continuityRank(m) {
   const typeKey = m.type !== undefined ? m.type : m.category;
   const typeScore = TYPE_WEIGHT[typeKey] !== undefined ? TYPE_WEIGHT[typeKey] : 150;
-  return (m.source === 'operator' ? 500 : 0) + typeScore;
+  return (m.source === 'operator' ? 500 : 0) + typeScore + (m._scope === 'agent' ? AGENT_SCOPE_WEIGHT : 0);
 }
+
+/**
+ * Is this memory switched on? Every memory has a manual switch in Memory Core
+ * (`active`), the operator's answer to a store that grows faster than any
+ * context window: a memory switched off stays saved and searchable and is
+ * never sent to a model. Missing means on — every memory saved before the
+ * switch existed keeps doing what it did.
+ */
+const isActive = (m) => !!m && m.active !== false;
 
 /**
  * The clause that makes injection mean something.
@@ -123,10 +135,14 @@ const PRECEDENCE = 'These are ground truth about the operator and this system, '
  * @returns {{text, lines, injected, considered, dropped, tokensUsed}}
  */
 function selectForInjection({ memories, budgetTokens, wake = false, query = '', maxCount = 0 } = {}) {
-  const all = Array.isArray(memories) ? memories.filter(m => m && m.text) : [];
+  const stored = Array.isArray(memories) ? memories.filter(m => m && m.text) : [];
+  // Switched off is the operator's choice, so it is reported apart from
+  // "dropped" (which means "did not fit") and never counted as considered.
+  const all = stored.filter(isActive);
+  const disabled = stored.length - all.length;
   const considered = all.length;
   if (!considered || !(budgetTokens > 0)) {
-    return { text: '', lines: [], injected: 0, considered, dropped: considered, tokensUsed: 0 };
+    return { text: '', lines: [], injected: 0, considered, dropped: considered, disabled, tokensUsed: 0 };
   }
 
   const words = String(query || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ')
@@ -176,7 +192,7 @@ function selectForInjection({ memories, budgetTokens, wake = false, query = '', 
   if (!lines.length) {
     // An empty MEMORY header is its own small lie — it implies a store that
     // was consulted and had nothing, when the truth may be that nothing fit.
-    return { text: '', lines: [], injected: 0, considered, dropped, tokensUsed: 0 };
+    return { text: '', lines: [], injected: 0, considered, dropped, disabled, tokensUsed: 0 };
   }
 
   return {
@@ -185,6 +201,7 @@ function selectForInjection({ memories, budgetTokens, wake = false, query = '', 
     injected: lines.length,
     considered,
     dropped,
+    disabled,
     tokensUsed: tokensUsed + headerCost,
   };
 }
@@ -230,6 +247,7 @@ module.exports = {
   selectForInjection,
   describeMemoryState,
   continuityRank,
+  isActive,
   SUBJECT,
   PRECEDENCE,
 };

@@ -16,12 +16,17 @@
  * block's job is the conversation and the wire format, nothing underneath.
  */
 const express = require('express');
-const router = express.Router();
 const tokens = require('../../../kernel/tokens.cjs');
 const kernelContext = require('../../../kernel/context.cjs');
 const blockSettings = require('../../../kernel/blockSettings.cjs');
 
 module.exports = function ({ kernelLLM, loadSettings: loadSettingsDep, VAULT_ROOT }) {
+  // One router per call. It was built once at module load, so every later
+  // call added its handlers to the SAME router behind the first set — and
+  // the first set answered every request, with the first call's model layer
+  // and Vault. A block reloaded with AEON running (no restart) kept chatting
+  // on what it had been given before (found 2026-10-02).
+  const router = express.Router();
   // Settings come from the kernel's own authority, injected — never a
   // sideways require into services/. A missing or throwing loader degrades to
   // empty prefs; provider/model resolution is the kernel's concern now.
@@ -56,7 +61,10 @@ module.exports = function ({ kernelLLM, loadSettings: loadSettingsDep, VAULT_ROO
   // Store is owned by the memory_core block, vault-resident so every memory
   // is operator-visible in Aeon Matrix; the kernel resolves it from the
   // shared VAULT_ROOT so it cannot drift from memory_core's own MEM_DIR.
-  const { WAKE_RE } = kernelContext;   // one wake phrase, shared with the terminal
+  // Who is speaking: the operator's own AEON or one of their agents
+  // (src/kernel/agents.cjs). The wake phrase is the kernel's too — it names
+  // the agent it wakes.
+  const agentsKernel = require('../../../kernel/agents.cjs');
 
   /**
    * Working memory for this turn.
@@ -73,11 +81,10 @@ module.exports = function ({ kernelLLM, loadSettings: loadSettingsDep, VAULT_ROO
    * one system prompt, with the model explicitly ordered to state one of them.
    * The kernel states the count it actually injected.
    */
-  function buildMemoryContext(message, settings, contextTokens = 8192) {
+  function buildMemoryContext(message, settings, contextTokens = 8192, { wake = false, agent = null } = {}) {
     const prefs = settings.prefs?.brain_settings || {};
     // Memory controls are memory_core's declared settings (Settings → Blocks).
     const mem = blockSettings.get('memory_core', settings);
-    const wake = WAKE_RE.test(message || '');
     const budgets = tokens.inputBudgets(contextTokens, { wake });
 
     const skills = (settings.prefs?.brain_skills || [])
@@ -90,6 +97,7 @@ module.exports = function ({ kernelLLM, loadSettings: loadSettingsDep, VAULT_ROO
       skillTokens: budgets.skillTokens,
       skills,
       wake,
+      agent,
       // Wake lifts the count cap entirely; otherwise the operator's cap applies
       // and memory-policy still keeps pinned memories ahead of it.
       //
@@ -104,10 +112,15 @@ module.exports = function ({ kernelLLM, loadSettings: loadSettingsDep, VAULT_ROO
       // An operator who sets memory_max_context still gets exactly that.
       maxCount: wake ? 0 : Math.max(Number(mem.memory_max_context) || 200, 0),
       enabled: mem.memory_in_context !== false,
-      autoMemoryEnabled: !!mem.auto_memory,
+      // An agent captures by its own switch; the operator's AEON by the block's.
+      autoMemoryEnabled: capturesFor(agent, mem),
     });
 
     return { ...out, budgets };
+  }
+
+  function capturesFor(agent, mem) {
+    return agent && !agent.self ? agent.capture === true : !!mem.auto_memory;
   }
 
   // ── SSE helpers ────────────────────────────────────────────────────
@@ -122,8 +135,21 @@ module.exports = function ({ kernelLLM, loadSettings: loadSettingsDep, VAULT_ROO
 
   // ── POST /chat/stream — the main SSE endpoint ─────────────────────
   router.post('/chat/stream', async (req, res) => {
-    const { message, role = 'chat', history = [], streamId: clientStreamId } = req.body || {};
+    const { message, role = 'chat', history = [], streamId: clientStreamId, agent: agentRef = null } = req.body || {};
     if (!message) return res.status(400).json({ error: 'message required' });
+
+    // The agent this turn belongs to. A wake that names an agent ("scout
+    // come online") hands the turn to it, and the terminal follows (meta.agent).
+    // An agent the terminal remembers but the Vault no longer has falls back
+    // to the operator's own AEON, and says so.
+    let agents = [];
+    try { agents = agentsKernel.list(VAULT_ROOT, { withStats: false }); } catch {}
+    const woke = agentsKernel.detectWake(message, agents);
+    const asked = agentRef ? agentsKernel.get(VAULT_ROOT, agentRef, agents) : null;
+    const agent = woke.agent || asked || agents.find((a) => a.self) || null;
+    const agentNotice = agentRef && !asked && !woke.agent
+      ? `No agent called "${agentRef}" any more — ${agent ? agent.name : 'AEON'} answered.` : null;
+    const callOpts = agentsKernel.callOptions(agent);
 
     const streamId = String(clientStreamId || `s_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
     const abort = new AbortController();
@@ -141,6 +167,10 @@ module.exports = function ({ kernelLLM, loadSettings: loadSettingsDep, VAULT_ROO
         ({ provider, model, contextTokens } = await kernelLLM.describeRole(role));
       }
     } catch {}
+    // An agent with its own model is announced as that model; the window
+    // stays the role's (a safe floor — the kernel trims a request that is
+    // too large for the model actually serving it).
+    if (callOpts.provider) { provider = callOpts.provider; model = callOpts.model || null; }
 
     // SSE headers
     res.writeHead(200, {
@@ -150,7 +180,8 @@ module.exports = function ({ kernelLLM, loadSettings: loadSettingsDep, VAULT_ROO
       'X-Accel-Buffering': 'no',
     });
 
-    sseWrite(res, 'meta', { provider, model, role, streamId });
+    const agentMeta = agent ? { id: agent.id, name: agent.name, self: !!agent.self } : null;
+    sseWrite(res, 'meta', { provider, model, role, streamId, agent: agentMeta, ...(agentNotice ? { notice: agentNotice } : {}) });
 
     let fullText = '';
     let tokenCount = 0;
@@ -165,7 +196,7 @@ module.exports = function ({ kernelLLM, loadSettings: loadSettingsDep, VAULT_ROO
       // actually about to spend from. Local models know their real window;
       // cloud providers are far larger than anything we inject, so the 8k
       // floor is a safe assumption there rather than a guess that matters.
-      const mem = buildMemoryContext(message, settings, contextTokens || 8192);
+      const mem = buildMemoryContext(message, settings, contextTokens || 8192, { wake: woke.wake, agent });
       // The caller's credentials are forwarded onto the internal retrieve call.
       // Without this the guard refuses it and the refusal reads as an empty vault.
       const sb = await buildSecondBrainContext(
@@ -182,7 +213,7 @@ module.exports = function ({ kernelLLM, loadSettings: loadSettingsDep, VAULT_ROO
         // mem.text, so the memory rules the kernel appends stay the last word
         // on this system turn. It governs layout only — see its definition in
         // src/kernel/context.cjs.
-        { role: 'system', content: 'You are AEON, a private AI workspace built by Broken Gear Industries. You are helpful, precise, and concise. When the user asks you to do something, do it directly. '
+        { role: 'system', content: agentsKernel.identityFor(agent, 'You are AEON, a private AI workspace built by Broken Gear Industries. You are helpful, precise, and concise. When the user asks you to do something, do it directly. ')
           + kernelContext.FORMATTING + mem.text },
         ...history.slice(-20).map(m => ({ role: m.role === 'error' || m.role === 'system' ? 'user' : m.role, content: m.content })),
         // Retrieved documents ride with the user's turn, not as a system
@@ -199,6 +230,7 @@ module.exports = function ({ kernelLLM, loadSettings: loadSettingsDep, VAULT_ROO
         memory: mem.count,
         memoryConsidered: mem.considered,
         memoryDropped: mem.dropped,
+        memoryDisabled: mem.disabled || 0,
         // A store that could not be read is not "0 memories" (sweep C12).
         memoryError: mem.memoryError || null,
         skillsDropped: mem.skillsDropped,
@@ -224,6 +256,9 @@ module.exports = function ({ kernelLLM, loadSettings: loadSettingsDep, VAULT_ROO
       let announced = provider;
       const result = await kernelLLM.stream(messages, {
         role,
+        // The agent's own model and privacy; nothing for a stock AEON, so
+        // Settings and roulette decide exactly as before.
+        ...callOpts,
         signal: abort.signal,
         onToken: (t) => {
           fullText += t;
@@ -257,6 +292,11 @@ module.exports = function ({ kernelLLM, loadSettings: loadSettingsDep, VAULT_ROO
         cancelled: result.cancelled,
       });
       fullText = result.text || fullText;
+      // Recent Agent Missions reads this: what the agent was last asked.
+      agentsKernel.recordMission(VAULT_ROOT, agent, {
+        asked: message, provider: result.provider, model: result.model,
+        tokens: result.tokens, ok: !result.cancelled,
+      });
 
       // ── Auto-extract memory (fire-and-forget, non-blocking) ────────
       //
@@ -272,7 +312,7 @@ module.exports = function ({ kernelLLM, loadSettings: loadSettingsDep, VAULT_ROO
       // Settings come from the injected authority, not a hand-built path
       // re-read per request.
       try {
-        if (blockSettings.get('memory_core', loadSettings()).auto_memory && message && fullText && !result.cancelled) {
+        if (capturesFor(agent, blockSettings.get('memory_core', loadSettings())) && message && fullText && !result.cancelled) {
           // Both internal calls below are guarded routes, and a loopback fetch
           // carries no session unless one is forwarded — the recall call above
           // learned this already. Without it the guard 401'd /api/ai, the 401
@@ -305,7 +345,10 @@ Assistant replied: ${fullText.slice(0, 1000)}`;
               const kernelBase = process.env.AEON_KERNEL_URL || `http://localhost:${process.env.PORT || 3001}`;
               const aiRes = await fetch(`${kernelBase}/api/ai`, {
                 method: 'POST', headers: internalHeaders,
-                body: JSON.stringify({ prompt: extractPrompt, role: 'chat', background: true }),
+                // As the agent: its model, and its privacy — a Local only
+                // agent's conversation is never sent to a cloud model to be
+                // summarised either.
+                body: JSON.stringify({ prompt: extractPrompt, role: 'chat', background: true, ...(agent ? { agent: agent.id } : {}) }),
               });
               const extractResult = await aiRes.json().catch(() => ({}));
               if (!aiRes.ok) {
@@ -330,7 +373,7 @@ Assistant replied: ${fullText.slice(0, 1000)}`;
                   try {
                     const r = await fetch(`${kernelBase}/api/memory/add`, {
                       method: 'POST', headers: internalHeaders,
-                      body: JSON.stringify({ text: fact.text, category: fact.category || 'fact', source: 'auto-extract' }),
+                      body: JSON.stringify({ text: fact.text, category: fact.category || 'fact', source: 'auto-extract', ...(agent && !agent.self ? { agent: agent.id } : {}) }),
                     });
                     if (r.ok) saved++;
                     else console.warn('[AUTO-MEMORY] /memory/add refused:', r.status, (await r.text()).slice(0, 160));

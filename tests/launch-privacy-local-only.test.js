@@ -272,3 +272,45 @@ describe('on: a role or caller naming a cloud provider is refused, in words', ()
     expect(offMachine).toEqual([]);
   });
 });
+
+// An agent can be Local only on its own (Memory Core → agent → Privacy),
+// whatever the global switch says: its calls carry opts.localOnly. A private
+// agent that fell back to a cloud model would break the one promise it makes.
+describe('per call: an agent set to Local only, with the global switch off', () => {
+  const agentOpts = {
+    localOnly: true,
+    localOnlyReason: 'Scout is set to Local only, so nothing it is asked is sent to a cloud model. ',
+    localOnlyRemedy: 'Give Scout a local model in Memory Core, or set its privacy to Roulette.',
+  };
+  beforeEach(() => { settings.local_only = false; });
+
+  it('stream: local out of credits is an error, not a cloud answer', async () => {
+    modes.local = '402';
+    const err = await stream(agentOpts).catch((e) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(hits.cloud).toBe(0);
+    expect(offMachine).toEqual([]);
+  });
+
+  it('non-stream: the same', async () => {
+    modes.local = '402';
+    const err = await ask(agentOpts).catch((e) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(hits.cloud).toBe(0);
+  });
+
+  it('a cloud model named for the role is refused in the agent\'s own words', async () => {
+    settings.models.chat = { provider: 'openai', model: 'cloud-model' };
+    const err = await stream(agentOpts).catch((e) => e);
+    expect(err.message).toMatch(/^Scout is set to Local only/);
+    expect(err.message).toMatch(/Give Scout a local model in Memory Core/);
+    expect(err.localOnly).toBe(true);
+    expect(hits).toEqual({ local: 0, cloud: 0 });
+  });
+
+  it('the same call without the agent fails over to the cloud as before', async () => {
+    modes.local = '402';
+    const r = await stream();
+    expect(r).toMatchObject({ provider: 'openai', text: 'from-cloud' });
+  });
+});

@@ -25,6 +25,7 @@ const fs = require('fs');
 const path = require('path');
 
 const memoryPolicy = require('./memory-policy.cjs');
+const agentsKernel = require('./agents.cjs');
 const { inputBudgets, estimateTokens } = require('./tokens.cjs');
 
 // ── The recall gate — one copy ──────────────────────────────────────────────
@@ -94,41 +95,25 @@ const FORCE_PREFIX = '/matrix ';
  */
 const FORMATTING = 'Your answer is read in a narrow terminal panel, so prefer short paragraphs, headings and tight bullet lists over long prose, keep code in fenced blocks, and use a table only when every column is short. Shape is all this governs: never drop a caveat, a citation, or an admission of uncertainty to make an answer fit.';
 
-// The wake phrase. Was a private const in chat-stream.cjs; the terminal needs
-// the same one, and two copies of a trigger phrase drift exactly like two
-// copies of a gate do.
-//
-// The memory persona was renamed from "vp" to "Aeon" (Agents/vp became
-// Agents/Aeon) and the trigger was not, so "aeon come online" did nothing and
-// said nothing — which, to the operator, looked exactly like broken memory.
-// Both words wake now. A short spoken name may sit between the wake word and
-// "online" ("aeon shield come online"); it is captured, never required.
-//
-// Shape: the wake word on its own (word boundary before, whitespace or ,/!
-// after), an optional name of 1–31 characters starting with a letter, an
-// optional comma or "!", whitespace, an optional "come", then "online" as a
-// whole word. The name is the SHORTEST run that lets the rest match, so
-// "aeon shield come online" names "shield", not "shield come". 31 characters
-// is a spoken handle, not a sentence: anything longer is not a wake phrase.
-//
-// Case-insensitive and deliberately NOT global or sticky: both routes call
-// .test() on every message, and a stateful pattern alternates its answers.
-// Exactly one capture group — the name.
-const WAKE_RE = /\b(?:aeon|vp)(?:\s+([a-z][a-z0-9 _-]{0,30}?))?[,!]?\s+(?:come\s+)?online\b/i;
+// The wake phrase lives with the agents (src/kernel/agents.cjs detectWake),
+// because a wake names WHO wakes: "aeon come online", "scout come online",
+// "wake up, scout". Any spaces or punctuation may sit between the words —
+// "aeon - come online" did nothing before 2026-10-02, because only a space, a
+// comma or "!" could. A bare "online" counts only at the start of a message
+// ("orion online"); mid-sentence it needs the verb ("please, aeon come
+// online"), so "the aeon matrix is online" is a sentence, not a wake.
 
 /**
- * { wake, agent } for a message. `agent` is the spoken name, trimmed and
- * lower-cased, or null when none was given ("come" in the name slot is the
- * word, not a name). An unknown name is not an error: resolving it is the
- * caller's job (agentRoster.resolve), and if it cannot be resolved AEON
- * itself wakes — a name nobody recognises must not cancel a wake the
- * operator plainly asked for.
+ * { wake, agent } for a message. `agent` is the spoken name, lower-cased, or
+ * null when none was given ("aeon come online", "come online"). Resolving
+ * the name is the caller's job (agents.get); a name nobody has still wakes.
+ * Pass the agent list to recognise agents' own names as wake words.
  */
-function parseWake(message) {
-  const m = WAKE_RE.exec(String(message ?? ''));
-  if (!m) return { wake: false, agent: null };
-  const name = (m[1] || '').trim().toLowerCase();
-  return { wake: true, agent: name && name !== 'come' ? name : null };
+function parseWake(message, agents = []) {
+  const r = agentsKernel.detectWake(message, agents);
+  if (!r.wake) return { wake: false, agent: null };
+  const spoken = r.spoken && r.spoken !== 'aeon' && r.spoken !== 'vp' ? r.spoken : null;
+  return { wake: true, agent: spoken };
 }
 
 /**
@@ -478,10 +463,12 @@ async function buildRecallContext(message, {
  * happened before: injection silently read an empty store for weeks after the
  * block was renamed.
  */
-function memoryFile(vaultRoot) {
+// The shared store (Agents/Aeon/memory) unless an agent is named; then that
+// agent's own (Agents/<Folder>/memory). agents.cjs owns the layout.
+function memoryFile(vaultRoot, agent = null) {
   const root = vaultRoot
     || path.join(__dirname, '..', 'blocks', 'aeon_matrix', 'data', 'Vault');
-  return path.join(root, 'Agents', 'Aeon', 'memory', 'memories.json');
+  return path.join(agentsKernel.memoryDir(root, agent), 'memories.json');
 }
 
 // Unreadable is not empty (sweep C12, the rule memory_core's own load()
@@ -491,8 +478,8 @@ function memoryFile(vaultRoot) {
 // empty store; anything else comes back as `error`, is logged once per cause,
 // and is reported with the turn (meta.memoryError), never read as 0.
 const _memoryErrorsLogged = new Set();
-function readMemoryStore(vaultRoot) {
-  const file = memoryFile(vaultRoot);
+function readMemoryStore(vaultRoot, agent = null) {
+  const file = memoryFile(vaultRoot, agent);
   let why;
   try {
     const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -506,6 +493,25 @@ function readMemoryStore(vaultRoot) {
   const error = `The memory store ${file} is unreadable (${why}); no memories were loaded. Fix or restore that file.`;
   if (!_memoryErrorsLogged.has(error)) { _memoryErrorsLogged.add(error); console.error(`[MEMORY] ${error}`); }
   return { memories: [], error };
+}
+
+/**
+ * What an agent remembers: its own store, plus the shared one unless the
+ * operator turned that off for it. Each memory is tagged with where it came
+ * from (_scope, never stored), so the agent's own outrank the shared pool.
+ * The operator's own AEON reads the shared store, which is its own.
+ */
+function readAgentMemories(vaultRoot, agent = null) {
+  if (!agent || agent.self) return readMemoryStore(vaultRoot);
+  const own = readMemoryStore(vaultRoot, agent);
+  const shared = agent.sharedMemory !== false ? readMemoryStore(vaultRoot) : { memories: [], error: null };
+  return {
+    memories: [
+      ...own.memories.map((m) => ({ ...m, _scope: 'agent' })),
+      ...shared.memories.map((m) => ({ ...m, _scope: 'shared' })),
+    ],
+    error: [own.error, shared.error].filter(Boolean).join(' ') || null,
+  };
 }
 
 /**
@@ -525,12 +531,15 @@ function buildMemoryContext(message, {
   enabled = true,
   autoMemoryEnabled = false,
   memories = null,
+  agent = null,
+  agentName = agent ? agent.name : null,
 } = {}) {
   if (!enabled) {
-    return { text: '', count: 0, considered: 0, dropped: 0, skillsDropped: 0, wake: false, autoMemoryEnabled };
+    return { text: '', count: 0, considered: 0, dropped: 0, disabled: 0, skillsDropped: 0, wake: false, autoMemoryEnabled };
   }
 
-  const store = Array.isArray(memories) ? { memories, error: null } : readMemoryStore(vaultRoot);
+  // An agent reads its own store plus the shared one; none: the shared one.
+  const store = Array.isArray(memories) ? { memories, error: null } : readAgentMemories(vaultRoot, agent);
   const all = store.memories;
   const selection = memoryPolicy.selectForInjection({
     memories: all,
@@ -559,10 +568,14 @@ function buildMemoryContext(message, {
     // announced the raw store length and then appended the real numbers two
     // lines later — two contradictory counts in one system prompt, with the
     // model explicitly ordered to state one of them.
-    text += `\n\n## WAKE\nThe operator just said the wake phrase. You are VP, AEON's operations agent. `
+    // Who wakes is the operator's to name — a clean install names its own
+    // AEON, and every agent has its own name. This said "You are VP", the
+    // builder's private nickname, to every customer (2026-10-02).
+    text += `\n\n## WAKE\nThe operator just woke you${agentName ? `, ${agentName}` : ''}. `
       + `${selection.injected} of ${selection.considered} stored memories are loaded above`
-      + `${selection.dropped ? `; ${selection.dropped} did not fit this turn's budget` : ''}. `
-      + `Confirm you are online, state that count, restate the prime directive, and ask for the mission. Do not ask what "VP" means.`;
+      + `${selection.dropped ? `; ${selection.dropped} did not fit this turn's budget` : ''}`
+      + `${selection.disabled ? `; ${selection.disabled} are switched off by the operator` : ''}. `
+      + 'Confirm you are online, state that count, restate the operator\'s standing goal or directive if your memories record one, and ask for the mission.';
   }
 
   if (text) {
@@ -580,6 +593,8 @@ function buildMemoryContext(message, {
     count: selection.injected,
     considered: selection.considered,
     dropped: selection.dropped,
+    // Switched off in Memory Core: a choice, not a shortfall.
+    disabled: selection.disabled || 0,
     skillsDropped,
     wake,
     autoMemoryEnabled,
@@ -606,6 +621,8 @@ async function assembleContext(message, {
   maxCount = 0,
   skills = [],
   memories = null,
+  agent = null,
+  agentName = agent ? agent.name : null,
   fetchImpl = null,
 } = {}) {
   const budgets = inputBudgets(contextTokens, { wake });
@@ -620,6 +637,8 @@ async function assembleContext(message, {
     enabled: memoryEnabled,
     autoMemoryEnabled,
     memories,
+    agent,
+    agentName,
   });
 
   const recall = await buildRecallContext(message, {
@@ -640,6 +659,7 @@ async function assembleContext(message, {
       memory: memory.count,
       memoryConsidered: memory.considered,
       memoryDropped: memory.dropped,
+      memoryDisabled: memory.disabled,
       memoryError: memory.memoryError || null,
       skillsDropped: memory.skillsDropped,
       wake: memory.wake,
@@ -662,7 +682,6 @@ module.exports = {
   COUNTING_RE,
   FORCE_PREFIX,
   FORMATTING,
-  WAKE_RE,
   parseWake,
   composePrompt,
   isRecallQuery,
@@ -672,6 +691,7 @@ module.exports = {
   assembleContext,
   memoryFile,
   readMemoryStore,
+  readAgentMemories,
   // Test seams.
   fitDocuments,
   forwardedAuth,

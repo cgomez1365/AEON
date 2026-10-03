@@ -207,9 +207,11 @@ describe('the terminal client', () => {
 });
 
 describe('R05 — one wake phrase', () => {
-  it('the dashboard no longer declares its own', () => {
+  it('the dashboard no longer declares its own — both chats ask the kernel', () => {
     const src = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src/blocks/dashboard/api/chat-stream.cjs'), 'utf8');
-    expect(src).not.toMatch(/const WAKE_RE = \//);
-    expect(src).toMatch(/WAKE_RE\s*\}\s*=\s*kernelContext/);
+    expect(src).not.toMatch(/WAKE_RE\s*=\s*\//);
+    expect(src).toMatch(/agentsKernel\.detectWake\(/);
+    const kernel = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src/kernel/routers/ai.cjs'), 'utf8');
+    expect(kernel).toMatch(/agentsKernel\.detectWake\(/);
   });
 });

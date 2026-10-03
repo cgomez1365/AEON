@@ -139,6 +139,11 @@ describe('none fit — the list instead of an apology', () => {
   });
 });
 
+// The wake phrase moved to src/kernel/agents.cjs (detectWake) on 2026-10-02,
+// when agents got names of their own. Operator: "any wake up call should be
+// good". So any spaces or punctuation may separate the words ("aeon - come
+// online" did not wake before), "wake up" wakes, and a bare "online" counts
+// only at the start of a message — "the aeon matrix is online" is a sentence.
 describe('the wake phrase', () => {
   const WAKES = [
     ['vp come online', null],
@@ -159,39 +164,47 @@ describe('the wake phrase', () => {
     ['aeon agent_7-b come online', 'agent_7-b'],
     ['aeon\ncome online', null],
     ['aeon come online.', null],
-    // Loose, kept for parity (no test pinned them before; tightening is a CEO call).
     ['aeon is online', 'is'],
-    ['is aeon online?', null],
-    ['the aeon matrix is online', 'matrix is'],
+    // Any separator (the operator's own "aeon - come online please" did nothing).
+    ['aeon - come online please', null],
+    ['aeon: come online', null],
+    ['aeon — come online', null],
+    ['vp,come online', null],
+    ['aeon , come online', null],
+    // The verb said, anywhere in the line.
+    ['please, aeon come online', null],
+    // Wake up.
+    ['wake up aeon', null],
+    ['aeon, wake up', null],
+    ['wake up', null],
+    ['come online', null],
   ];
   const NOT = [
     'aeonic come online',
     'vpn come online',
     'aeon comeonline',
     'aeon come onlineX',
-    'vp,come online',
-    'aeon , come online',
     'aeon 7 come online',
     'aeon protocol and header forensics specialist come online',
+    'is aeon online?',
+    'the aeon matrix is online',
+    'my vp online form',
+    'what is online banking',
   ];
 
   it.each(WAKES)('%j wakes, naming %j', (msg, agent) => {
-    expect(ctx.WAKE_RE.test(msg)).toBe(true);
     expect(ctx.parseWake(msg)).toEqual({ wake: true, agent });
   });
 
   it.each(NOT)('%j does not wake', (msg) => {
-    expect(ctx.WAKE_RE.test(msg)).toBe(false);
     expect(ctx.parseWake(msg)).toEqual({ wake: false, agent: null });
   });
 
-  it('is a pure predicate: one capture group, no global or sticky state', () => {
-    expect(ctx.WAKE_RE.flags).toContain('i');
-    expect(ctx.WAKE_RE.global).toBe(false);
-    expect(ctx.WAKE_RE.sticky).toBe(false);
-    expect(new RegExp(`${ctx.WAKE_RE.source}|`).exec('').length - 1).toBe(1);
-    expect(ctx.WAKE_RE.test('aeon come online')).toBe(true);
-    expect(ctx.WAKE_RE.test('aeon come online')).toBe(true);
+  it('an agent\'s own name wakes it, and null or empty never wakes', () => {
+    const agents = [{ id: 'aeon', name: 'Jarvis', folder: 'Aeon', self: true }, { id: 'card_scout', name: 'Card Scout', folder: 'Card_Scout' }];
+    expect(ctx.parseWake('card scout come online', agents)).toEqual({ wake: true, agent: 'card scout' });
+    expect(ctx.parseWake('jarvis - online', agents)).toEqual({ wake: true, agent: 'jarvis' });
     expect(ctx.parseWake(null)).toEqual({ wake: false, agent: null });
+    expect(ctx.parseWake('')).toEqual({ wake: false, agent: null });
   });
 });

@@ -2,6 +2,7 @@ const express = require('express');
 
 const kernelContext = require('../context.cjs');
 const blockSettings = require('../blockSettings.cjs');
+const agentsKernel = require('../agents.cjs');
 
 // The identity, then how it is laid out on screen — one voice, in that order.
 // kernelContext.FORMATTING is shared with the streaming path so the terminal
@@ -29,10 +30,16 @@ module.exports = function createAIRouter(deps) {
   // (R05). The caller supplies the line and the recent turns of its own
   // session; everything else is policy and lives in src/kernel/context.cjs.
   router.post('/converse', async (req, res) => {
-    const { message, history = [], contextTokens } = req.body || {};
+    const { message, history = [], contextTokens, agent: agentRef = null } = req.body || {};
     if (typeof message !== 'string' || !message.trim()) {
       return res.status(400).json({ error: 'message required' });
     }
+    // The same agent rules as the streaming chat: a wake that names an agent
+    // hands it the turn; otherwise the caller's agent, else the operator's own.
+    let agents = [];
+    try { agents = agentsKernel.list(VAULT_ROOT, { withStats: false }); } catch {}
+    const woke = agentsKernel.detectWake(message, agents);
+    const agent = woke.agent || (agentRef ? agentsKernel.get(VAULT_ROOT, agentRef, agents) : null) || agents.find((a) => a.self) || null;
     if (typeof kernelLLM !== 'function') {
       return res.status(503).json({
         error: 'No model is available to answer.',
@@ -53,7 +60,7 @@ module.exports = function createAIRouter(deps) {
         .slice(0, prefs.skill_max_injected || 30);
     } catch { /* settings are optional; a missing file is a fresh install */ }
 
-    const wake = kernelContext.WAKE_RE.test(message);
+    const wake = woke.wake;
     const assembled = await kernelContext.assembleContext(message, {
       // Forwarded so the internal recall call is not refused by the guard —
       // and if it IS refused, the refusal is reported as a refusal.
@@ -69,10 +76,11 @@ module.exports = function createAIRouter(deps) {
       // Same default as the streaming route: two chats, one memory rule.
       maxCount: wake ? 0 : Math.max(Number(mem.memory_max_context) || 200, 0),
       skills,
+      agent,
     });
 
     const prompt = kernelContext.composePrompt({
-      identity: IDENTITY,
+      identity: agentsKernel.identityFor(agent, IDENTITY),
       memoryText: assembled.memory.text,
       history,
       query: assembled.query,
@@ -80,10 +88,11 @@ module.exports = function createAIRouter(deps) {
     });
 
     try {
-      const text = await kernelLLM(prompt, { role: 'chat' });
+      const text = await kernelLLM(prompt, { role: 'chat', ...agentsKernel.callOptions(agent) });
       res.json({
         text,
         role: 'chat',
+        agent: agent ? { id: agent.id, name: agent.name, self: !!agent.self } : null,
         query: assembled.query,
         // Everything the caller needs to say what this turn consulted (R01,
         // R03): counts, whether recall actually ran, and the citations.
@@ -107,10 +116,22 @@ module.exports = function createAIRouter(deps) {
   });
 
   router.post('/', async (req, res) => {
-    const { prompt, role, provider, model, background, advisorModel } = req.body;
+    const { prompt, role, provider, model, background, advisorModel, agent: agentRef } = req.body;
     if (!prompt) return res.status(400).json({ error: 'prompt required' });
+    // `agent` runs the call as one of the operator's agents: its model, and
+    // its privacy (a Local only agent is never answered by a cloud model).
+    // A block can give its unattended jobs an agent of their own this way.
+    let agentOpts = {};
+    if (agentRef) {
+      const agent = agentsKernel.get(VAULT_ROOT, agentRef);
+      if (!agent) return res.status(404).json({ error: `No agent called "${agentRef}". GET /api/agents lists them.` });
+      agentOpts = agentsKernel.callOptions(agent);
+    }
     try {
-      const text = await kernelLLM(prompt, { role, provider, model, background, advisorModel });
+      const text = await kernelLLM(prompt, {
+        role, background, advisorModel, ...agentOpts,
+        ...(provider ? { provider } : {}), ...(model ? { model } : {}),
+      });
       res.json({ text, role: role || 'chat' });
     } catch (err) {
       // 503 = nothing is configured to answer (no API key, no local chat

@@ -134,7 +134,9 @@ describe('the component uses them', () => {
 
   it('sends the live transcript and nothing else', () => {
     expect(SRC).toMatch(/liveTranscript\(feedRef\.current/);
-    expect(SRC).toMatch(/body: JSON\.stringify\(\{ transcript \}\)/);
+    // The transcript, plus which agent's memory it goes to (2026-10-02) —
+    // a scope, not a different conversation.
+    expect(SRC).toMatch(/body: JSON\.stringify\(\{ transcript, \.\.\.agentBody\(\) \}\)/);
     const call = SRC.slice(SRC.indexOf("fetch('/api/memory/distill'"), SRC.indexOf('distillSummary(d)'));
     expect(call).not.toMatch(/force|sessionId/);
   });

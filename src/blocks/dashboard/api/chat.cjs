@@ -120,6 +120,8 @@ module.exports = function createChatRouter(deps) {
               nameSetBy: raw.nameSetBy || 'auto',
               inRecord: !!raw.inRecord,
               messageCount: raw.messageCount || 0,
+              // Which agent the chat was with (none: the operator's own AEON).
+              agent: typeof raw.agent === 'string' ? raw.agent : null,
             };
           } catch (e) {
             let savedAt = null;
@@ -153,7 +155,7 @@ module.exports = function createChatRouter(deps) {
   router.post('/terminal/sessions', (req, res) => {
     try {
       ensureSessionsDir();
-      const { id: incomingId, name, messages, autoSaved } = req.body || {};
+      const { id: incomingId, name, messages, autoSaved, agent } = req.body || {};
       if (!Array.isArray(messages) || messages.length === 0) {
         return res.status(400).json({ error: 'messages required' });
       }
@@ -188,6 +190,9 @@ module.exports = function createChatRouter(deps) {
         updatedAt: now,
         autoSaved: !!autoSaved,
         messageCount: messages.length,
+        // Every chat stays in this one folder (the one the index skips, R09);
+        // the agent it was with is recorded on it, not encoded in its path.
+        ...(typeof agent === 'string' && /^[a-z0-9_-]{1,64}$/.test(agent) ? { agent } : {}),
         messages,
       });
       res.json({ ok: true, id, name: record.name, nameSetBy: record.nameSetBy, updated: !!existing });

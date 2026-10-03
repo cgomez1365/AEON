@@ -23,9 +23,10 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Send, Loader, Cpu, Clock, Zap, ChevronRight, ChevronDown, ShieldAlert, Paperclip, Square, X as XIcon, Archive, History, Plus, Trash2, Pencil, BookmarkPlus, Check, Sparkles } from 'lucide-react';
+import { Send, Loader, Cpu, Clock, Zap, ChevronRight, ChevronDown, ShieldAlert, Paperclip, Square, X as XIcon, Archive, History, Plus, Trash2, Pencil, BookmarkPlus, Check, Sparkles, Bot } from 'lucide-react';
 import { describeStreamFailure, SELF_REPORTED_HEADER } from '../utils/interceptorPolicy.js';
 import { describeDispatchOutcome, describeDenial, describeCommandOutput } from '../utils/commandOutcome.js';
+import { readStoredAgent, storeAgent, asCurrent, resolveAgentArg, describeAgent, AGENT_SELECT_EVENT } from '../utils/terminalAgent.js';
 
 // ── Markdown rendering — the panel is a narrow column and nothing leaves it ──
 //
@@ -353,10 +354,10 @@ const NAMING_TRIES = 3;
  * nothing left to send ('saved'); when it does and it is too big for a beacon,
  * the caller is told so instead of guessing.
  */
-export function unloadSave({ feed, savedFeed, sessionId }) {
+export function unloadSave({ feed, savedFeed, sessionId, agent = null }) {
   if (!(feed || []).some(isTurn)) return { send: false, reason: 'empty' };
   if (feed === savedFeed) return { send: false, reason: 'saved' };
-  const body = JSON.stringify({ id: sessionId || null, messages: sessionEntries(feed), autoSaved: true });
+  const body = JSON.stringify({ id: sessionId || null, messages: sessionEntries(feed), autoSaved: true, ...(agent ? { agent } : {}) });
   const bytes = new TextEncoder().encode(body).length;
   if (bytes > BEACON_MAX_BYTES) return { send: false, reason: 'too_large', bytes };
   return { send: true, body, bytes };
@@ -469,6 +470,18 @@ const Terminal2 = ({ onUsageUpdate }) => {
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
   }, [input]);
   const [feed, setFeed] = useState([BOOT_MSG]);
+  // The agent this terminal talks to; null is the operator's own AEON.
+  // Remembered per browser (a convenience — the agents live in the Vault).
+  const browserStore = () => { try { return window.localStorage; } catch { return null; } };
+  const [agent, setAgentState] = useState(() => readStoredAgent(browserStore()));
+  const agentRef = useRef(agent);
+  const setAgent = useCallback((a) => {
+    const next = asCurrent(a);
+    agentRef.current = next;
+    setAgentState(next);
+    storeAgent(browserStore(), next);
+  }, []);
+  const agentBody = () => (agentRef.current ? { agent: agentRef.current.id } : {});
   const [distilling, setDistilling] = useState(false); // DISTIL → MEMORY in flight
   const [isLoading, setIsLoading] = useState(false);
   const [commands, setCommands] = useState([]);
@@ -523,6 +536,21 @@ const Terminal2 = ({ onUsageUpdate }) => {
 
   useEffect(() => { fetchSessions(); }, [fetchSessions]);
 
+  // Recent Agent Missions (and Memory Core) hand the terminal an agent by
+  // firing AGENT_SELECT_EVENT with { id, name }.
+  useEffect(() => {
+    const onSelect = (e) => {
+      const a = e?.detail;
+      if (!a || typeof a.id !== 'string') return;
+      setAgent(a);
+      push({ type: 'msg', role: 'system', content: a.self
+        ? `Back to ${a.name || 'your AEON'}.`
+        : `Talking to ${a.name} — say "${String(a.name).toLowerCase()} come online" to wake it with its full memory. /agent off to return.` });
+    };
+    window.addEventListener(AGENT_SELECT_EVENT, onSelect);
+    return () => window.removeEventListener(AGENT_SELECT_EVENT, onSelect);
+  }, [setAgent]);
+
   // DISTIL → MEMORY: the lasting facts of THIS chat into Memory Core.
   // Memory Core's own button reads the newest chat saved to disk, and a live
   // chat is not on disk until it is saved — pressed on one conversation, it
@@ -540,7 +568,8 @@ const Terminal2 = ({ onUsageUpdate }) => {
     try {
       const r = await fetch('/api/memory/distill', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ transcript }),
+        // Into the current agent's own memory; none: the shared memory.
+        body: JSON.stringify({ transcript, ...agentBody() }),
       });
       const d = (await r.json().catch(() => null)) || {};
       if (!r.ok || d.error) throw new Error(d.error || `HTTP ${r.status}`);
@@ -565,7 +594,7 @@ const Terminal2 = ({ onUsageUpdate }) => {
           // The outcome is reported in the feed below, so the global banner
           // stays out of it (a 5xx still raises it — interceptorPolicy).
           method: 'POST', headers: { 'Content-Type': 'application/json', [SELF_REPORTED_HEADER]: '1' },
-          body: JSON.stringify({ id, name, messages: sessionEntries(snapshot), autoSaved }),
+          body: JSON.stringify({ id, name, messages: sessionEntries(snapshot), autoSaved, ...agentBody() }),
         });
         const body = await r.json().catch(() => null);
         return readSaveResponse({ ok: r.ok, status: r.status, body, sentId: id });
@@ -763,7 +792,7 @@ const Terminal2 = ({ onUsageUpdate }) => {
   // after this one) and a close only has to carry what changed since.
   useEffect(() => {
     const handleBeforeUnload = () => {
-      const plan = unloadSave({ feed: feedRef.current, savedFeed: savedFeedRef.current, sessionId: sessionIdRef.current });
+      const plan = unloadSave({ feed: feedRef.current, savedFeed: savedFeedRef.current, sessionId: sessionIdRef.current, agent: agentRef.current?.id || null });
       if (plan.reason === 'too_large') {
         console.warn(`[SESSION] ${plan.bytes} bytes is over the browser's beacon limit — the turns since the last save were not sent on close.`);
         return;
@@ -1018,7 +1047,7 @@ const Terminal2 = ({ onUsageUpdate }) => {
       const res = await fetch('/api/chat/stream', {
         method: 'POST', headers: { 'Content-Type': 'application/json', [SELF_REPORTED_HEADER]: '1' },
         signal: controller.signal,
-        body: JSON.stringify({ message: text, role: 'chat', history: feed.filter(e => e.type === 'msg' && (e.role === 'user' || e.role === 'assistant')).slice(-20).map(e => ({ role: e.role, content: e.content })) }),
+        body: JSON.stringify({ message: text, role: 'chat', ...agentBody(), history: feed.filter(e => e.type === 'msg' && (e.role === 'user' || e.role === 'assistant')).slice(-20).map(e => ({ role: e.role, content: e.content })) }),
       });
       if (!res.ok || !res.body) {
         // The chat backend lives in the Dashboard block; with it removed the
@@ -1053,6 +1082,20 @@ const Terminal2 = ({ onUsageUpdate }) => {
             if (payload.streamId) activeChatRef.current = { ...activeChatRef.current, streamId: payload.streamId };
             // Fallback narrative, inline and ABOVE the answer it explains.
             if (payload.notice) pushBefore(msgId, { type: 'msg', role: 'system', content: `↪ ${payload.notice}` });
+            // The server says who answered. A wake that named an agent
+            // ("scout come online") hands it the terminal from here on.
+            if (payload.agent) {
+              const was = agentRef.current ? agentRef.current.id : null;
+              const now = payload.agent.self ? null : payload.agent.id;
+              if (was !== now) {
+                setAgent(payload.agent);
+                if (!payload.notice) {
+                  pushBefore(msgId, { type: 'msg', role: 'system', content: payload.agent.self
+                    ? `↪ Back to ${payload.agent.name}.`
+                    : `↪ ${payload.agent.name} is answering from here on — /agent off to return.` });
+                }
+              }
+            }
             meta = { ...meta, ...payload };
           }
           else if (eventType === 'warning') push({ type: 'msg', role: 'warning', content: payload.message });
@@ -1132,6 +1175,36 @@ const Terminal2 = ({ onUsageUpdate }) => {
     // output appeared beneath it, which is indistinguishable from a command
     // that does not exist. It is client-side, so it never reaches the
     // registry and cannot answer for itself. It says what it did.
+    // /agent — who the terminal talks to. Client-side: it changes this
+    // terminal's state; the list comes from Memory Core (GET /api/agents).
+    if (cmdToken === '/agent') {
+      let list = [];
+      try {
+        const r = await fetch('/api/agents', { headers: { [SELF_REPORTED_HEADER]: '1' } });
+        const d = await r.json().catch(() => null);
+        if (!r.ok || !d) throw new Error(d?.error || (r.status === 404 ? 'Memory Core is not installed — agents live there.' : `HTTP ${r.status}`));
+        list = d.agents || [];
+        if (!arg) {
+          const cur = agentRef.current ? agentRef.current.name : (list.find(a => a.self)?.name || 'AEON');
+          push({ type: 'msg', role: 'system', content: `${d.text}\n\nTalking to: ${cur}` });
+          return;
+        }
+      } catch (e) {
+        push({ type: 'msg', role: 'error', content: `[AGENT] ${e.message}` });
+        return;
+      }
+      const pick = resolveAgentArg(arg, list);
+      if (pick.error) { push({ type: 'msg', role: 'error', content: `[AGENT] ${pick.error}` }); return; }
+      if (pick.back) {
+        setAgent(null);
+        push({ type: 'msg', role: 'system', content: `Back to ${pick.agent?.name || 'AEON'}.` });
+        return;
+      }
+      setAgent(pick.agent);
+      push({ type: 'msg', role: 'system', content: `Talking to ${describeAgent(pick.agent)} This chat continues; NEW CHAT starts a clean one.` });
+      return;
+    }
+
     if (cmdToken === '/model') {
       const opening = !showModelPicker;
       setShowModelPicker(opening);
@@ -1362,6 +1435,20 @@ const Terminal2 = ({ onUsageUpdate }) => {
         </button>
       </div>
 
+      {agent && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 12px', borderBottom: '1px solid #111a28', fontSize: 10, letterSpacing: '0.08em', color: '#00f2ff', background: 'rgba(0,242,255,0.04)', flexShrink: 0, minWidth: 0 }}>
+          <Bot size={11} style={{ flexShrink: 0 }} />
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>TALKING TO {agent.name.toUpperCase()}</span>
+          <button onClick={() => { setAgent(null); push({ type: 'msg', role: 'system', content: 'Back to your AEON.' }); }}
+            title="Return to your own AEON (/agent off)"
+            style={{ marginLeft: 'auto', background: 'transparent', border: 'none', color: '#3a5070', cursor: 'pointer', fontSize: 10, fontFamily: 'inherit', letterSpacing: '0.08em', padding: 0 }}
+            onMouseEnter={e => e.currentTarget.style.color = '#00f2ff'}
+            onMouseLeave={e => e.currentTarget.style.color = '#3a5070'}>
+            × LEAVE
+          </button>
+        </div>
+      )}
+
       <div ref={scrollRef} style={{ flex: 1, minWidth: 0, overflowY: 'auto', overflowX: 'hidden', padding: '12px 14px' }}>
         {feed.map(entry => {
           if (entry.type === 'chip') return <EventChip key={entry.id} ev={entry} onToggle={() => patch(entry.id, e => ({ expanded: !e.expanded }))} />;
@@ -1422,7 +1509,7 @@ const Terminal2 = ({ onUsageUpdate }) => {
                       <span style={{ color: '#ffaa00' }} title={entry.meta.memoryError}>🧠 memory store unreadable</span>
                     )}
                     {!entry.meta.memoryError && entry.meta.memory != null && (
-                      <span title={`${entry.meta.memory} of ${entry.meta.memoryConsidered ?? '?'} memories injected${entry.meta.memoryDropped ? `, ${entry.meta.memoryDropped} dropped for space` : ''}`}>
+                      <span title={`${entry.meta.memory} of ${entry.meta.memoryConsidered ?? '?'} memories injected${entry.meta.memoryDropped ? `, ${entry.meta.memoryDropped} dropped for space` : ''}${entry.meta.memoryDisabled ? `, ${entry.meta.memoryDisabled} switched off in Memory Core` : ''}`}>
                         🧠 {entry.meta.memory}{entry.meta.memoryConsidered != null ? `/${entry.meta.memoryConsidered}` : ''}
                       </span>
                     )}

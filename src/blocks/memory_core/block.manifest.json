@@ -4,7 +4,7 @@
   "label": "Memory Core",
   "icon": "Workflow",
   "route": "/memory_core",
-  "description": "VP's persistent memory — typed facts (outline/algorithm/decision/milestone), vault-stored, injected into every terminal chat",
+  "description": "Agent memory — a shared store every agent reads, plus each agent's own; manual on/off switch per memory; vault-stored, injected into terminal chats",
   "category": "core",
   "tier": "core",
   "nav": {
@@ -66,7 +66,7 @@
         "chat"
       ],
       "role": "chat",
-      "blurb": "Distills and recalls VP memory"
+      "blurb": "Distills and recalls agent memory"
     },
     "targets": {
       "local": true,
@@ -106,6 +106,15 @@
         "param": "q",
         "mode": "instant",
         "category": "content"
+      },
+      {
+        "cmd": "/agent",
+        "desc": "Talk to one of your agents — /agent lists them, /agent <name> switches, /agent off returns to AEON",
+        "method": "GET",
+        "route": "/api/agents",
+        "mode": "instant",
+        "category": "content",
+        "argHint": "<name>"
       }
     ],
     "filesystem": {
@@ -139,10 +148,37 @@
         "type": "number",
         "default": 200,
         "desc": "Upper limit on memories considered per turn; the model's context budget still decides what fits."
+      },
+      {
+        "key": "new_memories_on",
+        "label": "New memories start on",
+        "type": "boolean",
+        "default": true,
+        "desc": "New memories are sent to the model straight away. Off: they are saved switched off, and you turn on the ones that matter (keeps big stores fast)."
       }
     ]
   },
   "routes": [
+    {
+      "method": "GET",
+      "path": "/api/agents",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/agents",
+      "auth": true
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/agents/:id",
+      "auth": true
+    },
+    {
+      "method": "PUT",
+      "path": "/api/agents/:id",
+      "auth": true
+    },
     {
       "method": "GET",
       "path": "/api/memory",
@@ -160,7 +196,17 @@
     },
     {
       "method": "POST",
+      "path": "/api/memory/:id/active",
+      "auth": true
+    },
+    {
+      "method": "POST",
       "path": "/api/memory/:id/pin",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/memory/active",
       "auth": true
     },
     {

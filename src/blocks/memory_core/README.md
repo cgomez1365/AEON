@@ -6,12 +6,34 @@
 
 ## What it does
 
-VP's persistent memory across terminal sessions. Every "durable" fact,
-decision, plan, or result the operator or VP surfaces gets stored as a typed
-record, vault-resident so it also shows up as a file node in Aeon Matrix.
-Pinned + high-priority memories ride along on every terminal chat turn so VP
-doesn't have amnesia between sessions; saying **"vp come online"** triggers a
-full read of the entire store.
+The operator's agents and what each one remembers.
+
+- **Shared memory** ("All agents" tab) — `Vault/Agents/Aeon/memory/`, the path it
+  always had. Every agent reads it unless told not to.
+- **Agents** — each one a folder `Vault/Agents/<Folder>/` with an `agent.json` (name,
+  persona, model, privacy, memory switches) and its **own** memory in `memory/`.
+  Created, edited and removed here (`/api/agents`); removing moves the folder to
+  `Vault/Agents/.removed/` — nothing is deleted. The operator's own AEON
+  (`Agents/Aeon`) can be renamed and given a persona; it cannot be removed.
+  Layout and rules: `src/kernel/agents.cjs`.
+- **A manual switch on every memory** (`active`). Off keeps the memory saved,
+  searchable and in Aeon Matrix, but it is never sent to a model. The page shows
+  what the switched-on memories cost every turn (~tokens), with all-on / all-off.
+  Settings → Blocks → Memory Core → **New memories start on** decides the default.
+- **Calling an agent:** `/agent <name>` in the terminal, a click in Fleet Control's
+  Recent Agent Missions, "talk in terminal" here, or any wake-up call that names it
+  ("scout come online", "scout - online", "wake up, scout"). A wake loads all of the
+  agent's switched-on memory; an ordinary turn loads what fits, its own first.
+- **Per-agent model and privacy:** an agent may name its own model (else Settings and
+  roulette decide). **Local only** means its calls — chat, distil, auto-capture — are
+  refused rather than sent to a cloud model, whatever the global switch says. A block
+  can run its own jobs as an agent: `POST /api/ai { prompt, agent }`.
+- **Mission log:** `Vault/Agents/<Folder>/missions/log.json`, the last 50 things the
+  agent was asked (the operator's words, never the answer — R09). Recent Agent
+  Missions shows the latest.
+
+Every route takes `?agent=<id|name>` (or `agent` in the body); none means the shared
+store. An agent nobody has answers 404 — the shared store never stands in for it.
 
 This block replaces an older `memory` block that was deleted without
 relocating its store — the terminal kept reading a path that no longer
@@ -45,7 +67,7 @@ reads them directly):
 {
   "id": "hex12", "text": "...", "category": "fact|identity|preference|contact|project|goal",
   "type": "outline|algorithm|decision|milestone|null", "title": null,
-  "tags": [], "pinned": false, "timestamp": 0, "source": "operator|distill|api|vp-import",
+  "tags": [], "pinned": false, "active": true, "timestamp": 0, "source": "operator|distill|api|vp-import",
   "refs": [{ "kind": "terminal-history|transcript|file|url|mission", "...locator": "" }]
 }
 ```
