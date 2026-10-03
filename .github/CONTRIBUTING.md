@@ -22,8 +22,8 @@ npm start              # Vite dev server + kernel, hot reload
 
 ## What a pull request must pass
 
-Every one of these runs in CI on Windows, macOS, Ubuntu 24, the Ubuntu 22.13 floor and a
-security leg. Run them locally first:
+Every one of these runs in CI on Windows, macOS, Ubuntu 24, Ubuntu 26, the Ubuntu 22.13 floor
+and a security leg, for every pull request to main. Run them locally first:
 
 ```bash
 npm test                    # the full suite

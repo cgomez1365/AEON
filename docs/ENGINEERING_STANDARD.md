@@ -24,7 +24,7 @@ gate**, so there is no "just this time" path.
 | Release gate | `npm run scan:release-gate` | No assumption of an external model daemon · no unauthorized machine-root access · cloud-surface ratchet · declared block filesystem |
 | Audit | `npm run scan:audit` | No unreviewed high/critical advisory. Acceptances carry a review date |
 | Build | `npm run build` | Manifests regenerate; artifact builds clean |
-| CI | 5 legs | Windows 24 · Ubuntu 24 · Ubuntu 22.13 · macOS 24 · security |
+| CI | 6 legs | Windows 24 · Ubuntu 24 · Ubuntu 22.13 · Ubuntu 26 · macOS 24 · security. Runs on pushes to main, release tags, pull requests to main and weekly |
 | Empty shell | in suite | AEON boots with zero blocks and says so honestly |
 | Clean room | in suite | The suite creates no `.env`, `secrets/` or `data/` in the install it runs from |
 | Route collision | in suite | No two blocks claim one route |

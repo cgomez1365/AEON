@@ -11,7 +11,7 @@
 
 > Think Linux, for the AI era: a kernel that discovers self-contained blocks, a nervous system (Settings) every block reports to, a vault that encrypts your keys, a Second Brain that indexes your files and answers with sources, and one LLM layer that routes every AI call by role.
 
-<sub>17 blocks (plus two `_` scaffolds the kernel skips) · 5 CI legs (Windows · Ubuntu on Node 24 · Ubuntu on the Node 22.13 floor · macOS · security) · 0 undeclared block filesystem access, held by the release gate. Test counts are dated readings, not properties: the latest one, with its date and commit, is in the [Engineering standard](docs/ENGINEERING_STANDARD.md#5-numbers-are-dated-readings).</sub>
+<sub>17 blocks (plus two `_` scaffolds the kernel skips) · 6 CI legs (Windows · Ubuntu on Node 24 · Ubuntu on the Node 22.13 floor · Ubuntu on Node 26 · macOS · security) · 0 undeclared block filesystem access, held by the release gate. Test counts are dated readings, not properties: the latest one, with its date and commit, is in the [Engineering standard](docs/ENGINEERING_STANDARD.md#5-numbers-are-dated-readings).</sub>
 
 ---
 
@@ -66,9 +66,9 @@ We do not say "cross-platform" and leave you to find out. Here is exactly what h
 
 | Platform | Status | Evidence |
 |---|---|---|
-| **Windows** | **This launcher not yet run on real hardware** | Last recorded end-to-end run on a real Windows PC: 2026-09-06 (operator-reported, a machine that had never run AEON). The launcher has changed since, and the 3.1.0 launcher has not been run on a real Windows machine. CI leg on every push; the Desktop shortcut is created and read back through real PowerShell on the Windows CI leg |
-| **macOS** | **Verified on real hardware** (with `git clone`) | 2026-08-12, a MacBook Pro that had never run AEON: `git clone` + `launch.command`, a local model installed, and it **answered with Wi-Fi off**. 2026-09-13: opening the Desktop icon started AEON in 5 s and indexed the Vault 24 s in. The browser-ZIP path has not been run end to end (see Gatekeeper above). CI leg on every push |
-| **Linux** | **Not yet verified on real hardware** | 2026-08-08, a clean Ubuntu 24.04 under WSL2 with no Node: `launch.sh` installed Node via NodeSource (that day's LTS, 24.19.0) and booted AEON, and a local model answered. CI legs on Ubuntu with Node 24 and with the Node 22.13 floor. No Desktop icon on Linux yet — the launcher says so |
+| **Windows** | **This launcher not yet run on real hardware** | Last recorded end-to-end run on a real Windows PC: 2026-09-06 (operator-reported, a machine that had never run AEON). The launcher has changed since, and the 3.1.0 launcher has not been run on a real Windows machine. CI leg on main, release tags, pull requests and weekly; the Desktop shortcut is created and read back through real PowerShell on the Windows CI leg |
+| **macOS** | **Verified on real hardware** (with `git clone`) | 2026-08-12, a MacBook Pro that had never run AEON: `git clone` + `launch.command`, a local model installed, and it **answered with Wi-Fi off**. 2026-09-13: opening the Desktop icon started AEON in 5 s and indexed the Vault 24 s in. The browser-ZIP path has not been run end to end (see Gatekeeper above). CI leg on main, release tags, pull requests and weekly |
+| **Linux** | **Not yet verified on real hardware** | 2026-08-08, a clean Ubuntu 24.04 under WSL2 with no Node: `launch.sh` installed Node via NodeSource (that day's LTS, 24.19.0) and booted AEON, and a local model answered. CI legs on Ubuntu with Node 24, with Node 26 and with the Node 22.13 floor. No Desktop icon on Linux yet — the launcher says so |
 
 **Also not yet verified:** a clean Windows machine that has never had Node (the launcher's `winget` path).
 
@@ -121,9 +121,9 @@ Not of the design. A declaration with no consumer is not a feature; a badge that
 
 That rule applies to this README and to the docs: every file path, link and anchor they cite is checked to exist by a test, because a reference that carries stale facts teaches people to distrust all of it.
 
-### Standing gates, cleared on every push
+### Standing gates, cleared in CI on main, release tags and pull requests
 
-Suite, release gate, dependency audit, build, five CI legs, empty-shell boot, clean-room isolation, route collision, command collision, manifest freshness, declared filesystem surface, tree integrity, manifest read safety, scaffold invariant, launcher contract, docs truth. A gate skipped once stops being a gate. → [Engineering standard](docs/ENGINEERING_STANDARD.md)
+Suite, release gate, dependency audit, build, six CI legs, empty-shell boot, clean-room isolation, route collision, command collision, manifest freshness, declared filesystem surface, tree integrity, manifest read safety, scaffold invariant, launcher contract, docs truth. A gate skipped once stops being a gate. → [Engineering standard](docs/ENGINEERING_STANDARD.md)
 
 ### "Done" requires evidence, named
 
@@ -212,7 +212,7 @@ npm run scan:release-gate   # runtime purity · path authority · cloud ratchet 
 npm run scan:audit          # no unreviewed high/critical advisories
 ```
 
-Install, test, release gate and build run in CI on every push across four OS/Node legs; the dependency audit runs on a fifth (security) leg. `npm start` and `npm run server` are dev entry points and are not exercised by CI. Contributions follow the [contributing guide](.github/CONTRIBUTING.md).
+Install, test, release gate and build run in CI across five OS/Node legs; the dependency audit runs on a sixth (security) leg. CI runs on every push to main, every release tag, every pull request to main, and weekly; a branch with no pull request runs only when started by hand. `npm start` and `npm run server` are dev entry points and are not exercised by CI. Contributions follow the [contributing guide](.github/CONTRIBUTING.md).
 
 **Changes:** [Changelog](CHANGELOG.md) · [3.1.0 release notes](RELEASE_NOTES_v3.1.0.md)
 

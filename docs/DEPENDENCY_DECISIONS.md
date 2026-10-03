@@ -13,6 +13,10 @@ security advisories.
 
 **Reviewed:** 2026-09-30 · **Review by:** 2026-10-31
 
+**2026-10-03:** vite moved to 6.4.3 (below). `npm audit` no longer reports the
+vite advisory or the moderate vite/esbuild ones listed here, so the vite
+acceptance is removed. One acceptance is left, grpc-js through firebase.
+
 The gate's two acceptances (vite 1123525, react-router 1124282) were dated
 2026-10-01, so the CI `security` leg would have gone red from 2026-10-02 (UTC)
 on an unchanged tree. On 2026-09-30 a new high advisory in `@grpc/grpc-js`
@@ -27,23 +31,25 @@ advisories.
 
 | Advisory | Severity | Package | Decision | Why AEON is not exposed |
 |---|---|---|---|---|
-| 1123525 (GHSA-fx2h-pf6j-xcff) | high | vite 5.4.21 | accepted to 2026-10-31 | `server.fs.deny` bypass in the Vite **dev server**. The customer path (`launch.js`) runs `vite build`, then `node server/server.js`, which serves `dist/` through Express; the dev server never starts. It runs only under `npm start` / `npm run dev`, which listen on 127.0.0.1 only (`vite.config.js` `server.host`, since 6defca4), so the remaining exposure is a contributor on Windows who starts the dev server with `--host` on an untrusted network. |
+| 1123525 (GHSA-fx2h-pf6j-xcff) | high | vite 5.4.21 | **acceptance removed** 2026-10-03: fixed by vite 6.4.3, which AEON now uses | Until then: `server.fs.deny` bypass in the Vite **dev server**. The customer path (`launch.js`) runs `vite build`, then `node server/server.js`, which serves `dist/` through Express; the dev server never starts. It runs only under `npm start` / `npm run dev`, which listen on 127.0.0.1 only (`vite.config.js` `server.host`, since 6defca4), so the remaining exposure is a contributor on Windows who starts the dev server with `--host` on an untrusted network. |
 | 1240623 (GHSA-m9gg-hp2v-232j) | high | @grpc/grpc-js 1.9.16 | accepted to 2026-10-31 | Published after `fe93dbf`. grpc-js arrives only through `firebase` → `@firebase/firestore`, whose **Node** build requires it. AEON imports firebase only in browser code (`src/kernel/firebase.js` and three React files); Vite bundles firestore's browser build, which does not use grpc-js — the built `dist/` contains no grpc-js code — and no Node code in AEON requires firebase. No fix exists yet: the latest firebase (12.19.0) still pins `@grpc/grpc-js ~1.9.0`, and 1.9.16 is the last 1.9.x. |
 | 1124282 | — | react-router | **acceptance removed** | npm audit no longer reports it against react-router 7.18.2. A dead acceptance would silently cover the advisory if it came back. |
 
 Below the gate's threshold (moderate), recorded so they are known, not
-accepted in code — all Vite **dev server** only, same reasoning as 1123525:
+accepted in code — all Vite **dev server** only, same reasoning as 1123525.
+None is reported after the vite 6.4.3 upgrade (2026-10-03):
 
 - 1116229 (GHSA-4w7w-66w2-5vf9) — vite: path traversal in optimized-deps `.map` handling.
 - 1120784 (GHSA-v6wh-96g9-6wx3) — vite's launch-editor: NTLMv2 hash disclosure via UNC paths on Windows.
 - 1102341 (GHSA-67mh-4wv8-2f99) — esbuild ≤0.24.2 (vite 5's): any website can send requests to the dev server and read the response.
 
-**Unblocked when:** vite moves to 6.4.3 or later (below), and firebase ships a
-firestore that depends on a fixed grpc-js — or AEON drops firebase.
+**Unblocked when:** firebase ships a firestore that depends on a fixed
+grpc-js, or AEON drops firebase. (The other half, vite 6.4.3, was done on
+2026-10-03.)
 
 ---
 
-## vite 5.4.21 → 8.x — **DEFERRED**
+## vite → 8.x — **DEFERRED**
 
 **Decided:** 2026-08-04 (BO-A3d) · **Re-reviewed:** 2026-09-30 · **Review by:** 2026-10-31
 
@@ -64,10 +70,10 @@ at**, and it fails.
 - `@vitejs/plugin-react-swc` additionally warns that its `esbuild` option is
   deprecated under vite 8 and wants `oxc`.
 
-**Why deferring is safe.** The advisories this upgrade would close are
-**dev-server only** — they do not affect the built artifact an operator runs.
-`npm run scan:audit` carries the high one as a reviewed acceptance (review by
-2026-10-31, table above), so nothing is silently ignored.
+**Why deferring is safe.** The vite advisories that once made this upgrade
+urgent were closed by vite 6.4.3 (2026-10-03, below). Deferring vite 8 leaves
+no vite advisory open, and `npm run scan:audit` holds no vite acceptance: if
+one is reported again, the gate fails.
 
 **Unblocked when:** `vite-plugin-pwa` ships a release that genuinely builds
 under rolldown. Re-test with `npm run build`; if it produces `dist/sw.js`, take
@@ -79,9 +85,47 @@ depends on esbuild `^0.25.0`, past the esbuild advisory. `vite-plugin-pwa@1.3.0`
 and `@vitejs/plugin-react-swc@3.11.0` both declare vite 6 support. Measured in
 a scratch copy of `fe93dbf` with `npm i -D vite@6.4.3`: `vite build` passed and
 wrote `dist/sw.js`, and `npm audit` then reported no vite or esbuild advisory.
-**Not measured:** the test suite, the dev server, or AEON booting on the
-result. Not taken here — it is a major bump the day before a release, and the
-standing instruction is to hold the vite major. It is the next thing to try.
+
+**Taken 2026-10-03** (audit #12): `vite ^6.4.3`. Measured on that tree: the
+full suite passed, `npm run build` passed and wrote `dist/sw.js`, the dev
+server started and served the app on 127.0.0.1, and `npm audit` reported no
+vite or esbuild advisory. **Not measured:** AEON booting through `launch.js`
+on the result. Vite 8 stays deferred for the reasons above.
+
+---
+
+## package-lock.json — written with npm 10
+
+**Decided:** 2026-10-03 (audit #6)
+
+Node 22.13 ships npm 10; Node 24 and 26 ship npm 11. `launch.js` runs
+`npm install` on a first launch, so if a user's npm would write a different
+lockfile, it rewrites the tracked file in their checkout and a later
+`git pull` that touches it stops. `npm ci` on npm 10 also refused the v3.2.0
+lockfile npm 11 wrote (27 `Missing:` lines).
+
+The cause was a nested vite 8 that vitest had resolved for itself when the root
+vite was 5.4.21; npm 10 and npm 11 disagree about its optional esbuild peer.
+vitest 4.1.11 accepts vite 6, so it now uses the root vite 6.4.3 and the nested
+copy is gone. The lockfile was then written with npm 10.9.2. Measured on
+macOS: `npm ci --dry-run` passes, and `npm install --package-lock-only` leaves the
+lockfile byte-identical, on npm 10.9.2 and on npm 11.19.0. CI checks the second
+on every Linux leg (npm 10 on the floor leg, npm 11 on Node 24 and 26).
+
+To change a dependency: change it with any npm, then rewrite the lockfile with
+
+    npx -y npm@10.9.2 install --package-lock-only
+
+**Cost, accepted:** npm 10 does not write the `libc` field npm 11 had put on
+Linux native packages, and npm uses that field to skip musl builds on a glibc
+Linux. Measured by simulation on macOS (npm 11.19.0,
+`npm ci --ignore-scripts --os=linux --cpu=x64 --libc=glibc`): this lockfile
+installs 4 musl packages the v3.2.0 lockfile did not — `@swc/core`,
+`@rollup/rollup`, `@napi-rs/canvas` and the `@napi-rs/canvas` copy under
+`pdfjs-dist` — 95,736 KB on disk (`du -sk`) on Linux x64. **Not measured** on
+a real Linux machine. Writing the field back with npm 11 would bring back the
+rewrite for Node 22 users: npm 10 removes it (it removed all 39 when this
+lockfile was written).
 
 ---
 

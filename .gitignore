@@ -7,6 +7,9 @@ node_modules/
 dist/
 build/
 
+# `npm run test:coverage` report (vitest + @vitest/coverage-v8)
+coverage/
+
 # Environment (contains API keys — use .env.example as template)
 .env
 .env.*
