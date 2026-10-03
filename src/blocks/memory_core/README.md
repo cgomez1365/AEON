@@ -43,6 +43,10 @@ The operator's agents and what each one remembers.
     them back into the conversation or have a model summarise them;
   - the question it searches the Second Brain with is embedded on this computer (or
     the LAN), or recall does not run;
+  - while it is the terminal's agent, `/ask`, `/recall`, `/ask-doc` and `/read` run
+    on local models (the dispatcher sends `localOnly` to the commands that declare
+    `takesLocalOnly`), and a command's result is read back by a local model or by
+    the narrator's own sentence. Other slash commands use the models in Settings;
   - its whole folder (`Agents/<Folder>/` — memory, mission log, `agent.json`) stays
     out of the Second Brain index and recall.
 
