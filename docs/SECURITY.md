@@ -37,7 +37,7 @@ in the vault, keyed by `AEON_VAULT_MASTER_KEY` which lives only in env.
 | Crash guards | `server/server.js`, `src/kernel/processGuards.cjs` | a fault inside one request is logged and survived; one that leaves the process unsound (out of memory, a missing module) is logged and stops AEON. Nothing restarts it except **Settings → RESTART**; start it again from the Desktop icon or the launcher. The crash log is capped |
 | Log redaction | `src/kernel/logger.cjs` | secrets censored in logs |
 | Anon canary | `tools/rls-canary.cjs` | alerts if a table goes public |
-| Dependency audit | `.github/workflows/ci.yml`, dependabot | weekly |
+| Dependency audit | `.github/workflows/ci.yml` (`npm run scan:audit`) | every push, and every pull request to `main`; Dependabot opens version-update pull requests (npm weekly, GitHub Actions monthly), and each runs the same gate |
 
 ## Which requests AEON answers
 

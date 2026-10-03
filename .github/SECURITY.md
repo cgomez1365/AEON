@@ -14,14 +14,23 @@ Please include:
 - what an attacker can do, and what they need first (local access, a crafted file, a
   malicious block, a network position)
 - the smallest steps that reproduce it
-- the AEON commit you tested (`git log --oneline -1`), your OS and your Node.js version
+- the release you downloaded (for example v3.2.0), or for a `git clone` the commit
+  (`git log --oneline -1`); your OS and your Node.js version
 
 AEON has one maintainer. Reports are read and answered as fast as that allows; there is
 no promised response time, and none is claimed here.
 
 ## Supported versions
 
-Fixes land on `main` and in the next release. Older snapshots are not patched.
+Fixes land on `main` and in the next release. Older releases are not patched.
+
+| Version | Supported |
+|---|---|
+| 3.2.x | Yes |
+| 3.1.x and older | No — upgrade to the [latest release](https://github.com/cgomez1365/AEON/releases/latest) |
+
+3.0.0 lacks security fixes made since (among them an auth-guard bypass and an
+unauthenticated `/ws` socket). See *Updating AEON* in the [README](../README.md#updating-aeon).
 
 ## What AEON does and does not claim
 
