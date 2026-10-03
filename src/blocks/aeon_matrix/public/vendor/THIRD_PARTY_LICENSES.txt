@@ -8,29 +8,29 @@ committed prebuilt in 7cccdf2 (2026-07-21); the command that built it is not in
 this repository.
 
 How the list below was made (2026-10-03): the bundle keeps only three.js's license
-comment and records no package version except three.js's (REVISION "184"). Each
-package below is from the dependency tree of 3d-force-graph 1.80.1 with three
-0.184.0, as npm resolved it on 2026-10-03, and the bundle was checked for code from
-those packages (ngraph.graph's warning strings, kapsule's __kapsuleInstance, the
-float-tooltip stylesheet, polished's error URL, tween.js, preact internals,
-d3-force-3d's numDimensions, a d3-scale-chromatic palette, tinycolor's
-toHexString/getAlpha, and others). The versions are the ones resolved that day;
-the bundled copies of the dependencies may be slightly older. A bundler drops code
-that is not used, so some of these packages may contribute little or nothing; each
-one's notice is included anyway.
+comment and records no package version except three.js's (REVISION "184").
+second_brain.html says the bundle was built from this repository's node_modules,
+so each version below is the one package-lock.json recorded at 7cccdf2, the commit
+that added the bundle. The package set is the dependency tree of 3d-force-graph
+1.80.0 with three 0.184.0, and the bundle was checked for code from those packages
+(ngraph.graph's warning strings, kapsule's __kapsuleInstance, the float-tooltip
+stylesheet, polished's error URL, tween.js, preact internals, d3-force-3d's
+numDimensions, a d3-scale-chromatic palette, tinycolor's toHexString/getAlpha, and
+others). A bundler drops code that is not used, so some of these packages may
+contribute little or nothing; each one's notice is included anyway.
 
 Packages and licenses:
   three 0.184.0                        MIT
-  3d-force-graph 1.80.1                MIT
-  three-forcegraph 1.43.6              MIT
-  three-render-objects 1.43.0          MIT
+  3d-force-graph 1.80.0                MIT
+  three-forcegraph 1.43.4              MIT
+  three-render-objects 1.41.1          MIT
   kapsule 1.16.3                       MIT
   accessor-fn 1.5.3                    MIT
   data-bind-mapper 1.0.3               MIT
   float-tooltip 1.7.5                  MIT
-  preact 10.29.8                       MIT
+  preact 10.29.1                       MIT
   polished 4.3.1                       MIT
-  @babel/runtime 7.29.7                MIT
+  @babel/runtime 7.29.2                MIT
   @tweenjs/tween.js 25.0.0             MIT
   lodash-es 4.18.1                     MIT
   tinycolor2 1.6.0                     MIT
@@ -84,7 +84,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-3d-force-graph 1.80.1 (MIT)
+3d-force-graph 1.80.0 (MIT)
 https://github.com/vasturiano/3d-force-graph
 ------------------------------------------------------------------------------
 
@@ -111,7 +111,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-three-forcegraph 1.43.6 (MIT)
+three-forcegraph 1.43.4 (MIT)
 https://github.com/vasturiano/three-forcegraph
 ------------------------------------------------------------------------------
 
@@ -138,7 +138,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-three-render-objects 1.43.0 (MIT)
+three-render-objects 1.41.1 (MIT)
 https://github.com/vasturiano/three-render-objects
 ------------------------------------------------------------------------------
 
@@ -273,7 +273,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-preact 10.29.8 (MIT)
+preact 10.29.1 (MIT)
 https://preactjs.com
 ------------------------------------------------------------------------------
 
@@ -327,7 +327,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-@babel/runtime 7.29.7 (MIT)
+@babel/runtime 7.29.2 (MIT)
 https://babel.dev/docs/en/next/babel-runtime
 ------------------------------------------------------------------------------
 

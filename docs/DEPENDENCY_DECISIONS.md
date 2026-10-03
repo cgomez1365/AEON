@@ -133,13 +133,16 @@ lockfile was written).
 
 ## actions/checkout and actions/setup-node v5 → v7 — **MERGED**
 
-**Decided:** 2026-08-04 (BO-A3d, "do not merge yet") · **Merged:** 2026-09-14
+**Decided:** 2026-08-04 (BO-A3d held `setup-node` v7, "do not merge yet"; it left
+`checkout` v7 untouched) · **Merged:** 2026-09-14
 
 The 2026-08-04 entry held `actions/setup-node@v7` because nobody had read why a
 run on it failed. Both v7 bumps were merged on 2026-09-14: `c3d0992`
 (`actions/checkout` 5 → 7, PR #10) and `d2474e1` (`actions/setup-node` 5 → 7,
-PR #11). `.github/workflows/ci.yml` uses `@v7` for both in both jobs, and CI on the
-v3.2.0 release commit `cf73b00` ran 5/5 green on them (run 37102458513).
+PR #11). CI on the v3.2.0 release commit `cf73b00` ran 5/5 green on them (run
+37102458513). Since 2026-10-03 (audit #43) `.github/workflows/ci.yml` pins both to
+commit SHAs in both jobs: checkout `3d3c42e…` (v7.0.1) and setup-node `8207627…`
+(v7.0.0).
 
 ---
 
@@ -150,15 +153,17 @@ two Dependabot branches:
 
 - `dependabot/npm_and_yarn/minor-and-patch-c4dd0af735` — the weekly
   minor-and-patch group, PR #32 (opened 2026-10-01).
-- `dependabot/npm_and_yarn/vite-8.3.2` — vite 5.4.21 → 8.3.2, PR #33 (opened
-  2026-10-03). Not tested here. It is the same three-major jump as the vite
-  8 entry above, so it stays held under that entry until `vite-plugin-pwa`
-  builds under vite 8.
+- `dependabot/npm_and_yarn/vite-8.3.2` — opened as vite 5.4.21 → 8.3.2, PR #33
+  (2026-10-03), against the `main` of that day. `main` now has vite 6.4.3, so from
+  here it is a two-major jump. Not tested here. It stays held under the vite 8
+  entry above until `vite-plugin-pwa` builds under vite 8.
 
 The branches this file listed on 2026-08-04 (`checkout-7`, `setup-node-7`,
 `concurrently-10.0.3`, `inquirer-14.0.2`, `typescript-7.0.2`, `vite-8.1.5` and
 an older minor-and-patch group) are gone: the two actions bumps were merged
-(above), and the others were closed or superseded by Dependabot.
+(above). PRs #2–#5 (concurrently, vite 8, typescript, inquirer) were closed by
+hand on 2026-09-14; the older minor-and-patch group (PR #13) was superseded by
+Dependabot.
 
 The majors (vite, typescript, inquirer, concurrently) stay held; vite's reason
 is above. PR #32 is not security-driven: no advisory in the gate's table is

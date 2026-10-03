@@ -96,11 +96,13 @@ review items.
   the manifest. `npm run scan:block-fs` reports undeclared access in shipped
   blocks; browsing the operator's files goes through host_os's `/api/fs/*` routes.
 - Run shell commands. There is no shell route (`/api/exec` was deleted); named OS
-  operations are `POST /api/os/action`. `aeon lint` flags `child_process`,
-  `execSync` and `spawnSync` as HIGH unless the manifest declares
-  `contract.permissions.shell: true`.
+  operations are `POST /api/os/action`. `aeon lint` flags
+  `require('child_process')`, `execSync` and `spawnSync` as HIGH unless the
+  manifest declares `contract.permissions.shell: true` (`node:child_process` and
+  an ESM `import` of it are not caught).
 - Import or require other block modules directly (any `../../` path other than an
-  import of a kernel module is a HIGH `path-traversal` finding).
+  import of a kernel module is a HIGH `path-traversal` finding; a single
+  `../<other_block>` from the block's root is not caught and is a review item).
 - Hardcode API keys, Supabase URLs, or file paths (`hardcoded-secret` catches
   key-shaped strings only).
 - Assume any other block is installed

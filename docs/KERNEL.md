@@ -63,7 +63,7 @@ POST /api/ai            { prompt, role?, provider?, model?, background?, advisor
                                                      a bare prompt
 POST /api/ai/converse   { message, history?, contextTokens?, agent? }
                                                      a conversational turn with memory + vault recall
-POST /api/ai/vision     { image, prompt, provider?, model? }
+POST /api/ai/vision     { image, prompt?, provider?, model? }   (model only with provider)
                                                      vision role
 ```
 

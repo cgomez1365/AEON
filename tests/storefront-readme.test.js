@@ -142,7 +142,9 @@ describe('the security policy fits a ZIP download', () => {
 
   it('the dependency-audit row says what runs, not a weekly audit', () => {
     const row = read('docs/SECURITY.md').split('\n').find((l) => l.startsWith('| Dependency audit |'));
-    expect(row).toMatch(/every push, and every pull request to `main`/);
+    // Same triggers as .github/workflows/ci.yml's `on:` (fix-ci, audit #11 and #42).
+    expect(row).toMatch(/every push to `main`, every `v\*` release tag, every pull request to `main`, a weekly scheduled run/);
+    expect(row).not.toMatch(/every push,/);
     expect(row).not.toMatch(/\| weekly \|$/);
   });
 });

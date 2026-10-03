@@ -682,8 +682,9 @@ WHAT'S HERE
                  macOS 11 to 13.4` : ''}), Windows (${runtimes.win}), Linux (${runtimes.linux}),
                  and npm.
   THIRD_PARTY_NOTICES.txt
-                 the licenses of the other software on the drive
-                 (FFmpeg, Node.js, llama.cpp) and of any model weights.
+                 names the licenses of the other software on the drive
+                 (FFmpeg, Node.js, llama.cpp) and of the catalogue model
+                 weights on it, with where to read each.
 
 WHAT WORKS WHERE
 ---------------------------------------------------------------------

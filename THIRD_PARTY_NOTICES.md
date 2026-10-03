@@ -32,7 +32,7 @@ That build's license and build record are `ffmpeg.LICENSE` and `ffmpeg.README` i
 | What | When | From | License |
 |---|---|---|---|
 | llama.cpp runtime | The first time you install a local model (Cookbook or `/model-pull`) | The pinned release in [`services/local-runtime/runtime-assets.json`](services/local-runtime/runtime-assets.json), from GitHub | MIT — <https://github.com/ggml-org/llama.cpp/blob/master/LICENSE> |
-| Model weights | When you install a model | Hugging Face | Each model's own license: Apache-2.0, MIT, the Llama 3.1 and 3.2 Community Licenses, or the Gemma Terms of Use. [`services/local-runtime/model-catalog.json`](services/local-runtime/model-catalog.json) records each one, and Cookbook shows it before the download starts. The weights are not under the AEON Community License. |
+| Model weights | When you install a model | Hugging Face | Each model's own license. For the catalogue models: Apache-2.0, MIT, the Llama 3.1 and 3.2 Community Licenses, or the Gemma Terms of Use; [`services/local-runtime/model-catalog.json`](services/local-runtime/model-catalog.json) records each one, and Cookbook shows it before the download starts. A model pulled by Hugging Face repo name comes under the license that repo states. The weights are not under the AEON Community License. |
 | cloudflared | The first time you start a Remote Access tunnel | Cloudflare's GitHub releases | Its own license: <https://github.com/cloudflare/cloudflared/blob/master/LICENSE> |
 | OCR language data for tesseract.js | Only with `AEON_OCR_DOWNLOAD=1` in `.env` | cdn.jsdelivr.net (`@tesseract.js-data/eng`) | Its own license, published with that package |
 
