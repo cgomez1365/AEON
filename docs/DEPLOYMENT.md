@@ -1,12 +1,12 @@
 # AEON — Deployment
 
 AEON is built to run on the operator's own machine. That is the only target that is
-exercised: five CI legs on every push, and the launcher runs on real hardware listed
+exercised: six CI legs on main, release tags, pull requests to main and weekly, and the launcher runs on real hardware listed
 (with dates, and with what has not been run) in the README's platform table.
 
 | Target | Status | Use when |
 |--------|--------|----------|
-| **Local install** (launcher or Desktop icon) | CI on every push; real-hardware runs dated in the README | The normal way to run AEON |
+| **Local install** (launcher or Desktop icon) | CI on main, release tags and pull requests; real-hardware runs dated in the README | The normal way to run AEON |
 | **Self-hosted (bare Node)** | Supported, same code path as local | One always-on box you control |
 | **Vercel** (stateless cloud mirror) | **Never deployed — unverified** | See §2 before relying on it |
 
