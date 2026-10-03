@@ -34,3 +34,10 @@
 # POSIX launchers must keep LF.
 *.sh text eol=lf
 launch.command text eol=lf
+
+# Not in the GitHub download (Download ZIP, release source archives): the AI-agent
+# briefing and the editor launch config are for developers, not customers
+# (GitHub audit #45, 2026-10-03). tests/ stays: the block builder guide and
+# vitest.config.js use tests/setup-isolation.js. .github/ stays: README and
+# TERMS_OF_USE link into it.
+/.claude/ export-ignore

@@ -681,6 +681,9 @@ WHAT'S HERE
   runtime/       Node.js for macOS (${runtimes.mac}${runtimes.macLegacy ? `; ${runtimes.macLegacy} for
                  macOS 11 to 13.4` : ''}), Windows (${runtimes.win}), Linux (${runtimes.linux}),
                  and npm.
+  THIRD_PARTY_NOTICES.txt
+                 the licenses of the other software on the drive
+                 (FFmpeg, Node.js, llama.cpp) and of any model weights.
 
 WHAT WORKS WHERE
 ---------------------------------------------------------------------
@@ -707,6 +710,25 @@ checkout as it is, add --keep-app to the builder's command.
 }
 
 // ── orchestration ────────────────────────────────────────────────────────────
+
+/**
+ * What THIRD_PARTY_NOTICES.txt describes on a carried drive: the Node versions
+ * staged, and the catalogue models and llama.cpp runtime the carried home
+ * holds (<data>/data/local-runtime, where Cookbook installs them). Nothing is
+ * written into AEON-Data: the models are named in the drive-root file.
+ */
+function carriedNoticesInput(plan, { runtimes = {}, version = process.version, skipRuntime = false } = {}) {
+  const dataRoot = driveRoots(plan.app, plan.data).data;
+  let catalog = [];
+  try { catalog = require(path.join(ROOT, 'services/local-runtime/model-catalog.json')).models || []; } catch { /* no catalogue: no models named */ }
+  return {
+    appDir: plan.app,
+    nodeVersions: skipRuntime ? [] : [version, ...(runtimes.macLegacy ? [LEGACY_MAC_NODE] : [])],
+    nodeLicenseInArchives: false,
+    models: catalog.filter((m) => m.relPathTemplate && fs.existsSync(path.join(dataRoot, m.relPathTemplate))),
+    llamaOnDrive: (() => { try { return fs.readdirSync(path.join(dataRoot, 'local-runtime', 'runtime')).some((n) => !isOsJunk(n)); } catch { return false; } })(),
+  };
+}
 
 async function buildCarried(args, { download, log = console.log } = {}) {
   const buildUsb = require('./build-usb.js');
@@ -793,9 +815,10 @@ async function buildCarried(args, { download, log = console.log } = {}) {
     : await stageRuntimes(target, { version: process.version, download, log });
   writeCarriedLaunchers(target);
   writeDriveReadme(target, { built: new Date().toISOString().slice(0, 10), runtimes });
+  buildUsb.writeNotices(target, carriedNoticesInput(plan, { runtimes, version: process.version, skipRuntime: !!args.skipRuntime }));
   const swept = (keepApp ? 0 : sweepOsJunk(plan.app)) + sweepOsJunk(plan.data) + sweepOsJunk(path.join(target, 'runtime'))
     + sweepDriveRoot(target);
-  log(`  ✓ launchers (macOS, Windows, Linux) and README_DRIVE.txt · ${swept} OS junk file(s) swept`);
+  log(`  ✓ launchers (macOS, Windows, Linux), README_DRIVE.txt and THIRD_PARTY_NOTICES.txt · ${swept} OS junk file(s) swept`);
   log(`\n  done in ${Math.round((Date.now() - t0) / 1000)}s.  Verify: node scripts/verify-usb.js --target ${target} --carry-home\n`);
   return { plan, runtimes };
 }
@@ -803,6 +826,6 @@ async function buildCarried(args, { download, log = console.log } = {}) {
 module.exports = {
   buildCarried, planCarry, carryRefusal, copyFileData, copyTreeMaterialized, sweepOsJunk, sweepDriveRoot, installFileList,
   copyHome, driveRoots, writeCarriedMarker, unparseableJson, isUniversalMachO, parseShasums, stageRuntimes,
-  writeCarriedLaunchers, writeDriveReadme, keepAppRefusal, macLauncher, linuxLauncher, windowsLauncher, APP_FOLDER, DATA_FOLDER,
+  writeCarriedLaunchers, writeDriveReadme, keepAppRefusal, carriedNoticesInput, macLauncher, linuxLauncher, windowsLauncher, APP_FOLDER, DATA_FOLDER,
   LEGACY_MAC_NODE,
 };

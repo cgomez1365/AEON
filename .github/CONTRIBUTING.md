@@ -43,13 +43,19 @@ And three rules that are reviewed, not just scanned:
 
 ## Building a block
 
-A block is a folder in `src/blocks/`. Copy `src/blocks/_template/`, rename it, and edit
-`block.manifest.json` — the manifest is the block's declaration of itself, and the kernel
-and gates check the code against it. Lint before opening a PR:
+A block is a folder in `src/blocks/`. Start one in staging, not by copying the template
+by hand: `aeon new` copies `src/blocks/_template/` to `staging/my_block` and fills in its
+id, route and label. Then edit `block.manifest.json` — the manifest is the block's
+declaration of itself, and the kernel and gates check the code against it. Lint it, and
+promote it into `src/blocks/` through the airlock (promote refuses a HIGH lint finding):
 
 ```bash
+npm run aeon -- new my_block
 npm run aeon -- lint my_block
+npm run aeon -- promote my_block
 ```
+
+The full guide is [`src/blocks/master/README.md`](../src/blocks/master/README.md).
 
 → [`docs/BLOCK_STANDARD.md`](../docs/BLOCK_STANDARD.md)
 

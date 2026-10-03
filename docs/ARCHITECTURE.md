@@ -74,8 +74,9 @@ conversational turn with memory and vault recall, policy in `src/kernel/context.
 
 ## The terminal
 
-`src/components/Terminal2.jsx` has three verbs in one input: plain text is a conversation,
-`/` runs a command, `>` is the shell sigil. Commands are declared in block manifests and
+`src/components/Terminal2.jsx` has two verbs in one input: plain text is a conversation,
+`/` runs a command. Typing `>` only explains that shell execution was removed; named OS
+actions are at `POST /api/os/action`. Commands are declared in block manifests and
 dispatched by `src/kernel/commandRegistry.cjs`; the terminal holds no dispatch logic of its
 own.
 

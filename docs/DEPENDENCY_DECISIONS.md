@@ -53,10 +53,12 @@ grpc-js, or AEON drops firebase. (The other half, vite 6.4.3, was done on
 
 **Decided:** 2026-08-04 (BO-A3d) · **Re-reviewed:** 2026-09-30 · **Review by:** 2026-10-31
 
-Dependabot has `dependabot/npm_and_yarn/vite-8.1.5` open on origin, and prior
-build orders described it as "the ready-made fix for the deferred dev-only
+Dependabot opened a vite 8 update (`dependabot/npm_and_yarn/vite-8.1.5`), and
+prior build orders described it as "the ready-made fix for the deferred dev-only
 vite/esbuild advisories". It is not ready-made. It was **tested, not guessed
-at**, and it fails.
+at**, and it fails. The pull request was closed unmerged; its branch is no longer
+on origin (checked 2026-10-03). Its successor, PR #33 (vite 8.3.2), is listed at
+the end of this file.
 
 - The bump is `^5.4.21 → ^8.2.0` — a **three-major** jump, not one.
 - Vite 8 replaces the esbuild/rollup pipeline with **rolldown**.
@@ -129,32 +131,35 @@ lockfile was written).
 
 ---
 
-## actions/setup-node v5 → v7 — **DO NOT MERGE YET**
+## actions/checkout and actions/setup-node v5 → v7 — **MERGED**
 
-**Decided:** 2026-08-04 (BO-A3d) · **Review by:** 2026-10-01
+**Decided:** 2026-08-04 (BO-A3d, "do not merge yet") · **Merged:** 2026-09-14
 
-`dependabot/github_actions/actions/setup-node-7` is open on origin. The
-workflow pins `actions/setup-node@v5` in both jobs and **CI is green**, so
-nothing is blocked.
-
-Guessing at this was declined once already and that was correct. It stays
-declined for the same reason: nobody has read *why* v7 fails, and merging a CI
-change you do not understand converts a green pipeline into an unknown one for
-no benefit. A dependency bump whose only justification is "it is newer" is not
-a justification.
-
-**Unblocked when:** someone reads the v7 release notes and the failing run's
-log, and can state what changed. Then merge on purpose.
+The 2026-08-04 entry held `actions/setup-node@v7` because nobody had read why a
+run on it failed. Both v7 bumps were merged on 2026-09-14: `c3d0992`
+(`actions/checkout` 5 → 7, PR #10) and `d2474e1` (`actions/setup-node` 5 → 7,
+PR #11). `.github/workflows/ci.yml` uses `@v7` for both in both jobs, and CI on the
+v3.2.0 release commit `cf73b00` ran 5/5 green on them (run 37102458513).
 
 ---
 
-## Also open on origin, untouched by BO-A3d
+## Dependabot branches on origin — checked 2026-10-03
 
-Listed so they are known rather than discovered later. None are on the release
-path and none are security-driven:
+`git ls-remote --heads origin` on 2026-10-03 lists three branches: `main` and
+two Dependabot branches:
 
-- `dependabot/github_actions/actions/checkout-7`
-- `dependabot/npm_and_yarn/concurrently-10.0.3`
-- `dependabot/npm_and_yarn/inquirer-14.0.2`
-- `dependabot/npm_and_yarn/minor-and-patch-52612f826a`
-- `dependabot/npm_and_yarn/typescript-7.0.2`
+- `dependabot/npm_and_yarn/minor-and-patch-c4dd0af735` — the weekly
+  minor-and-patch group, PR #32 (opened 2026-10-01).
+- `dependabot/npm_and_yarn/vite-8.3.2` — vite 5.4.21 → 8.3.2, PR #33 (opened
+  2026-10-03). Not tested here. It is the same three-major jump as the vite
+  8 entry above, so it stays held under that entry until `vite-plugin-pwa`
+  builds under vite 8.
+
+The branches this file listed on 2026-08-04 (`checkout-7`, `setup-node-7`,
+`concurrently-10.0.3`, `inquirer-14.0.2`, `typescript-7.0.2`, `vite-8.1.5` and
+an older minor-and-patch group) are gone: the two actions bumps were merged
+(above), and the others were closed or superseded by Dependabot.
+
+The majors (vite, typescript, inquirer, concurrently) stay held; vite's reason
+is above. PR #32 is not security-driven: no advisory in the gate's table is
+closed by it.

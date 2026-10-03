@@ -257,9 +257,11 @@ whether a value came from a default or a user override.
   /api/connections/sync` (force-push the local registry + vault to the
   Supabase mirror).
 - **`api/connectivity.js`** — Supabase cloud mirror (test/save/setup
-  tables/sync-now) and the Cloudflare Quick Tunnel (downloads
-  `cloudflared.exe` on first use, spawns it, parses the `*.trycloudflare
-  .com` URL from stdout). **Windows-specific** — see "Known gaps" below.
+  tables/sync-now) and the Cloudflare Quick Tunnel (on first use, downloads
+  the `cloudflared` release asset for this OS and CPU — `.exe` on Windows, a
+  `.tgz` extracted with `tar` on macOS, a raw binary on Linux — spawns it,
+  parses the `*.trycloudflare.com` URL from stdout). An unsupported
+  platform is refused by name; see "Cross-platform note" below.
 - **`api/model-scan.js`** — `POST /api/connections/detect` (paste a key,
   guess the provider from its prefix, confirm with a real list-models
   call against each candidate in order) and `GET
@@ -346,7 +348,7 @@ Spot-checked against real code as part of this audit:
   same-origin-only calls). This block makes outbound calls to
   `api.groq.com`, `generativelanguage.googleapis.com`, `api.openai.com`,
   `api.anthropic.com`, `api.x.ai`, `openrouter.ai` (provider tests +
-  model discovery), `github.com` (downloading `cloudflared.exe`), and
+  model discovery), `github.com` (downloading `cloudflared`), and
   whatever Supabase project URL the operator pastes in — all clearly
   third-party, not same-origin.
 - **`ai: true`**, **`contract.ai.role: "chat"`**, **`contract.ai.blurb`**

@@ -213,6 +213,146 @@ function seedVault(root, aeonDir) {
   return r;
 }
 
+// ── third-party notices ─────────────────────────────────────────────────────
+// A drive is a copy handed to someone, and it carries other people's software
+// that the public ZIP does not: node_modules (with ffmpeg-static's FFmpeg
+// binary, GPL-3.0-or-later), portable Node.js, the llama.cpp runtime once
+// Cookbook installs it, and model weights. Their licenses ask that a copy
+// carries the notice, and the GPL asks for a way to the source. The builder
+// wrote none of it (GitHub audit #24, 2026-10-03). THIRD_PARTY_NOTICES.txt
+// goes at the drive root; a seeded model gets <weights>.LICENSE.txt beside it.
+// A pointer, not the license text: the weights' licenses are long, some ask
+// for acceptance, and the catalogue records where each one is.
+const NOTICES_FILE = 'THIRD_PARTY_NOTICES.txt';
+const FFMPEG_SOURCE_URL = 'https://ffmpeg.org/download.html#get-sources';
+
+const readJsonOr = (file, fallback) => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; } };
+
+/** The license a catalogue model comes under — Cookbook's own answer, so the drive and the install screen agree. */
+function modelLicenseFor(entry) {
+  try { return require(path.join(ROOT, 'src/blocks/cookbook/api/index.cjs')).modelLicense(entry); }
+  catch { return { name: entry.license || 'not stated in the catalogue', url: entry.licenseUrl || null, notice: null }; }
+}
+
+function modelPage(entry) {
+  if (entry.homepage) return entry.homepage;
+  const m = /^(https:\/\/huggingface\.co\/[^/]+\/[^/]+)\//.exec(entry.url || '');
+  return m ? m[1] : null;
+}
+
+function modelLicenseText(entry) {
+  const lic = modelLicenseFor(entry);
+  const lines = [
+    `${entry.displayName || entry.id} (${entry.id}) — ${entry.filename}`,
+    '',
+    `License:      ${lic.name}`,
+    `License text: ${lic.url || entry.licenseUrl || 'not linked in the AEON catalogue'}`,
+  ];
+  if (lic.policyName && lic.policyUrl) lines.push(`${lic.policyName}: ${lic.policyUrl}`);
+  const page = modelPage(entry);
+  if (page) lines.push(`Model page:   ${page}`);
+  if (lic.notice) lines.push('', lic.notice);
+  lines.push('',
+    'This file points to the license; it is not the license text. These weights',
+    'come under that license, not under the AEON Community License.', '');
+  return lines.join('\n');
+}
+
+/**
+ * The text of THIRD_PARTY_NOTICES.txt for a drive whose app folder is appDir.
+ * Reads what is actually there: ffmpeg-static's own package.json in the app's
+ * node_modules, the pinned llama.cpp release in runtime-assets.json.
+ *
+ * @param {{ appDir: string, nodeVersions?: string[], nodeLicenseInArchives?: boolean,
+ *           models?: object[], llamaOnDrive?: boolean }} o
+ */
+function thirdPartyNotices({ appDir, nodeVersions = [], nodeLicenseInArchives = false, models = [], llamaOnDrive = false }) {
+  const out = [
+    'THIRD-PARTY SOFTWARE ON THIS DRIVE',
+    '=====================================================================',
+    'AEON itself is under the AEON Community License (AEON/LICENSE). This',
+    'drive also carries software and model weights from others, each under',
+    'its own license. AEON/THIRD_PARTY_NOTICES.md lists what ships inside the',
+    'app; this file covers what a drive adds.',
+    '',
+  ];
+
+  const ffDir = path.join(appDir, 'node_modules', 'ffmpeg-static');
+  const ff = readJsonOr(path.join(ffDir, 'package.json'), null);
+  out.push('FFMPEG', '---------------------------------------------------------------------');
+  if (ff) {
+    const tag = ff['ffmpeg-static']?.['binary-release-tag'] || null;
+    const bin = ['ffmpeg', 'ffmpeg.exe'].find((f) => fs.existsSync(path.join(ffDir, f)));
+    out.push(
+      `AEON/node_modules/ffmpeg-static/ holds ffmpeg-static ${ff.version} (license: ${ff.license}).`,
+      bin ? `Its FFmpeg binary (${bin}) is a static build from the ffmpeg-static release ${tag || '(tag not recorded)'},`
+          : `Its FFmpeg binary was not found there (its install step downloads it from the release ${tag || '(tag not recorded)'}).`,
+      bin ? 'made by the builders that ffmpeg-static/README.md names. ffmpeg.LICENSE and ffmpeg.README' : null,
+      bin ? 'beside it are that build\'s license and build record.' : null,
+      `FFmpeg's source code: ${FFMPEG_SOURCE_URL}`,
+      bin ? '  (the FFmpeg version of this build is in ffmpeg.README)' : null,
+      tag ? `The binary release: https://github.com/eugeneware/ffmpeg-static/releases/tag/${tag}` : null,
+    );
+  } else {
+    out.push('No ffmpeg-static package is in AEON/node_modules on this drive.');
+  }
+  out.push('');
+
+  out.push('NODE.JS', '---------------------------------------------------------------------');
+  if (nodeVersions.length) {
+    out.push(`runtime/ holds Node.js ${nodeVersions.join(' and ')}, under the Node.js license, which`,
+      'also carries the licenses of the libraries Node bundles. The full text:');
+    for (const v of nodeVersions) out.push(`  https://github.com/nodejs/node/blob/${v}/LICENSE`);
+    if (nodeLicenseInArchives) out.push('Each archive in runtime/node/ also contains that LICENSE file.');
+  } else {
+    out.push('No portable Node.js was staged on this drive.');
+  }
+  out.push('');
+
+  const rt = readJsonOr(path.join(appDir, 'services', 'local-runtime', 'runtime-assets.json'), {});
+  out.push('LLAMA.CPP', '---------------------------------------------------------------------',
+    llamaOnDrive
+      ? `A llama.cpp runtime installed by Cookbook is on this drive (AEON pins release ${rt.releaseTag || '?'}).`
+      : `No llama.cpp runtime is on this drive yet. Cookbook downloads release ${rt.releaseTag || '?'}`,
+    llamaOnDrive ? null : 'from GitHub when a local model is first installed.',
+    `License: ${rt.license || 'see the link'} — ${rt.licenseUrl || 'https://github.com/ggml-org/llama.cpp/blob/master/LICENSE'}`,
+    '');
+
+  out.push('MODEL WEIGHTS', '---------------------------------------------------------------------');
+  if (models.length) {
+    for (const m of models) {
+      const lic = modelLicenseFor(m);
+      out.push(`${m.filename}: ${lic.name} — ${lic.url || m.licenseUrl || 'not linked in the AEON catalogue'}`);
+      if (lic.policyName && lic.policyUrl) out.push(`  ${lic.policyName}: ${lic.policyUrl}`);
+    }
+    out.push('The weights come under these licenses, not under the AEON Community License.');
+  } else {
+    out.push('No catalogue model weights are on this drive.');
+  }
+  out.push('');
+  return out.filter((l) => l !== null).join('\n');
+}
+
+/**
+ * Write THIRD_PARTY_NOTICES.txt at the drive root, and <filename>.LICENSE.txt
+ * beside each model in modelsDir. Returns the paths written.
+ */
+function writeNotices(target, { modelsDir = null, ...o }) {
+  const written = [];
+  const file = path.join(target, NOTICES_FILE);
+  fs.writeFileSync(file, thirdPartyNotices(o));
+  written.push(file);
+  if (modelsDir) {
+    for (const m of o.models || []) {
+      if (!fs.existsSync(path.join(modelsDir, m.filename))) continue;
+      const lf = path.join(modelsDir, `${m.filename}.LICENSE.txt`);
+      fs.writeFileSync(lf, modelLicenseText(m));
+      written.push(lf);
+    }
+  }
+  return written;
+}
+
 // ── main ────────────────────────────────────────────────────────────────────
 async function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -391,6 +531,7 @@ ${C.bold('aeon build-usb')} — assemble a portable AEON drive
   // ── 5. model ──
   step(5, 'Model weights');
   const modelsDir = path.join(TARGET, 'models');
+  let seededModel = null; // the catalogue entry, once its weights are on the drive and verified
   if (!args.dryRun) fs.mkdirSync(modelsDir, { recursive: true });
   if (!args.model) {
     log(C.dim('  none requested — the launcher pulls one on first run if online,'));
@@ -422,6 +563,7 @@ ${C.bold('aeon build-usb')} — assemble a portable AEON drive
           log(C.err(`  ✗ SHA-256 mismatch — deleted. expected ${entry.sha256}, got ${actual}`));
         } else {
           log(C.ok(`  ✓ ${entry.id} (${human(dirSize(modelsDir))}) hash verified`));
+          seededModel = entry;
         }
       } catch (e) {
         log(C.warn(`  ! fetch failed: ${e.message}`));
@@ -433,12 +575,19 @@ ${C.bold('aeon build-usb')} — assemble a portable AEON drive
   // ── 6. env + launchers + readme ──
   step(6, 'Launchers and environment');
   if (args.dryRun) {
-    log(C.dim('  would write .env.usb, LAUNCH.bat, launch.command, launch.sh, README_USB.txt'));
+    log(C.dim(`  would write .env.usb, LAUNCH.bat, launch.command, launch.sh, README_USB.txt, ${NOTICES_FILE}`));
   } else {
     writeEnvUsb(AEON_DIR, args);
     writeLaunchers(TARGET, NODE_VERSION);
     writeReadme(TARGET, args, NODE_VERSION);
-    log(C.ok('  ✓ .env.usb, LAUNCH.bat, launch.command, launch.sh, README_USB.txt'));
+    writeNotices(TARGET, {
+      appDir: AEON_DIR,
+      nodeVersions: args.skipRuntime ? [] : [NODE_VERSION],
+      nodeLicenseInArchives: !args.skipRuntime,
+      models: seededModel ? [seededModel] : [],
+      modelsDir,
+    });
+    log(C.ok(`  ✓ .env.usb, LAUNCH.bat, launch.command, launch.sh, README_USB.txt, ${NOTICES_FILE}`));
   }
 
   // macOS writes an AppleDouble "._" sidecar for every copied file on an
@@ -668,6 +817,8 @@ WHAT IS ON THIS DRIVE
   AEON/           the application, with node_modules and a built dist/
   runtime/node/   portable Node ${nodeVersion} — nothing is installed
   models/         model weights${args.model ? ` (${args.model} included)` : ' (empty — see below)'}
+  THIRD_PARTY_NOTICES.txt   the licenses of the other software on the drive
+                  (FFmpeg, Node.js, llama.cpp) and of any model weights
 
 
 NO INTERNET REQUIRED
@@ -724,6 +875,7 @@ AEON · Broken Gear Industries · AEON Community License — see AEON/LICENSE
 // require returned an empty object and --carry-home crashed on EXCLUDE.
 module.exports = {
   main, writeEnvUsb, writeLaunchers, writeReadme, seedVault,
+  thirdPartyNotices, writeNotices, modelLicenseText, NOTICES_FILE, FFMPEG_SOURCE_URL,
   shouldExclude, EXCLUDE, copyTree, dirSize, human,
   NODE_VERSION, NODE_ASSET,
 };
