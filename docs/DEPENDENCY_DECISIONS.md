@@ -70,10 +70,10 @@ at**, and it fails.
 - `@vitejs/plugin-react-swc` additionally warns that its `esbuild` option is
   deprecated under vite 8 and wants `oxc`.
 
-**Why deferring is safe.** The advisories this upgrade would close are
-**dev-server only** — they do not affect the built artifact an operator runs.
-`npm run scan:audit` carries the high one as a reviewed acceptance (review by
-2026-10-31, table above), so nothing is silently ignored.
+**Why deferring is safe.** The vite advisories that once made this upgrade
+urgent were closed by vite 6.4.3 (2026-10-03, below). Deferring vite 8 leaves
+no vite advisory open, and `npm run scan:audit` holds no vite acceptance: if
+one is reported again, the gate fails.
 
 **Unblocked when:** `vite-plugin-pwa` ships a release that genuinely builds
 under rolldown. Re-test with `npm run build`; if it produces `dist/sw.js`, take
@@ -89,10 +89,43 @@ wrote `dist/sw.js`, and `npm audit` then reported no vite or esbuild advisory.
 **Taken 2026-10-03** (audit #12): `vite ^6.4.3`. Measured on that tree: the
 full suite passed, `npm run build` passed and wrote `dist/sw.js`, the dev
 server started and served the app on 127.0.0.1, and `npm audit` reported no
-vite or esbuild advisory. Vitest still installs its own vite 8 under
-`node_modules/vitest/`, used only to run the tests; it has no advisory
-reported. **Not measured:** AEON booting through `launch.js` on the result.
-Vite 8 stays deferred for the reasons above.
+vite or esbuild advisory. **Not measured:** AEON booting through `launch.js`
+on the result. Vite 8 stays deferred for the reasons above.
+
+---
+
+## package-lock.json — written with npm 10
+
+**Decided:** 2026-10-03 (audit #6)
+
+Node 22.13 ships npm 10; Node 24 and 26 ship npm 11. `launch.js` runs
+`npm install` on a first launch, so if a user's npm would write a different
+lockfile, it rewrites the tracked file in their checkout and a later
+`git pull` that touches it stops. `npm ci` on npm 10 also refused the v3.2.0
+lockfile npm 11 wrote (27 `Missing:` lines).
+
+The cause was a nested vite 8 that vitest had resolved for itself when the root
+vite was 5.4.21; npm 10 and npm 11 disagree about its optional esbuild peer.
+vitest 4.1.11 accepts vite 6, so it now uses the root vite 6.4.3 and the nested
+copy is gone. The lockfile was then written with npm 10.9.2. Measured on
+macOS: `npm ci --dry-run` passes, and `npm install --package-lock-only` leaves the
+lockfile byte-identical, on npm 10.9.2 and on npm 11.19.0. CI checks the second
+on every Linux leg (npm 10 on the floor leg, npm 11 on Node 24 and 26).
+
+To change a dependency: change it with any npm, then rewrite the lockfile with
+
+    npx -y npm@10.9.2 install --package-lock-only
+
+**Cost, accepted:** npm 10 does not write the `libc` field npm 11 had put on
+Linux native packages, and npm uses that field to skip musl builds on a glibc
+Linux. Measured by simulation on macOS (npm 11.19.0,
+`npm ci --ignore-scripts --os=linux --cpu=x64 --libc=glibc`): this lockfile
+installs 4 musl packages the v3.2.0 lockfile did not — `@swc/core`,
+`@rollup/rollup`, `@napi-rs/canvas` and the `@napi-rs/canvas` copy under
+`pdfjs-dist` — 95,736 KB on disk (`du -sk`) on Linux x64. **Not measured** on
+a real Linux machine. Writing the field back with npm 11 would bring back the
+rewrite for Node 22 users: npm 10 removes it (it removed all 39 when this
+lockfile was written).
 
 ---
 
