@@ -27,6 +27,8 @@
 
    The first launch installs AEON's dependencies (about 1 GB on disk) and builds its interface, so it takes a few minutes and needs the internet; later launches skip both.
 
+**Stuck? Install help is free** — see [Need help?](#need-help).
+
 **After the first launch, AEON puts its own icon on your Desktop** (`AEON.app` on macOS, an `AEON` shortcut on Windows). Open AEON from there from then on — every open also picks up any new files in your Vault. Don't want the icon? Delete it and it stays gone (`node launch.js --desktop-icon` brings it back), or set `AEON_NO_DESKTOP_ICON=1`. USB/portable installs never create one.
 
 **Carry it with you:** `node scripts/build-usb.js --target <drive> --carry-home` puts this AEON — app, Vault, settings and key vault — on an exFAT drive with launchers for macOS, Windows and Linux; your data stays on the drive. It carries your keys, so treat the drive like a key, and eject it before unplugging. **Only the macOS launcher has been run** (on one iMac, 2026-09-22); the drive's Windows and Linux launchers have not yet been run on real hardware.
@@ -103,6 +105,11 @@ then launch as usual. `git pull` leaves your installed packs alone (git does not
 - **Local (no keys)** — open the **Cookbook** block, install the local runtime, download a model with one click. Models run inside AEON on a llama.cpp worker that the Cookbook downloads (a pinned, hash-verified release) into `~/AEON/data` — it is not bundled with AEON, nothing is installed system-wide, nothing lands in the AEON folder, and no internet is needed after the download. Local stays private only while Settings → Models → **Local only** is on. With it off (the default) and a cloud key added, a local model that cannot answer hands the prompt to that cloud provider, and the chat shows a one-line notice when it does.
 
 ---
+
+## Need help?
+
+- **Install help is free.** Open an [Install help request](https://github.com/cgomez1365/AEON/issues/new?template=install-help.yml): say what computer you have and where it stopped, and we answer there. Never paste an API key or your `.env`.
+- **Paid services:** we can set AEON up for you — on your computer or on a drive you carry — and build blocks for your own work. Tick the box on the same form and we will get in touch.
 
 ## Why this is not a weekend AI project
 

@@ -1,0 +1,53 @@
+name: Install help (free)
+description: Stuck installing or starting AEON? Tell us where — install help is free.
+title: "[Install help] "
+labels: ["install-help"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Install help is free. Tell us what you did and what you saw; we answer here.
+        **Never paste an API key, a password or your `.env` file.** If a log shows one, cut it out first.
+  - type: dropdown
+    id: os
+    attributes:
+      label: Your computer
+      options:
+        - macOS
+        - Windows
+        - Linux
+        - AEON on a USB drive
+    validations:
+      required: true
+  - type: dropdown
+    id: step
+    attributes:
+      label: Where did it stop?
+      options:
+        - Installing Node.js
+        - Downloading or unzipping AEON
+        - First launch (the launcher window)
+        - AEON opened, but something does not work
+        - Adding an AI key or a local model
+        - Something else
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you saw instead.
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Launcher window text (optional)
+      description: The last lines of the launcher window, if it showed an error. Remove any keys first.
+      render: shell
+  - type: checkboxes
+    id: services
+    attributes:
+      label: Paid help (optional)
+      options:
+        - label: I would like AEON set up for me, or a block built for my work — tell me about the paid service.

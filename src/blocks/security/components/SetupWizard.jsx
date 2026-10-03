@@ -19,6 +19,7 @@
  * displays it again after this screen.
  */
 import React, { useState } from 'react';
+import { HELP_URL } from '../../../utils/help.js';
 import { useNavigate } from 'react-router-dom';
 import ModalPortal from '../../../components/ModalPortal.jsx';
 import { resetSupabase } from '../../../kernel/supabase';
@@ -188,6 +189,11 @@ export default function SetupWizard({ onComplete, onSkip }) {
                   <strong>AI answers.</strong> Add a key in Settings → Keys (Gemini and Groq offer free ones),
                   or install a local model in the Cookbook block. A cloud AI provider receives what you send it;
                   a local model runs on this computer.
+                </div>
+                <div>
+                  <strong>Need a hand?</strong> Install help is free —{' '}
+                  <a href={HELP_URL} target="_blank" rel="noopener noreferrer" style={{ color: 'inherit', textDecoration: 'underline' }}>ask us</a>.
+                  We can also set AEON up for you or build a block for your work, as a paid service.
                 </div>
                 <div style={S.warn}>
                   <strong>No password yet.</strong> Until you create an account on the Security page, anyone

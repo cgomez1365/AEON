@@ -17,7 +17,9 @@ directory is yours.
 | What | Where | Written by |
 |---|---|---|
 | Documents | anywhere in the Vault (for example `<Vault>/Reading_Library/Uploads/`) | uploads, `/upload`, the Files block |
-| Memories | `<Vault>/Agents/Aeon/memory/memories.json` + one readable `.md` per memory | Memory Core (`src/blocks/memory_core/api/memory.cjs`), Writer saves |
+| Memories (shared — every agent reads them) | `<Vault>/Agents/Aeon/memory/memories.json` + one readable `.md` per memory | Memory Core (`src/blocks/memory_core/api/memory.cjs`), Writer saves |
+| An agent and its own memories | `<Vault>/Agents/<Folder>/agent.json` and `<Vault>/Agents/<Folder>/memory/` (same shape as the shared store) | Memory Core (`src/kernel/agents.cjs` owns the layout) |
+| An agent's mission log | `<Vault>/Agents/<Folder>/missions/log.json` — the last 50 things it was asked, never its answers | the streaming chat |
 | Saved conversations | `<Vault>/Agents/Aeon/chat_sessions/` | the terminal and chat |
 | Block memory | `<Vault>/blocks/<id>/` | blocks, through their declared storage contract |
 
