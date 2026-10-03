@@ -318,6 +318,20 @@ function openInBrowser(to) {
   try { execSync(cmd, { stdio: 'ignore', shell: true }); return true; } catch { return false; }
 }
 
+// Where to get a Node that runs here, for the "too old" stop below. Node 24's
+// macOS builds need macOS 13.5, so on macOS 11–13.4 the current LTS download
+// would not start; name Node 22 LTS there, as launch.command does.
+function nodeDownloadAdvice(platform, macosVersion) {
+  if (platform === 'darwin' && macosVersion) {
+    const [major, minor] = String(macosVersion).split('.').map(n => parseInt(n, 10) || 0);
+    if (major > 0 && (major < 13 || (major === 13 && minor < 5))) {
+      return `This Mac runs macOS ${macosVersion}, and Node.js 24 needs macOS 13.5 or newer. ` +
+        'Install Node.js 22 LTS from https://nodejs.org/en/download and run LAUNCH again.';
+    }
+  }
+  return 'Download the current LTS from https://nodejs.org and run LAUNCH again.';
+}
+
 // Required (tests) rather than run: export the helpers, run nothing — the rest
 // of this file is the interactive launcher and ends by booting the server.
 if (require.main !== module) {
@@ -326,6 +340,7 @@ if (require.main !== module) {
     INSTALL_MARKER, dependenciesReady, markDependenciesInstalled,
     choosePort, isAeonPing, probeAeon, runningAeon, waitForAeon,
     envValue, vaultKeyPlan, recoverVault, createKeyslots, recoverOnly,
+    nodeDownloadAdvice,
   };
   return;
 }
@@ -373,7 +388,7 @@ const nodeVer = process.versions.node;
 const [nodeMajor, nodeMinor] = nodeVer.split('.').map(n => parseInt(n, 10));
 if (nodeMajor < NODE_MIN_MAJOR || (nodeMajor === NODE_MIN_MAJOR && nodeMinor < NODE_MIN_MINOR)) {
   fail(`Node.js ${nodeVer} is too old — AEON needs ${NODE_MIN_MAJOR}.${NODE_MIN_MINOR} or newer.`);
-  fail('Download the current LTS from https://nodejs.org and run LAUNCH again.');
+  fail(nodeDownloadAdvice(os.platform(), os.platform() === 'darwin' ? sh('sw_vers -productVersion') : null));
   process.exit(1);
 }
 ok(`Node.js ${nodeVer} (${os.platform()} ${os.arch()})`);

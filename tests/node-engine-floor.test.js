@@ -12,6 +12,7 @@ import { describe, expect, it } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { createRequire } from 'module';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
@@ -62,5 +63,32 @@ describe('Node version floor', () => {
       ours,
       `${culprit} requires Node >=${highest}, launcher allows ${ours}`,
     ).toBeGreaterThanOrEqual(highest);
+  });
+});
+
+// GitHub audit 2026-10-03 #13: the "too old" stop sent every user to the
+// current LTS download, which on macOS 11–13.4 installs a Node 24 that cannot
+// start there (its macOS builds need 13.5). launch.command already used Node 22
+// on those Macs; the message now says the same.
+describe('the "Node too old" stop names a Node this computer can run', () => {
+  const { nodeDownloadAdvice } = createRequire(import.meta.url)(path.join(ROOT, 'launch.js'));
+
+  it.each(['11.7.10', '12.7.6', '13.0', '13.4.1'])('macOS %s is told to install Node 22 LTS', (v) => {
+    const msg = nodeDownloadAdvice('darwin', v);
+    expect(msg).toContain(`macOS ${v}`);
+    expect(msg).toMatch(/Node\.js 22 LTS/);
+    expect(msg).not.toMatch(/current LTS/);
+  });
+
+  it.each([
+    ['darwin', '13.5'], ['darwin', '14.6.1'], ['darwin', '26.0'],
+    ['darwin', null], ['win32', null], ['linux', null],
+  ])('%s %s is sent to the current LTS', (platform, v) => {
+    expect(nodeDownloadAdvice(platform, v)).toBe('Download the current LTS from https://nodejs.org and run LAUNCH again.');
+  });
+
+  it('the stop asks sw_vers on macOS and prints that advice', () => {
+    const stop = launchSrc.slice(launchSrc.indexOf('const NODE_MIN_MAJOR'), launchSrc.indexOf("ok(`Node.js ${nodeVer}"));
+    expect(stop).toMatch(/fail\(nodeDownloadAdvice\(os\.platform\(\), os\.platform\(\) === 'darwin' \? sh\('sw_vers -productVersion'\) : null\)\);/);
   });
 });
