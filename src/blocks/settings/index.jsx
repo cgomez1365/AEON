@@ -52,7 +52,7 @@ function deriveRoles(settingsModels, blockRoles = {}) {
       : '';
     return {
       key,
-      label: ROLE_DEFAULTS[key]?.label || fieldLabel(key),
+      label: ROLE_DEFAULTS[key]?.label || (byBlocks && from.length === 1 ? from[0].label : fieldLabel(key)),
       desc: ROLE_DEFAULTS[key]?.desc || byBlocks,
       icon: ROLE_DEFAULTS[key]?.icon || '⚙️',
     };
