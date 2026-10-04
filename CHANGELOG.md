@@ -12,6 +12,21 @@ tagged; until then its heading says so.
      is added here before tagging, and the heading's "not tagged yet" is replaced by
      the date. -->
 
+## 3.3.3 — 2026-10-04
+
+<!-- Range: v3.3.0 (f353caa) to f3b31f4, two commits, plus "Release 3.3.3". The number
+     skips 3.3.1 and 3.3.2 by the owner's choice; no release was published under them. -->
+
+A contact address and the README's banners. Nothing in how AEON runs changes.
+
+- **A private way to ask for help.** AEON now has its own address,
+  **aeon@brokengearindustries.com**. First-run setup and the README's "Need help?" offer it
+  beside the public install-help form, and SECURITY.md and the code of conduct name it as
+  the fallback to GitHub's private report. It is one constant, `HELP_EMAIL` in
+  `src/utils/help.js`, and a test checks every place names the same address (f3b31f4).
+- **README:** the animated banner is back on top, with the working-terminal picture
+  below the intro (d12d0cb).
+
 ## 3.3.0 — 2026-10-04
 
 <!-- 3.3.0 was built in local branches and lands as one commit, 25a66cd, plus the
