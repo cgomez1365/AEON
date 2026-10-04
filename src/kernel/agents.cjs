@@ -245,6 +245,13 @@ function list(vaultRoot, { withStats = true } = {}) {
     catch (e) { entry = unreadable(folder, false, e); }
     others.push(withStats ? { ...entry, ...stats(dir) } : entry);
   }
+  // A folder copied by hand carries another agent's id in its agent.json. An
+  // id is the folder's own name unless no other folder has that name: the
+  // copy answers to its folder, the original keeps its id.
+  const folders = new Set(others.map((a) => a.folder.toLowerCase()));
+  for (const a of others) {
+    if (a.id !== a.folder.toLowerCase() && (folders.has(a.id) || a.id === SELF_ID)) a.id = a.folder.toLowerCase();
+  }
   others.sort((a, b) => String(b.lastActiveAt || '').localeCompare(String(a.lastActiveAt || '')) || a.name.localeCompare(b.name));
   return out.concat(others);
 }
@@ -265,8 +272,17 @@ function get(vaultRoot, ref, agents = null) {
   // agent, never another one that took its old name. Callers treat "no
   // agent" as your own AEON, so a clash is resolved, never left as null.
   const byId = all.filter((a) => a.id === text || a.folder.toLowerCase() === text);
-  if (byId.length === 1) return byId[0];
   const byName = all.filter((a) => a.name.toLowerCase() === text);
+  if (byId.length === 1) {
+    // A clash made before 3.3.0 or by hand: one agent's id is another's
+    // name. When exactly one of the two is Local only it wins, so a word
+    // that may mean a private agent never reaches a cloud one.
+    const other = byName.length === 1 && byName[0] !== byId[0] ? byName[0] : null;
+    if (other && (other.privacy === 'local-only') !== (byId[0].privacy === 'local-only')) {
+      return other.privacy === 'local-only' ? other : byId[0];
+    }
+    return byId[0];
+  }
   if (byName.length === 1 && !byId.length) return byName[0];
   if (byId.length || byName.length) return null; // two folders differing only in case, or a duplicated name
   const byWord = all.filter((a) => a.name.toLowerCase().split(' ').some((w) => w === text || w.startsWith(text)));
@@ -277,6 +293,27 @@ function get(vaultRoot, ref, agents = null) {
 // or by its id or folder (which keep the name an agent was created with).
 function takenBy(agent, lowerName) {
   return agent.name.toLowerCase() === lowerName || agent.id === lowerName || agent.folder.toLowerCase() === lowerName;
+}
+
+/**
+ * The agent a turn or a saved record belongs to, failing closed. A stored
+ * reference (the terminal's current agent, a saved chat's or a mission's
+ * `agent`, ?agent=) is an id, so it is matched as an id or folder only —
+ * never as a name, which another agent may have taken since. No reference:
+ * the operator's own AEON. A reference that no longer names exactly one
+ * agent (removed, or hand-copied folders) is answered by the operator's own
+ * AEON as Local only (`unresolved`), so nothing tied to that agent reaches a
+ * cloud model. Words a person types go through get() instead.
+ */
+function ownerOf(vaultRoot, ref, agents = null) {
+  const all = agents || list(vaultRoot, { withStats: false });
+  const self = all.find((a) => a.self) || readSelf(vaultRoot);
+  const text = String(ref ?? '').trim();
+  if (!text) return self;
+  const t = text.toLowerCase();
+  const byId = all.filter((a) => a.id === t || a.folder.toLowerCase() === t);
+  if (byId.length === 1) return byId[0];
+  return { ...self, privacy: 'local-only', unresolved: text };
 }
 
 function requireAgent(vaultRoot, ref) {
@@ -298,6 +335,12 @@ function create(vaultRoot, input = {}) {
   }
   let folder = folderFor(fields.name);
   if (!folder || RESERVED.has(folder.toLowerCase())) folder = `Agent_${crypto.randomBytes(2).toString('hex')}`;
+  // Never reuse a removed agent's id: the feed's turns and saved chats tagged
+  // with it stay that agent's, and private if it was Local only. remove()
+  // names the bin entry "<Folder>-<time>".
+  let removed = [];
+  try { removed = fs.readdirSync(path.join(agentsDir(vaultRoot), '.removed')).map((n) => n.toLowerCase()); } catch {}
+  if (removed.some((n) => n.startsWith(`${folder.toLowerCase()}-`))) folder = `${folder}_${crypto.randomBytes(2).toString('hex')}`;
   const dir = path.join(agentsDir(vaultRoot), folder);
   if (fs.existsSync(dir)) {
     throw new AgentError(`A folder Agents/${folder} already exists in the Vault. Pick another name, or move that folder first.`, 409);
@@ -378,7 +421,10 @@ function callOptions(agent) {
   }
   if (agent.privacy === 'local-only') {
     out.localOnly = true;
-    if (agent.privacyUnknown) {
+    if (agent.unresolved) {
+      out.localOnlyReason = `No agent called "${agent.unresolved}" any more, so ${agent.name} answers on this computer only: nothing from that agent's chat is sent to a cloud model. `;
+      out.localOnlyRemedy = 'Pick an agent with /agent, or /agent off to talk to your own AEON as usual.';
+    } else if (agent.privacyUnknown) {
       const where = `Agents/${agent.self ? SELF_FOLDER : agent.folder}/agent.json`;
       out.localOnlyReason = `${where} could not be read, so ${agent.name} is treated as Local only and nothing it is asked is sent to a cloud model. `;
       out.localOnlyRemedy = `Fix or restore ${where} (Memory Core shows the error), or give ${agent.name} a local model.`;
@@ -520,7 +566,7 @@ function shareableTurns(messages, agent, agents) {
 }
 
 module.exports = {
-  list, get, create, update, remove, memoryDir, sharedMemoryDir, memoryLink, memoryLinkError, detectWake, callOptions, identityFor, recordMission,
+  list, get, ownerOf, create, update, remove, memoryDir, sharedMemoryDir, memoryLink, memoryLinkError, detectWake, callOptions, identityFor, recordMission,
   shareableTurns,
   folderFor, cleanName, AgentError, SELF_ID, SELF_FOLDER, PRIVACY,
 };

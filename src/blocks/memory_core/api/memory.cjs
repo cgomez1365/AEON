@@ -570,7 +570,7 @@ module.exports = function createMemoryRouter(deps) {
         // a Local only agent's turns in a chat that switched agents.
         const withheldWith = (rec) => {
           if (callerLocal) return null;
-          const owner = agentsKernel.get(VAULT, (rec && !Array.isArray(rec) && rec.agent) || agentsKernel.SELF_ID, allAgents());
+          const owner = agentsKernel.ownerOf(VAULT, (rec && !Array.isArray(rec) && rec.agent) || '', allAgents());
           return owner && owner.privacy === 'local-only' ? owner : null;
         };
         let best = null;

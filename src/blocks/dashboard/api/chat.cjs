@@ -37,7 +37,7 @@ module.exports = function createChatRouter(deps) {
   // that may be a cloud one, and do not enter the indexed record.
   const listAgents = () => { try { return agentsKernel.list(VAULT, { withStats: false }); } catch { return []; } };
   const localOnlyAgentOf = (record, agents = listAgents()) => {
-    const a = agentsKernel.get(VAULT, record?.agent || agentsKernel.SELF_ID, agents);
+    const a = agentsKernel.ownerOf(VAULT, record?.agent, agents);
     return a && a.privacy === 'local-only' ? a : null;
   };
   // The turns of a saved chat that may leave it for a call that is not a

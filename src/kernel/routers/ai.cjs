@@ -39,7 +39,7 @@ module.exports = function createAIRouter(deps) {
     let agents = [];
     try { agents = agentsKernel.list(VAULT_ROOT, { withStats: false }); } catch {}
     const woke = agentsKernel.detectWake(message, agents);
-    const agent = woke.agent || (agentRef ? agentsKernel.get(VAULT_ROOT, agentRef, agents) : null) || agents.find((a) => a.self) || null;
+    const agent = woke.agent || agentsKernel.ownerOf(VAULT_ROOT, agentRef, agents);
     if (typeof kernelLLM !== 'function') {
       return res.status(503).json({
         error: 'No model is available to answer.',
@@ -165,7 +165,14 @@ module.exports = function createAIRouter(deps) {
     // own AEON — sends none, and neither does the question that rides with it.
     let agents = [];
     try { agents = agentsKernel.list(VAULT_ROOT, { withStats: false }); } catch {}
-    const agent = (agentRef ? agentsKernel.get(VAULT_ROOT, agentRef, agents) : null) || agents.find((a) => a.self) || null;
+    const agent = agentsKernel.ownerOf(VAULT_ROOT, agentRef, agents);
+    if (agent && agent.unresolved) {
+      return res.status(409).json({
+        error: `No agent called "${agent.unresolved}" any more, so the image was not sent.`,
+        remedy: 'Pick an agent with /agent, or /agent off to talk to your own AEON, then send it again.',
+        localOnly: true,
+      });
+    }
     if (agent && agent.privacy === 'local-only') {
       return res.status(409).json({
         error: `${agent.name} is set to Local only, and images are read only by cloud models here, so the image was not sent.`,

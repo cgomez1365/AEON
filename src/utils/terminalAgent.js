@@ -57,7 +57,13 @@ export function resolveAgentArg(arg, agents = []) {
   // The kernel's order (agents.cjs get): an id or folder first, then a name.
   const byId = agents.filter((a) => a && (a.id === text || String(a.folder || '').toLowerCase() === text));
   const byName = agents.filter((a) => a && String(a.name).toLowerCase() === text);
-  const one = byId.length === 1 ? byId[0] : (byName.length === 1 && !byId.length ? byName[0] : null);
+  const local = (a) => a.privacy === 'local-only';
+  let one = byId.length === 1 ? byId[0] : (byName.length === 1 && !byId.length ? byName[0] : null);
+  // One agent's id is another's name (a clash made before 3.3.0 or by hand):
+  // the Local only one when exactly one is, as the kernel does; else ask.
+  if (one && byId.length === 1 && byName.length === 1 && byName[0] !== byId[0]) {
+    one = local(byId[0]) !== local(byName[0]) ? (local(byName[0]) ? byName[0] : byId[0]) : null;
+  }
   if (one) return one.self ? { back: true, agent: one } : { agent: one };
   if (byId.length || byName.length) return { error: `"${arg}" could be ${[...byId, ...byName].map((a) => a.name).join(' or ')} — say which.` };
   const byWord = agents.filter((a) => a && String(a.name).toLowerCase().split(' ').some((w) => w === text || w.startsWith(text)));

@@ -211,7 +211,7 @@ module.exports = function ({ blockReadiness = {}, isVercel = false, writeOSAudit
     try {
       const agentsKernel = require('./agents.cjs');
       const all = agentsKernel.list(vaultRoot, { withStats: false });
-      const a = (ref ? agentsKernel.get(vaultRoot, ref, all) : null) || all.find((x) => x.self) || null;
+      const a = agentsKernel.ownerOf(vaultRoot, ref, all);
       return a && a.privacy === 'local-only' ? a : null;
     } catch { return null; }
   };

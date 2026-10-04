@@ -148,15 +148,15 @@ module.exports = function ({ kernelLLM, loadSettings: loadSettingsDep, VAULT_ROO
 
     // The agent this turn belongs to. A wake that names an agent ("scout
     // come online") hands the turn to it, and the terminal follows (meta.agent).
-    // An agent the terminal remembers but the Vault no longer has falls back
-    // to the operator's own AEON, and says so.
+    // An agent the terminal remembers but the Vault no longer has (removed,
+    // or two agents answer to it) is answered by the operator's own AEON on
+    // local models only (agents.ownerOf), and the terminal says so.
     let agents = [];
     try { agents = agentsKernel.list(VAULT_ROOT, { withStats: false }); } catch {}
     const woke = agentsKernel.detectWake(message, agents);
-    const asked = agentRef ? agentsKernel.get(VAULT_ROOT, agentRef, agents) : null;
-    const agent = woke.agent || asked || agents.find((a) => a.self) || null;
-    const agentNotice = agentRef && !asked && !woke.agent
-      ? `No agent called "${agentRef}" any more — ${agent ? agent.name : 'AEON'} answered.` : null;
+    const agent = woke.agent || agentsKernel.ownerOf(VAULT_ROOT, agentRef, agents);
+    const agentNotice = !woke.agent && agent && agent.unresolved
+      ? `No agent called "${agentRef}" any more — ${agent.name} answered, on this computer only (nothing from that agent's chat goes to a cloud model). Pick an agent with /agent.` : null;
     const callOpts = agentsKernel.callOptions(agent);
 
     const streamId = String(clientStreamId || `s_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
