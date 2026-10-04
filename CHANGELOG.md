@@ -12,7 +12,7 @@ tagged; until then its heading says so.
      is added here before tagging, and the heading's "not tagged yet" is replaced by
      the date. -->
 
-## 3.3.0 — not tagged yet
+## 3.3.0 — 2026-10-04
 
 <!-- 3.3.0 was built in local branches and lands as one commit, 25a66cd, plus the
      commit that points these lines at it and the review fixes on top of it (same
@@ -141,7 +141,8 @@ data in `~/AEON` is untouched; upgrade as for 3.2.0.
   and Google's sign-in avatar host (`img-src`).
   (25a66cd)
 - **Errors a model reads name a Vault path, never this computer's paths** (they carry
-  your user name), `file://` addresses and quoted paths with spaces included. (25a66cd, 4aafe70)
+  your user name), `file://` addresses and quoted paths with spaces included, whichever
+  slash Windows uses. (25a66cd, 4aafe70, 5098239)
 - Scratchpads and handoffs are the model's own words, so they are not indexed into
   the Second Brain; artifacts are documents and are indexed. Scratchpads and handoffs
   are shown to the agent as its notes, not as instructions. (25a66cd)

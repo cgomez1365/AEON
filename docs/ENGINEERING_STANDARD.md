@@ -191,7 +191,23 @@ in the commit that replaces the CHANGELOG's "not tagged yet" with the date
 tag while the heading still says "not tagged yet"). Until then the reading below is
 the latest one recorded, of the release line before it.
 
-**Current reading — v3.2.0, CI run 37102458513 on `cf73b00` ("Release 3.2.0"), started
+**Current reading — v3.3.0, CI run 37213367807 on `5098239` ("3.3.0 CI: Windows Vault
+paths in errors, a depth cap on judged paths"), the last code commit before "Release
+3.3.0", which changes only this reading and the CHANGELOG; started 2026-10-04 15:32 UTC
+(08:32 US Pacific time), all six jobs green:** 350 test files and 3,628 tests on every
+build leg, 0 failures. Skips differ by platform:
+
+| Leg | Passed | Skipped | What the skips are |
+|---|---|---|---|
+| Ubuntu, Node 24 | 3,623 | 5 | tests that need macOS or Windows |
+| Ubuntu, Node 26 | 3,623 | 5 | the same five |
+| Ubuntu, Node 22.13 floor | 3,623 | 5 | the same five |
+| macOS, Node 24 | 3,627 | 1 | the real-PowerShell Desktop shortcut |
+| Windows, Node 24 | 3,535 | 93 | tests marked POSIX-only or macOS-only, 4 whole files among them |
+
+The security job (dependency audit gate) passed, and so did CodeQL. Taken from the run's own logs.
+
+**Previous reading — v3.2.0, CI run 37102458513 on `cf73b00` ("Release 3.2.0"), started
 2026-10-03 06:15 UTC (23:15 on 2026-10-02 US Pacific time), all five jobs green:** 313
 test files and 3,235 tests on every build leg, 0 failures. Skips differ by platform:
 
