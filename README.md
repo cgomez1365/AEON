@@ -1,13 +1,20 @@
 <p align="center">
   <picture>
-    <source media="(prefers-reduced-motion: reduce)" srcset=".github/assets/aeon-hero.png">
-    <img src=".github/assets/aeon-hero.webp" alt="AEON — Modular. Local. Yours. In AEON's terminal an agent wakes by name and answers from its memory, and when one AI provider is rate-limited a quiet notice hands the chat to another." width="100%">
+    <source media="(prefers-reduced-motion: reduce)" srcset=".github/assets/aeon-banner.png">
+    <img src=".github/assets/aeon-banner.webp" alt="AEON — Modular. Local. Yours. A local-first AI workspace." width="100%">
   </picture>
 </p>
 
 # AEON
 
 **An AI workspace that runs on your own computer.** Give it your documents and ask about them — it answers and names the files it used, or says nothing matched. Give agents a name and a memory of their own and call them when you need them, and add blocks for the work your business does. Use a free cloud AI key or a local model; your keys and documents stay on your computer, apart from what goes to a cloud AI provider you added a key for or a cloud you connect yourself ([what leaves, and when](#privacy-in-short)).
+
+<p align="center">
+  <picture>
+    <source media="(prefers-reduced-motion: reduce)" srcset=".github/assets/aeon-hero.png">
+    <img src=".github/assets/aeon-hero.webp" alt="AEON — Modular. Local. Yours. In AEON's terminal an agent wakes by name and answers from its memory, and when one AI provider is rate-limited a quiet notice hands the chat to another." width="100%">
+  </picture>
+</p>
 
 <p align="center">
   <img src=".github/assets/aeon-dashboard.png" alt="AEON's Dashboard on a fresh v3.2.0 install: the 17 built-in blocks on the left, the terminal on the right" width="100%">
