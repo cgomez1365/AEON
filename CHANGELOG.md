@@ -17,7 +17,8 @@ tagged; until then its heading says so.
 <!-- 3.3.0 was built in local branches and lands as one commit, 25a66cd, plus the
      commit that points these lines at it and the review fixes on top of it (same
      branch, release/3.3.0: round 3 is 4aafe70, round 4 is c805e4a,
-     round 5 is 6d414c7, round 6 is f5e406e). Every entry below
+     round 5 is 6d414c7, round 6 is f5e406e,
+     round 7 is ff707d3). Every entry below
      except "Not included in 3.3.0" names the commit or commits its behaviour comes
      from. These hashes hold only if the branch reaches main by a merge commit or a
      fast-forward, never a squash or rebase. -->
@@ -114,14 +115,19 @@ data in `~/AEON` is untouched; upgrade as for 3.2.0.
   (4aafe70)
 - **Turns from an agent you removed** stay out of every later prompt that may go to a
   cloud model: a turn tagged with an agent that is no longer listed counts as Local
-  only, since whether it was private can no longer be told. (25a66cd, 4aafe70)
+  only, since whether it was private can no longer be told. A new agent given a removed
+  agent's name gets a new id, so it never inherits those turns. (25a66cd, 4aafe70, ff707d3)
 - **An agent reference lands on the agent it was saved for.** What the terminal and
   saved chats keep is an agent's id, and an id or folder wins over another agent's
   name — so a renamed Local only agent's id cannot reach a Roulette agent that took its
   old name. A new or changed name may not be another agent's name, id or folder, and
-  neither may the folder a new name gets ("José" gets `jose`). (6d414c7, f5e406e)
-- **A folder named Vault inside your Vault** (an older Vault copied in) is checked as
-  itself, so a Local only agent's folder inside it stays private. (6d414c7)
+  neither may the folder a new name gets ("José" gets `jose`). A saved reference that no
+  longer names exactly one agent is answered by your own AEON on this computer only, with
+  a notice, never by a cloud model. When one agent's name is another's id (a clash made
+  before 3.3.0 or by hand), a name you type picks the Local only one if exactly one is,
+  and the terminal otherwise asks which. (6d414c7, f5e406e, ff707d3)
+- **A Local only agent's folder inside a folder named Vault** (an older Vault copied
+  in) stays private: that folder is no longer read as the Vault itself. (6d414c7)
 - **Your own AEON set to Local only:** an agent set to Roulette no longer gets the
   shared memory (which is your AEON's memory) in its prompt. 3.2.1 listed this as not
   covered. (25a66cd)
