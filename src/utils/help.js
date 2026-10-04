@@ -4,6 +4,10 @@
 // is sent anywhere on its own.
 export const HELP_URL = 'https://github.com/cgomez1365/AEON/issues/new?template=install-help.yml';
 
+// The private channel, for anyone who would rather not post in public. It
+// forwards to the maintainer; the README and SECURITY.md name the same address.
+export const HELP_EMAIL = 'aeon@brokengearindustries.com';
+
 // The terms AEON is used under, as published on main. The welcome screen links
 // them; nothing in the app or the launcher did before (audit #25, 2026-10-03).
 const REPO_MAIN = 'https://github.com/cgomez1365/AEON/blob/main';

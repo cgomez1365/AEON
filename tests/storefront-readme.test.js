@@ -192,7 +192,9 @@ describe('community files', () => {
     const coc = read('CODE_OF_CONDUCT.md');
     expect(coc).toMatch(/Contributor Covenant, version 2\.1/);
     expect(coc).toMatch(/security\/advisories\/new/);
-    expect(coc).not.toMatch(/[\w.+-]+@[\w-]+\.[\w.]+/);
+    // The only address it may name is AEON's own help address — no personal inbox.
+    const emails = coc.match(/[\w.+-]+@[\w-]+\.[\w.]+/g) || [];
+    expect(emails.every((e) => e.replace(/\.$/, '') === 'aeon@brokengearindustries.com'), emails.join(', ')).toBe(true);
     expect(README).toMatch(/\]\(CODE_OF_CONDUCT\.md\)/);
   });
 });

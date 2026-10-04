@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { HELP_URL } from '../src/utils/help.js';
+import { HELP_URL, HELP_EMAIL } from '../src/utils/help.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8');
@@ -30,5 +30,14 @@ describe('install help', () => {
     expect(readme).toContain('## Need help?');
     expect(readme).toContain(`(${HELP_URL})`);
     expect(readme).toMatch(/\[Need help\?\]\(#need-help\)/);
+  });
+
+  it('the private email is one address, named the same everywhere it appears', () => {
+    expect(HELP_EMAIL).toMatch(/^[\w.-]+@[\w.-]+\.[a-z]{2,}$/);
+    const wizard = read('src/blocks/security/components/SetupWizard.jsx');
+    expect(wizard).toMatch(/href=\{`mailto:\$\{HELP_EMAIL\}`\}/);
+    for (const f of ['README.md', '.github/SECURITY.md', 'CODE_OF_CONDUCT.md']) {
+      expect(read(f), f).toContain(HELP_EMAIL);
+    }
   });
 });

@@ -129,7 +129,8 @@ then launch as usual. `git pull` leaves your installed packs alone (git does not
 ## Need help?
 
 - **Install help is free.** Open an [Install help request](https://github.com/cgomez1365/AEON/issues/new?template=install-help.yml): say what computer you have and where it stopped, and we answer there. **The request is public — anyone can read it**, so remove your username from any paths you paste, and never paste an API key or your `.env`.
-- **Paid services:** we can set AEON up for you — on your computer or on a drive you carry — and build blocks for your own work. Tick the box on the same form and we will get in touch.
+- **Rather not post in public?** Email **[aeon@brokengearindustries.com](mailto:aeon@brokengearindustries.com)**. Same help, and only we see it.
+- **Paid services:** we can set AEON up for you — on your computer or on a drive you carry — and build blocks for your own work. Tick the box on the same form, or email [aeon@brokengearindustries.com](mailto:aeon@brokengearindustries.com), and we will get in touch.
 
 ---
 

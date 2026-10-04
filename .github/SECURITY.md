@@ -7,7 +7,8 @@
 Report it privately through GitHub: open the repository's **Security** tab and choose
 **Report a vulnerability**, or go straight to
 <https://github.com/cgomez1365/AEON/security/advisories/new>. Only the maintainer can see
-the report.
+the report. If you cannot use GitHub, email **aeon@brokengearindustries.com** with "Security" at the start
+of the subject.
 
 Please include:
 

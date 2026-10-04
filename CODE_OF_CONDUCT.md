@@ -38,6 +38,7 @@ AEON has one maintainer. To report a problem:
 - **Privately:** open the repository's **Security** tab → **Report a vulnerability**
   (<https://github.com/cgomez1365/AEON/security/advisories/new>) and start the title with
   "Conduct:". It is not public: only you and the maintainer can see it.
+  Or email **aeon@brokengearindustries.com** with "Conduct" at the start of the subject.
 - **Publicly:** reply on the issue or pull request where it happened. Anyone can read it,
   so do not include anyone's private information.
 

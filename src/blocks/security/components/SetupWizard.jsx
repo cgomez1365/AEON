@@ -19,7 +19,7 @@
  * displays it again after this screen.
  */
 import React, { useState } from 'react';
-import { HELP_URL, TERMS_URL, LICENSE_URL, PRIVACY_URL } from '../../../utils/help.js';
+import { HELP_URL, HELP_EMAIL, TERMS_URL, LICENSE_URL, PRIVACY_URL } from '../../../utils/help.js';
 import { useNavigate } from 'react-router-dom';
 import ModalPortal from '../../../components/ModalPortal.jsx';
 import { resetSupabase } from '../../../kernel/supabase';
@@ -198,7 +198,9 @@ export default function SetupWizard({ onComplete, onSkip }) {
                 </div>
                 <div>
                   <strong>Need a hand?</strong> Install help is free —{' '}
-                  <a href={HELP_URL} target="_blank" rel="noopener noreferrer" style={{ color: 'inherit', textDecoration: 'underline' }}>ask us</a>.
+                  <a href={HELP_URL} target="_blank" rel="noopener noreferrer" style={{ color: 'inherit', textDecoration: 'underline' }}>ask us</a>{' '}
+                  or email{' '}
+                  <a href={`mailto:${HELP_EMAIL}`} style={{ color: 'inherit', textDecoration: 'underline' }}>{HELP_EMAIL}</a>.
                   We can also set AEON up for you or build a block for your work, as a paid service.
                 </div>
                 <div>
