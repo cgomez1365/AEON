@@ -592,7 +592,9 @@ module.exports = function createMemoryRouter(deps) {
         if (!best && wanted && withheld) {
           return res.status(409).json({
             ok: false, code: 'local_only',
-            error: `That chat is with ${withheld.name}, which is set to Local only, so it is not sent to the model this distil runs on.`,
+            error: withheld.unresolved
+              ? `That chat is with an agent this AEON no longer lists ("${withheld.unresolved}"), so whether it was private can no longer be told and it is not sent to the model this distil runs on.`
+              : `That chat is with ${withheld.name}, which is set to Local only, so it is not sent to the model this distil runs on.`,
           });
         }
         if (!best) {

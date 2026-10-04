@@ -1213,9 +1213,12 @@ const Terminal2 = ({ onUsageUpdate }) => {
             // The server says who answered. A wake that named an agent
             // ("scout come online") hands it the terminal from here on.
             if (payload.agent) {
-              // Both sides of this turn carry the agent they were with.
-              patch(msgId, { agent: payload.agent.id });
-              if (userMsgId != null) patch(userMsgId, { agent: payload.agent.id });
+              // Both sides of this turn carry the agent they were with — or,
+              // for an agent AEON no longer has, the reference it came with
+              // (payload.tag), which keeps the turn out of later cloud calls.
+              const turnTag = payload.tag || payload.agent.id;
+              patch(msgId, { agent: turnTag });
+              if (userMsgId != null) patch(userMsgId, { agent: turnTag });
               const was = agentRef.current ? agentRef.current.id : null;
               const now = payload.agent.self ? null : payload.agent.id;
               if (was !== now) {

@@ -189,7 +189,11 @@ module.exports = function ({ kernelLLM, loadSettings: loadSettingsDep, VAULT_ROO
     });
 
     const agentMeta = agent ? { id: agent.id, name: agent.name, self: !!agent.self } : null;
-    sseWrite(res, 'meta', { provider, model, role, streamId, agent: agentMeta, ...(agentNotice ? { notice: agentNotice } : {}) });
+    // An unresolved agent's turn is tagged with the reference it came with,
+    // not with the operator's own AEON: an id nobody has stays withheld from
+    // every later cloud turn (agents.shareableTurns).
+    const tag = agent && agent.unresolved ? { tag: String(agent.unresolved) } : {};
+    sseWrite(res, 'meta', { provider, model, role, streamId, agent: agentMeta, ...tag, ...(agentNotice ? { notice: agentNotice } : {}) });
 
     let fullText = '';
     let tokenCount = 0;
@@ -361,11 +365,15 @@ module.exports = function ({ kernelLLM, loadSettings: loadSettingsDep, VAULT_ROO
         toolWrites: result.toolWrites,
       });
       fullText = result.text || fullText;
-      // Recent Agent Missions reads this: what the agent was last asked.
-      agentsKernel.recordMission(VAULT_ROOT, agent, {
-        asked: message, provider: result.provider, model: result.model,
-        tokens: result.tokens, ok: !result.cancelled,
-      });
+      // Recent Agent Missions reads this: what the agent was last asked. Not
+      // for an unresolved agent's turn: the log is the operator's own AEON's,
+      // and it is indexed.
+      if (!agent?.unresolved) {
+        agentsKernel.recordMission(VAULT_ROOT, agent, {
+          asked: message, provider: result.provider, model: result.model,
+          tokens: result.tokens, ok: !result.cancelled,
+        });
+      }
 
       // ── Auto-extract memory (fire-and-forget, non-blocking) ────────
       //
@@ -381,7 +389,7 @@ module.exports = function ({ kernelLLM, loadSettings: loadSettingsDep, VAULT_ROO
       // Settings come from the injected authority, not a hand-built path
       // re-read per request.
       try {
-        if (capturesFor(agent, blockSettings.get('memory_core', loadSettings())) && message && fullText && !result.cancelled) {
+        if (!agent?.unresolved && capturesFor(agent, blockSettings.get('memory_core', loadSettings())) && message && fullText && !result.cancelled) {
           // Both internal calls below are guarded routes, and a loopback fetch
           // carries no session unless one is forwarded — the recall call above
           // learned this already. Without it the guard 401'd /api/ai, the 401

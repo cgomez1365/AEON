@@ -344,6 +344,13 @@ module.exports = function createChatRouter(deps) {
         ? 'Everything you said in this conversation was to an agent set to Local only, so none of it is added to the indexed record.'
         : 'This conversation has nothing of yours to remember yet.' });
     }
+    if (privateTo && privateTo.unresolved) {
+      return res.status(409).json({
+        ok: false, code: 'local_only',
+        error: `This chat is with an agent this AEON no longer lists ("${privateTo.unresolved}"), so whether it was private can no longer be told and it is not added to the indexed record.`,
+        remedy: 'Nothing to change in Settings. Start a new chat for what you want remembered.',
+      });
+    }
     if (privateTo) {
       return res.status(409).json({
         ok: false, code: 'local_only',

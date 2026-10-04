@@ -340,7 +340,8 @@ function create(vaultRoot, input = {}) {
   // names the bin entry "<Folder>-<time>".
   let removed = [];
   try { removed = fs.readdirSync(path.join(agentsDir(vaultRoot), '.removed')).map((n) => n.toLowerCase()); } catch {}
-  if (removed.some((n) => n.startsWith(`${folder.toLowerCase()}-`))) folder = `${folder}_${crypto.randomBytes(2).toString('hex')}`;
+  const binEntry = new RegExp(`^${folder.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-\\d{4}-\\d{2}-\\d{2}t`);
+  if (removed.some((n) => binEntry.test(n))) folder = `${folder}_${crypto.randomBytes(2).toString('hex')}`;
   const dir = path.join(agentsDir(vaultRoot), folder);
   if (fs.existsSync(dir)) {
     throw new AgentError(`A folder Agents/${folder} already exists in the Vault. Pick another name, or move that folder first.`, 409);
