@@ -83,11 +83,15 @@ below.
     `CONTINUE_PROMPT` (`src/kernel/continuation.cjs`), up to Memory Core's
     `auto_continue_parts` (default 4, at most 8); the start of each continuation is
     held until the seam is decided (200 characters, longer while it still repeats
-    shown text, at most 1,000), so a repeated overlap (12 characters or more), a
-    restarted sentence or line (4 or more) or a "Continuing:" style preamble is
-    dropped. A part that ended at a line break and starts again with that line keeps
-    it (a checklist can repeat a line). A provider that sends no finish reason is never
-    continued.
+    shown text; past 1,000 it is followed through the previous part, and a restart
+    that runs on to that part's end is dropped however long it is), so a repeated
+    overlap (12 characters or more), a restarted sentence or line (4 or more) or a
+    "Continuing:" style preamble is dropped. A part that ended at a line break and
+    starts again with that line keeps it (a checklist can repeat a line), and an
+    overlap that is a short repeating pattern ("0 0 0 0") is kept (repetitive data
+    can rightly go on with more of the same). A tool-call opener the limit cut in
+    half is carried into the next part and completed there. A provider that sends no
+    finish reason is never continued.
 
   The agent's scratchpad and newest handoff are injected before the tools section
   (`src/kernel/agentWorkspace.cjs`), on every turn until a newer handoff exists,

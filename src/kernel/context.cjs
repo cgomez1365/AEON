@@ -488,6 +488,16 @@ function memoryFile(vaultRoot, agent = null) {
 const _memoryErrorsLogged = new Set();
 function readMemoryStore(vaultRoot, agent = null) {
   const file = memoryFile(vaultRoot, agent);
+  // Never through a link (agents.memoryLink): a linked memory/ would carry
+  // another agent's memories — a Local only one's included — into this
+  // prompt. Said with a Vault-relative path; this error is reported with
+  // the turn.
+  const link = agentsKernel.memoryLink(vaultRoot, agent);
+  if (link) {
+    const error = agentsKernel.memoryLinkError(link);
+    if (!_memoryErrorsLogged.has(error)) { _memoryErrorsLogged.add(error); console.error(`[MEMORY] ${error}`); }
+    return { memories: [], error };
+  }
   let why;
   try {
     const raw = JSON.parse(fs.readFileSync(file, 'utf8'));

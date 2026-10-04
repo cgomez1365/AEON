@@ -15,7 +15,10 @@ tagged; until then its heading says so.
 ## 3.3.0 — not tagged yet
 
 <!-- 3.3.0 was built in local branches and lands as one commit, 25a66cd, plus the
-     commit that points these lines at it; every line below names 25a66cd. -->
+     commit that points these lines at it and the review fixes on top of it (same
+     branch, release/3.3.0); every entry below except "Not included in 3.3.0" names
+     25a66cd. These hashes hold only if the branch reaches main by a merge commit or a
+     fast-forward, never a squash or rebase. -->
 
 Agents that can work. In a chat, your AEON and your agents can use AEON's own tools —
 search and read your Vault, search the web, save to their own memory and folder, ask
@@ -43,8 +46,8 @@ data in `~/AEON` is untouched; upgrade as for 3.2.0.
   more went to the model). Each save adds a ✎ line saying what changed and where. AEON
   also checks the answer for common phrasings such as "I searched your Vault", "I read
   the file", "I saved it to my memory" or "I asked <agent>", and warns under it when no
-  tool of that kind ran in that reply (a Vault search does not back "I searched the
-  web"); other wordings are not caught. (25a66cd)
+  tool of that kind succeeded in that reply (a Vault search does not back "I searched
+  the web"); other wordings are not caught. (25a66cd)
 - **Limits per reply:** at most 6 tool uses, 3 of them saves; each result is capped in
   size, the results together are capped, and each tool has a time limit. When the chat
   role's model has a context window under 4,096 tokens, tools are off for that turn and
@@ -61,8 +64,8 @@ data in `~/AEON` is untouched; upgrade as for 3.2.0.
   "Agents may search the web", both on by default. (25a66cd)
 - **Not included in 3.3.0:** no shell, no code execution and no arbitrary web
   requests. Apart from the model calls a chat already makes (and `vault_search`'s query
-  embedding), the only outside service a tool contacts is your search provider, through
-  `web_search`.
+  embedding, and `ask_agent`'s call to the asked agent's own model and provider), the
+  only outside service a tool contacts is your search provider, through `web_search`.
 
 ### Privacy
 
@@ -80,18 +83,30 @@ data in `~/AEON` is untouched; upgrade as for 3.2.0.
   until it is fixed. (25a66cd)
 - **Switched-off memories, a memory store holding one, Local only agents' folders,
   saved chats and the security block's records** cannot be read, listed or searched
-  through a tool, also when a link elsewhere in the Vault leads to them. (25a66cd)
+  through another agent's tools (a Local only agent still reads its own folder), also
+  when a link elsewhere in the Vault leads to them. A `memory_save` of the same words as
+  a switched-off memory is answered like a new save, so a model cannot learn it exists.
+  (25a66cd)
+- **A memory store is never read or written through a link.** When an agent's
+  `memory/` folder (or the shared one, `Agents/Aeon/memory`) is a link, its prompt gets
+  no memories and Memory Core refuses to show or change that store, with the reason; a
+  link to a Local only agent's memory would otherwise have put it in a cloud prompt.
+  (25a66cd)
+- **Turns from an agent you removed** stay out of every later prompt that may go to a
+  cloud model: a turn tagged with an agent that is no longer listed counts as Local
+  only, since whether it was private can no longer be told. (25a66cd)
 - **Your own AEON set to Local only:** an agent set to Roulette no longer gets the
   shared memory (which is your AEON's memory) in its prompt. 3.2.1 listed this as not
   covered. (25a66cd)
 - **Images in an answer are not loaded.** A Markdown image in a model's answer or a
-  tool result is shown as a line you can open yourself, never fetched by the browser on
-  its own: a document the model read could otherwise put private text in the image's
+  tool result that points to an address is shown as a line you can open yourself,
+  never fetched by the browser on its own (an image embedded in the text as `data:` or
+  `blob:` is shown): a document the model read could otherwise put private text in the image's
   address. AEON's pages also limit images to AEON itself, `data:` and `blob:` images,
   and Google's sign-in avatar host (`img-src`).
   (25a66cd)
 - **Errors a model reads name a Vault path, never this computer's paths** (they carry
-  your user name). (25a66cd)
+  your user name), `file://` addresses and quoted paths with spaces included. (25a66cd)
 - Scratchpads and handoffs are the model's own words, so they are not indexed into
   the Second Brain; artifacts are documents and are indexed. Both are shown to the
   agent as its notes, not as instructions. (25a66cd)
@@ -101,14 +116,19 @@ data in `~/AEON` is untouched; upgrade as for 3.2.0.
 - When a model stops because it reached its output limit — free OpenRouter models stop
   at 1,024 tokens — AEON asks the same model to carry on and joins the parts into one
   answer. At each join it removes a repeated overlap of 12 characters or more, a
-  restarted sentence or line (a list item too) of 4 characters or more, and a
-  preamble such as "Continuing:" or "Here is the continuation:". A part that ended at a
-  line break and starts again with that same line keeps it (a checklist can repeat a
-  line), so a model that restarts a whole line there can still show it twice.
+  restarted sentence or line (a list item too) of 4 characters or more, a restart that
+  runs on to the end of the previous part however long it is (a model that begins the
+  section or the whole answer again), and a preamble such as "Continuing:" or "Here is
+  the continuation:". A part that ended at a line break and starts again with that same
+  line keeps it (a checklist can repeat a line), so a model that restarts a whole line
+  there can still show it twice; an overlap that is a short repeating pattern ("0 0 0
+  0") is kept too, since repetitive data can rightly go on with more of the same. A
+  tool call the limit cut in half is completed in the next part and run.
   The terminal shows "continuing… part 2 of up to 5" while it works and "Continued
   automatically, N parts." under the answer. (25a66cd)
-- Each part goes through the same connection as the first (its address, key pool and
-  pacing). (25a66cd)
+- Later parts resolve the chat role the same way the first did (its address, key pool
+  and pacing), and stay on a fallback model once one has served a part; a provider
+  failure on a later part can still fall back. (25a66cd)
 - Up to 4 extra parts by default (Settings → Blocks → Memory Core, 0 to 8; each part is
   another model call), or off. An answer still cut after the last part says so and
   that you can type "continue". A provider that does not report why it stopped is

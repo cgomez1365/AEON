@@ -47,7 +47,7 @@ function createBlockHost({ blocksDir, baseDeps, createScopedDeps, registry, read
   // and after a restart, because mounting re-arms it whatever the run state
   // says (measured 2026-10-02 with a 3 s job: 6 → 10 runs in the 10 s after
   // stop, and still ticking after a reboot with the block stopped). For a block
-  // that acts on a timer (a scraper that bids), "Stop" has to mean stop.
+  // that acts on a timer, "Stop" has to mean stop.
   //
   // Callbacks are gated when they fire, so Start resumes the same timers with
   // no remount. A one-shot setTimeout that comes due while the block is

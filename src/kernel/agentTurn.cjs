@@ -68,6 +68,8 @@ async function runAgentTurn({
   let last = null;
   let finalRound = false;    // the tool cap is reached: blocks are no longer run
   let seamPrev = null;       // set when the next round continues a cut-off one
+  let carry = '';            // text the cut-off round's scanner still held (a possible opener)
+  let contBase = '';         // the cut-off answer so far, as the model is shown it (without `carry`)
   let needSep = false;       // a new segment after a tool result
   let contTail = false;      // convo ends with [assistant, CONTINUE_PROMPT]
   const roundCap = (toolbox ? toolbox.callsLeft() : 0) + 1 + maxParts + 1;
@@ -103,8 +105,9 @@ async function runAgentTurn({
     // A continuation that starts inside a code block the cut-off part opened
     // reads an aeon-tool line there as an example, as the first part would.
     const scanner = toolbox ? protocol.createScanner({
-      onText: sink, initialFence: seamPrev != null ? protocol.codeFenceState(seamPrev) : null,
+      onText: sink, initialFence: seamPrev != null ? protocol.codeFenceState(seamPrev) : null, carry,
     }) : null;
+    carry = '';
     let block = null;
 
     let r;
@@ -144,7 +147,10 @@ async function runAgentTurn({
     }
 
     let tail = null;
-    if (scanner && !block) tail = scanner.end({ truncated: !!r.truncated });
+    // Cut off with a continuation to come: what the scanner still holds (an
+    // opener cut mid-word) goes to the next round's scanner, not on screen.
+    if (scanner && !block) tail = scanner.end({ truncated: !!r.truncated, carry: !!r.truncated && continuesLeft > 0 });
+    const heldTail = tail && typeof tail.heldTail === 'string' ? tail.heldTail : '';
     if (seam) seam.end();
     seamPrev = null;
     // Later rounds stay on the model that answered round 1 — but only a
@@ -205,14 +211,18 @@ async function runAgentTurn({
       parts++;
       continued++;
       emit('continue', { part: parts, max: 1 + maxParts, reason: 'max_tokens' });
+      // One assistant turn holds the whole cut-off answer so far, as the
+      // model wrote it: the held tail included, so it continues after it.
       if (contTail) {
-        // One assistant turn holds the whole cut-off answer so far.
-        convo[convo.length - 2] = { role: 'assistant', content: convo[convo.length - 2].content + roundText };
+        contBase += roundText;
+        convo[convo.length - 2] = { role: 'assistant', content: contBase + heldTail };
       } else {
-        convo.push({ role: 'assistant', content: segmentText }, { role: 'user', content: continuation.CONTINUE_PROMPT });
+        contBase = segmentText;
+        convo.push({ role: 'assistant', content: contBase + heldTail }, { role: 'user', content: continuation.CONTINUE_PROMPT });
         contTail = true;
       }
       seamPrev = segmentText;
+      carry = heldTail;
       continue;
     }
 

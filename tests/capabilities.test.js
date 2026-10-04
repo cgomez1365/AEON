@@ -118,3 +118,48 @@ describe('capabilities — the Settings panel cannot hardcode them back', () => 
     }
   });
 });
+
+// 3.3.0: agents use tools in chat (src/kernel/agentTools.cjs), switched in
+// Settings → Blocks → Memory Core. The Agent tab's inert toggles that sound
+// like those tools once said the agent "cannot write to memory at all today"
+// and that no agent tool reads files — false the moment 3.3.0 shipped, and
+// shown to the operator who opened that tab to see what agents may do.
+describe('capabilities — the Agent tab does not deny what agents do in chat', () => {
+  const { TOOL_NAMES } = require_(path.join(ROOT, 'src', 'kernel', 'toolProtocol.cjs'));
+  const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'src', 'blocks', 'memory_core', 'block.manifest.json'), 'utf8'));
+  const label = (key) => {
+    const find = (o) => {
+      if (!o || typeof o !== 'object') return null;
+      if (o.key === key && typeof o.label === 'string') return o.label;
+      for (const v of Object.values(o)) { const r = find(v); if (r) return r; }
+      return null;
+    };
+    return find(manifest);
+  };
+  const COVERS = {
+    tool_filesystem: { tools: ['vault_read', 'vault_list', 'artifact_save', 'scratchpad_write'], switch: 'agent_tools' },
+    tool_web_search: { tools: ['web_search'], switch: 'agent_tools_web' },
+    tool_memory: { tools: ['memory_save'], switch: 'agent_tools' },
+  };
+
+  it('each toggle a chat tool overlaps names the Memory Core switch that really governs it', () => {
+    for (const [key, { tools, switch: sw }] of Object.entries(COVERS)) {
+      if (!tools.some((t) => TOOL_NAMES.includes(t))) continue;
+      const spec = caps.CAPABILITIES[key];
+      const text = spec.implemented ? spec.summary : spec.pending;
+      expect(label(sw), `memory_core manifest has no "${sw}" setting`).toBeTruthy();
+      expect(text, `${key} does not point to Memory Core`).toContain(`Memory Core → "${label(sw)}"`);
+      expect(text, `${key} says agents cannot do what ${tools.join('/')} do`).not.toMatch(/\byet\b|at all today|No agent tool/i);
+    }
+  });
+
+  it('the shell toggle does not say the terminal runs commands', () => {
+    expect(caps.CAPABILITIES.tool_shell.pending).not.toMatch(/prefix is what runs commands/i);
+  });
+
+  it('the Agent tab heading does not claim its toggles change the agent\'s toolset', () => {
+    const ui = fs.readFileSync(path.join(ROOT, 'src', 'blocks', 'settings', 'index.jsx'), 'utf8');
+    expect(ui).not.toMatch(/Disabled tools won't appear in the agent's toolset/);
+    expect(ui).toMatch(/agent-tools-desc">[^<]*Memory Core/);
+  });
+});

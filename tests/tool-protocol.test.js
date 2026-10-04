@@ -37,10 +37,17 @@ describe('opener variants', () => {
     }
   });
 
-  it('one-line form, closed the moment the closing fence arrives', () => {
-    const { visible, block } = scan(['Look: ```aeon-tool {"tool":"vault_search","query":"tax"}``` and more text']);
-    expect(visible).toBe('Look: ');
-    expect(p.parseBlock(block)).toMatchObject({ ok: true, tool: 'vault_search', args: { query: 'tax' } });
+  it('one-line form: a call when it ends its line; with prose after it on the line, an example shown as text', () => {
+    // Review 2026-10-04 (round 3): this used to close the moment the closing
+    // fence arrived, so a quoted example ran and the rest of its line was lost.
+    const call = scan(['Look: ```aeon-tool {"tool":"vault_search","query":"tax"}```\nmore text']);
+    expect(call.visible).toBe('Look: ');
+    expect(p.parseBlock(call.block)).toMatchObject({ ok: true, tool: 'vault_search', args: { query: 'tax' } });
+    const quoted = 'Look: ```aeon-tool {"tool":"vault_search","query":"tax"}``` and more text';
+    const ex = scan([quoted]);
+    expect(ex.block).toBeNull();
+    expect(ex.tail.block).toBeNull();
+    expect(ex.visible).toBe(quoted);
   });
 
   it('a header that starts on the opener line is tolerated', () => {
@@ -190,17 +197,17 @@ describe('systemText and claimCheck', () => {
     const flagged = p.claimCheck(text, []);
     expect(flagged).toHaveLength(1);
     expect(flagged[0]).toMatchObject({ level: 'warn', code: 'unbacked-claim' });
-    expect(flagged[0].message).toMatch(/AEON ran no search tool/);
+    expect(flagged[0].message).toMatch(/No search tool succeeded/);
     expect(p.claimCheck(text, [{ tool: 'vault_search', ok: true }])).toEqual([]);
     expect(p.claimCheck(text, [{ tool: 'vault_search', ok: false }])).toHaveLength(1);
     // A Vault search does not back "I searched the web", nor the reverse
     // (review 2026-10-03, round 2: one search group covered both).
     const web = p.claimCheck('I searched the web and found three reviews.', [{ tool: 'vault_search', ok: true }]);
     expect(web).toHaveLength(1);
-    expect(web[0].message).toMatch(/AEON ran no web search tool/);
+    expect(web[0].message).toMatch(/No web search tool succeeded/);
     expect(p.claimCheck('I searched the web and found three reviews.', [{ tool: 'web_search', ok: true }])).toEqual([]);
     expect(p.claimCheck(text, [{ tool: 'web_search', ok: true }])).toHaveLength(1);
-    expect(p.claimCheck('I have saved it to my memory.', [])[0].message).toMatch(/no save tool/);
-    expect(p.claimCheck('I asked Ledger about it.', [], { agentNames: ['Ledger'] })[0].message).toMatch(/no ask tool/);
+    expect(p.claimCheck('I have saved it to my memory.', [])[0].message).toMatch(/No save tool succeeded/);
+    expect(p.claimCheck('I asked Ledger about it.', [], { agentNames: ['Ledger'] })[0].message).toMatch(/No ask tool succeeded/);
   });
 });

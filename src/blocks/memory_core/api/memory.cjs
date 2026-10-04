@@ -89,8 +89,19 @@ module.exports = function createMemoryRouter(deps) {
   // One store per memory folder — the shared one, and one per agent. Same
   // rules for every one of them: atomic writes, unreadable is not empty, a
   // ledger of what was distilled beside it.
-  function makeStore(MEM_DIR) {
+  function makeStore(MEM_DIR, owner = null) {
   const STORE = path.join(MEM_DIR, 'memories.json');
+  // A store reached through a link is neither read nor written
+  // (agents.memoryLink): a linked memory/ would show and change another
+  // agent's memories — a Local only one's included — as this one's.
+  const refuseLink = () => {
+    const link = agentsKernel.memoryLink(VAULT, owner);
+    if (!link) return;
+    const err = new Error(agentsKernel.memoryLinkError(link));
+    err.status = 409;
+    err.memoryStore = true;
+    throw err;
+  };
   // Which transcripts have already been distilled, by fingerprint. It sits
   // beside memories.json rather than under db/, so a Vault restored from a
   // backup brings back the ledger that matches its memories. Bounded: 200
@@ -144,6 +155,7 @@ module.exports = function createMemoryRouter(deps) {
     if (wrote) { console.log(`[MEMORY] wrote ${wrote} missing memory mirror(s) in ${MEM_DIR}`); requestIndex('mirror'); }
   };
   const load = () => {
+    refuseLink();
     let why;
     try {
       const all = JSON.parse(fs.readFileSync(STORE, 'utf8'));
@@ -172,6 +184,7 @@ module.exports = function createMemoryRouter(deps) {
   // an unplug just after the rename could still leave the new name holding a
   // short file, and the comment above would only be true of a crash.
   const save = (all) => {
+    refuseLink();
     fs.mkdirSync(MEM_DIR, { recursive: true });
     const tmp = `${STORE}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
     try {
@@ -208,7 +221,7 @@ module.exports = function createMemoryRouter(deps) {
 
   try { if (!fs.existsSync(MEM_DIR)) fs.mkdirSync(MEM_DIR, { recursive: true }); } catch {}
   const stores = new Map();
-  const storeAt = (dir) => { if (!stores.has(dir)) stores.set(dir, makeStore(dir)); return stores.get(dir); };
+  const storeAt = (dir, owner = null) => { if (!stores.has(dir)) stores.set(dir, makeStore(dir, owner)); return stores.get(dir); };
 
   // Which store a request means: ?agent= or body.agent, else the shared
   // one. An agent nobody has is a 404 that says so — never the shared store
@@ -218,7 +231,7 @@ module.exports = function createMemoryRouter(deps) {
     if (ref == null || ref === '') return { st: storeAt(MEM_DIR), agent: null };
     const agent = agentsKernel.get(VAULT, ref);
     if (!agent) { res.status(404).json({ ok: false, error: `No agent called "${ref}". GET /api/agents lists them.` }); return null; }
-    return { st: storeAt(agentsKernel.memoryDir(VAULT, agent)), agent: agent.self ? null : agent };
+    return { st: storeAt(agentsKernel.memoryDir(VAULT, agent), agent.self ? null : agent), agent: agent.self ? null : agent };
   };
   // Settings → Blocks → Memory Core → "New memories start on". Off suits an
   // operator whose store has outgrown the context window: new memories are
@@ -292,6 +305,14 @@ module.exports = function createMemoryRouter(deps) {
     });
   });
 
+  // What a save says: the stored text, and whether it was reworded.
+  const savedSays = (category, normalized, original) => {
+    const said = [`Saved to memory (${category}): ${normalized.text}`];
+    if (normalized.changed) said.push(`Reworded from "${String(original).trim()}" so it reads as being about you when AEON recalls it.`);
+    if (normalized.residualPerson) said.push('It still says "I" or "you" somewhere; recalled into a prompt, that reads as the model. Consider editing it in Memory Core.');
+    return said;
+  };
+
   // ── POST /memory/add — create (path kept for chat-stream auto-extract) ─
   router.post('/memory/add', (req, res) => {
     const { text, category, type, title, tags, pinned, source, refs } = req.body || {};
@@ -316,7 +337,15 @@ module.exports = function createMemoryRouter(deps) {
     const dupe = all.find(m => m.text.trim().toLowerCase() === normalized.text.toLowerCase());
     // `text` is what the terminal chip prints. Without it /remember showed the
     // record as JSON, and a repeat looked exactly like a save.
-    if (dupe) return res.json({ ok: true, memory: dupe, deduped: true, text: `Already in memory — nothing new saved: ${dupe.text}` });
+    if (dupe) {
+      const out = { ok: true, memory: dupe, deduped: true, text: `Already in memory — nothing new saved: ${dupe.text}` };
+      // A switched-off memory never reaches a model, so a model that saves
+      // its words (an agent's memory_save tool) is told what a new save would
+      // tell it — modelText and modelActive — and never that it exists, nor
+      // its stored wording. `text` above is the operator's.
+      if (dupe.active === false) Object.assign(out, { modelText: savedSays(category || 'fact', normalized, text).join('\n'), modelActive: newMemoriesOn() });
+      return res.json(out);
+    }
     const m = {
       id: newId(), text: normalized.text,
       ...(normalized.changed ? { originalText: String(text).trim() } : {}),
@@ -330,9 +359,7 @@ module.exports = function createMemoryRouter(deps) {
     };
     all.push(m); st.save(all); st.mdMirror(m);
     requestIndex('memory-add');
-    const said = [`Saved to memory (${m.category}): ${m.text}`];
-    if (normalized.changed) said.push(`Reworded from "${m.originalText}" so it reads as being about you when AEON recalls it.`);
-    if (normalized.residualPerson) said.push('It still says "I" or "you" somewhere; recalled into a prompt, that reads as the model. Consider editing it in Memory Core.');
+    const said = savedSays(m.category, normalized, text);
     res.json({
       ok: true, memory: m, normalized: normalized.changed,
       text: said.join('\n'),

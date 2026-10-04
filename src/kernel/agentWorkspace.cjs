@@ -90,6 +90,11 @@ const FS_SAYS = {
 };
 
 const ABS_PATH_RE = /(?<![\w./\\])(?:[A-Za-z]:[\\/]|\\\\|\/)(?:[^\s'"`,;:()<>\\/]+[\\/])+[^\s'"`,;:()<>\\/]*/g;
+// A file: URL (file:///Users/…) — its slashes follow ':' or '/', which
+// ABS_PATH_RE's look-behind skips — and a quoted absolute path, which may
+// hold spaces ('/Users/some one/AEON Data/…'): both are redacted whole first.
+const FILE_URL_RE = /\bfile:\/\/[^\s'"`<>]*/gi;
+const QUOTED_PATH_RE = /(['"`])(?:[A-Za-z]:[\\/]|\\\\|\/|~\/)[^'"`\n]*?\1/g;
 
 function vaultRelative(p, vaultRoot) {
   if (!p || !vaultRoot) return null;
@@ -119,7 +124,10 @@ function plainError(e, vaultRoot = null) {
     try { roots.push(fs.realpathSync.native(vaultRoot)); } catch {}
     for (const r of roots.sort((a, b) => b.length - a.length)) msg = msg.split(r + path.sep).join('').split(r).join('the Vault');
   }
-  return msg.replace(ABS_PATH_RE, '<path>');
+  return msg
+    .replace(FILE_URL_RE, '<path>')
+    .replace(QUOTED_PATH_RE, (_, q) => `${q}<path>${q}`)
+    .replace(ABS_PATH_RE, '<path>');
 }
 
 // ── One way in ──────────────────────────────────────────────────────────

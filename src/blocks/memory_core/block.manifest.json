@@ -173,7 +173,7 @@
         "label": "Let agents use AEON's tools in chat",
         "type": "boolean",
         "default": true,
-        "desc": "During a chat turn your AEON and your agents may search and read your Vault, list folders, search the web, save to their own memory, scratchpad and folder, and ask another agent. Every tool use and its result is shown in the terminal. Agents set to Local only never search the web."
+        "desc": "During a chat turn your AEON and your agents may search and read your Vault, list folders, search the web, save to their own memory, scratchpad and folder, and ask another agent. Every tool use and its result is shown in the terminal. With a cloud model, what a tool reads is sent to that provider. Agents set to Local only read only into a local model and never search the web."
       },
       {
         "key": "agent_tools_web",

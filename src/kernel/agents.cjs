@@ -379,6 +379,33 @@ function memoryDir(vaultRoot, agent) {
 }
 
 /**
+ * The first part of an agent's memory path below the Vault root — Agents,
+ * its folder, memory/, memories.json — that is a link, as a Vault-relative
+ * path; null when none is. A memory store is never read or written through
+ * a link: one agent's memory/ linked to a Local only agent's would put that
+ * agent's memories in a prompt that can go to a cloud model, and send this
+ * agent's saves into the other store (agentWorkspace.workingPath refuses the
+ * same links for the scratchpad, handoffs and artifacts).
+ */
+function memoryLink(vaultRoot, agent) {
+  const root = path.dirname(agentsDir(vaultRoot));
+  const segs = ['Agents', agent && !agent.self ? agent.folder : SELF_FOLDER, 'memory', 'memories.json'];
+  let p = path.resolve(root);
+  for (let i = 0; i < segs.length; i++) {
+    p = path.join(p, segs[i]);
+    let st;
+    // Missing: nothing below it can be a link. Any other error: the read
+    // that follows fails on its own and says why.
+    try { st = fs.lstatSync(p); } catch { return null; }
+    if (st.isSymbolicLink()) return segs.slice(0, i + 1).join('/');
+  }
+  return null;
+}
+
+/** The words for a memory store that is a link (memoryLink). */
+const memoryLinkError = (rel) => `${rel} is a link; AEON does not read or write an agent's memory through a link, so no memories were loaded or saved. Put the real folder there instead.`;
+
+/**
  * The opening of a system prompt, for an agent. `base` is the caller's own
  * identity line, which starts with LEAD; only that first sentence changes.
  * The operator's own AEON keeps the stock line until they name it or give
@@ -460,17 +487,23 @@ function detectWake(message, agents = []) {
  * feed can hold several agents. A turn with an agent set to Local only goes
  * only to a call that is Local only too; untagged turns are kept. `agent`
  * null: a call that is not an agent's (a chat title, the indexed record).
+ *
+ * Fails closed: for a call that is not Local only, a tagged turn is kept only
+ * when its agent is listed now and is not Local only. A turn tagged with an
+ * agent nobody has any more — removed in Memory Core, its folder moved to
+ * Agents/.removed — is dropped, because whether it was private can no longer
+ * be told (found 2026-10-04: a removed Local only agent's turns, still in the
+ * feed or in a reopened chat, went to the next Roulette turn).
  */
 function shareableTurns(messages, agent, agents) {
   if (!Array.isArray(messages)) return [];
   if (agent && agent.privacy === 'local-only') return messages;
-  const hidden = new Set((agents || []).filter((a) => a && a.privacy === 'local-only').map((a) => a.id));
-  if (!hidden.size) return messages;
-  return messages.filter((m) => !(m && typeof m.agent === 'string' && hidden.has(m.agent)));
+  const open = new Set((agents || []).filter((a) => a && a.privacy !== 'local-only').map((a) => a.id));
+  return messages.filter((m) => !(m && typeof m.agent === 'string') || open.has(m.agent));
 }
 
 module.exports = {
-  list, get, create, update, remove, memoryDir, sharedMemoryDir, detectWake, callOptions, identityFor, recordMission,
+  list, get, create, update, remove, memoryDir, sharedMemoryDir, memoryLink, memoryLinkError, detectWake, callOptions, identityFor, recordMission,
   shareableTurns,
   folderFor, cleanName, AgentError, SELF_ID, SELF_FOLDER, PRIVACY,
 };

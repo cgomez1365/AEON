@@ -271,7 +271,9 @@ function createToolbox({
   const PATH_REFUSALS = new Set(['absolute-path', 'traversal', 'hidden', 'outside-vault']);
   const fromPath = (r) => (PATH_REFUSALS.has(r.code) ? no(r.code, r.message) : err(r.code, r.message));
   const WITHHELD_SAYS = {
-    'local-only-agent': 'it belongs to an agent set to Local only, and this chat may go to a cloud model',
+    // Reached only by a Local only caller (withheldOutcome): another
+    // agent's Local only folder is that agent's own, not shared.
+    'local-only-agent': 'it belongs to another agent set to Local only, and each Local only agent reads only its own folder',
     'memory-off': 'it is a memory the operator switched off',
     'memory-store': 'it is a memory store that holds a switched-off memory',
   };
@@ -403,9 +405,20 @@ function createToolbox({
           const why = workspace.plainError(String(data.error || data.message || ''), vaultRoot).slice(0, 240);
           return { ...err('failed', `Memory Core refused the save (${r.status}): ${why}`, 'memory not saved'), unchanged: true };
         }
-        const off = data.memory && data.memory.active === false;
         const who = caller.self ? `${nameOf(caller)}'s (shared)` : `${nameOf(caller)}'s`;
-        const offNote = off ? ' — saved switched off (Settings → Blocks → Memory Core → New memories start on)' : '';
+        const offNoteFor = (off) => (off ? ' — saved switched off (Settings → Blocks → Memory Core → New memories start on)' : '');
+        // The same words as a switched-off memory already in the store:
+        // Memory Core says what a new save would have said (modelText), so
+        // the model cannot learn that an Off memory exists, nor its wording
+        // (Off memories never reach a model). The save stays spent, as a new
+        // one would be; the operator's notice says what really happened.
+        if (data.deduped && typeof data.modelText === 'string') {
+          return ok(`${data.modelText}${offNoteFor(data.modelActive === false)}`, 'already in memory (switched off)', {
+            notice: `Already in ${who} memory, switched off — nothing new saved: "${body.text.slice(0, 160)}"`,
+            unchanged: true, keepsSave: true,
+          });
+        }
+        const offNote = offNoteFor(data.memory && data.memory.active === false);
         const quoted = `"${String(data.memory?.text || body.text).slice(0, 160)}"`;
         // A memory already there is not a save: not counted, and the reply
         // keeps the save it would have used.
@@ -530,7 +543,7 @@ function createToolbox({
     }
 
     // A write that changed nothing gives its save back.
-    if (write && o.unchanged && writes > 0) writes--;
+    if (write && o.unchanged && !o.keepsSave && writes > 0) writes--;
     const max = write ? LIMITS.RESULT_MAX_CHARS[tool] : Math.max(200, Math.min(LIMITS.RESULT_MAX_CHARS[tool] || 1000, budgetLeft() || 200));
     const c = cap(o.text, max);
     used += c.text.length;

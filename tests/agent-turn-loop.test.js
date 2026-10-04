@@ -183,7 +183,7 @@ describe('the tool loop over SSE', () => {
       { tokens: ['I searched your vault and noted it.'] },
     ]);
     const r = await chat({ message: 'x' });
-    expect(r.of('notice').find((n) => n.code === 'unbacked-claim').message).toMatch(/AEON ran no search tool/);
+    expect(r.of('notice').find((n) => n.code === 'unbacked-claim').message).toMatch(/No search tool succeeded/);
     expect(r.of('done')[0]).toMatchObject({ toolCalls: 1, toolWrites: 1 });
     expect(r.of('tool_result')[0].notice).toMatch(/scratchpad updated/);
   });

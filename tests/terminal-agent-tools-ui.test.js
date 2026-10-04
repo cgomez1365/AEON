@@ -78,8 +78,8 @@ describe('auto-continue and engine notices', () => {
   });
 
   it('a warn notice is a WARN line, an info notice a SYS line', () => {
-    expect(noticeEntry({ level: 'warn', code: 'unbacked-claim', message: 'AEON ran no search tool in this reply' }))
-      .toEqual({ type: 'msg', role: 'warning', content: '↪ AEON ran no search tool in this reply' });
+    expect(noticeEntry({ level: 'warn', code: 'unbacked-claim', message: 'No search tool succeeded in this reply' }))
+      .toEqual({ type: 'msg', role: 'warning', content: '↪ No search tool succeeded in this reply' });
     expect(noticeEntry({ level: 'info', code: 'tools-off', message: 'tools are off' }).role).toBe('system');
   });
 });

@@ -65,20 +65,26 @@ const CAPABILITIES = {
   // an agent_tool for them to govern — collectTools() returns an empty array
   // on this install — so enforcing them today would gate nothing while
   // implying otherwise.
+  //
+  // Since 3.3.0 agents DO use tools in chat (src/kernel/agentTools.cjs):
+  // reading and listing the Vault, saving to their own memory and folder,
+  // searching the web. Those are switched in Settings → Blocks → Memory
+  // Core, not here, and the pending text of the three toggles that sound
+  // like them says so (tests/capabilities.test.js holds it to that).
   tool_filesystem: {
     default: true, implemented: false,
     summary: 'Let the agent read and write files on this computer.',
-    pending: 'No agent tool requests file access yet, so this cannot restrict anything. The File Manager\'s own add-only lock is what governs file changes today.',
+    pending: 'This switch does not govern agents\' Vault tools. In chat, your agents read and list files in your Vault and save to their own folder (memory, scratchpad, handoffs, artifacts) — turn that on or off in Settings → Blocks → Memory Core → "Let agents use AEON\'s tools in chat". Agents cannot touch files outside the Vault. The File Manager\'s own add-only lock governs its file changes.',
   },
   tool_shell: {
     default: true, implemented: false,
     summary: 'Let the agent run commands on this computer.',
-    pending: 'No agent tool runs shell commands yet. The terminal\'s own > prefix is what runs commands today, and it acts on your instruction rather than the agent\'s.',
+    pending: 'No agent tool runs shell commands, and the terminal no longer runs them either (its > prefix only explains that). Named actions on this computer go through AEON\'s own OS actions, on your instruction.',
   },
   tool_web_search: {
     default: true, implemented: false,
     summary: 'Let the agent search the web.',
-    pending: 'Deep Research and Orion Search run searches when you ask them to, and neither routes through the agent toolset yet.',
+    pending: 'This switch does not govern agents\' web search. In chat, your agents can search the web on their own with your search provider — turn that on or off in Settings → Blocks → Memory Core → "Agents may search the web". Agents set to Local only never search the web. Deep Research and Orion Search run searches when you ask them to.',
   },
   tool_email: {
     default: false, implemented: false,
@@ -93,7 +99,7 @@ const CAPABILITIES = {
   tool_memory: {
     default: true, implemented: false,
     summary: 'Let the agent save facts to memory on its own.',
-    pending: 'The agent cannot write to memory at all today — Memory Core\'s automatic capture setting is what governs saving, and it runs after a conversation rather than as an agent action.',
+    pending: 'This switch does not govern agents\' memory saves. In chat, each agent saves facts to its own memory with its memory_save tool, and every save is shown in the terminal — turn agent tools on or off in Settings → Blocks → Memory Core → "Let agents use AEON\'s tools in chat"; "New memories start on" applies to what they save. Memory Core\'s automatic capture runs after a conversation.',
   },
   tool_autopilot: {
     default: false, implemented: false,

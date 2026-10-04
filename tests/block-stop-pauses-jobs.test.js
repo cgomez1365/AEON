@@ -9,9 +9,8 @@
  *   restart with the block still stopped              — the job ran again
  *
  * The run state was enforced in blockHost's HTTP gate only. A block that acts
- * on a timer — the first customer's is a scraper that places bids — kept
- * acting after the operator pressed Stop. This drives the REAL block host with
- * the REAL runState: no stubbed timers, no stubbed state.
+ * on a timer kept acting after the operator pressed Stop. This drives the
+ * REAL block host with the REAL runState: no stubbed timers, no stubbed state.
  */
 import { afterAll, describe, expect, it } from 'vitest';
 import { createRequire } from 'module';

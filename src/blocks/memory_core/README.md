@@ -38,7 +38,12 @@ The operator's agents and what each one remembers.
     only, and "remember" will not add them to the indexed record. The terminal tags
     every turn with the agent it was with, so in a chat that switched agents its
     turns are left out of what goes to another agent's model, a chat title, a
-    distil or the record (`shareableTurns` in `src/kernel/agents.cjs`);
+    distil or the record (`shareableTurns` in `src/kernel/agents.cjs`) — also after
+    the agent is removed: a turn tagged with an agent no longer listed is treated as
+    Local only;
+  - its `memory/` folder is never read or written through a link: an agent whose
+    `memory/` (or `memories.json`) is a link gets no memories, and Memory Core
+    refuses that store with the reason (`agents.memoryLink`);
   - `/memory`, `/context`, `/doc` and `/read` show its memory files but never read
     them back into the conversation or have a model summarise them;
   - the question it searches the Second Brain with is embedded on this computer (or
@@ -173,7 +178,7 @@ the index is decided by `src/kernel/vaultPrivacy.cjs`.
 | Method | Path | Notes |
 |---|---|---|
 | `GET` | `/api/memory` | List, pinned first then newest. Query: `?type=`, `?category=`, `?q=` (every word, any order, in text + title; a `q` that is only a category word is a section lookup). Returns `memories` (each with `active` and `tokens`), a `summary` (total, on, off, tokens of the on ones), `text` for the terminal chip, and `modelText` — what the terminal may read back into the conversation (without switched-off memories; `null` for a Local only agent). |
-| `POST` | `/api/memory/add` | Create. Body: `{text, category?, type?, title?, tags?, pinned?, source?, refs?, active?}`. `text` must be 6+ chars. Deduped on trimmed, lower-cased text — a repeat is a no-op and its `text` says so. Every response carries a one-line `text` for the terminal chip. **Path is a contract**: the chat auto-extract posts here. |
+| `POST` | `/api/memory/add` | Create. Body: `{text, category?, type?, title?, tags?, pinned?, source?, refs?, active?}`. `text` must be 6+ chars. Deduped on trimmed, lower-cased text — a repeat is a no-op and its `text` says so; a repeat of a switched-off memory also carries `modelText` and `modelActive` — what a new save would have said — which is all an agent's `memory_save` tool tells the model, so a model cannot learn that an Off memory exists. A linked store answers 409. Every response carries a one-line `text` for the terminal chip. **Path is a contract**: the chat auto-extract posts here. |
 | `PUT` | `/api/memory/:id` | Edit any of `text, category, type, title, tags, pinned, active`. |
 | `POST` | `/api/memory/:id/pin` | Toggle pin. |
 | `POST` | `/api/memory/:id/active` | The switch: `{active: true\|false}` sets it, no body flips it. |

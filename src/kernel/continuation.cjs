@@ -13,13 +13,20 @@
  *   - a preamble ("Continuing: ", "Sure, here is the rest:")
  *
  * The start of a continuation is held back while the seam is decided: at
- * least SEAM_HOLD characters, and longer (up to SEAM_HOLD_MAX) while what is
- * held still repeats text already shown, so a restarted paragraph is matched
- * whole. The rest streams straight through.
+ * least SEAM_HOLD characters, and longer while what is held still repeats
+ * text already shown, so a restarted paragraph is matched whole. Past
+ * SEAM_HOLD_MAX characters the held text is followed through the previous
+ * part character by character: a restart that runs on to the end of that
+ * part (a model that began its section, or the whole answer, again) is
+ * dropped however long it is; one that turns into new text before then is
+ * shown as it was written. The rest streams straight through.
  *
- * Known limit: a continuation that repeats the previous part's last line
+ * Known limits: a continuation that repeats the previous part's last line
  * when that part ended exactly at a line break is kept (a checklist or a
- * table can rightly repeat a line; dropping it would lose text).
+ * table can rightly repeat a line; dropping it would lose text). An overlap
+ * that is a short repeating pattern ("0 0 0 0 0 0 0") is never trimmed:
+ * repetitive data can rightly continue with more of the same, so such a
+ * repeat may show twice.
  *
  * Pure: no I/O. Kernel module.
  */
@@ -58,10 +65,26 @@ function overlapLength(prev, head, min = SEAM_MIN) {
   for (const h of [h0, h0.replace(/^\s+/, '')]) {
     const offset = h0.length - h.length;
     for (let k = Math.min(h.length, p.length); k >= min; k--) {
-      if (p.endsWith(h.slice(0, k))) return offset + k;
+      const o = h.slice(0, k);
+      if (!p.endsWith(o)) continue;
+      // Repetitive data ("0 0 0 0 0 0") can rightly go on with more of the
+      // same; trimming it would lose text (see the known limit above).
+      if (periodic(o)) return 0;
+      return offset + k;
     }
   }
   return 0;
+}
+
+// Whether `s` is a shorter pattern repeated at least twice over its length.
+function periodic(s) {
+  const n = s.length;
+  for (let p = 1; p <= n / 2; p++) {
+    let i = p;
+    while (i < n && s[i] === s[i - p]) i++;
+    if (i === n) return true;
+  }
+  return false;
 }
 
 /**
@@ -115,15 +138,41 @@ function stripPreamble(head) {
  * push(t) / end() — calls onText with the stitched text.
  */
 function createSeam(prev, { onText = () => {}, hold = SEAM_HOLD, holdMax = SEAM_HOLD_MAX, min = SEAM_MIN } = {}) {
-  const tail = String(prev || '').slice(-2 * holdMax);
-  // Still a repeat of text already shown: keep holding, the overlap may grow.
+  const whole = String(prev || '');
+  const held = () => stripPreamble(buf).replace(/^\s+/, '');
+  // Still a repeat of text already shown (anywhere in the previous part):
+  // keep holding, the overlap may grow.
   const stillRepeating = () => {
-    const h = stripPreamble(buf).replace(/^\s+/, '');
-    return h.length > 0 && tail.includes(h);
+    const h = held();
+    return h.length > 0 && whole.includes(h);
   };
   let buf = '';
   let decided = false;
   let dropped = 0;
+  // Past holdMax: where in the previous part the held text could still be
+  // a repeat of (start offsets), followed as more arrives.
+  let offsets = null;
+  let matched = 0; // how much of the held text is known to match at every offset
+  const track = () => {
+    const h = held();
+    const lead = buf.length - h.length;
+    for (const o of offsets) {
+      const rest = whole.length - o;
+      if (h.length >= rest && h.slice(matched, rest) === whole.slice(o + matched)) {
+        // The repeat ran on to the end of the previous part: drop it all.
+        decided = true;
+        dropped = lead + rest;
+        const out = h.slice(rest);
+        buf = '';
+        if (out) onText(out);
+        return;
+      }
+    }
+    const more = h.slice(matched);
+    offsets = offsets.filter((o) => whole.startsWith(more, o + matched));
+    matched = h.length;
+    if (!offsets.length) decide();
+  };
   const decide = () => {
     if (decided) return;
     decided = true;
@@ -142,9 +191,23 @@ function createSeam(prev, { onText = () => {}, hold = SEAM_HOLD, holdMax = SEAM_
       if (!t) return;
       if (decided) { onText(t); return; }
       buf += t;
-      if (buf.length >= holdMax || (buf.length >= hold && !stillRepeating())) decide();
+      if (offsets) { track(); return; }
+      if (buf.length >= hold && !stillRepeating()) { decide(); return; }
+      if (buf.length >= holdMax) {
+        const h = held();
+        offsets = [];
+        for (let i = whole.indexOf(h); i !== -1; i = whole.indexOf(h, i + 1)) offsets.push(i);
+        matched = 0;
+        track();
+      }
     },
-    end() { decide(); return { dropped }; },
+    end() {
+      // Still following a repeat when the part ended (cut again before it
+      // reached the end of the previous part): all of it was shown already.
+      if (!decided && offsets && offsets.length) { decided = true; dropped = buf.length; buf = ''; }
+      decide();
+      return { dropped };
+    },
     dropped: () => dropped,
   };
 }

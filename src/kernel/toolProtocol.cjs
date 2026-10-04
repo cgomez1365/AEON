@@ -37,6 +37,11 @@ const OPENER_RE = /^(.*?)(`{3,}|~{3,})[ \t]*aeon[-_ ]?tool[ \t]*$/i;
 const ONE_LINE_RE = /^(.*?)(`{3,}|~{3,})[ \t]*aeon[-_ ]?tool[ \t]+(\{.*\})[ \t]*\2[ \t]*$/i;
 // The header started on the opener line and continues below it (tolerated).
 const OPENER_INLINE_RE = /^(.*?)(`{3,}|~{3,})[ \t]*aeon[-_ ]?tool[ \t]+(\{.*)$/i;
+// A one-line call with more prose after its closing fence on the same line:
+// "You can write ```aeon-tool {...}``` to list things." is an explanation,
+// quoted inline — shown as text, never run (DESIGN §4.2 anchors a one-line
+// call to the end of its line).
+const ONE_LINE_PROSE_RE = /^(.*?)(`{3,}|~{3,})[ \t]*aeon[-_ ]?tool[ \t]+(\{.*\})[ \t]*\2[ \t]*\S/i;
 // The tail of an incomplete line that could still become an opener (or a
 // one-line call). While it matches, it is held back from the visible text.
 // (A trailing \r is held too: a model that streams CRLF line endings.)
@@ -170,10 +175,13 @@ function parseBlock(block) {
  * after it is shown), else null. end flushes held text and reports an
  * unterminated block.
  */
-function createScanner({ onText = () => {}, initialFence = null } = {}) {
+function createScanner({ onText = () => {}, initialFence = null, carry = '' } = {}) {
   let mode = 'text'; // 'text' | 'block' | 'done'
   let released = ''; // released part of the current (incomplete) line
-  let pending = '';  // held part of the current line
+  // held part of the current line. A continuation round starts with what the
+  // cut-off round still held (end({ carry: true }) → heldTail): an opener cut
+  // by the output limit ("```aeon-to" | "ol") completes across the seam.
+  let pending = String(carry || '');
   let visibleText = '';
   // block state
   let fence = null;  // { char, len }
@@ -288,7 +296,7 @@ function createScanner({ onText = () => {}, initialFence = null } = {}) {
       if (one) return oneLine(one);
       const open = OPENER_RE.exec(line);
       if (open) { openBlock(open, line); return null; }
-      const inline = OPENER_INLINE_RE.exec(line);
+      const inline = ONE_LINE_PROSE_RE.test(line) ? null : OPENER_INLINE_RE.exec(line);
       if (inline) { openBlock(inline, line, inline[3]); return null; }
     }
     noteFence(line);
@@ -322,12 +330,10 @@ function createScanner({ onText = () => {}, initialFence = null } = {}) {
         if (b) return { block: b };
         continue;
       }
+      // A one-line call is complete at the end of its line (or of the
+      // stream, in end()), never at its closing fence: prose may follow the
+      // fence on the same line, and then it was a quoted example.
       pending += ch;
-      // A one-line call is complete the moment its closing fence arrives.
-      if (FENCE_CHARS.has(ch) && !codeFence) {
-        const one = ONE_LINE_RE.exec(released + pending);
-        if (one) return { block: oneLine(one) };
-      }
       settle();
     }
     return null;
@@ -339,14 +345,23 @@ function createScanner({ onText = () => {}, initialFence = null } = {}) {
     return r;
   }
 
-  function endInner({ truncated = false } = {}) {
+  function endInner({ truncated = false, carry = false } = {}) {
     if (mode === 'done') return { block: null, unterminated: false, raw: '' };
     if (mode === 'text') {
       const line = noCr(released + pending);
       const one = codeFence ? null : ONE_LINE_RE.exec(line);
       if (one) return { block: oneLine(one), unterminated: false, raw: '' };
+      // Cut by the output limit while holding what may be an opener, and a
+      // continuation follows: hand the held text to the next round's scanner
+      // (createScanner carry) instead of showing it. It is not shown here.
+      if (carry && truncated && !codeFence && pending && HOLD_RE.test(pending)) {
+        const heldTail = pending;
+        pending = '';
+        mode = 'done';
+        return { block: null, unterminated: false, raw: '', heldTail };
+      }
       const open = codeFence ? null : OPENER_RE.exec(line);
-      const inline = open || codeFence ? null : OPENER_INLINE_RE.exec(line);
+      const inline = open || codeFence || ONE_LINE_PROSE_RE.test(line) ? null : OPENER_INLINE_RE.exec(line);
       if (open || inline) {
         // An opener and nothing (or only a header start) after it: the model
         // stopped right there.
@@ -506,7 +521,7 @@ function claimCheck(text, outcomes = [], { agentNames = [] } = {}) {
     if (g.tools.some((t) => okTools.has(t))) continue;
     out.push({
       level: 'warn', code: 'unbacked-claim',
-      message: `AEON ran no ${g.group} tool in this reply — "${m[0]}" is the model's claim, not something AEON did.`,
+      message: `No ${g.group} tool succeeded in this reply — "${m[0]}" is the model's claim, not something AEON did.`,
     });
   }
   return out;
@@ -515,5 +530,5 @@ function claimCheck(text, outcomes = [], { agentNames = [] } = {}) {
 module.exports = {
   createScanner, parseBlock, parseHeader, repairJson, normalizeTool, wrapResult, neutralise, newNonce, codeFenceState,
   systemText, claimCheck, TOOL_NAMES, WRITE_TOOLS, ALIASES,
-  OPENER_RE, ONE_LINE_RE, HOLD_RE,
+  OPENER_RE, ONE_LINE_RE, ONE_LINE_PROSE_RE, HOLD_RE,
 };

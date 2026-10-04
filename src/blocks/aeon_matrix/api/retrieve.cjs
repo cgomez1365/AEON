@@ -603,7 +603,10 @@ module.exports = function retrieveFactory(deps) {
     try {
       const memFile = path.join(VAULT_ROOT, 'Agents', 'Aeon', 'memory', 'memories.json');
       let mems = [];
-      try { const raw = JSON.parse(fs.readFileSync(memFile, 'utf8')); if (Array.isArray(raw)) mems = raw; } catch { /* no store */ }
+      // Never through a link (agents.memoryLink), the rule every memory reader follows.
+      if (!require('../../../kernel/agents.cjs').memoryLink(VAULT_ROOT, null)) {
+        try { const raw = JSON.parse(fs.readFileSync(memFile, 'utf8')); if (Array.isArray(raw)) mems = raw; } catch { /* no store */ }
+      }
       // A memory switched off is not recalled, here either: this answer goes
       // into a chat turn. Nor is any of it while the operator's own AEON is
       // set to Local only — the same rule as its file in the index.

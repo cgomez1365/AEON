@@ -3678,7 +3678,7 @@ export default function SystemSettings() {
         <>
           <BuildQueuePanel />
           <div className="admin-card prefs-card">
-            <div className="agent-tools-desc">Control what the AI agent is allowed to do when processing requests. Disabled tools won't appear in the agent's toolset.</div>
+            <div className="agent-tools-desc">Permissions for agent tools that are not built yet. The tools agents use in chat today — reading your Vault, saving to their own memory and folder, searching the web — are switched in Settings → Blocks → Memory Core.</div>
             <CapabilityToggle capKey="tool_filesystem" label="File system access" onMsg="FS access on" offMsg="FS access off" />
             <CapabilityToggle capKey="tool_shell" label="Shell commands" onMsg="Shell on" offMsg="Shell off" />
             <CapabilityToggle capKey="tool_web_search" label="Web search" onMsg="Web search on" offMsg="Web search off" />
