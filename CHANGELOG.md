@@ -16,7 +16,8 @@ tagged; until then its heading says so.
 
 <!-- 3.3.0 was built in local branches and lands as one commit, 25a66cd, plus the
      commit that points these lines at it and the review fixes on top of it (same
-     branch, release/3.3.0: round 3 is 4aafe70, round 4 is c805e4a). Every entry below
+     branch, release/3.3.0: round 3 is 4aafe70, round 4 is c805e4a,
+     round 5 is 6d414c7). Every entry below
      except "Not included in 3.3.0" names the commit or commits its behaviour comes
      from. These hashes hold only if the branch reaches main by a merge commit or a
      fast-forward, never a squash or rebase. -->
@@ -62,6 +63,10 @@ data in `~/AEON` is untouched; upgrade as for 3.2.0.
   save is shown, and one reply can make at most 3. A model that streams a very long line
   of backticks can no longer stall AEON: what the terminal holds back while it decides
   whether a line is a tool call is bounded. (25a66cd, c805e4a)
+- **A reply after a tool result is never retried in shortened form.** A shortened retry
+  would keep only the start of the instructions and drop the tool rules. If the model
+  cannot take the result (too large, or out of output budget), the answer so far stays
+  and a notice says why. (6d414c7)
 - **Vault paths stay in the Vault:** no `..`, no absolute paths, no hidden files or OS
   junk, and no way out through a symlink — also for an agent's own scratchpad,
   handoffs and artifacts, which are never opened through a link. (25a66cd)
@@ -109,6 +114,12 @@ data in `~/AEON` is untouched; upgrade as for 3.2.0.
 - **Turns from an agent you removed** stay out of every later prompt that may go to a
   cloud model: a turn tagged with an agent that is no longer listed counts as Local
   only, since whether it was private can no longer be told. (25a66cd, 4aafe70)
+- **An agent reference never lands on the wrong agent.** A word that is one agent's id
+  or folder and another agent's name picks neither, and a new or changed name may not
+  be another agent's id or folder — so a renamed Local only agent's id cannot reach the
+  Roulette agent that took its old name. (6d414c7)
+- **A folder named Vault inside your Vault** (an older Vault copied in) is checked as
+  itself, so a Local only agent's folder inside it stays private. (6d414c7)
 - **Your own AEON set to Local only:** an agent set to Roulette no longer gets the
   shared memory (which is your AEON's memory) in its prompt. 3.2.1 listed this as not
   covered. (25a66cd)
