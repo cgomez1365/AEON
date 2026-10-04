@@ -16,8 +16,9 @@ tagged; until then its heading says so.
 
 <!-- 3.3.0 was built in local branches and lands as one commit, 25a66cd, plus the
      commit that points these lines at it and the review fixes on top of it (same
-     branch, release/3.3.0); every entry below except "Not included in 3.3.0" names
-     25a66cd. These hashes hold only if the branch reaches main by a merge commit or a
+     branch, release/3.3.0: round 3 is 4aafe70, round 4 is ROUND4). Every entry below
+     except "Not included in 3.3.0" names the commit or commits its behaviour comes
+     from. These hashes hold only if the branch reaches main by a merge commit or a
      fast-forward, never a squash or rebase. -->
 
 Agents that can work. In a chat, your AEON and your agents can use AEON's own tools —
@@ -29,7 +30,8 @@ data in `~/AEON` is untouched; upgrade as for 3.2.0.
 
 ### Agent tools in chat
 
-- **Eight tools**, in every chat turn of the terminal: `vault_search` (the same Second
+- **Eight tools**, in the terminal's chat turns (within the limits below; `web_search`
+  and `ask_agent` only where allowed): `vault_search` (the same Second
   Brain search `/ask` uses), `vault_read` (one Vault file — text, Markdown, PDF or
   HTML, long files in parts), `vault_list` (a Vault folder), `web_search` (your search
   provider; DuckDuckGo needs no key), `memory_save` (one fact to the agent's **own**
@@ -47,7 +49,8 @@ data in `~/AEON` is untouched; upgrade as for 3.2.0.
   also checks the answer for common phrasings such as "I searched your Vault", "I read
   the file", "I saved it to my memory" or "I asked <agent>", and warns under it when no
   tool of that kind succeeded in that reply (a Vault search does not back "I searched
-  the web"); other wordings are not caught. (25a66cd)
+  the web"); other wordings are not caught. "I asked <agent>" is checked against every
+  agent you have, including ones that agent may not ask. (25a66cd, 4aafe70, ROUND4)
 - **Limits per reply:** at most 6 tool uses, 3 of them saves; each result is capped in
   size, the results together are capped, and each tool has a time limit. When the chat
   role's model has a context window under 4,096 tokens, tools are off for that turn and
@@ -56,7 +59,9 @@ data in `~/AEON` is untouched; upgrade as for 3.2.0.
   data, between markers that carry a random tag for that reply, and a tool call written
   inside a document is never run — in a tool result, in a passage the Second Brain
   recalled into the turn, or in a saved memory. A document's text can still sway a model, so every
-  save is shown, and one reply can make at most 3. (25a66cd)
+  save is shown, and one reply can make at most 3. A model that streams a very long line
+  of backticks can no longer stall AEON: what the terminal holds back while it decides
+  whether a line is a tool call is bounded. (25a66cd, ROUND4)
 - **Vault paths stay in the Vault:** no `..`, no absolute paths, no hidden files or OS
   junk, and no way out through a symlink — also for an agent's own scratchpad,
   handoffs and artifacts, which are never opened through a link. (25a66cd)
@@ -65,7 +70,9 @@ data in `~/AEON` is untouched; upgrade as for 3.2.0.
 - **Not included in 3.3.0:** no shell, no code execution and no arbitrary web
   requests. Apart from the model calls a chat already makes (and `vault_search`'s query
   embedding, and `ask_agent`'s call to the asked agent's own model and provider), the
-  only outside service a tool contacts is your search provider, through `web_search`.
+  only outside service a tool contacts is your search provider, through `web_search`;
+  and a save starts the usual Vault indexing, which embeds the saved text with your
+  Embedding model (a cloud one if no local embedding model is installed).
 
 ### Privacy
 
@@ -81,20 +88,27 @@ data in `~/AEON` is untouched; upgrade as for 3.2.0.
   name. A Local only agent asking a Roulette agent is refused with the reason. Neither
   model is called. An agent whose `agent.json` cannot be read is treated as Local only
   until it is fixed. (25a66cd)
-- **Switched-off memories, a memory store holding one, Local only agents' folders,
-  saved chats and the security block's records** cannot be read, listed or searched
-  through another agent's tools (a Local only agent still reads its own folder), also
-  when a link elsewhere in the Vault leads to them. A `memory_save` of the same words as
-  a switched-off memory is answered like a new save, so a model cannot learn it exists.
-  (25a66cd)
+- **Switched-off memories, Local only agents' folders, saved chats and the security
+  block's records** cannot be read, listed or searched through any agent's tools (a
+  Local only agent may read its own folder, except memories switched off), also when a
+  link elsewhere in the Vault leads to them; saved chats and security records reached
+  through a link are not indexed either. No tool reads or lists an agent's memory
+  files: the memories that are on are already in its prompt, and `vault_search` finds
+  them. A `memory_save` of the same words as a switched-off memory is answered like a
+  new save, so a model cannot learn it exists. (25a66cd, 4aafe70, ROUND4)
+- **A removed agent set to Local only stays private.** Removing an agent moves its
+  folder to `Agents/.removed/`; any folder whose `agent.json` says Local only (or cannot
+  be read), and any folder in `Agents/.removed/` without one, is withheld from tools,
+  indexing and recall wherever it is — reached through a link, or moved elsewhere in
+  the Vault by hand. (ROUND4)
 - **A memory store is never read or written through a link.** When an agent's
   `memory/` folder (or the shared one, `Agents/Aeon/memory`) is a link, its prompt gets
   no memories and Memory Core refuses to show or change that store, with the reason; a
   link to a Local only agent's memory would otherwise have put it in a cloud prompt.
-  (25a66cd)
+  (4aafe70)
 - **Turns from an agent you removed** stay out of every later prompt that may go to a
   cloud model: a turn tagged with an agent that is no longer listed counts as Local
-  only, since whether it was private can no longer be told. (25a66cd)
+  only, since whether it was private can no longer be told. (25a66cd, 4aafe70)
 - **Your own AEON set to Local only:** an agent set to Roulette no longer gets the
   shared memory (which is your AEON's memory) in its prompt. 3.2.1 listed this as not
   covered. (25a66cd)
@@ -106,10 +120,10 @@ data in `~/AEON` is untouched; upgrade as for 3.2.0.
   and Google's sign-in avatar host (`img-src`).
   (25a66cd)
 - **Errors a model reads name a Vault path, never this computer's paths** (they carry
-  your user name), `file://` addresses and quoted paths with spaces included. (25a66cd)
+  your user name), `file://` addresses and quoted paths with spaces included. (25a66cd, 4aafe70)
 - Scratchpads and handoffs are the model's own words, so they are not indexed into
-  the Second Brain; artifacts are documents and are indexed. Both are shown to the
-  agent as its notes, not as instructions. (25a66cd)
+  the Second Brain; artifacts are documents and are indexed. Scratchpads and handoffs
+  are shown to the agent as its notes, not as instructions. (25a66cd)
 
 ### Answers continue past the output limit
 
@@ -123,16 +137,20 @@ data in `~/AEON` is untouched; upgrade as for 3.2.0.
   line keeps it (a checklist can repeat a line), so a model that restarts a whole line
   there can still show it twice; an overlap that is a short repeating pattern ("0 0 0
   0") is kept too, since repetitive data can rightly go on with more of the same. A
-  tool call the limit cut in half is completed in the next part and run.
+  tool call whose first line the limit cut is completed in the next part and run; one
+  cut later is refused as cut off, and the model is asked to send a shorter call.
   The terminal shows "continuing… part 2 of up to 5" while it works and "Continued
-  automatically, N parts." under the answer. (25a66cd)
+  automatically, N parts." under the answer. (25a66cd, 4aafe70, ROUND4)
 - Later parts resolve the chat role the same way the first did (its address, key pool
   and pacing), and stay on a fallback model once one has served a part; a provider
   failure on a later part can still fall back. (25a66cd)
 - Up to 4 extra parts by default (Settings → Blocks → Memory Core, 0 to 8; each part is
   another model call), or off. An answer still cut after the last part says so and
   that you can type "continue". A provider that does not report why it stopped is
-  never continued on a guess. (25a66cd)
+  never continued on a guess. A later part is never sent with less context: when the
+  question and the answer so far are more than the model accepts, or a later part comes
+  back empty (a reasoning model that spent its budget thinking), the answer ends where
+  it stopped, says why, and you can type "continue". (25a66cd, ROUND4)
 
 ### Scratchpad and handoffs
 
@@ -142,8 +160,8 @@ data in `~/AEON` is untouched; upgrade as for 3.2.0.
   never cut. (25a66cd)
 - **`/handoff`:** the agent you are talking to writes a short note — what it was working
   on, what was decided, what is open, the next step — to
-  `Agents/<Folder>/handoffs/`. The newest one is shown to it on every turn until it
-  writes a newer one. Older ones are kept; nothing is deleted or overwritten. "Write a
+  `Agents/<Folder>/handoffs/`. The first 1,500 characters of the newest one are shown
+  to it on every turn until it writes a newer one. Older ones are kept; nothing is deleted or overwritten. "Write a
   handoff when you save a chat" (off by default) does the same when you save a chat
   with an agent. (25a66cd)
 - Memory Core's agent settings show the scratchpad (editable, with its character

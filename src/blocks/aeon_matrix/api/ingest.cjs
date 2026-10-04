@@ -453,6 +453,10 @@ module.exports = function ingestFactory(deps) {
       const full = path.join(dir, name);
       const relPosix = vaultRelative(full).replace(/\\/g, '/');
       if (NON_INDEXED_VAULT_PATHS.has(relPosix)) continue;
+      // The same places under any other name: a link elsewhere in the Vault
+      // that leads into saved chats or security records, or a mis-cased one
+      // (vaultPrivacy.NEVER_SHARED, judged as the disk resolves the path).
+      if (privacy.neverShared(relPosix)) continue;
       // An agent's scratchpad and handoffs are its own words (R09, as for
       // chat_sessions above): src/kernel/agentWorkspace.cjs. Its artifacts
       // are deliberate documents and stay indexed.
@@ -646,7 +650,7 @@ module.exports = function ingestFactory(deps) {
     const privacy = vaultPrivacy.createScope(BRAIN_DIR);
     for (const rel of new Set([...Object.keys(manifest), ...Object.keys(index.documents)])) {
       const relPosix = rel.replace(/\\/g, '/');
-      if (seen.has(relPosix) || !privacy.withheld(relPosix)) continue;
+      if (seen.has(relPosix) || !(privacy.withheld(relPosix) || privacy.neverShared(relPosix))) continue;
       delete manifest[rel];
       delete index.documents[relPosix];
       delete chunks()[relPosix];

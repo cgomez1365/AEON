@@ -123,7 +123,10 @@ module.exports = function retrieveFactory(deps) {
   // Every route below reads the index through this, so nothing the operator
   // withheld in Memory Core — a memory switched off, a Local only agent's
   // folder — is ever a candidate, even in the moments between flipping the
-  // switch and the scan that takes its entry out of vault_index.json.
+  // switch and the scan that takes its entry out of vault_index.json. Saved
+  // chats and security records are never candidates either, under any name a
+  // link gives them (vaultPrivacy.neverShared): an agent's vault_search reads
+  // this index, and its vault_read refuses those files.
   function readIndex() {
     let idx;
     if (!fs.existsSync(INDEX_FILE)) return { documents: {} };
@@ -132,7 +135,8 @@ module.exports = function retrieveFactory(deps) {
     const privacy = vaultPrivacy.createScope(VAULT_ROOT);
     const documents = {};
     for (const [rel, d] of Object.entries(idx.documents)) {
-      if (!privacy.withheld(d?.path || rel)) documents[rel] = d;
+      const p = d?.path || rel;
+      if (!privacy.withheld(p) && !privacy.neverShared(p)) documents[rel] = d;
     }
     return { ...idx, documents };
   }

@@ -337,7 +337,12 @@ module.exports = function ({ kernelLLM, loadSettings: loadSettingsDep, VAULT_ROO
       // A claim the model made that no tool backs ("I searched your vault")
       // is pointed out, never edited.
       if (!result.cancelled) {
-        for (const n of toolProtocol.claimCheck(result.text, toolbox ? toolbox.outcomes() : [], { agentNames: toolbox ? toolbox.agentNames() : [] })) {
+        // "I asked <name>" is checked against every agent the operator has,
+        // not only those this caller may ask: a claim to have asked one it
+        // may not (or with tools off) is the likeliest false one. The notice
+        // goes to the operator only.
+        const agentNames = agents.filter((a) => a && a.name && !(agent && a.id === agent.id)).map((a) => a.name);
+        for (const n of toolProtocol.claimCheck(result.text, toolbox ? toolbox.outcomes() : [], { agentNames })) {
           sseWrite(res, 'notice', n);
         }
       }

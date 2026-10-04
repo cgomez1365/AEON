@@ -72,22 +72,28 @@ const WRITE_TOOLS = protocol.WRITE_TOOLS;
 const CATEGORIES = new Set(['fact', 'identity', 'preference', 'contact', 'project', 'goal']);
 const BASE_IDENTITY = 'You are AEON, a private AI workspace built by Broken Gear Industries. You are helpful, precise, and concise. When the user asks you to do something, do it directly. ';
 
-// Never readable through a tool, whoever asks: saved chats (they carry model
-// turns and may hold a Local only agent's turns — chat.cjs keeps every chat in
-// Agents/Aeon/chat_sessions) and the security block's own records.
-const NOT_FOR_TOOLS = [/^agents\/[^/]+\/chat_sessions(?:\/|$)/i, /^blocks\/security(?:\/|$)/i];
-// Windows opens "chat_sessions." and "chat_sessions " as chat_sessions: each
-// part is also judged with trailing dots and spaces removed.
-const trimParts = (rel) => String(rel || '').split('/').map((x) => x.replace(/[. ]+$/, '')).join('/');
-const matchesNotForTools = (rel) => NOT_FOR_TOOLS.some((re) => re.test(rel) || re.test(trimParts(rel)));
 /**
- * Judged as typed AND as the disk resolves it (vaultPrivacy's canonical path:
- * real case, symlinks followed, Windows short names expanded by realpath), so
- * a link elsewhere in the Vault that leads into chat_sessions is refused too.
+ * Never read or listed through a tool, whoever asks, judged as typed AND as
+ * the disk resolves it (vaultPrivacy: real case, symlinks followed, Windows
+ * short names expanded by realpath), so a link elsewhere in the Vault that
+ * leads into one is refused too:
+ *   'saved-chats'   saved chats and the security block's records
+ *                   (vaultPrivacy.NEVER_SHARED: not indexed either)
+ *   'memory-folder' an agent's memory folder — its store and the <id>.md
+ *                   mirrors. Memories switched on reach the model in its
+ *                   instructions, and vault_search searches them; a listing
+ *                   would change with a save that matched a switched-off
+ *                   memory and so tell a model that one exists.
  */
 const notForTools = (rel, sc) => {
-  if (matchesNotForTools(rel)) return true;
-  try { return matchesNotForTools(sc.canonical(rel)); } catch { return true; }
+  try {
+    if (sc.neverShared(rel)) return 'saved-chats';
+    return sc.inMemoryFolder(rel) ? 'memory-folder' : null;
+  } catch { return 'saved-chats'; }
+};
+const NOT_FOR_TOOLS_SAYS = {
+  'saved-chats': 'saved chats and security records stay out of tool results',
+  'memory-folder': 'memory files are not read through tools; the memories that are switched on are already in your instructions, and vault_search searches them',
 };
 
 const USAGE = {
@@ -270,20 +276,36 @@ function createToolbox({
   const no = (code, text, summary = text) => ({ status: 'refused', code, text, summary });
   const PATH_REFUSALS = new Set(['absolute-path', 'traversal', 'hidden', 'outside-vault']);
   const fromPath = (r) => (PATH_REFUSALS.has(r.code) ? no(r.code, r.message) : err(r.code, r.message));
+  // What the terminal says (the operator's view). The model is told only
+  // what a missing path tells it, except a Local only caller asking for
+  // another Local only agent's folder.
   const WITHHELD_SAYS = {
-    // Reached only by a Local only caller (withheldOutcome): another
-    // agent's Local only folder is that agent's own, not shared.
-    'local-only-agent': 'it belongs to another agent set to Local only, and each Local only agent reads only its own folder',
-    'memory-off': 'it is a memory the operator switched off',
-    'memory-store': 'it is a memory store that holds a switched-off memory',
+    'local-only-agent': 'a Local only agent\'s folder',
+    'memory-off': 'a memory the operator switched off',
+    'memory-store': 'a memory store that holds a switched-off memory',
   };
-  const withheldWhy = (rel) => scope().withheldFor(rel, { ownFolder });
-  // A Local only agent's folder, asked for by a caller that is not Local
-  // only: the model is told exactly what a missing path tells it, so it
-  // cannot learn the folder exists. The terminal still shows the real reason.
-  const withheldOutcome = (why, rel, notFoundText) => (why === 'local-only-agent' && !callerLocal
-    ? err('local-only-agent', notFoundText, 'withheld: a Local only agent\'s folder (the model was told it is not there)')
-    : no(why, `"${rel}" is withheld: ${WITHHELD_SAYS[why]}.`));
+  // Withheld: the model is told exactly what a missing path tells it, so it
+  // cannot learn that the folder exists, nor that a switched-off memory does.
+  // A Local only caller may learn that another Local only agent's folder is
+  // there (both stay on this computer): each reads only its own.
+  const withheldOutcome = (why, rel, notFoundText) => (why === 'local-only-agent' && callerLocal
+    ? no(why, `"${rel}" is withheld: it belongs to another agent set to Local only, and each Local only agent reads only its own folder.`)
+    : err(why, notFoundText, `withheld: ${WITHHELD_SAYS[why] || why} (the model was told it is not there)`));
+
+  // Why a path is not read or listed for this caller, as the outcome, or
+  // null. In this order, so no answer tells a Local only folder apart from a
+  // missing one: saved chats (by name alone, the same for every folder), a
+  // Local only agent's folder (reads as not there), an existing agent's
+  // memory folder, then anything else withheld.
+  function barred(rel, sc, notFound) {
+    const refuse = (bar) => no('hidden', `"${rel}" is not readable through tools (${NOT_FOR_TOOLS_SAYS[bar]}).`);
+    if (notForTools(rel, sc) === 'saved-chats') return refuse('saved-chats');
+    const why = sc.withheldFor(rel, { ownFolder });
+    if (why === 'local-only-agent') return withheldOutcome(why, rel, notFound);
+    const bar = notForTools(rel, sc);
+    if (bar) return refuse(bar);
+    return why ? withheldOutcome(why, rel, notFound) : null;
+  }
 
   function str(v, max, name, min = 1) {
     if (typeof v !== 'string') return `"${name}" must be text.`;
@@ -320,9 +342,8 @@ function createToolbox({
         const r = resolveInVault(vaultRoot, a.path, { mustExist: false });
         if (!r.ok) return fromPath(r);
         const notFound = `Nothing at "${r.rel}" in the Vault. Use vault_list or vault_search to find the right path.`;
-        if (notForTools(r.rel, scope())) return no('hidden', `"${r.rel}" is not readable through tools (saved chats and security records stay out of tool results).`);
-        const why = withheldWhy(r.rel);
-        if (why) return withheldOutcome(why, r.rel, notFound);
+        const refusal = barred(r.rel, scope(), notFound);
+        if (refusal) return refusal;
         if (!fs.existsSync(r.abs)) return err('not-found', notFound);
         const st = fs.statSync(r.abs);
         if (st.isDirectory()) return err('bad-path', `"${r.rel}" is a folder. Use vault_list to see what is in it.`);
@@ -347,9 +368,8 @@ function createToolbox({
         if (!r.ok) return fromPath(r);
         const sc = scope();
         const notFound = `Nothing at "${r.rel}" in the Vault. Use vault_list on its parent folder.`;
-        if (r.rel && notForTools(r.rel, sc)) return no('hidden', `"${r.rel}" is not readable through tools.`);
-        const why = r.rel ? withheldWhy(r.rel) : null;
-        if (why) return withheldOutcome(why, r.rel, notFound);
+        const refusal = r.rel ? barred(r.rel, sc, notFound) : null;
+        if (refusal) return refusal;
         if (!fs.existsSync(r.abs)) {
           return r.rel ? err('not-found', notFound) : ok('The Vault is empty.', 'empty Vault');
         }

@@ -15,6 +15,9 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { createRequire } from 'module';
+
+const require = createRequire(import.meta.url);
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SRC = fs.readFileSync(path.join(ROOT, 'src', 'blocks', 'memory_core', 'index.jsx'), 'utf8');
@@ -78,6 +81,8 @@ describe('the agent settings panel shows the scratchpad and handoffs', () => {
 
   it('says what each part is, in plain words', () => {
     expect(SRC).toMatch(/It sees them every turn and can change them with its scratchpad tool\./);
-    expect(SRC).toMatch(/Written by the agent with \/handoff, or when you save a chat if that setting is on\. The newest one is shown to it on every turn until it writes a newer one\. Nothing is deleted;/);
+    expect(SRC).toMatch(/Written by the agent with \/handoff, or when you save a chat if that setting is on\. The first 1,500 characters of the newest one are shown to it on every turn until it writes a newer one\. Nothing is deleted;/);
+    // The number in the words is the number the kernel injects.
+    expect(require('../src/kernel/agentWorkspace.cjs').HANDOFF_INJECT_MAX).toBe(1500);
   });
 });

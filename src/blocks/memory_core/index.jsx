@@ -163,7 +163,7 @@ function AgentWorkspace({ agentId, name }) {
       <div style={{ display: 'grid', gap: 4, fontSize: 11 }}>
         <span style={{ fontWeight: 600 }}>Handoffs</span>
         <span style={{ color: 'var(--text-dim, #8aa)' }}>
-          Written by the agent with /handoff, or when you save a chat if that setting is on. The newest one is shown to it on every turn until it writes a newer one. Nothing is deleted;
+          Written by the agent with /handoff, or when you save a chat if that setting is on. The first 1,500 characters of the newest one are shown to it on every turn until it writes a newer one. Nothing is deleted;
           {' '}they live in {folder ? `${folder}/handoffs/` : 'the handoffs folder inside its folder under Agents'}.
         </span>
         {handoffError && <div role="alert" style={{ color: 'var(--danger, #ff4466)' }}>{handoffError}</div>}
@@ -174,7 +174,7 @@ function AgentWorkspace({ agentId, name }) {
           <div key={h.path || h.at} style={{ border: '1px solid var(--border, #223)', borderRadius: 4, padding: '6px 8px' }}>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
               <span>{h.at ? new Date(h.at).toLocaleString() : h.path}</span>
-              {i === 0 && <span style={{ color: 'var(--accent, #00ff40)' }}>newest — shown to the agent</span>}
+              {i === 0 && <span style={{ color: 'var(--accent, #00ff40)' }}>newest — first 1,500 characters shown to the agent</span>}
               {i === 0 && latest?.text && (
                 <button type="button" onClick={() => setOpenLatest(!openLatest)} aria-expanded={openLatest}
                   style={{ ...chip(false), marginLeft: 'auto' }}>{openLatest ? 'hide' : 'read in full'}</button>

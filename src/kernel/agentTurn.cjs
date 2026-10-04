@@ -98,6 +98,7 @@ async function runAgentTurn({
     }
 
     let roundText = '';
+    const contRound = seamPrev != null;
     const seam = seamPrev != null
       ? continuation.createSeam(seamPrev, { onText: (t) => { roundText += t; out(t); } })
       : null;
@@ -116,6 +117,8 @@ async function runAgentTurn({
         role,
         ...callOpts,
         ...(pinned || {}),
+        // Never trimmed and retried: see services/ai.js (noTrimRetry).
+        ...(contRound ? { noTrimRetry: true } : {}),
         signal: child.signal,
         onToken: (t) => {
           if (block) return;
@@ -130,6 +133,24 @@ async function runAgentTurn({
       if (signal) signal.removeEventListener('abort', relay);
       if (scanner && !block) { try { scanner.end({ truncated: false }); } catch {} }
       if (seam) seam.end();
+      // A continuation that could not be fetched: the parts already shown
+      // are the answer, cut off where the model stopped, as without
+      // auto-continue. (Review round 4: a "too large" continuation, or a
+      // reasoning model that spent its budget thinking, ended the turn with
+      // a provider error and no done.)
+      if (contRound && !(signal && signal.aborted)) {
+        const cause = (e && e.cause) || e;
+        const tooLarge = !!(e?.tooLarge || cause?.tooLarge);
+        const why = tooLarge
+          ? 'the question and the answer so far are more than this model accepts in one request'
+          : String(cause?.message || e?.message || 'the model did not answer').slice(0, 300);
+        notice('warn', 'continue-stopped', `Auto-continue stopped at part ${parts}: ${why}.`);
+        return finish({
+          stopped: tooLarge
+            ? 'The answer is too long for this model to continue automatically. Type "continue" to ask for the rest.'
+            : 'The answer stopped at the model\'s output limit and could not be continued automatically. Type "continue" to try again.',
+        });
+      }
       // What the operator was shown, never the raw round: a tool block the
       // kernel saw as text must not surface in the error.
       if (visible) e.partialText = visible;
@@ -230,10 +251,11 @@ async function runAgentTurn({
   }
   return finish({});
 
-  function finish({ cancelled = false }) {
-    const truncated = !cancelled && !!last?.truncated;
+  function finish({ cancelled = false, stopped = null }) {
+    const truncated = !cancelled && (!!stopped || !!last?.truncated);
     let truncationReason = null;
-    if (truncated) {
+    if (stopped && truncated) truncationReason = stopped;
+    else if (truncated) {
       truncationReason = continued > 0 || maxParts > 0
         ? `The answer was continued ${continued} time${continued === 1 ? '' : 's'} and still reached the model's output limit. Type "continue" for more.`
         : (last?.truncationReason || 'max_tokens');

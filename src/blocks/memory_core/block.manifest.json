@@ -118,7 +118,7 @@
       },
       {
         "cmd": "/handoff",
-        "desc": "The agent you are talking to writes a handoff note (what it was doing, what is open, the next step) into its folder; it is shown that note every turn until it writes a newer one",
+        "desc": "The agent you are talking to writes a handoff note (what it was doing, what is open, the next step) into its folder; the first 1,500 characters of that note are shown to it every turn until it writes a newer one",
         "method": "POST",
         "route": "/api/agents/handoff",
         "param": "note",
@@ -201,7 +201,7 @@
         "label": "Write a handoff when you save a chat",
         "type": "boolean",
         "default": false,
-        "desc": "When you save a chat with an agent, it writes a short handoff note into its folder, shown to it every turn until it writes a newer one. /handoff does the same on demand."
+        "desc": "When you save a chat with an agent, it writes a short handoff note into its folder; its first 1,500 characters are shown to it every turn until it writes a newer one. /handoff does the same on demand."
       }
     ]
   },

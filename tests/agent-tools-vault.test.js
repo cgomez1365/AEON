@@ -178,17 +178,17 @@ describe('withheld documents are not readable through tools', () => {
     return agentTools.createToolbox({ vaultRoot: vault, agent: agents.get(vault, name, all), agents: all, contextTokens: 32768 });
   };
 
-  it('a switched-off memory and a store that holds one are refused', async () => {
+  it('memory files are never read or listed through tools, Off or on (review round 4)', async () => {
     const tb = as('aeon');
-    expect(await tb.run(call('vault_read', { path: 'Agents/Ledger/memory/off1.md' }))).toMatchObject({ ok: false, status: 'refused', code: 'memory-off' });
-    expect(await tb.run(call('vault_read', { path: 'Agents/Ledger/memory/memories.json' }))).toMatchObject({ ok: false, status: 'refused', code: 'memory-store' });
-    // A memory that is on reads.
-    expect((await tb.run(call('vault_read', { path: 'Agents/Ledger/memory/on1.md' }))).ok).toBe(true);
-    // And the listing leaves the withheld ones out.
-    const list = await tb.run(call('vault_list', { path: 'Agents/Ledger/memory' }));
-    expect(list.text).toContain('on1.md');
-    expect(list.text).not.toContain('off1.md');
-    expect(list.text).not.toContain('memories.json');
+    // One answer for every file in a memory folder, so none tells a model
+    // that a switched-off memory exists.
+    for (const f of ['off1.md', 'on1.md', 'memories.json']) {
+      const r = await tb.run(call('vault_read', { path: `Agents/Ledger/memory/${f}` }));
+      expect(r).toMatchObject({ ok: false, status: 'refused', code: 'hidden' });
+      expect(r.text).not.toMatch(/switched.off/i);
+    }
+    expect(await tb.run(call('vault_list', { path: 'Agents/Ledger/memory' }))).toMatchObject({ ok: false, status: 'refused', code: 'hidden' });
+    expect((await tb.run(call('vault_list', { path: 'Agents/Ledger' }))).text).not.toMatch(/memory/);
   });
 
   it('a Roulette caller cannot read a Local only agent\'s folder, nor see it exists', async () => {
@@ -210,12 +210,12 @@ describe('withheld documents are not readable through tools', () => {
     expect((await tb.run(call('vault_list', { path: 'Agents/Quill' }))).code).toBe('local-only-agent');
   });
 
-  it('a Local only caller reads its own scratchpad, but NOT its own switched-off memory', async () => {
+  it('a Local only caller reads its own scratchpad, but not its own memory files', async () => {
     const tb = as('Quill');
     const pad = await tb.run(call('vault_read', { path: 'Agents/Quill/scratchpad.md' }));
     expect(pad.ok).toBe(true);
     expect(pad.text).toContain('Quill private scratchpad line');
-    expect(await tb.run(call('vault_read', { path: 'Agents/Quill/memory/q2.md' }))).toMatchObject({ ok: false, code: 'memory-off' });
-    expect(await tb.run(call('vault_read', { path: 'Agents/Quill/memory/memories.json' }))).toMatchObject({ ok: false, code: 'memory-store' });
+    expect(await tb.run(call('vault_read', { path: 'Agents/Quill/memory/q2.md' }))).toMatchObject({ ok: false, code: 'hidden' });
+    expect(await tb.run(call('vault_read', { path: 'Agents/Quill/memory/memories.json' }))).toMatchObject({ ok: false, code: 'hidden' });
   });
 });

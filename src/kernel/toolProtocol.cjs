@@ -46,6 +46,22 @@ const ONE_LINE_PROSE_RE = /^(.*?)(`{3,}|~{3,})[ \t]*aeon[-_ ]?tool[ \t]+(\{.*\})
 // one-line call). While it matches, it is held back from the visible text.
 // (A trailing \r is held too: a model that streams CRLF line endings.)
 const HOLD_RE = /^(`+|~+)[ \t]*(?:[a-z_ -]{0,9}|aeon[-_ ]?tool[ \t]*|aeon[-_ ]?tool[ \t]+\{.*)\r?$/i;
+// A held tail that already holds an opener and the start of its header: it
+// stays held to the end of its line, whatever follows.
+const HOLD_INLINE_RE = /^(`+|~+)[ \t]*aeon[-_ ]?tool[ \t]+\{/i;
+// What a part cut by the output limit hands to the next part (end({carry})):
+// only what can still become an aeon-tool call — a fence of 3+ and a start of
+// "aeon-tool", or an opener with its header started. Inline code ("`npm") or
+// a short fence ("``") is shown, so a continuation that restarts the line is
+// stitched at the seam as any other text is (review round 4).
+const CARRY_RE = /^(`{3,}|~{3,})[ \t]*(?:a(?:e(?:o(?:n(?:[-_ ]?(?:t(?:o(?:o(?:l[ \t]*)?)?)?)?)?)?)?)?|aeon[-_ ]?tool[ \t]+\{.*)?\r?$/i;
+// Bounds on what is held back (review round 4: re-testing the held text on
+// every character was quadratic, and a model streaming a long line of
+// backticks blocked the whole server). A fence and language word longer than
+// HOLD_RUN_MAX is no opener; a one-line call longer than HOLD_LINE_MAX is no
+// call. Either is released as text, and the rest of its line is text.
+const HOLD_RUN_MAX = 64;
+const HOLD_LINE_MAX = 8192;
 const BARE_FENCE_RE = /^[ \t]*(`{3,}|~{3,})[ \t]*$/;
 // In the header part: "``` and more text" is the close with text after it on
 // the same line (the text is not shown). In the content part the same shape
@@ -200,19 +216,46 @@ function createScanner({ onText = () => {}, initialFence = null, carry = '' } = 
   const emit = (t) => { if (!t) return; visibleText += t; outBuf += t; };
   const flush = () => { if (outBuf) { const t = outBuf; outBuf = ''; onText(t); } };
 
+  // What is known about `pending` while it is held, so one more character is
+  // decided without re-reading all of it: an opener whose header started
+  // (held to the end of the line), or one run of a single fence character.
+  let heldInline = false;
+  let heldRun = false;
+  let lineIsText = false; // a held run on this line was too long: all of it is text
+
+  function releaseAll() {
+    released += pending; emit(pending); pending = '';
+    heldInline = false; heldRun = false;
+  }
+
   // Release whatever part of `pending` can no longer become an opener.
+  // Linear in the length of a line: each character costs at most a
+  // HOLD_RUN_MAX-long test.
   function settle() {
-    if (codeFence) { released += pending; emit(pending); pending = ''; return; }
+    if (pending.length <= 1) { heldInline = false; heldRun = false; }
+    if (codeFence || lineIsText) { releaseAll(); return; }
+    if (heldInline) {
+      if (pending.length <= HOLD_LINE_MAX) return;
+      lineIsText = true; releaseAll(); return;
+    }
+    if (heldRun && pending[pending.length - 1] === pending[0]) {
+      if (pending.length <= HOLD_RUN_MAX) return;
+      lineIsText = true; releaseAll(); return;
+    }
+    heldRun = false;
     for (let i = 0; i < pending.length; i++) {
       const ch = pending[i];
       if (!FENCE_CHARS.has(ch)) continue;
       if (i > 0 && pending[i - 1] === ch) continue; // only the start of a run
       if (HOLD_RE.test(pending.slice(i))) {
         if (i > 0) { const out = pending.slice(0, i); released += out; pending = pending.slice(i); emit(out); }
+        heldInline = HOLD_INLINE_RE.test(pending);
+        if (!heldInline && pending.length > HOLD_RUN_MAX) { lineIsText = true; releaseAll(); return; }
+        heldRun = /^(?:`+|~+)$/.test(pending);
         return;
       }
     }
-    released += pending; emit(pending); pending = '';
+    releaseAll();
   }
 
   function openBlock(match, line, inlineHeader = null) {
@@ -291,7 +334,9 @@ function createScanner({ onText = () => {}, initialFence = null, carry = '' } = 
 
   function textLineDone() {
     const line = noCr(released + pending);
-    if (!codeFence) {
+    const text = lineIsText;
+    lineIsText = false;
+    if (!codeFence && !text) {
       const one = ONE_LINE_RE.exec(line);
       if (one) return oneLine(one);
       const open = OPENER_RE.exec(line);
@@ -349,19 +394,20 @@ function createScanner({ onText = () => {}, initialFence = null, carry = '' } = 
     if (mode === 'done') return { block: null, unterminated: false, raw: '' };
     if (mode === 'text') {
       const line = noCr(released + pending);
-      const one = codeFence ? null : ONE_LINE_RE.exec(line);
+      const asText = !!codeFence || lineIsText;
+      const one = asText ? null : ONE_LINE_RE.exec(line);
       if (one) return { block: oneLine(one), unterminated: false, raw: '' };
       // Cut by the output limit while holding what may be an opener, and a
       // continuation follows: hand the held text to the next round's scanner
       // (createScanner carry) instead of showing it. It is not shown here.
-      if (carry && truncated && !codeFence && pending && HOLD_RE.test(pending)) {
+      if (carry && truncated && !asText && pending && CARRY_RE.test(pending)) {
         const heldTail = pending;
         pending = '';
         mode = 'done';
         return { block: null, unterminated: false, raw: '', heldTail };
       }
-      const open = codeFence ? null : OPENER_RE.exec(line);
-      const inline = open || codeFence || ONE_LINE_PROSE_RE.test(line) ? null : OPENER_INLINE_RE.exec(line);
+      const open = asText ? null : OPENER_RE.exec(line);
+      const inline = open || asText || ONE_LINE_PROSE_RE.test(line) ? null : OPENER_INLINE_RE.exec(line);
       if (open || inline) {
         // An opener and nothing (or only a header start) after it: the model
         // stopped right there.
@@ -530,5 +576,5 @@ function claimCheck(text, outcomes = [], { agentNames = [] } = {}) {
 module.exports = {
   createScanner, parseBlock, parseHeader, repairJson, normalizeTool, wrapResult, neutralise, newNonce, codeFenceState,
   systemText, claimCheck, TOOL_NAMES, WRITE_TOOLS, ALIASES,
-  OPENER_RE, ONE_LINE_RE, ONE_LINE_PROSE_RE, HOLD_RE,
+  OPENER_RE, ONE_LINE_RE, ONE_LINE_PROSE_RE, HOLD_RE, CARRY_RE, HOLD_RUN_MAX, HOLD_LINE_MAX,
 };

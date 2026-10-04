@@ -21,7 +21,7 @@ directory is yours.
 | An agent and its own memories | `<Vault>/Agents/<Folder>/agent.json` and `<Vault>/Agents/<Folder>/memory/` (same shape as the shared store) | Memory Core (`src/kernel/agents.cjs` owns the layout) |
 | An agent's mission log | `<Vault>/Agents/<Folder>/missions/log.json` — the last 50 things it was asked, never its answers | the streaming chat |
 | An agent's scratchpad | `<Vault>/Agents/<Folder>/scratchpad.md` — at most 2,000 characters, shown to the agent every turn | the agent's `scratchpad_write` tool, and Memory Core |
-| An agent's handoffs | `<Vault>/Agents/<Folder>/handoffs/<time>.md` — the newest is shown to the agent on every turn until it writes a newer one; none is deleted | `/handoff`, and a chat save when Memory Core's "Write a handoff when you save a chat" is on |
+| An agent's handoffs | `<Vault>/Agents/<Folder>/handoffs/<time>.md` — the newest one's first 1,500 characters are shown to the agent on every turn until it writes a newer one; none is deleted | `/handoff`, and a chat save when Memory Core's "Write a handoff when you save a chat" is on |
 | An agent's artifacts | `<Vault>/Agents/<Folder>/artifacts/<name>.md` — never overwritten (`-2`, `-3`…) | the agent's `artifact_save` tool |
 | Saved conversations | `<Vault>/Agents/Aeon/chat_sessions/` | the terminal and chat |
 | Block memory | `<Vault>/blocks/<id>/` | blocks, through their declared storage contract |
@@ -49,10 +49,15 @@ documents it was asked to write, and are indexed.
 
 **Withheld from the index and recall** (`src/kernel/vaultPrivacy.cjs`): switched-off
 memories, a memory store that holds one, and the whole folder of an agent set to Local
-only. The same verdicts apply to an agent's chat tools: `vault_read` and `vault_list`
-refuse those paths (a Local only agent may still read and list its own folder;
-switched-off memories in it stay withheld), and `vault_search` goes through the same
-retriever. An agent's own working files (`scratchpad.md`, `handoffs/`, `artifacts/`)
+only — judged by the folder's own `agent.json`, wherever it is, so a removed agent's
+folder (`Agents/.removed/`, where one without an `agent.json` is withheld too) stays
+withheld when a link leads to it or it is moved elsewhere in the Vault. Saved chats and
+the security block's records are never indexed or recalled under any name a link gives
+them (`neverShared`). The same verdicts apply to an agent's chat tools: `vault_read`
+and `vault_list` refuse those paths (a Local only agent may still read and list its own
+folder), never read or list an agent's memory folder at all (`inMemoryFolder`: what it
+holds would tell a model that a switched-off memory exists), and `vault_search` goes
+through the same retriever. An agent's own working files (`scratchpad.md`, `handoffs/`, `artifacts/`)
 are never opened through a link, and an agent whose `agent.json` cannot be read is
 treated as Local only (`src/kernel/agents.cjs`).
 

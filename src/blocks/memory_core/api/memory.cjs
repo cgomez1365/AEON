@@ -771,7 +771,7 @@ ${String(transcript).slice(0, 8000)}`;
   // ── An agent's working files (3.3, src/kernel/agentWorkspace.cjs) ─────
   // Its scratchpad (its own notes, shown to it every turn, at most 2,000
   // characters: refused over that, never cut) and its handoffs (written by
-  // the agent with /handoff; the newest is shown to it on every turn until it
+  // the agent with /handoff; the newest (its first 1,500 characters) is shown to it on every turn until it
   // writes a newer one; kept, never deleted). Neither is indexed: they are a model's words.
   const workspaceErr = (res, e) => res.status(e.status || 500).json({ ok: false, error: e.message, ...(e.code ? { code: e.code } : {}) });
   const agentOr404 = (ref, res) => {

@@ -89,7 +89,10 @@ The operator's agents and what each one remembers.
 
 Scratchpads and handoffs are a model's own words, so the Second Brain does not index
 them (R09); artifacts are indexed like any document. A Local only agent's whole folder,
-these files included, stays out of the index and out of every other agent's tools.
+these files included, stays out of the index and out of every other agent's tools —
+also once removed (its folder in `Agents/.removed/` keeps its `agent.json`) or moved
+elsewhere in the Vault. No agent tool reads or lists a memory folder itself: the
+memories that are on reach an agent in its prompt and through `vault_search`.
 
 Every memory route takes `?agent=<id|name>` (or `agent` in the body); none means the
 shared store. An agent nobody has answers 404 — the shared store never stands in

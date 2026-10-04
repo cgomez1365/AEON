@@ -90,21 +90,31 @@ below.
     starts again with that line keeps it (a checklist can repeat a line), and an
     overlap that is a short repeating pattern ("0 0 0 0") is kept (repetitive data
     can rightly go on with more of the same). A tool-call opener the limit cut in
-    half is carried into the next part and completed there. A provider that sends no
-    finish reason is never continued.
+    half (a fence of three and the start of `aeon-tool`, or a one-line call) is
+    carried into the next part and completed there; any other held text is shown.
+    A provider that sends no finish reason is never continued. A later part is sent
+    with `noTrimRetry`: when the provider says it is too large, or a reasoning model
+    returns nothing at the limit, the turn ends with the parts already shown,
+    `truncated: true` and a `continue-stopped` notice — it is never retried with the
+    answer and the question trimmed away.
 
-  The agent's scratchpad and newest handoff are injected before the tools section
-  (`src/kernel/agentWorkspace.cjs`), on every turn until a newer handoff exists,
+  The agent's scratchpad and the newest handoff's first 1,500 characters are
+  injected before the tools section (`src/kernel/agentWorkspace.cjs`), on every
+  turn until a newer handoff exists,
   labelled as its own notes and neutralised like a tool result; memory rules stay
   last. After the turn a claim check looks for common first-person phrasings ("I
   searched your Vault", "I read the file", "I saved it to my memory", "I asked
-  <agent>") and emits a `notice` when no tool of that kind succeeded in the turn (a
+  <agent>" — any agent the operator has, not only those the caller may ask) and
+  emits a `notice` when no tool of that kind succeeded in the turn (a
   Vault search does not back a web claim, nor the reverse); other wordings are not
   caught. Recalled Second Brain passages and memories are neutralised like tool
   results, so a block quoted from them never runs. No shell, no code execution, no arbitrary HTTP: apart from the
   model calls a chat already makes (and `vault_search`'s query embedding through the
   retriever), the only outside service a tool contacts is `fetchWebSearch`;
-  `memory_save` and `vault_search` call AEON's own routes over loopback.
+  `memory_save` and `vault_search` call AEON's own routes over loopback, and a save
+  (`memory_save`, `artifact_save`) starts the usual Vault indexing, which embeds the
+  saved text with the Embedding role's model (a cloud one when no local embedding
+  model is installed).
 
   SSE events of `POST /api/chat/stream` (the terminal renders each; unknown events
   are ignored):

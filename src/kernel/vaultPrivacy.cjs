@@ -22,6 +22,19 @@
  * front matter ("active: false"). An agent.json that exists but cannot be read
  * withholds the folder: a privacy setting nobody can read is not "off".
  *
+ * A folder is judged by its own declaration, not only by where it sits
+ * (review round 4): removing an agent moves its folder, agent.json and all,
+ * to Agents/.removed/<Folder>-<time>, and the operator may move it on from
+ * there (to Archive/, say). Any folder in the Vault that holds an agent.json
+ * saying Local only, or one that cannot be read, is withheld with everything
+ * in it, wherever it is; a folder in Agents/.removed with no agent.json is
+ * withheld too (nobody can say it was not private). A memory in such a moved
+ * folder is judged by that folder's own store.
+ *
+ * Saved chats and the security block's records are never shared at all
+ * (neverShared): not indexed, not recalled, not read through an agent's tools,
+ * under any name a link gives them.
+ *
  * Everything is read from disk once per scope (one scan, one recall), so a
  * switch flipped a moment ago is honoured by the next one.
  *
@@ -67,11 +80,24 @@ function split(relPosix) {
 
 const within = (child, parent) => child === parent || child.startsWith(parent + path.sep);
 
+// Never in the index, never recalled, never in a tool result, whoever asks:
+// saved chats (they carry model turns and may hold a Local only agent's
+// turns — chat.cjs keeps every chat in Agents/Aeon/chat_sessions) and the
+// security block's own records.
+const NEVER_SHARED = [/^agents\/[^/]+\/chat_sessions(?:\/|$)/i, /^blocks\/security(?:\/|$)/i];
+// Windows opens "chat_sessions." and "chat_sessions " as chat_sessions: each
+// part is also judged with trailing dots and spaces removed.
+const trimParts = (rel) => String(rel || '').split('/').map((x) => x.replace(/[. ]+$/, '')).join('/');
+const matchesNeverShared = (rel) => NEVER_SHARED.some((re) => re.test(rel) || re.test(trimParts(rel)));
+
+// Where removing an agent puts its folder (agents.cjs remove()).
+const REMOVED_BIN = '.removed';
+
 function createScope(vaultRoot) {
   const realRoot = onDisk(path.resolve(vaultRoot));
   const agentsRoot = path.join(vaultRoot, 'Agents');
   let agentFolders = null;
-  const localOnly = new Map();
+  const declared = new Map();
   const stores = new Map();
 
   // The parts of a Vault-relative path as the disk names them.
@@ -92,28 +118,30 @@ function createScope(vaultRoot) {
     return agentFolders.find((f) => f.toLowerCase() === lower) || folder;
   }
 
-  function isLocalOnly(folder) {
-    if (!localOnly.has(folder)) {
-      let yes = false;
+  // What an agent.json in `dir` declares: 'none' (there is none), 'local'
+  // (Local only — or there and unreadable: a privacy setting nobody can read
+  // is not "off"), 'shared'. No agent.json (Agents/council, the operator's
+  // own AEON before it was named, any ordinary folder) is an ordinary folder.
+  function declaration(dir) {
+    if (!declared.has(dir)) {
+      let d;
       try {
-        yes = JSON.parse(fs.readFileSync(path.join(agentsRoot, folder, 'agent.json'), 'utf8'))?.privacy === 'local-only';
+        d = JSON.parse(fs.readFileSync(path.join(dir, 'agent.json'), 'utf8'))?.privacy === 'local-only' ? 'local' : 'shared';
       } catch (e) {
-        // No agent.json (Agents/council, the operator's own AEON before it was
-        // named) is an ordinary folder. One that is there and unreadable is not.
-        yes = !(e && (e.code === 'ENOENT' || e.code === 'ENOTDIR'));
+        d = e && (e.code === 'ENOENT' || e.code === 'ENOTDIR') ? 'none' : 'local';
       }
-      localOnly.set(folder, yes);
+      declared.set(dir, d);
     }
-    return localOnly.get(folder);
+    return declared.get(dir);
   }
 
   // { all, off } — the ids a store lists and the ones switched off; null when
-  // the store is missing or cannot be read.
-  function store(folder) {
-    if (!stores.has(folder)) {
+  // the store is missing or cannot be read. `dir` is the agent's folder.
+  function store(dir) {
+    if (!stores.has(dir)) {
       let rec = null;
       try {
-        const raw = JSON.parse(fs.readFileSync(path.join(agentsRoot, folder, 'memory', 'memories.json'), 'utf8'));
+        const raw = JSON.parse(fs.readFileSync(path.join(dir, 'memory', 'memories.json'), 'utf8'));
         const list = Array.isArray(raw) ? raw : raw?.memories;
         if (Array.isArray(list)) {
           rec = { all: new Set(), off: new Set() };
@@ -124,9 +152,36 @@ function createScope(vaultRoot) {
           }
         }
       } catch { rec = null; }
-      stores.set(folder, rec);
+      stores.set(dir, rec);
     }
-    return stores.get(folder);
+    return stores.get(dir);
+  }
+
+  /**
+   * Which agent folder a path is in, and whether a Local only one holds it.
+   * → { local, root: { dir, depth } | null } — `root` is the deepest agent
+   * folder (Agents/<Folder>, a removed agent's folder, or any folder holding
+   * an agent.json), `depth` how many parts of the path name it.
+   */
+  function locate(parts, own = null) {
+    const base = path.resolve(vaultRoot);
+    const inAgents = parts.length >= 2 && parts[0].toLowerCase() === 'agents';
+    const p = inAgents ? ['Agents', folderOnDisk(parts[1]), ...parts.slice(2)] : parts;
+    const removed = inAgents && p[1].toLowerCase() === REMOVED_BIN;
+    // The caller's own folder (a Local only agent reading its own files).
+    const ownTree = inAgents && !removed && !!own && p[1].toLowerCase() === own;
+    let local = false;
+    let root = null;
+    for (let k = 1; k <= p.length; k++) {
+      const dir = path.join(base, ...p.slice(0, k));
+      const agentFolder = inAgents && k === 2 && !removed && !p[1].startsWith('.');
+      const removedFolder = removed && k === 3;
+      const d = declaration(dir);
+      if (d === 'none' && !agentFolder && !removedFolder) continue;
+      root = { dir, depth: k };
+      if ((d === 'local' || (d === 'none' && removedFolder)) && !ownTree) local = true;
+    }
+    return { local, root };
   }
 
   function mirrorSaysOff(full) {
@@ -168,22 +223,47 @@ function createScope(vaultRoot) {
   }
 
   function judge(parts, own = null) {
-    if (parts.length < 2 || parts[0].toLowerCase() !== 'agents') return null;
-    const folder = folderOnDisk(parts[1]);
-    if (folder.startsWith('.')) return null;
-    if (isLocalOnly(folder) && !(own && folder.toLowerCase() === own)) return 'local-only-agent';
-    if (parts.length !== 4 || parts[2].toLowerCase() !== 'memory') return null;
-    const name = parts[3];
+    if (!parts.length) return null;
+    const { local, root } = locate(parts, own);
+    if (local) return 'local-only-agent';
+    if (!root || parts.length !== root.depth + 2 || parts[root.depth].toLowerCase() !== 'memory') return null;
+    const name = parts[root.depth + 1];
     if (name.toLowerCase() === 'memories.json') {
       // Withheld while it holds a switched-off memory, or cannot be read.
-      const st = store(folder);
+      const st = store(root.dir);
       return !st || st.off.size ? 'memory-store' : null;
     }
     if (!/\.md$/i.test(name)) return null;
     const id = name.slice(0, -3);
-    const st = store(folder);
+    const st = store(root.dir);
     if (st && st.all.has(id)) return st.off.has(id) ? 'memory-off' : null;
-    return mirrorSaysOff(path.join(agentsRoot, folder, 'memory', name)) ? 'memory-off' : null;
+    return mirrorSaysOff(path.join(root.dir, 'memory', name)) ? 'memory-off' : null;
+  }
+
+  // Both readings of a path: as the disk resolves it, and as given.
+  function readings(relPosix) {
+    const given = split(String(relPosix || '').replace(/\\/g, '/').replace(/^Vault\//, ''));
+    const real = resolveParts(given);
+    return real.join('/') === given.join('/') ? [real] : [real, given];
+  }
+
+  /**
+   * Whether a path is in an agent's memory folder (its store and the <id>.md
+   * mirrors), under either reading. Agent tools never list or read these:
+   * what a listing of them shows changes with a save that matched a
+   * switched-off memory, so it would tell a model that one exists. Only an
+   * agent folder that exists has one (a missing one reads as not found).
+   */
+  function inMemoryFolder(relPosix) {
+    return readings(relPosix).some((parts) => {
+      const { root } = locate(parts);
+      return !!root && parts.length > root.depth && parts[root.depth].toLowerCase() === 'memory' && fs.existsSync(root.dir);
+    });
+  }
+
+  /** Saved chats or security records, under either reading (NEVER_SHARED). */
+  function neverShared(relPosix) {
+    return readings(relPosix).some((parts) => matchesNeverShared(parts.join('/')));
   }
 
   /** The same, for an absolute path; null when it is not in the Vault. */
@@ -201,7 +281,7 @@ function createScope(vaultRoot) {
     return resolveParts(split(String(relPosix || '').replace(/\\/g, '/'))).join('/');
   }
 
-  return { withheld, withheldFor, withheldAt, canonical };
+  return { withheld, withheldFor, withheldAt, canonical, inMemoryFolder, neverShared };
 }
 
 /** One-off check, for a caller with a single path. */
@@ -214,4 +294,4 @@ function withheldAt(vaultRoot, absPath) {
   return createScope(vaultRoot).withheldAt(absPath);
 }
 
-module.exports = { createScope, withheld, withheldAt };
+module.exports = { createScope, withheld, withheldAt, NEVER_SHARED };
