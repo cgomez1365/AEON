@@ -201,9 +201,25 @@ function shape(folder, rec, self) {
 }
 function cleanModelSafe(m) { try { return cleanModel(m); } catch { return null; } }
 
+// An agent.json that is there but cannot be read: the agent is treated as
+// Local only until it is fixed. vaultPrivacy.cjs already withholds such a
+// folder ("a privacy setting nobody can read is not off"); serving the agent
+// as Roulette would send its memory and notes to a cloud model.
+function unreadable(folder, self, e) {
+  return {
+    ...shape(folder, { privacy: 'local-only' }, self),
+    error: `agent.json could not be read (${e.message})`,
+    privacyUnknown: true,
+  };
+}
+
 function readSelf(vaultRoot) {
   let rec = {};
-  try { rec = readJson(path.join(agentsDir(vaultRoot), SELF_FOLDER, 'agent.json')) || {}; } catch {}
+  try { rec = readJson(path.join(agentsDir(vaultRoot), SELF_FOLDER, 'agent.json')) || {}; }
+  catch (e) {
+    // No agent.json: the operator's own AEON before it was named.
+    if (!(e && (e.code === 'ENOENT' || e.code === 'ENOTDIR'))) return unreadable(SELF_FOLDER, true, e);
+  }
   return shape(SELF_FOLDER, rec, true);
 }
 
@@ -226,7 +242,7 @@ function list(vaultRoot, { withStats = true } = {}) {
     if (!fs.existsSync(file)) continue;
     let entry;
     try { entry = shape(folder, readJson(file) || {}, false); }
-    catch (e) { entry = { ...shape(folder, {}, false), error: `agent.json could not be read (${e.message})` }; }
+    catch (e) { entry = unreadable(folder, false, e); }
     others.push(withStats ? { ...entry, ...stats(dir) } : entry);
   }
   others.sort((a, b) => String(b.lastActiveAt || '').localeCompare(String(a.lastActiveAt || '')) || a.name.localeCompare(b.name));
@@ -345,8 +361,14 @@ function callOptions(agent) {
   }
   if (agent.privacy === 'local-only') {
     out.localOnly = true;
-    out.localOnlyReason = `${agent.name} is set to Local only, so nothing it is asked is sent to a cloud model. `;
-    out.localOnlyRemedy = `Give ${agent.name} a local model in Memory Core, or set its privacy to Roulette.`;
+    if (agent.privacyUnknown) {
+      const where = `Agents/${agent.self ? SELF_FOLDER : agent.folder}/agent.json`;
+      out.localOnlyReason = `${where} could not be read, so ${agent.name} is treated as Local only and nothing it is asked is sent to a cloud model. `;
+      out.localOnlyRemedy = `Fix or restore ${where} (Memory Core shows the error), or give ${agent.name} a local model.`;
+    } else {
+      out.localOnlyReason = `${agent.name} is set to Local only, so nothing it is asked is sent to a cloud model. `;
+      out.localOnlyRemedy = `Give ${agent.name} a local model in Memory Core, or set its privacy to Roulette.`;
+    }
   }
   return out;
 }

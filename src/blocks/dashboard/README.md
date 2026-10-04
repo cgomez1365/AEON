@@ -41,7 +41,10 @@ below.
   SSE bridge. Handles in-chat command interception (`/link`, `/scrape`,
   `/web`, `/matrix` + implicit Second Brain recall), the daily-cost kill
   switch (forces the local model once `KILL_SWITCH_THRESHOLD` is
-  hit), and a Gemini → Groq → offline-failsafe fallback chain.
+  hit), and a Gemini → Groq → offline-failsafe fallback chain. With Memory
+  Core's **Write a handoff when you save a chat** on, an explicit save of a chat
+  with an agent (not an automatic one) also has that agent write a handoff
+  (`src/kernel/agentWorkspace.cjs`), in the background and logged.
 - `api/chat-stream.cjs` — SSE token-by-token streaming chat:
   `POST /api/chat/stream`, `POST /api/chat/stop`. Asks the kernel which
   provider/model serves the role (`kernelLLM.describeRole`), injects the
@@ -55,6 +58,64 @@ below.
   in-flight stream and asks the kernel (`kernelLLM.cancelAll`) to reclaim
   local generations. Also fires a non-blocking auto-memory-extraction call
   after each turn when `brain_settings.auto_memory` is on.
+
+  **3.3.0 — the agent turn.** The single `kernelLLM.stream` call is now
+  `runAgentTurn` (`src/kernel/agentTurn.cjs`): a bounded loop of model calls
+  ("rounds"), with the agent's `callOptions` (Local only included) on every call.
+  Later rounds resolve the chat role exactly as the first did (registry address, key
+  pool, rpm pacing); when a fallback served the first round, later rounds are pinned
+  to that provider and model, still through its registry connection when it has one. Two things make a new round:
+  - **A tool call.** The system prompt gains a `## TOOLS` section
+    (`src/kernel/toolProtocol.cjs`) listing only the tools this caller may use. The
+    model asks for one with a fenced `aeon-tool` block — plain text, so no provider
+    function-calling is needed (local llama.cpp included; how reliably a model writes
+    the block depends on the model). The stream scanner stops the round at
+    the block's closing fence (no character of the block reaches the screen), the
+    toolbox (`src/kernel/agentTools.cjs`) runs it between rounds, and the result goes
+    back as a `user` message wrapped as data (`<<<AEON-TOOL-RESULT <nonce> …>>>`, with
+    a random nonce per turn that the system prompt names; fences and markers inside it
+    neutralised in any case). At most 6 tool calls per turn, 3 of them writes; result
+    and time caps per tool; off when the chat role's model window is under 4,096 tokens, for
+    non-chat roles, or with Memory Core's `agent_tools` off. Every outcome is also
+    written to the OS audit log (`AGENT_TOOL`).
+  - **The output limit.** A round the kernel reports as `truncated` (the provider's
+    own finish reason: `length`, `MAX_TOKENS`, `max_tokens`) is continued with
+    `CONTINUE_PROMPT` (`src/kernel/continuation.cjs`), up to Memory Core's
+    `auto_continue_parts` (default 4, at most 8); the start of each continuation is
+    held until the seam is decided (200 characters, longer while it still repeats
+    shown text, at most 1,000), so a repeated overlap (12 characters or more), a
+    restarted sentence or line (4 or more) or a "Continuing:" style preamble is
+    dropped. A part that ended at a line break and starts again with that line keeps
+    it (a checklist can repeat a line). A provider that sends no finish reason is never
+    continued.
+
+  The agent's scratchpad and newest handoff are injected before the tools section
+  (`src/kernel/agentWorkspace.cjs`), on every turn until a newer handoff exists,
+  labelled as its own notes and neutralised like a tool result; memory rules stay
+  last. After the turn a claim check looks for common first-person phrasings ("I
+  searched your Vault", "I read the file", "I saved it to my memory", "I asked
+  <agent>") and emits a `notice` when no tool of that kind succeeded in the turn (a
+  Vault search does not back a web claim, nor the reverse); other wordings are not
+  caught. Recalled Second Brain passages and memories are neutralised like tool
+  results, so a block quoted from them never runs. No shell, no code execution, no arbitrary HTTP: apart from the
+  model calls a chat already makes (and `vault_search`'s query embedding through the
+  retriever), the only outside service a tool contacts is `fetchWebSearch`;
+  `memory_save` and `vault_search` call AEON's own routes over loopback.
+
+  SSE events of `POST /api/chat/stream` (the terminal renders each; unknown events
+  are ignored):
+
+  | Event | Fields | When |
+  |---|---|---|
+  | `meta` | as before; the first one of a turn also has `tools` (names), `toolsOff` (reason or null), `autoContinue` `{on, maxParts}`, `scratchpadChars`, `handoffAt` | start of the turn, and on a provider fallback |
+  | `token` | `t` | visible text, all rounds and parts |
+  | `tool_call` | `id`, `n`, `tool`, `args` (long strings cut, `content` replaced by its length), `write`, `label` | a tool block was parsed (malformed and unknown ones too) |
+  | `tool_result` | `id`, `n`, `tool`, `ok`, `status` (`ok`/`error`/`refused`), `code`, `summary`, `preview` (≤ 4,000 chars), `chars`, `truncated`, `ms`, `notice` (always set for a successful write) | after the tool ran or was refused |
+  | `continue` | `part`, `max`, `reason: 'max_tokens'` | before a continuation round |
+  | `notice` | `level` (`info`/`warn`), `code` (`tool-limit`, `write-limit`, `unbacked-claim`, `tools-off`, `results-budget`), `message` | engine notices |
+  | `warning` | `message` | as before |
+  | `done` | as before, plus `parts`, `continued`, `toolCalls`, `toolWrites`; `text` is the whole visible answer; `truncated` only if the last part still hit the limit | end of the turn |
+  | `error` | `error` | as before (`partialText` when text had already streamed) |
 - `api/audit.js`, `api/health.js`, `api/pipeline-metrics.js` — **retired
   2026-09-23** (Bible §21). Each registered `ALL` on a path another block
   already owned, so it only ever answered the methods the owner did not:
@@ -79,7 +140,7 @@ below.
 | GET/POST/DELETE | `/api/chat` | `api/chat.cjs` | Chat history + message post (with AI generation, command interception, cost tracking). |
 | GET | `/api/terminal-stream` | `api/chat.cjs` | SSE bridge for `aeonTerminalStream` log events. |
 | GET/POST | `/api/terminal-history` | `api/chat.cjs` | Read/save Neural Terminal conversation history. |
-| POST | `/api/chat/stream` | `api/chat-stream.cjs` | SSE token-by-token chat completion with provider fallback. |
+| POST | `/api/chat/stream` | `api/chat-stream.cjs` | SSE token-by-token chat completion with provider fallback, the agent tool loop and automatic continuation (events above). |
 | POST | `/api/chat/stop` | `api/chat-stream.cjs` | Cancels a generation server-side. `{streamId}` stops that stream; no body stops every stream this process is running. Aborts the upstream request, so llama-server actually stops generating. |
 
 The frontend (`index.jsx`) additionally reads routes owned by other

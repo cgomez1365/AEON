@@ -1481,7 +1481,9 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
         temperature: opts.temperature ?? 0.7,
       }, opts.onToken);
     } catch (e) { throw opts.signal?.aborted ? e : _localFailure(e, model, _t0); }
-    _trackLLM('local', result.model || model || 'local', result.tokens || 0, Date.now() - _t0, !result.cancelled);
+    // A stop for an agent tool call (agentTurn.cjs) is the turn working, not
+    // a failed generation.
+    _trackLLM('local', result.model || model || 'local', result.tokens || 0, Date.now() - _t0, !result.cancelled || _isToolStop(opts.signal));
     return {
       text: result.text || '',
       tokens: result.tokens || 0,
@@ -1711,6 +1713,19 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
           endpoint_id: r.endpoint_id, credential_ref: r.credential_ref, credential_count: r.credential_count,
         }
         : { provider: opts.provider, model: opts.model, source: 'override', error: r?.error };
+    } else if (opts.provider && opts._pinnedRound && opts.provider !== 'local' && aeonEndpoints) {
+      // A later round of one chat turn (agentTurn.cjs) pinned to the provider
+      // that served round 1. When that provider has a connection in the
+      // registry, the round goes through it as round 1 did: the same address,
+      // key pool and pacing, not the env key and default host an override gets.
+      const r = await aeonEndpoints.resolveForProvider(opts.provider, opts.model, supabase).catch(() => null);
+      primary = r && r.ok && r.via !== 'relay'
+        ? {
+          provider: r.provider, model: r.model, base_url: r.base_url, apiKey: r.apiKey,
+          rpm_limit: r.rpm_limit, source: 'registry',
+          endpoint_id: r.endpoint_id, credential_ref: r.credential_ref, credential_count: r.credential_count,
+        }
+        : { provider: opts.provider, model: opts.model, source: 'override' };
     } else if (opts.provider) {
       primary = { provider: opts.provider, model: opts.model, source: 'override' };
     } else if (aeonEndpoints) {
@@ -1792,6 +1807,12 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
    * already shown them — so it is rethrown with err.partialText. A caller
    * abort resolves to { cancelled: true } with whatever text had arrived.
    */
+  // The turn engine (src/kernel/agentTurn.cjs) stops a generation the moment
+  // a model has written a complete tool call, by aborting with an
+  // AeonToolStop. That is a clean stop: the text so far is the round, nothing
+  // failed, nothing is cancelled, and the provider is healthy.
+  const _isToolStop = (signal) => !!(signal && signal.aborted && signal.reason && signal.reason.name === 'AeonToolStop');
+
   const kernelLLMStream = async (messages, opts = {}) => {
     if (typeof opts.onToken !== 'function') throw new Error('kernelLLM.stream requires opts.onToken');
     if (!Array.isArray(messages) || !messages.length) throw new Error('kernelLLM.stream requires a messages array');
@@ -1842,15 +1863,31 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
         noteProviderSuccess(c.provider);
         const usedModel = r.model || c.model;
         if (fallback) notify(`↪ Fallback: ${role} streamed via ${c.provider}/${usedModel} (configured: ${primary.provider}${c.paidFrom ? `/${c.paidFrom}` : ''})`, { provider: c.provider });
+        // The local runtime answers a stop with `cancelled: true` instead of
+        // throwing; a stop for a tool call is still not a cancel.
+        const toolStop = !!r.cancelled && _isToolStop(opts.signal);
         return {
           text: r.text, tokens: r.tokens, latencyMs: Date.now() - t0,
           provider: c.provider, model: usedModel, fallback,
-          complete: r.complete !== false, truncated: !!r.truncated,
-          truncationReason: r.truncationReason || null, cancelled: !!r.cancelled,
-          finishReason: r.finishReason || null,
+          complete: toolStop || r.complete !== false, truncated: toolStop ? false : !!r.truncated,
+          truncationReason: toolStop ? null : (r.truncationReason || null), cancelled: toolStop ? false : !!r.cancelled,
+          finishReason: toolStop ? 'tool' : (r.finishReason || null),
+          ...(toolStop ? { stoppedFor: 'tool' } : {}),
           ...(c.trimmedMessages ? { trimmed: true } : {}),
         };
       } catch (e) {
+        if (_isToolStop(opts.signal)) {
+          // Stopped because the model finished writing a tool call: a clean
+          // round, recorded as a success, and the provider stays healthy.
+          _trackLLM(c.provider, c.model || 'unknown', _estimateTokens(sent, partial), Date.now() - t0, true);
+          noteProviderSuccess(c.provider);
+          return {
+            text: partial, tokens: Math.ceil(partial.length / 4), latencyMs: Date.now() - t0,
+            provider: c.provider, model: c.model, fallback,
+            complete: true, truncated: false, truncationReason: null, cancelled: false,
+            finishReason: 'tool', stoppedFor: 'tool',
+          };
+        }
         if (opts.signal?.aborted) {
           // The operator stopped it. Not a provider failure — do not fall back.
           _trackLLM(c.provider, c.model || 'unknown', _estimateTokens(sent, partial), Date.now() - t0, false);

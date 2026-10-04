@@ -70,6 +70,21 @@ POST /api/ai/vision     { image, prompt?, provider?, model? }   (model only with
 Every call crosses one seam, `_trackLLM`, and is appended once to the LLM ledger
 (`src/kernel/llm-ledger.cjs`), which the Activity and Fleet Control blocks read.
 
+## Agent turns
+
+A chat turn in the terminal (`src/blocks/dashboard/api/chat-stream.cjs`) runs through six
+kernel modules added in 3.3.0. The ones that touch files are given the Vault root by the
+caller; none looks up a home directory itself.
+
+| File | What it does |
+|---|---|
+| `src/kernel/agentTurn.cjs` | The turn: a bounded loop of `kernelLLM.stream` rounds — run a tool between rounds, or continue an answer cut off by the output limit — emitting the SSE events the terminal shows. |
+| `src/kernel/toolProtocol.cjs` | The provider-independent text protocol: the `## TOOLS` prompt text, the stream scanner and parser for `aeon-tool` blocks, the data wrapper for results, and the claim check. No I/O. |
+| `src/kernel/agentTools.cjs` | The eight tools, their limits (`LIMITS`: 6 calls and 3 writes per turn, size caps, timeouts), argument checks and every privacy refusal. No shell, no code execution, no arbitrary HTTP: outside this computer it reaches only the web search service (and, through the retriever and `ask_agent`, the models the chat could already use); `memory_save` and `vault_search` call AEON's own routes over loopback. |
+| `src/kernel/continuation.cjs` | The prompt that asks a model to carry on, and the seam that drops a repeated overlap (12 characters or more), a restarted sentence or line (4 or more), or a preamble. No I/O. |
+| `src/kernel/vaultPath.cjs` | Resolves a model-supplied Vault path or refuses it: traversal, absolute paths, hidden files and OS junk, symlink escapes. |
+| `src/kernel/agentWorkspace.cjs` | An agent's scratchpad, handoffs and artifacts in `Vault/Agents/<Folder>/`, and the block of them injected into its prompt. |
+
 ## Kernel routers
 
 | Mount | File | What it serves |

@@ -21,6 +21,7 @@ const path    = require('path');
 const fs      = require('fs');
 const { loadExtractors, extractText, embed, EMBED_MODEL } = require('./_lib.cjs');
 const vaultPrivacy = require('../../../kernel/vaultPrivacy.cjs');
+const agentWorkspace = require('../../../kernel/agentWorkspace.cjs');
 
 const NIGHTLY_HOUR  = 3; // local hour to auto re-index, once per day
 // .docx dropped 2026-09-12 (CEO) with mammoth and its eight @xmldom/xmldom
@@ -452,6 +453,10 @@ module.exports = function ingestFactory(deps) {
       const full = path.join(dir, name);
       const relPosix = vaultRelative(full).replace(/\\/g, '/');
       if (NON_INDEXED_VAULT_PATHS.has(relPosix)) continue;
+      // An agent's scratchpad and handoffs are its own words (R09, as for
+      // chat_sessions above): src/kernel/agentWorkspace.cjs. Its artifacts
+      // are deliberate documents and stay indexed.
+      if (agentWorkspace.isAgentWorkingFile(relPosix)) continue;
       if (privacy.withheld(relPosix)) continue;
       const stat = fs.statSync(full);
       if (stat.isDirectory()) { files.push(...walkVault(full, hashes, privacy)); continue; }

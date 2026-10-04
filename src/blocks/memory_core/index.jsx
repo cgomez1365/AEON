@@ -67,6 +67,129 @@ const talkTo = (a) => {
   try { window.dispatchEvent(new CustomEvent(AGENT_SELECT_EVENT, { detail: { id: a.id, name: a.name, self: !!a.self } })); } catch { /* no window */ }
 };
 
+// The server's cap (agentWorkspace.cjs SCRATCHPAD_MAX); the GET answers its
+// own `max`, which wins. A save over it is refused, never cut.
+const SCRATCHPAD_MAX = 2000;
+const fmt = (n) => Number(n || 0).toLocaleString('en-US');
+
+/**
+ * An agent's scratchpad and handoffs (Vault/Agents/<Folder>/scratchpad.md and
+ * handoffs/), in its settings panel. The scratchpad is editable here and by the
+ * agent's own scratchpad tool; handoffs are read-only — the agent writes them
+ * with /handoff, and nothing here deletes one.
+ */
+function AgentWorkspace({ agentId, name }) {
+  const [pad, setPad] = useState(null);         // GET /scratchpad answer
+  const [text, setText] = useState('');
+  const [padError, setPadError] = useState('');
+  const [padNote, setPadNote] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [handoffs, setHandoffs] = useState(null);  // GET /handoffs answer
+  const [handoffError, setHandoffError] = useState('');
+  const [openLatest, setOpenLatest] = useState(false);
+
+  const base = `/api/agents/${encodeURIComponent(agentId)}`;
+  const loadPad = useCallback(async () => {
+    try {
+      const r = await fetch(`${base}/scratchpad`);
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || d.ok === false) throw new Error(d.error || `the scratchpad did not load (server answered ${r.status})`);
+      setPad(d); setText(d.content || ''); setPadError('');
+    } catch (e) { setPad(null); setPadError(e.message); }
+  }, [base]);
+  const loadHandoffs = useCallback(async () => {
+    try {
+      const r = await fetch(`${base}/handoffs?limit=20`);
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || d.ok === false) throw new Error(d.error || `the handoffs did not load (server answered ${r.status})`);
+      setHandoffs(d); setHandoffError('');
+    } catch (e) { setHandoffs(null); setHandoffError(e.message); }
+  }, [base]);
+  useEffect(() => { loadPad(); loadHandoffs(); }, [loadPad, loadHandoffs]);
+
+  const max = pad?.max || SCRATCHPAD_MAX;
+  const over = text.length > max;
+  const changed = pad != null && text !== (pad.content || '');
+  const savePad = async () => {
+    setSaving(true); setPadNote('');
+    try {
+      const r = await fetch(`${base}/scratchpad`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: text }),
+      });
+      const d = await r.json().catch(() => ({}));
+      // A 413 says the size in the server's own words; shown as written.
+      if (!r.ok || d.ok === false) throw new Error(d.error || `not saved (server answered ${r.status})`);
+      setPadError('');
+      setPadNote(d.text || `scratchpad saved (${fmt(d.chars ?? text.length)} / ${fmt(d.max || max)} characters)`);
+      await loadPad();
+    } catch (e) { setPadError(e.message); }
+    setSaving(false);
+  };
+
+  // Agents/<Folder>/ — read off the path the server answers, never guessed.
+  const folder = pad?.path ? pad.path.replace(/\/scratchpad\.md$/, '') : null;
+  const list = handoffs?.handoffs || [];
+  const latest = handoffs?.latest || null;
+
+  return (
+    <div style={{ display: 'grid', gap: 10, borderTop: '1px solid var(--border, #223)', paddingTop: 10 }}>
+      <label style={{ display: 'grid', gap: 3, fontSize: 11 }}>
+        <span style={{ display: 'flex', gap: 8 }}>
+          <span style={{ fontWeight: 600 }}>Scratchpad</span>
+          <span style={{ marginLeft: 'auto', color: over ? 'var(--danger, #ff4466)' : 'var(--text-dim, #8aa)' }}>
+            {fmt(text.length)} / {fmt(max)}
+          </span>
+        </span>
+        <span style={{ color: 'var(--text-dim, #8aa)' }}>
+          {name ? `${name}'s` : 'Your agent\'s'} own notes. It sees them every turn and can change them with its scratchpad tool.
+          {' '}At most {fmt(max)} characters{folder ? ` — ${folder}/scratchpad.md` : ''}.
+        </span>
+        <textarea value={text} onChange={e => setText(e.target.value)} rows={5} disabled={pad == null}
+          aria-label={`Scratchpad, at most ${fmt(max)} characters`}
+          placeholder={pad == null ? '' : 'Empty. Notes written here are shown to the agent on every turn.'}
+          style={{ ...field, fontFamily: 'inherit', resize: 'vertical' }} />
+      </label>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', fontSize: 11 }}>
+        <button type="button" onClick={savePad} disabled={saving || pad == null || over || !changed}
+          title={over ? `Over the ${fmt(max)}-character limit — shorten it to save` : undefined}
+          style={{ ...chip(changed && !over), display: 'flex', alignItems: 'center', gap: 4 }}>
+          <Check size={12} /> save scratchpad
+        </button>
+        {over && <span style={{ color: 'var(--danger, #ff4466)' }}>{fmt(text.length - max)} characters over the limit — shorten it to save.</span>}
+        {padNote && !over && <span role="status" style={{ color: 'var(--accent, #00ff40)' }}>{padNote}</span>}
+      </div>
+      {padError && <div role="alert" style={{ fontSize: 11, color: 'var(--danger, #ff4466)' }}>{padError}</div>}
+
+      <div style={{ display: 'grid', gap: 4, fontSize: 11 }}>
+        <span style={{ fontWeight: 600 }}>Handoffs</span>
+        <span style={{ color: 'var(--text-dim, #8aa)' }}>
+          Written by the agent with /handoff, or when you save a chat if that setting is on. The newest one is shown to it on every turn until it writes a newer one. Nothing is deleted;
+          {' '}they live in {folder ? `${folder}/handoffs/` : 'the handoffs folder inside its folder under Agents'}.
+        </span>
+        {handoffError && <div role="alert" style={{ color: 'var(--danger, #ff4466)' }}>{handoffError}</div>}
+        {handoffs && !list.length && (
+          <span style={{ color: 'var(--text-dim, #8aa)' }}>None yet. In the terminal, talking to {name || 'this agent'}, type /handoff.</span>
+        )}
+        {list.map((h, i) => (
+          <div key={h.path || h.at} style={{ border: '1px solid var(--border, #223)', borderRadius: 4, padding: '6px 8px' }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <span>{h.at ? new Date(h.at).toLocaleString() : h.path}</span>
+              {i === 0 && <span style={{ color: 'var(--accent, #00ff40)' }}>newest — shown to the agent</span>}
+              {i === 0 && latest?.text && (
+                <button type="button" onClick={() => setOpenLatest(!openLatest)} aria-expanded={openLatest}
+                  style={{ ...chip(false), marginLeft: 'auto' }}>{openLatest ? 'hide' : 'read in full'}</button>
+              )}
+            </div>
+            <div style={{ color: 'var(--text-dim, #8aa)', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', marginTop: 3 }}>
+              {i === 0 && openLatest && latest?.text ? latest.text : h.preview}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function MemoryCore() {
   const [agents, setAgents] = useState([]);
   const [scope, setScope] = useState(null);           // null = shared; else an agent id
@@ -308,7 +431,7 @@ export default function MemoryCore() {
           </label>
           <label style={{ display: 'grid', gap: 3, fontSize: 11 }}>Persona — who it is and what it does (sent with every message to it)
             <textarea value={agentForm.persona} onChange={e => setAgentForm({ ...agentForm, persona: e.target.value })} rows={3}
-              placeholder="e.g. Watches card auctions for the shop and reports prices against my ceilings."
+              placeholder="e.g. Answers bookkeeping questions from my Vault and drafts a short month-end summary."
               style={{ ...field, fontFamily: 'inherit', resize: 'vertical' }} />
           </label>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -333,8 +456,8 @@ export default function MemoryCore() {
           </div>
           {agentForm.self && agentForm.privacy === 'local-only' && (
             <div style={{ fontSize: 11, color: 'var(--text-dim, #8aa)' }}>
-              Your AEON's memory is the shared memory: it stays out of the Second Brain index and recall, but an agent set to
-              Roulette that reads the shared memory still sends it to its own model.
+              Your AEON's memory is the shared memory: it stays out of the Second Brain index and recall, and
+              an agent set to Roulette does not get the shared memory in its prompt (an agent set to Local only still does).
             </div>
           )}
           {!agentForm.self && (
@@ -360,6 +483,9 @@ export default function MemoryCore() {
               </button>
             )}
           </div>
+          {agentForm.mode === 'edit' && agentForm.id && (
+            <AgentWorkspace key={agentForm.id} agentId={agentForm.id} name={agentForm.name} />
+          )}
         </div>
       )}
 

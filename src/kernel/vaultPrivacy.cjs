@@ -147,18 +147,31 @@ function createScope(vaultRoot) {
    * too ("Agents/Scout"), so a walk can skip a Local only agent whole.
    */
   function withheld(relPosix) {
-    const given = split(String(relPosix || '').replace(/\\/g, '/').replace(/^Vault\//, ''));
-    const real = resolveParts(given);
-    // Both: the name the disk gives it, and the one it was reached by (a
-    // symlink named Agents/Scout is Scout's to the operator, wherever it points).
-    return judge(real) || (real.join('/') === given.join('/') ? null : judge(given));
+    return withheldFor(relPosix);
   }
 
-  function judge(parts) {
+  /**
+   * The same verdicts for a caller that is itself an agent set to Local only
+   * (agentTools.cjs): `ownFolder` is that agent's folder, and a path inside
+   * it is not withheld for being a Local only agent's — its own memory,
+   * scratchpad and handoffs are its own. A memory it switched Off, and a
+   * store that holds one, still are. Every other caller passes nothing and
+   * gets exactly withheld().
+   */
+  function withheldFor(relPosix, { ownFolder = null } = {}) {
+    const given = split(String(relPosix || '').replace(/\\/g, '/').replace(/^Vault\//, ''));
+    const real = resolveParts(given);
+    const own = ownFolder ? String(ownFolder).toLowerCase() : null;
+    // Both: the name the disk gives it, and the one it was reached by (a
+    // symlink named Agents/Scout is Scout's to the operator, wherever it points).
+    return judge(real, own) || (real.join('/') === given.join('/') ? null : judge(given, own));
+  }
+
+  function judge(parts, own = null) {
     if (parts.length < 2 || parts[0].toLowerCase() !== 'agents') return null;
     const folder = folderOnDisk(parts[1]);
     if (folder.startsWith('.')) return null;
-    if (isLocalOnly(folder)) return 'local-only-agent';
+    if (isLocalOnly(folder) && !(own && folder.toLowerCase() === own)) return 'local-only-agent';
     if (parts.length !== 4 || parts[2].toLowerCase() !== 'memory') return null;
     const name = parts[3];
     if (name.toLowerCase() === 'memories.json') {
@@ -188,7 +201,7 @@ function createScope(vaultRoot) {
     return resolveParts(split(String(relPosix || '').replace(/\\/g, '/'))).join('/');
   }
 
-  return { withheld, withheldAt, canonical };
+  return { withheld, withheldFor, withheldAt, canonical };
 }
 
 /** One-off check, for a caller with a single path. */

@@ -12,6 +12,126 @@ tagged; until then its heading says so.
      is added here before tagging, and the heading's "not tagged yet" is replaced by
      the date. -->
 
+## 3.3.0 — not tagged yet
+
+Agents that can work. In a chat, your AEON and your agents can use AEON's own tools —
+search and read your Vault, search the web, save to their own memory and folder, ask
+another agent — and every tool use is shown in the terminal with its real result. An
+answer a model cut off at its output limit is continued automatically. Each agent keeps
+a scratchpad and can write a handoff note it sees until it writes a newer one. Your
+data in `~/AEON` is untouched; upgrade as for 3.2.0.
+
+### Agent tools in chat
+
+- **Eight tools**, in every chat turn of the terminal: `vault_search` (the same Second
+  Brain search `/ask` uses), `vault_read` (one Vault file — text, Markdown, PDF or
+  HTML, long files in parts), `vault_list` (a Vault folder), `web_search` (your search
+  provider; DuckDuckGo needs no key), `memory_save` (one fact to the agent's **own**
+  memory; Settings' "New memories start on" applies), `artifact_save` (a Markdown
+  document in `Agents/<Folder>/artifacts/`), `scratchpad_write` (its scratchpad, below)
+  and `ask_agent` (one question to another of your agents). (e1ccb6a, c8d1367,
+  c12f119, 80c8038, 1d0f2fc, 738b772, eb14998, 7703f80)
+- **Needs no provider function-calling**, so every provider AEON supports can use it —
+  free OpenRouter models, Groq, Gemini, OpenAI-compatible endpoints and local llama.cpp
+  models: the model asks for a tool in plain text (a fenced `aeon-tool` block) and AEON
+  runs it. How reliably a model writes the block depends on the model; it was tested
+  against a scripted model, not yet against each provider. (e1ccb6a)
+- **On screen, as it happens.** Each tool use is a TOOL line above the answer; open it
+  to see what the tool returned (a long result is shortened there, and says how much
+  more went to the model). Each save adds a ✎ line saying what changed and where. AEON
+  also checks the answer for common phrasings such as "I searched your Vault", "I read
+  the file", "I saved it to my memory" or "I asked <agent>", and warns under it when no
+  tool of that kind ran in that reply (a Vault search does not back "I searched the
+  web"); other wordings are not caught. (13d1a23, c840398)
+- **Limits per reply:** at most 6 tool uses, 3 of them saves; each result is capped in
+  size, the results together are capped, and each tool has a time limit. When the chat
+  role's model has a context window under 4,096 tokens, tools are off for that turn and
+  the terminal says why. (c12f119, 80c8038)
+- **What a tool returns is data, not instructions.** Results reach the model marked as
+  data, between markers that carry a random tag for that reply, and a tool call written
+  inside a document is never run — in a tool result, in a passage the Second Brain
+  recalled into the turn, or in a saved memory. A document's text can still sway a model, so every
+  save is shown, and one reply can make at most 3. (e1ccb6a, 3251d68)
+- **Vault paths stay in the Vault:** no `..`, no absolute paths, no hidden files or OS
+  junk, and no way out through a symlink — also for an agent's own scratchpad,
+  handoffs and artifacts, which are never opened through a link. (c12f119)
+- **Settings → Blocks → Memory Core:** "Let agents use AEON's tools in chat" and
+  "Agents may search the web", both on by default. (80c8038, 13d1a23)
+- **Not included in 3.3.0:** no shell, no code execution and no arbitrary web
+  requests. Apart from the model calls a chat already makes (and `vault_search`'s query
+  embedding), the only outside service a tool contacts is your search provider, through
+  `web_search`.
+
+### Privacy
+
+- **An agent set to Local only** keeps every model call of its turn on local models —
+  each tool round, each continuation, its handoffs and the questions it is asked by
+  another agent. It is never offered `web_search`, and a `web_search` it writes
+  anyway is refused. Settings → Models → **Local only** turns `web_search` off for
+  every agent. (c12f119, 80c8038)
+- **A Local only agent's folder** — its memory, scratchpad, handoffs and artifacts —
+  cannot be searched, read or listed from a Roulette agent's turn, and a model that can
+  be in the cloud cannot tell it exists: the tool list does not name it, a read or list
+  of its folder answers like a missing path, and `ask_agent` answers like an unknown
+  name. A Local only agent asking a Roulette agent is refused with the reason. Neither
+  model is called. An agent whose `agent.json` cannot be read is treated as Local only
+  until it is fixed. (c12f119, 3251d68)
+- **Switched-off memories, a memory store holding one, Local only agents' folders,
+  saved chats and the security block's records** cannot be read, listed or searched
+  through a tool, also when a link elsewhere in the Vault leads to them. (c12f119,
+  3251d68)
+- **Your own AEON set to Local only:** an agent set to Roulette no longer gets the
+  shared memory (which is your AEON's memory) in its prompt. 3.2.1 listed this as not
+  covered. (c12f119)
+- **Images in an answer are not loaded.** A Markdown image in a model's answer or a
+  tool result is shown as a line you can open yourself, never fetched by the browser on
+  its own: a document the model read could otherwise put private text in the image's
+  address. AEON's pages also limit images to AEON itself, `data:` and `blob:` images,
+  and Google's sign-in avatar host (`img-src`).
+  (3251d68)
+- **Errors a model reads name a Vault path, never this computer's paths** (they carry
+  your user name). (3251d68)
+- Scratchpads and handoffs are the model's own words, so they are not indexed into
+  the Second Brain; artifacts are documents and are indexed. Both are shown to the
+  agent as its notes, not as instructions. (6fc12f6, 3251d68)
+
+### Answers continue past the output limit
+
+- When a model stops because it reached its output limit — free OpenRouter models stop
+  at 1,024 tokens — AEON asks the same model to carry on and joins the parts into one
+  answer. At each join it removes a repeated overlap of 12 characters or more, a
+  restarted sentence or line (a list item too) of 4 characters or more, and a
+  preamble such as "Continuing:" or "Here is the continuation:". A part that ended at a
+  line break and starts again with that same line keeps it (a checklist can repeat a
+  line), so a model that restarts a whole line there can still show it twice.
+  The terminal shows "continuing… part 2 of up to 5" while it works and "Continued
+  automatically, N parts." under the answer. (e1ccb6a, c8d1367, 13d1a23, 3251d68)
+- Each part goes through the same connection as the first (its address, key pool and
+  pacing). (3251d68)
+- Up to 4 extra parts by default (Settings → Blocks → Memory Core, 0 to 8; each part is
+  another model call), or off. An answer still cut after the last part says so and
+  that you can type "continue". A provider that does not report why it stopped is
+  never continued on a guess. (c8d1367, 80c8038)
+
+### Scratchpad and handoffs
+
+- **Scratchpad:** `Agents/<Folder>/scratchpad.md`, at most 2,000 characters, shown to
+  the agent every turn. The agent changes it with its tool; you change it in Memory
+  Core → agent settings. A change that would take it over 2,000 characters is refused,
+  never cut. (c12f119, 6fc12f6, 13d1a23)
+- **`/handoff`:** the agent you are talking to writes a short note — what it was working
+  on, what was decided, what is open, the next step — to
+  `Agents/<Folder>/handoffs/`. The newest one is shown to it on every turn until it
+  writes a newer one. Older ones are kept; nothing is deleted or overwritten. "Write a
+  handoff when you save a chat" (off by default) does the same when you save a chat
+  with an agent. (6fc12f6)
+- Memory Core's agent settings show the scratchpad (editable, with its character
+  count) and the handoffs, newest first. (13d1a23)
+
+### Smaller
+
+- The New agent persona example is a bookkeeping helper. (13d1a23, 2b48f48, 3251d68)
+
 ## 3.2.1 — 2026-10-03
 
 Fixes from the 2026-10-03 audit of the public repository: the privacy switches now do

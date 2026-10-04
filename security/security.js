@@ -20,8 +20,19 @@ module.exports = ({ supabase, getLocalFile, WORKSPACE, AUDIT_FILE, SDI_VIOLATION
   };
 
   // ── Security headers ──
+  // The full policy is opt-in (AEON_ENABLE_CSP=1). Without it, images are
+  // still limited to this AEON, data: and blob: (plus the Google sign-in
+  // avatar): a Markdown image in a model's answer must never make the browser
+  // send private text to another host (3.3.0 security review). Terminal2's
+  // renderer does not load remote images either; this is the second layer.
   const helmetMiddleware = helmet({
-    contentSecurityPolicy: process.env.AEON_ENABLE_CSP === '1' ? undefined : false,
+    contentSecurityPolicy: process.env.AEON_ENABLE_CSP === '1' ? undefined : {
+      useDefaults: false,
+      directives: {
+        defaultSrc: helmet.contentSecurityPolicy.dangerouslyDisableDefaultSrc,
+        imgSrc: ["'self'", 'data:', 'blob:', 'https://*.googleusercontent.com'],
+      },
+    },
     crossOriginEmbedderPolicy: false,
     crossOriginResourcePolicy: { policy: 'cross-origin' },
   });

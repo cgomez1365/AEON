@@ -20,9 +20,11 @@ const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
 const flat = (text) => text.replace(/[`*]/g, '').replace(/\s+/g, ' ');
 
 const PRIVACY = flat(read('PRIVACY.md'));
-const SHARED_EXCEPTION = 'an agent set to Roulette that reads the shared memory still sends it to its own model';
+// 3.3.0: the exception is closed (context.cjs readAgentMemories), and every
+// text that described it says so in the same words.
+const SHARED_EXCEPTION = 'an agent set to Roulette does not get the shared memory in its prompt';
 
-describe('Local only: the shared-memory exception is stated everywhere it is set or described', () => {
+describe('Local only: what happens to the shared memory is stated everywhere it is set or described', () => {
   it.each([
     ['PRIVACY.md', PRIVACY],
     ['Memory Core screen', flat(read('src/blocks/memory_core/index.jsx'))],

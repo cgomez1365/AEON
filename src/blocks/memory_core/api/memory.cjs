@@ -36,6 +36,7 @@ const agentsKernel = require('../../../kernel/agents.cjs');
 const { estimateTokens } = require('../../../kernel/tokens.cjs');
 const blockSettings = require('../../../kernel/blockSettings.cjs');
 const sections = require('../../../kernel/memorySections.cjs');
+const agentWorkspace = require('../../../kernel/agentWorkspace.cjs');
 const crypto = require('crypto');
 
 /**
@@ -738,6 +739,58 @@ ${String(transcript).slice(0, 8000)}`;
       requestIndex('agent-remove');
       res.json({ ok: true, ...out, text: `${out.name} removed. Its memory and chats were moved to ${out.movedTo}, not deleted.` });
     } catch (e) { agentErr(res, e); }
+  });
+
+  // ── An agent's working files (3.3, src/kernel/agentWorkspace.cjs) ─────
+  // Its scratchpad (its own notes, shown to it every turn, at most 2,000
+  // characters: refused over that, never cut) and its handoffs (written by
+  // the agent with /handoff; the newest is shown to it on every turn until it
+  // writes a newer one; kept, never deleted). Neither is indexed: they are a model's words.
+  const workspaceErr = (res, e) => res.status(e.status || 500).json({ ok: false, error: e.message, ...(e.code ? { code: e.code } : {}) });
+  const agentOr404 = (ref, res) => {
+    const a = agentsKernel.get(VAULT, ref);
+    if (!a) res.status(404).json({ ok: false, error: `No agent called "${ref}". GET /api/agents lists them.` });
+    return a;
+  };
+
+  router.get('/agents/:id/scratchpad', (req, res) => {
+    const a = agentOr404(req.params.id, res); if (!a) return;
+    try {
+      res.json({ ok: true, agent: { id: a.id, name: a.name }, ...agentWorkspace.readScratchpad(VAULT, a) });
+    } catch (e) { workspaceErr(res, e); }
+  });
+
+  router.put('/agents/:id/scratchpad', (req, res) => {
+    const a = agentOr404(req.params.id, res); if (!a) return;
+    const content = req.body?.content;
+    if (typeof content !== 'string') return res.status(400).json({ ok: false, error: 'Send the scratchpad as { content: "..." }.' });
+    try {
+      const w = agentWorkspace.writeScratchpad(VAULT, a, content, { mode: 'replace' });
+      res.json({ ok: true, chars: w.chars, max: w.max, path: w.path,
+        text: `${a.name}'s scratchpad saved (${w.chars.toLocaleString('en-US')} / ${w.max.toLocaleString('en-US')} characters).` });
+    } catch (e) { workspaceErr(res, e); }
+  });
+
+  router.get('/agents/:id/handoffs', (req, res) => {
+    const a = agentOr404(req.params.id, res); if (!a) return;
+    try {
+      res.json({ ok: true, agent: { id: a.id, name: a.name }, ...agentWorkspace.listHandoffs(VAULT, a, { limit: req.query?.limit }) });
+    } catch (e) { workspaceErr(res, e); }
+  });
+
+  // /handoff — the agent the terminal is talking to writes its handoff from
+  // this conversation (the dispatcher forwards `agent` and `history`). A
+  // Local only agent's handoff is written by a local model or not at all.
+  router.post('/agents/handoff', async (req, res) => {
+    const { agent: ref = null, history = [], note = '' } = req.body || {};
+    const a = agentOr404(ref || agentsKernel.SELF_ID, res); if (!a) return;
+    try {
+      const out = await agentWorkspace.writeHandoff({
+        vaultRoot: VAULT, agent: a, history: Array.isArray(history) ? history : [],
+        note: typeof note === 'string' ? note : '', kernelLLM, source: '/handoff',
+      });
+      res.json({ ok: true, path: out.rel, at: out.at, text: `Handoff saved to ${out.rel}\n\n${out.text}` });
+    } catch (e) { workspaceErr(res, e); }
   });
   return router;
 };

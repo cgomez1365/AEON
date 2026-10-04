@@ -115,6 +115,18 @@
         "mode": "instant",
         "category": "content",
         "argHint": "<name>"
+      },
+      {
+        "cmd": "/handoff",
+        "desc": "The agent you are talking to writes a handoff note (what it was doing, what is open, the next step) into its folder; it is shown that note every turn until it writes a newer one",
+        "method": "POST",
+        "route": "/api/agents/handoff",
+        "param": "note",
+        "argHint": "<optional focus>",
+        "mode": "instant",
+        "category": "content",
+        "takesAgent": true,
+        "takesHistory": true
       }
     ],
     "filesystem": {
@@ -155,6 +167,41 @@
         "type": "boolean",
         "default": true,
         "desc": "New memories are sent to the model straight away. Off: they are saved switched off, and you turn on the ones that matter (keeps big stores fast)."
+      },
+      {
+        "key": "agent_tools",
+        "label": "Let agents use AEON's tools in chat",
+        "type": "boolean",
+        "default": true,
+        "desc": "During a chat turn your AEON and your agents may search and read your Vault, list folders, search the web, save to their own memory, scratchpad and folder, and ask another agent. Every tool use and its result is shown in the terminal. Agents set to Local only never search the web."
+      },
+      {
+        "key": "agent_tools_web",
+        "label": "Agents may search the web",
+        "type": "boolean",
+        "default": true,
+        "desc": "Lets the web_search tool send a search query to your search provider (DuckDuckGo needs no key). Never for an agent set to Local only, or while Local only is on in Settings → Models."
+      },
+      {
+        "key": "auto_continue",
+        "label": "Continue cut-off answers automatically",
+        "type": "boolean",
+        "default": true,
+        "desc": "When a model stops because it reached its output limit (free OpenRouter models stop at 1,024 tokens), AEON asks it to carry on and joins the parts into one answer."
+      },
+      {
+        "key": "auto_continue_parts",
+        "label": "Most extra parts per answer",
+        "type": "number",
+        "default": 4,
+        "desc": "How many times AEON may continue one answer (0 to 8). Each part is another model call."
+      },
+      {
+        "key": "handoff_on_save",
+        "label": "Write a handoff when you save a chat",
+        "type": "boolean",
+        "default": false,
+        "desc": "When you save a chat with an agent, it writes a short handoff note into its folder, shown to it every turn until it writes a newer one. /handoff does the same on demand."
       }
     ]
   },
@@ -177,6 +224,26 @@
     {
       "method": "PUT",
       "path": "/api/agents/:id",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/agents/:id/handoffs",
+      "auth": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/agents/:id/scratchpad",
+      "auth": true
+    },
+    {
+      "method": "PUT",
+      "path": "/api/agents/:id/scratchpad",
+      "auth": true
+    },
+    {
+      "method": "POST",
+      "path": "/api/agents/handoff",
       "auth": true
     },
     {

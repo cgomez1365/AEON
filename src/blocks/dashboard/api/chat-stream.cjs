@@ -19,8 +19,13 @@ const express = require('express');
 const tokens = require('../../../kernel/tokens.cjs');
 const kernelContext = require('../../../kernel/context.cjs');
 const blockSettings = require('../../../kernel/blockSettings.cjs');
+const agentTools = require('../../../kernel/agentTools.cjs');
+const agentTurn = require('../../../kernel/agentTurn.cjs');
+const agentWorkspace = require('../../../kernel/agentWorkspace.cjs');
+const toolProtocol = require('../../../kernel/toolProtocol.cjs');
+const continuation = require('../../../kernel/continuation.cjs');
 
-module.exports = function ({ kernelLLM, loadSettings: loadSettingsDep, VAULT_ROOT }) {
+module.exports = function ({ kernelLLM, loadSettings: loadSettingsDep, VAULT_ROOT, fetchWebSearch, requestIndex, writeOSAudit }) {
   // One router per call. It was built once at module load, so every later
   // call added its handlers to the SAME router behind the first set — and
   // the first set answered every request, with the first call's model layer
@@ -120,6 +125,8 @@ module.exports = function ({ kernelLLM, loadSettings: loadSettingsDep, VAULT_ROO
     return { ...out, budgets };
   }
 
+  const BASE_IDENTITY = agentTools.BASE_IDENTITY;
+
   function capturesFor(agent, mem) {
     return agent && !agent.self ? agent.capture === true : !!mem.auto_memory;
   }
@@ -204,8 +211,30 @@ module.exports = function ({ kernelLLM, loadSettings: loadSettingsDep, VAULT_ROO
         message,
         { authorization: req.headers.authorization, cookie: req.headers.cookie },
         mem.budgets?.recallTokens,
-        { localOnly: agent?.privacy === 'local-only' },
+        { localOnly: !!callOpts.localOnly },
       );
+      // 3.3 — the agent's own working files, and AEON's tools. The toolbox
+      // holds only what THIS caller may use (Local only: no web search, no
+      // asking across the Local only line); off when the operator turned it
+      // off, for non-chat roles, and for a window too small to carry results.
+      const memSettings = blockSettings.get('memory_core', settings);
+      const ctxWindow = contextTokens || 8192;
+      const smallWindow = ctxWindow < agentTools.LIMITS.TOOLS_MIN_CONTEXT;
+      const toolsOff = memSettings.agent_tools === false ? 'off in Settings → Blocks → Memory Core'
+        : role !== 'chat' ? 'only chat turns use tools'
+          : !VAULT_ROOT ? 'no Vault is mounted'
+            : smallWindow ? `the model's window (${ctxWindow} tokens) is too small for tools`
+              : null;
+      const auth = { authorization: req.headers.authorization, cookie: req.headers.cookie };
+      const toolbox = toolsOff ? null : agentTools.createToolbox({
+        vaultRoot: VAULT_ROOT, agent, agents, settings, memSettings, auth,
+        kernelLLM, fetchWebSearch, requestIndex, writeOSAudit,
+        correlationId: req.correlationId || streamId, contextTokens: ctxWindow, signal: abort.signal,
+        baseIdentity: BASE_IDENTITY,
+      });
+      const workspace = agentWorkspace.promptBlock(VAULT_ROOT, agent);
+      const autoContinue = memSettings.auto_continue !== false;
+      const continueParts = continuation.clampParts(memSettings.auto_continue_parts);
       const messages = [
         // AEON is a tool, not a staff member. This prompt used to cast the
         // assistant as "VP (VP of Operations), the operator's autonomous
@@ -215,8 +244,12 @@ module.exports = function ({ kernelLLM, loadSettings: loadSettingsDep, VAULT_ROO
         // mem.text, so the memory rules the kernel appends stay the last word
         // on this system turn. It governs layout only — see its definition in
         // src/kernel/context.cjs.
-        { role: 'system', content: agentsKernel.identityFor(agent, 'You are AEON, a private AI workspace built by Broken Gear Industries. You are helpful, precise, and concise. When the user asks you to do something, do it directly. ')
-          + kernelContext.FORMATTING + mem.text },
+        // The workspace (scratchpad, last handoff) and the tool protocol come
+        // before mem.text, so the memory rules stay the last word.
+        { role: 'system', content: agentsKernel.identityFor(agent, BASE_IDENTITY)
+          // Memories are data too: an aeon-tool block saved inside one is
+          // neutralised like a recalled passage (context.cjs) or a result.
+          + kernelContext.FORMATTING + workspace.text + (toolbox ? toolbox.promptText() : '') + toolProtocol.neutralise(mem.text) },
         // A turn the terminal tagged with an agent set to Local only reaches
         // only a Local only agent's model (one feed can switch agents).
         ...agentsKernel.shareableTurns(history, agent, agents).slice(-20)
@@ -253,22 +286,37 @@ module.exports = function ({ kernelLLM, loadSettings: loadSettingsDep, VAULT_ROO
         recallUnavailable: sb.unavailable || null,
         recallError: sb.error || null,
         citations: sb.citations,
+        // 3.3: what this turn may do, and the agent's own working files.
+        tools: toolbox ? toolbox.names() : [],
+        toolsOff,
+        autoContinue: { on: autoContinue, maxParts: autoContinue ? continueParts : 0 },
+        scratchpadChars: workspace.scratchpadChars,
+        handoffAt: workspace.handoffAt,
       });
+      if (toolsOff && smallWindow && memSettings.agent_tools !== false && role === 'chat' && VAULT_ROOT) {
+        sseWrite(res, 'notice', { level: 'info', code: 'tools-off', message: `Tools are off for this reply: ${toolsOff}.` });
+      }
 
       // The kernel streams, falls back, and records. This block only relays:
       // tokens as they arrive, and a corrected label whenever the provider
-      // actually serving differs from the one announced.
+      // actually serving differs from the one announced. The turn engine
+      // (src/kernel/agentTurn.cjs) runs the rounds: tool calls between them,
+      // and the continuation of an answer cut off by the output limit.
       let announced = provider;
-      const result = await kernelLLM.stream(messages, {
+      const result = await agentTurn.runAgentTurn({
+        kernelLLM,
+        messages,
         role,
-        // The agent's own model and privacy; nothing for a stock AEON, so
-        // Settings and roulette decide exactly as before.
-        ...callOpts,
+        // The agent's own model and privacy, on EVERY round and continuation;
+        // nothing for a stock AEON, so Settings and roulette decide as before.
+        callOpts,
         signal: abort.signal,
-        onToken: (t) => {
-          fullText += t;
-          tokenCount++;
-          sseWrite(res, 'token', { t: t });
+        toolbox,
+        autoContinue,
+        continueParts,
+        emit: (event, data) => {
+          if (event === 'token') { fullText += data.t; tokenCount++; }
+          sseWrite(res, event, data);
         },
         onAttempt: ({ provider: p, model: m }) => {
           if (p !== announced) {
@@ -286,6 +334,13 @@ module.exports = function ({ kernelLLM, loadSettings: loadSettingsDep, VAULT_ROO
         },
       });
 
+      // A claim the model made that no tool backs ("I searched your vault")
+      // is pointed out, never edited.
+      if (!result.cancelled) {
+        for (const n of toolProtocol.claimCheck(result.text, toolbox ? toolbox.outcomes() : [], { agentNames: toolbox ? toolbox.agentNames() : [] })) {
+          sseWrite(res, 'notice', n);
+        }
+      }
       sseWrite(res, 'done', {
         text: result.text,
         tokens: result.tokens,
@@ -295,6 +350,10 @@ module.exports = function ({ kernelLLM, loadSettings: loadSettingsDep, VAULT_ROO
         truncated: result.truncated,
         truncationReason: result.truncationReason,
         cancelled: result.cancelled,
+        parts: result.parts,
+        continued: result.continued,
+        toolCalls: result.toolCalls,
+        toolWrites: result.toolWrites,
       });
       fullText = result.text || fullText;
       // Recent Agent Missions reads this: what the agent was last asked.

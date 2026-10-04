@@ -92,8 +92,12 @@ describe('a wide answer scrolls inside the terminal instead of pushing it', () =
     expect(code).toMatch(/overflow-wrap:\s*anywhere/);
   });
 
-  it('an image can never be wider than the panel', () => {
-    expect(render('![a](/brand/aeon-mark/aeon-mark.svg)')).toMatch(/max-width:\s*100%/);
+  it('an image is never loaded from an address, so it can never be wider than the panel', () => {
+    // 3.3.0 security review: a remote (or same-origin) image in an answer is
+    // shown as a line the operator can open, never fetched by the browser.
+    const html = render('![a](/brand/aeon-mark/aeon-mark.svg)');
+    expect(html).not.toMatch(/<img/);
+    expect(html).toMatch(/overflow-wrap:\s*anywhere/);
   });
 
   it('lists, headings and quotes are styled rather than left at browser defaults', () => {

@@ -185,6 +185,12 @@ documentation reported the suite as "1,100 / 1,106" — it had taken 1,100 as th
 total. The correction was published rather than quietly patched, because a
 number that was never right must be re-taken, not carried forward.
 
+A release's reading is taken from CI's run on its release commit, so it is written
+in the commit that replaces the CHANGELOG's "not tagged yet" with the date
+(`tests/storefront-readme.test.js` holds both, and fails on CI's run for the release
+tag while the heading still says "not tagged yet"). Until then the reading below is
+the latest one recorded, of the release line before it.
+
 **Current reading — v3.2.0, CI run 37102458513 on `cf73b00` ("Release 3.2.0"), started
 2026-10-03 06:15 UTC (23:15 on 2026-10-02 US Pacific time), all five jobs green:** 313
 test files and 3,235 tests on every build leg, 0 failures. Skips differ by platform:

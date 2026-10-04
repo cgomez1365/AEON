@@ -50,12 +50,41 @@ The operator's agents and what each one remembers.
   - its whole folder (`Agents/<Folder>/` — memory, mission log, `agent.json`) stays
     out of the Second Brain index and recall.
 
-  For the operator's own AEON, its memory **is** the shared memory: an agent set to
-  Roulette that reads the shared memory still sends it to its own model. A block
+  For the operator's own AEON, its memory **is** the shared memory: while that AEON is
+  set to Local only, an agent set to Roulette does not get the shared memory in its
+  prompt (3.3.0; an agent set to Local only still does). A block
   can run its own jobs as an agent: `POST /api/ai { prompt, agent }`.
 - **Mission log:** `Vault/Agents/<Folder>/missions/log.json`, the last 50 things the
   agent was asked (the operator's words, never the answer — R09). Recent Agent
-  Missions shows the latest.
+  Missions shows the latest. A question one agent asks another with `ask_agent` is
+  logged on the asked agent as `[from <caller>] <question>`.
+- **Scratchpad** (3.3.0): `Vault/Agents/<Folder>/scratchpad.md`, at most 2,000
+  characters, injected into that agent's system prompt every turn (`## YOUR
+  SCRATCHPAD`). The agent edits it with its `scratchpad_write` tool (replace or
+  append); the operator edits it in this block's agent settings. A write that would
+  pass 2,000 characters is refused with both sizes, never cut. Layout and rules:
+  `src/kernel/agentWorkspace.cjs`.
+- **Handoffs** (3.3.0): `/handoff` (or, with **Write a handoff when you save a chat**
+  on, an explicit chat save) has the agent summarise its turns of the chat on screen
+  — `Working on`, `Decided`, `Open`, `Next step` — into
+  `Vault/Agents/<Folder>/handoffs/<time>.md`, on the agent's own model and privacy.
+  The newest one (first 1,500 characters) is injected on every turn until it writes a
+  newer one (`## YOUR LAST HANDOFF`, marked as its own summary, not the operator's
+  words, and as notes, not commands).
+  Older ones are kept; nothing is deleted or overwritten.
+- **Artifacts** (3.3.0): Markdown documents an agent saves with its `artifact_save`
+  tool, in `Vault/Agents/<Folder>/artifacts/<name>.md` (`-2`, `-3`… rather than
+  overwrite).
+- **Agent tools in chat** (3.3.0): the toolbox the chat stream gives an agent —
+  `vault_search`, `vault_read`, `vault_list`, `web_search`, `memory_save` (its own
+  store, through `POST /api/memory/add` with `source: "agent-tool"`), `artifact_save`,
+  `scratchpad_write` and `ask_agent` — is `src/kernel/agentTools.cjs`; its settings live
+  here (below). No shell, no code execution, no arbitrary HTTP. How a turn runs it:
+  `src/blocks/dashboard/README.md`.
+
+Scratchpads and handoffs are a model's own words, so the Second Brain does not index
+them (R09); artifacts are indexed like any document. A Local only agent's whole folder,
+these files included, stays out of the index and out of every other agent's tools.
 
 Every memory route takes `?agent=<id|name>` (or `agent` in the body); none means the
 shared store. An agent nobody has answers 404 — the shared store never stands in
@@ -156,6 +185,10 @@ the index is decided by `src/kernel/vaultPrivacy.cjs`.
 | `POST` | `/api/agents` | Create: `{name, persona?, model?, privacy?, sharedMemory?, capture?}`. |
 | `PUT` | `/api/agents/:id` | Change any of those fields. |
 | `DELETE` | `/api/agents/:id` | Move the agent's folder to `Agents/.removed/`. |
+| `GET` | `/api/agents/:id/scratchpad` | `{ok, agent: {id, name}, content, chars, max: 2000, path, updatedAt}`; 404 for an unknown agent; 403 when `scratchpad.md` or a folder on its path is a link (never followed). |
+| `PUT` | `/api/agents/:id/scratchpad` | `{content}` replaces it: `{ok, chars, max, text}`. Over 2,000 characters answers **413** with both sizes; nothing is cut or written. 403 for a link, as for `GET`. |
+| `GET` | `/api/agents/:id/handoffs` | `?limit=` (at most 20): `{ok, latest: {at, path, text} \| null, handoffs: [{at, path, preview}]}`, newest first. |
+| `POST` | `/api/agents/handoff` | What `/handoff` calls: `{agent?, history?, note?}`. 200 with the saved path and the note; 400 when the chat has no turns with that agent; 404 unknown agent; 409 when a Local only agent has no local model (the kernel's words); 502 when the model fails — nothing is written; 503 when no model layer is available; 403 when the agent's `handoffs/` is a link (never followed); 500 when the file cannot be written. |
 
 All routes require auth per the manifest (`routes[].auth: true`). Add, edit,
 delete, distill, the switches and agent changes ask the kernel to index the
@@ -190,12 +223,27 @@ Memory Core:
 | `memory_in_context` | boolean | `true` | Use memories in chat. Off: the model sees none. |
 | `auto_memory` | boolean | `false` | Save memories automatically from the operator's own AEON's chats. |
 | `memory_max_context` | number | `200` | Most memories considered per ordinary turn; the token budget still decides what fits. |
-| `new_memories_on` | boolean | `true` | New memories start switched on. Off: they are saved switched off. |
+| `new_memories_on` | boolean | `true` | New memories start switched on. Off: they are saved switched off — `memory_save` included. |
+| `agent_tools` | boolean | `true` | Let agents use AEON's tools in chat. Off: no `## TOOLS` section, and the model is offered no tool. |
+| `agent_tools_web` | boolean | `true` | Agents may search the web (`web_search`). Never for an agent set to Local only, or while Settings → Models → Local only is on. |
+| `auto_continue` | boolean | `true` | Continue cut-off answers automatically when a model stops at its output limit. |
+| `auto_continue_parts` | number | `4` | Most extra parts per answer, 0 to 8. Each part is another model call. |
+| `handoff_on_save` | boolean | `false` | Write a handoff when you save a chat with an agent (not on automatic saves). |
+
+## Terminal command
+
+`/handoff [focus]` — declared in the manifest with `takesAgent` and `takesHistory`, so
+the dispatcher (`src/kernel/commandRegistry.cjs`) forwards the terminal's agent and the
+last 20 turns on screen (4,000 characters each) to `POST /api/agents/handoff`. The
+optional text is a note to focus the summary.
 
 ## UI (`index.jsx`)
 
 Agent tabs (All agents, then each agent) / new and edit agent (name, persona,
-model, privacy, shared memory, auto-capture) / "talk in terminal" / the switch
+model, privacy, shared memory, auto-capture) / in edit, the agent's scratchpad
+(editable, `N / 2,000`, save disabled over the limit, the server's 413 shown as
+written) and its handoffs (newest first, the newest readable in full) /
+"talk in terminal" / the switch
 on every memory with its token cost and all-on, all-off / filter by type or
 category chip, or free-text search / add / pin / inline edit / delete /
 "distill" (the newest saved chat in that store's sibling `chat_sessions/`).

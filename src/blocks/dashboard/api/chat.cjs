@@ -5,6 +5,8 @@ const { loadSettings } = require('../../../../services/settings.js');
 const { isCloud: _isCloud } = require('../../../kernel/runtime.cjs');
 const kernelContext = require('../../../kernel/context.cjs');
 const agentsKernel = require('../../../kernel/agents.cjs');
+const agentWorkspace = require('../../../kernel/agentWorkspace.cjs');
+const blockSettings = require('../../../kernel/blockSettings.cjs');
 
 module.exports = function createChatRouter(deps) {
   const router = express.Router();
@@ -206,10 +208,37 @@ module.exports = function createChatRouter(deps) {
         messages,
       });
       res.json({ ok: true, id, name: record.name, nameSetBy: record.nameSetBy, updated: !!existing });
+      handoffOnSave(record, !!autoSaved);
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
   });
+
+  // Settings → Blocks → Memory Core → "Write a handoff when you save a chat".
+  // On a save the operator made (never an automatic one: a tab switch saves
+  // too), the agent the chat was with writes its handoff. After the reply,
+  // fire-and-forget; a failure is logged, never silent, and never fails the
+  // save. Local only agents keep their privacy (agentWorkspace → callOptions).
+  const settingsNow = () => {
+    try { return (typeof deps.loadSettings === 'function' ? deps.loadSettings() : loadSettings()) || {}; } catch { return {}; }
+  };
+  function handoffOnSave(record, autoSaved) {
+    if (autoSaved || !kernelLLM) return;
+    if (blockSettings.get('memory_core', settingsNow()).handoff_on_save !== true) return;
+    const agents = listAgents();
+    const agent = agentsKernel.get(VAULT, record.agent || agentsKernel.SELF_ID, agents);
+    if (!agent) return;
+    setImmediate(async () => {
+      try {
+        const out = await agentWorkspace.writeHandoff({
+          vaultRoot: VAULT, agent, agents, history: record.messages || [], kernelLLM, source: 'session-save',
+        });
+        console.log(`[HANDOFF] ${agent.name} wrote ${out.rel} on save of chat ${record.id}.`);
+      } catch (e) {
+        console.warn(`[HANDOFF] ${agent.name}'s handoff on save of chat ${record.id} was not written: ${e.message}`);
+      }
+    });
+  }
 
   // PATCH /api/terminal/sessions/:id — rename. The operator's word is final.
   router.patch('/terminal/sessions/:id', (req, res) => {

@@ -97,12 +97,47 @@ describe('versions point at the latest release', () => {
     // The numbers themselves are a dated reading (section 5), so they are not
     // pinned here; what is pinned is that a release re-takes the reading: it
     // names the package.json release line, a CI run id and the commit it ran on.
+    //
+    // A reading is taken FROM the release commit's CI run, so the release
+    // commit itself cannot hold it. While the CHANGELOG still says the
+    // package.json version is "not tagged yet", the current reading is the
+    // previous release's (the latest one recorded); the commit that
+    // dates the heading must also write the new reading.
     expect(README).toMatch(/\]\(docs\/ENGINEERING_STANDARD\.md#5-numbers-are-dated-readings\)/);
     const std = read('docs/ENGINEERING_STANDARD.md');
     const current = std.slice(std.indexOf('**Current reading'), std.indexOf('**Previous reading'));
     const [major, minor] = pkg.version.split('.');
-    expect(current).toContain(`v${major}.${minor}.`);
+    const untagged = new RegExp(`^## ${pkg.version.replace(/\./g, '\\.')} — not tagged yet`, 'm').test(read('CHANGELOG.md'));
+    if (untagged) {
+      // Not any version: the release line of the newest TAGGED release below
+      // the untagged heading (review 2026-10-03: v1.0.0 would have passed).
+      const tagged = /^## (\d+)\.(\d+)\.\d+ — \d{4}-\d\d-\d\d/m.exec(read('CHANGELOG.md'));
+      expect(tagged).toBeTruthy();
+      expect(current).toMatch(new RegExp(`^\\*\\*Current reading — v${tagged[1]}\\.${tagged[2]}\\.\\d+,`));
+    } else expect(current).toContain(`v${major}.${minor}.`);
     expect(current).toMatch(/CI run \d+ on `[0-9a-f]{7,40}`/);
+  });
+
+  it('on CI\'s run for a release tag, the CHANGELOG heading of that release is dated', () => {
+    // A tag pushed while the heading still says "not tagged yet" would leave
+    // the previous release's reading standing for good.
+    const ref = process.env.GITHUB_REF || '';
+    const changelog = read('CHANGELOG.md');
+    const esc = (v) => v.replace(/\./g, '\\.');
+    if (ref === `refs/tags/v${pkg.version}`) {
+      expect(changelog).not.toMatch(new RegExp(`^## ${esc(pkg.version)} — not tagged yet`, 'm'));
+      expect(changelog).toMatch(new RegExp(`^## ${esc(pkg.version)} — \\d{4}-\\d\\d-\\d\\d`, 'm'));
+    } else {
+      // Off a tag: the heading of the package.json version is either dated or
+      // says "not tagged yet" — never missing.
+      expect(changelog).toMatch(new RegExp(`^## ${esc(pkg.version)} — (?:not tagged yet|\\d{4}-\\d\\d-\\d\\d)`, 'm'));
+    }
+  });
+
+  it('README\'s pointer to the reading names no release version that could go stale', () => {
+    const line = README.split('\n').find((l) => l.includes('ENGINEERING_STANDARD.md#5-numbers-are-dated-readings'));
+    expect(line).toBeTruthy();
+    expect(line).not.toMatch(/latest one[^.]*\bv?\d+\.\d+\.\d+/);
   });
 });
 

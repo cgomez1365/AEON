@@ -17,9 +17,12 @@ directory is yours.
 | What | Where | Written by |
 |---|---|---|
 | Documents | anywhere in the Vault (for example `<Vault>/Reading_Library/Uploads/`) | uploads, `/upload`, the Files block |
-| Memories (shared — every agent reads them) | `<Vault>/Agents/Aeon/memory/memories.json` + one readable `.md` per memory | Memory Core (`src/blocks/memory_core/api/memory.cjs`), Writer saves |
+| Memories (shared — in every agent's prompt unless its **Reads the shared memory too** box is unticked, or your own AEON is Local only and the agent is Roulette; with agent tools on, any agent can still read a memory file that is not withheld) | `<Vault>/Agents/Aeon/memory/memories.json` + one readable `.md` per memory | Memory Core (`src/blocks/memory_core/api/memory.cjs`), Writer saves |
 | An agent and its own memories | `<Vault>/Agents/<Folder>/agent.json` and `<Vault>/Agents/<Folder>/memory/` (same shape as the shared store) | Memory Core (`src/kernel/agents.cjs` owns the layout) |
 | An agent's mission log | `<Vault>/Agents/<Folder>/missions/log.json` — the last 50 things it was asked, never its answers | the streaming chat |
+| An agent's scratchpad | `<Vault>/Agents/<Folder>/scratchpad.md` — at most 2,000 characters, shown to the agent every turn | the agent's `scratchpad_write` tool, and Memory Core |
+| An agent's handoffs | `<Vault>/Agents/<Folder>/handoffs/<time>.md` — the newest is shown to the agent on every turn until it writes a newer one; none is deleted | `/handoff`, and a chat save when Memory Core's "Write a handoff when you save a chat" is on |
+| An agent's artifacts | `<Vault>/Agents/<Folder>/artifacts/<name>.md` — never overwritten (`-2`, `-3`…) | the agent's `artifact_save` tool |
 | Saved conversations | `<Vault>/Agents/Aeon/chat_sessions/` | the terminal and chat |
 | Block memory | `<Vault>/blocks/<id>/` | blocks, through their declared storage contract |
 
@@ -40,6 +43,18 @@ removed 2026-09-12 with its eight `@xmldom/xmldom` advisories.
 `Agents/Aeon/chat_sessions`. A saved conversation includes the assistant's own turns;
 indexing it would let a later answer cite an earlier model output as if it were a source.
 Operator turns re-enter only through an explicit `POST /crn/second-brain/ingest/chat`.
+For the same reason an agent's `scratchpad.md` and `handoffs/` are not indexed: both are
+the model's own words (`src/kernel/agentWorkspace.cjs`). An agent's `artifacts/` are
+documents it was asked to write, and are indexed.
+
+**Withheld from the index and recall** (`src/kernel/vaultPrivacy.cjs`): switched-off
+memories, a memory store that holds one, and the whole folder of an agent set to Local
+only. The same verdicts apply to an agent's chat tools: `vault_read` and `vault_list`
+refuse those paths (a Local only agent may still read and list its own folder;
+switched-off memories in it stay withheld), and `vault_search` goes through the same
+retriever. An agent's own working files (`scratchpad.md`, `handoffs/`, `artifacts/`)
+are never opened through a link, and an agent whose `agent.json` cannot be read is
+treated as Local only (`src/kernel/agents.cjs`).
 
 ### When indexing runs
 

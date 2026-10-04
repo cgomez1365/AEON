@@ -110,15 +110,26 @@ describe('baseline: embedding response shape', () => {
 describe('baseline: terminal SSE event vocabulary', () => {
   const streamPath = path.join(APP_ROOT, 'src', 'blocks', 'dashboard', 'api', 'chat-stream.cjs');
   const src = fs.readFileSync(streamPath, 'utf8');
+  // Since 3.3 the rounds (tool calls, auto-continue) run in the kernel's turn
+  // engine; chat-stream relays every event it emits, unchanged, over SSE.
+  const turnPath = path.join(APP_ROOT, 'src', 'kernel', 'agentTurn.cjs');
+  const turn = fs.readFileSync(turnPath, 'utf8');
+  const relays = /emit:\s*\(event,\s*data\)\s*=>\s*\{[\s\S]{0,200}?sseWrite\(res,\s*event,\s*data\)/;
 
   // The browser Terminal listens for these exact event names. Renaming one
   // silently breaks streaming with no server-side error.
-  it.each(['token', 'done', 'error'])('emits SSE event "%s"', (evt) => {
+  it.each(['done', 'error'])('emits SSE event "%s"', (evt) => {
     expect(src).toMatch(new RegExp(`sseWrite\\(res,\\s*['"]${evt}['"]`));
   });
 
+  it('emits SSE event "token" (the turn engine emits it; chat-stream relays it)', () => {
+    expect(turn).toMatch(/emit\(\s*['"]token['"]/);
+    expect(src).toMatch(relays);
+  });
+
   it('token frames carry the delta under key "t"', () => {
-    expect(src).toMatch(/sseWrite\(res,\s*['"]token['"],\s*\{\s*t:/);
+    expect(turn).toMatch(/emit\(\s*['"]token['"],\s*\{\s*t[:,\s}]/);
+    expect(src).toMatch(/if \(event === 'token'\) \{ fullText \+= data\.t;/);
   });
 
   it('done frames carry text, tokens, latencyMs, provider, model', () => {
@@ -132,9 +143,13 @@ describe('baseline: terminal SSE event vocabulary', () => {
     // "One LLM layer that routes every AI call by role" was false for the one
     // route the operator actually talks to: this file carried its own Groq,
     // Gemini and local streamers, its own vault key lookup, and a Claude branch
-    // that posted to Groq's URL. The provider hosts must not reappear here.
-    expect(src).not.toMatch(/api\.groq\.com|openrouter\.ai|generativelanguage\.googleapis|api\.anthropic\.com|api\.openai\.com/);
-    expect(src).toContain('kernelLLM.stream(');
+    // that posted to Groq's URL. The provider hosts must not reappear here,
+    // nor in the turn engine that now makes the calls.
+    const hosts = /api\.groq\.com|openrouter\.ai|generativelanguage\.googleapis|api\.anthropic\.com|api\.openai\.com/;
+    expect(src).not.toMatch(hosts);
+    expect(turn).not.toMatch(hosts);
+    expect(src).toMatch(/agentTurn\.runAgentTurn\(\{\s*kernelLLM,/);
+    expect(turn).toContain('kernelLLM.stream(');
   });
 });
 

@@ -144,9 +144,22 @@ export const MD = {
   em: ({ node, style, ...rest }) => (
     <em {...rest} style={{ fontStyle: 'italic', color: '#b9cbe0', ...style }} />
   ),
-  img: ({ node, style, ...rest }) => (
-    <img {...rest} style={{ maxWidth: '100%', height: 'auto', display: 'block', borderRadius: 3, margin: '6px 0', ...style }} />
-  ),
+  // An image in a model's answer or a tool result is NOT loaded unless it is
+  // already on this computer (data: or blob:). A remote one would make the
+  // browser fetch its URL by itself, and a document or web result the model
+  // read can tell it to put private text in that URL. Shown as a line the
+  // operator can read and open on purpose instead.
+  img: ({ node, style, src, alt, title, ...rest }) => {
+    const url = typeof src === 'string' ? src.trim() : '';
+    if (/^(?:data:image\/|blob:)/i.test(url)) {
+      return <img {...rest} src={url} alt={alt || ''} title={title} style={{ maxWidth: '100%', height: 'auto', display: 'block', borderRadius: 3, margin: '6px 0', ...style }} />;
+    }
+    return (
+      <span title={url ? `Image not loaded: ${url}` : 'Image not loaded'} style={{ color: '#8aa0b8', fontStyle: 'italic', overflowWrap: 'anywhere', ...style }}>
+        [image not loaded{alt ? `: ${alt}` : ''}{url ? <> — <a href={url} target="_blank" rel="noopener noreferrer" style={{ color: '#00f2ff' }}>open it yourself</a></> : null}]
+      </span>
+    );
+  },
 };
 
 // UI-only commands — act on the terminal or app itself, never the server.
@@ -415,6 +428,73 @@ export function turnForServer(t, maxChars = Infinity) {
 /** The last `n` turns of the feed, for the chat stream's history. */
 export function chatHistory(feed, n = 20) {
   return (Array.isArray(feed) ? feed : []).filter(isTurn).slice(-n).map((t) => turnForServer(t));
+}
+
+// ── Agent tools and auto-continue (3.3.0) ─────────────────────────────
+//
+// The chat stream reports each tool an agent uses as it happens: `tool_call`
+// when AEON parsed the call, `tool_result` with what the tool REALLY returned
+// (agentTools.cjs). Each becomes a TOOL chip above the answer, so "I read
+// your file" can be checked against a result on screen. `continue` and
+// `notice` come from the turn engine (agentTurn.cjs).
+
+/** One-line label for a tool call, when the server sent none. */
+function toolCallLabel(ev) {
+  const args = ev && ev.args && typeof ev.args === 'object' ? ev.args : {};
+  const shown = Object.entries(args)
+    .filter(([k, v]) => k !== 'content' && v != null && v !== '')
+    .map(([, v]) => (typeof v === 'string' ? v : JSON.stringify(v)))
+    .join(' ');
+  return `${ev?.tool || '?'}${shown ? ` ${shown}` : ''}`.slice(0, 200);
+}
+
+/** A `tool_call` event → a running TOOL chip (no result yet). */
+export function toolChipFromCall(ev) {
+  return {
+    type: 'chip', kind: 'TOOL', label: (ev && ev.label) || toolCallLabel(ev), status: 'running',
+    toolId: ev?.id ?? null, write: !!ev?.write, expanded: false, output: null,
+  };
+}
+
+/** A `tool_result` event → the chip's finished state: the real result, capped as the model got it. */
+export function toolChipUpdate(chip, ev) {
+  const preview = typeof ev?.preview === 'string' && ev.preview ? ev.preview : (ev?.summary || '(no output)');
+  const capped = ev?.truncated
+    ? `\n\n_(${Number(ev.chars || 0).toLocaleString('en-US')} characters sent to the model; capped)_`
+    : '';
+  return {
+    status: ev?.ok ? 'ok' : 'fail',
+    latencyMs: ev?.ms,
+    output: `${preview}${capped}`,
+    label: ev?.summary ? `${chip.label} — ${ev.summary}` : chip.label,
+  };
+}
+
+/** The grey line under an answer while AEON asks the model to carry on. */
+export function continueStatusText(ev) {
+  return `continuing… part ${ev.part} of up to ${ev.max}`;
+}
+
+/** After `done`: say an answer was joined from several parts; null when it was one. */
+export function continuedNoticeText(done) {
+  return done && Number(done.parts) > 1 ? `Continued automatically, ${done.parts} parts.` : null;
+}
+
+/** An engine `notice` (tool limit, unbacked claim, tools off…) as a feed line. */
+export function noticeEntry(ev) {
+  return { type: 'msg', role: ev?.level === 'warn' ? 'warning' : 'system', content: `↪ ${ev?.message ?? ''}` };
+}
+
+/**
+ * The body of POST /api/commands/dispatch. A command that declares
+ * `takesHistory` (/handoff) also gets the chat on screen — the same turns a
+ * chat turn sends — so the agent can summarise it. No other command does.
+ */
+export function dispatchBody({ cmdToken, arg, confirmed, agentBody, spec, feed }) {
+  return {
+    cmd: cmdToken, arg, confirmed, ...(agentBody || {}),
+    ...(spec && spec.takesHistory ? { history: chatHistory(feed) } : {}),
+  };
 }
 
 /**
@@ -1082,6 +1162,9 @@ const Terminal2 = ({ onUsageUpdate }) => {
     const msgId = push({ type: 'msg', role: 'assistant', content: '', streaming: true });
     let streamed = '';
     let meta = {};
+    // tool_call id → its chip, and the ids still waiting on a result.
+    const toolChips = new Map();
+    const toolPending = new Set();
 
     // D1c — the operator's handle on their own machine's work. The backend
     // can cancel a generation; without this nothing ever asked it to.
@@ -1147,6 +1230,26 @@ const Terminal2 = ({ onUsageUpdate }) => {
             meta = { ...meta, ...payload };
           }
           else if (eventType === 'warning') push({ type: 'msg', role: 'warning', content: payload.message });
+          // An agent's tool use: a chip above the answer, filled in with
+          // the tool's real result when it comes back.
+          else if (eventType === 'tool_call') {
+            const chipId = pushBefore(msgId, { ...toolChipFromCall(payload), pid: nextPid() });
+            if (payload.id != null) { toolChips.set(payload.id, chipId); toolPending.add(payload.id); }
+          }
+          else if (eventType === 'tool_result') {
+            let chipId = toolChips.get(payload.id);
+            // A result whose call frame never arrived still shows.
+            if (chipId == null) chipId = pushBefore(msgId, { ...toolChipFromCall({ tool: payload.tool, id: payload.id }), pid: nextPid() });
+            toolPending.delete(payload.id);
+            patch(chipId, (c) => toolChipUpdate(c, payload));
+            // Every write says what it changed, in the feed, not only in the chip.
+            if (payload.notice) pushBefore(msgId, { type: 'msg', role: 'system', content: `✎ ${payload.notice}` });
+          }
+          else if (eventType === 'continue') patch(msgId, { continuing: continueStatusText(payload) });
+          else if (eventType === 'notice') {
+            if (payload.code === 'tools-off') pushBefore(msgId, noticeEntry(payload));
+            else push(noticeEntry(payload));
+          }
           else if (eventType === 'done') { streamed = payload.text || streamed; meta = { ...meta, ...payload }; }
           else if (eventType === 'error') {
             // The server spoke. Carry its words, not a link diagnosis.
@@ -1162,22 +1265,30 @@ const Terminal2 = ({ onUsageUpdate }) => {
       if (meta.truncated) {
         push({ type: 'msg', role: 'warning', content: meta.truncationReason || 'The answer reached its token budget and stopped early.' });
       }
-      patch(msgId, { content: streamed, streaming: false, meta });
+      patch(msgId, { content: streamed, streaming: false, continuing: null, meta });
+      // One answer joined from several parts says so, once, under it.
+      const joined = continuedNoticeText(meta);
+      if (joined) push({ type: 'msg', role: 'system', content: `↪ ${joined}` });
       onUsageUpdate?.({ tokens: meta.tokens || 0, latencyMs: meta.latencyMs || 0 });
     } catch (e) {
       const failure = describeStreamFailure(e);
       if (!failure) {
         // A deliberate stop is not a failure. Keep what was generated.
-        patch(msgId, { content: streamed, streaming: false, meta: { ...meta, cancelled: true } });
+        patch(msgId, { content: streamed, streaming: false, continuing: null, meta: { ...meta, cancelled: true } });
         push({ type: 'msg', role: 'system', content: 'Generation stopped.' });
       } else if (streamed) {
         // Keep what already arrived; say it broke underneath it.
-        patch(msgId, { content: streamed, streaming: false, meta: { ...meta, truncated: true } });
+        patch(msgId, { content: streamed, streaming: false, continuing: null, meta: { ...meta, truncated: true } });
         push({ type: 'msg', role: 'warning', content: failure.text });
       } else {
-        patch(msgId, { role: 'error', content: failure.text, streaming: false });
+        patch(msgId, { role: 'error', content: failure.text, streaming: false, continuing: null });
       }
     } finally {
+      // A tool still running when the reply ended (stopped, or the stream
+      // broke) has no result. Its chip says so instead of spinning forever.
+      for (const id of toolPending) {
+        patch(toolChips.get(id), { status: 'fail', output: 'No result: the reply ended before this tool finished.' });
+      }
       activeChatRef.current = null;
     }
   };
@@ -1304,7 +1415,11 @@ const Terminal2 = ({ onUsageUpdate }) => {
         method: 'POST', headers: { 'Content-Type': 'application/json', [SELF_REPORTED_HEADER]: '1' },
         // The agent this terminal is with: one set to Local only has /ask,
         // /recall, /ask-doc and /read run on local models (commandRegistry).
-        body: JSON.stringify({ cmd: cmdToken, arg, confirmed, ...agentBody() }),
+        // /handoff (takesHistory) also carries the chat on screen.
+        body: JSON.stringify(dispatchBody({
+          cmdToken, arg, confirmed, agentBody: agentBody(),
+          spec: commands.find(c => c.cmd === cmdToken), feed,
+        })),
       });
       const data = await res.json().catch(() => ({}));
       const outcome = describeDispatchOutcome({ status: res.status, data });
@@ -1552,11 +1667,23 @@ const Terminal2 = ({ onUsageUpdate }) => {
                 {entry.role === 'assistant'
                   ? <ReactMarkdown remarkPlugins={[remarkGfm]} components={MD}>{entry.content || (entry.streaming ? '▮' : '')}</ReactMarkdown>
                   : <span style={{ whiteSpace: 'pre-wrap' }}>{entry.content}</span>}
+                {entry.streaming && entry.continuing && (
+                  <div role="status" style={{ marginTop: 3, fontSize: 10, color: '#5a6a80' }}>{entry.continuing}</div>
+                )}
                 {entry.meta?.model && (
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 3, fontSize: 9.5, color: '#4a5568', minWidth: 0 }}>
                     <span><Cpu size={9} style={{ verticalAlign: -1 }} /> {entry.meta.model}</span>
                     {entry.meta.latencyMs != null && <span><Clock size={9} style={{ verticalAlign: -1 }} /> {entry.meta.latencyMs}ms</span>}
                     {entry.meta.tokens != null && <span><Zap size={9} style={{ verticalAlign: -1 }} /> {entry.meta.tokens} tok</span>}
+                    {/* What the agent did this turn, as the server counted it. */}
+                    {entry.meta.toolCalls > 0 && (
+                      <span title={`${entry.meta.toolCalls} tool ${entry.meta.toolCalls === 1 ? 'use' : 'uses'}${entry.meta.toolWrites ? `, ${entry.meta.toolWrites} of them ${entry.meta.toolWrites === 1 ? 'a save' : 'saves'}` : ''} — each one is a TOOL line above`}>
+                        🛠 {entry.meta.toolCalls}{entry.meta.toolWrites ? ` · ✎ ${entry.meta.toolWrites}` : ''}
+                      </span>
+                    )}
+                    {entry.meta.parts > 1 && (
+                      <span title={`continued automatically: ${entry.meta.parts} parts joined into this answer`}>⤵ {entry.meta.parts} parts</span>
+                    )}
                     {/* What this turn consulted. These counters were emitted on every
                         stream and read by nobody — the operator's answer to "did it
                         actually look?" existed only in the network tab (§08, R01, R03). */}

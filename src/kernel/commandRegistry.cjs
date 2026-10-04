@@ -17,8 +17,11 @@
  *   { cmd:"/gpu", desc, route, method, param?, display?,   ← legacy
  *     mode?: "instant"|"stream"|"view", dangerous?: bool,
  *     when?: "ready", template?: "GPU: {name}", category?,
- *     takesLocalOnly?: bool }   ← the route keeps its model calls on this
+ *     takesLocalOnly?: bool,    ← the route keeps its model calls on this
  *                                 computer when its body says localOnly
+ *     takesAgent?: bool,        ← the body carries `agent` (the terminal's agent)
+ *     takesHistory?: bool }     ← the body carries `history` (the terminal's
+ *                                 recent turns, capped)
  *
  * Response envelope (every dispatch): { ok, id, text, data, meta }
  */
@@ -27,6 +30,22 @@ const fs = require('fs');
 const path = require('path');
 
 const { BLOCKS_DIR } = require('./blocksDir.cjs');
+
+// What a takesHistory command may receive of the terminal's conversation.
+const HISTORY_MAX_TURNS = 20;
+const HISTORY_MAX_CHARS_PER_TURN = 4000;
+
+/** The terminal's turns, capped: the last 20, 4,000 characters each. */
+function capHistory(history) {
+  if (!Array.isArray(history)) return [];
+  return history.slice(-HISTORY_MAX_TURNS)
+    .filter((t) => t && typeof t === 'object')
+    .map((t) => ({
+      role: String(t.role || 'user').slice(0, 20),
+      content: String(t.content ?? '').slice(0, HISTORY_MAX_CHARS_PER_TURN),
+      ...(typeof t.agent === 'string' ? { agent: t.agent.slice(0, 64) } : {}),
+    }));
+}
 
 /**
  * The usage line for a command, derived from what it already declares.
@@ -147,6 +166,11 @@ function scanCommands(readiness = {}) {
         // only models on this computer or the LAN). The dispatcher sets it
         // when the terminal's agent is set to Local only.
         takesLocalOnly: !!c.takesLocalOnly,
+        // The route acts for the terminal's agent (`agent` in its body), and
+        // reads the conversation so far (`history`, capped). /handoff takes
+        // both. Only routes that declare them get the fields.
+        takesAgent: !!c.takesAgent,
+        takesHistory: !!c.takesHistory,
       };
       // First declaration wins on a cmd collision; both remain reachable by id.
       if (!registry.has(c.cmd)) registry.set(c.cmd, spec);
@@ -297,7 +321,7 @@ module.exports = function ({ blockReadiness = {}, isVercel = false, writeOSAudit
   // (fs/write: {filePath, content}) — declared as `params` in the manifest.
   // When both are present `body` wins; `arg` alone keeps working unchanged.
   router.post('/commands/dispatch', async (req, res) => {
-    const { cmd, id, arg = '', confirmed = false, body = null, agent = null } = req.body || {};
+    const { cmd, id, arg = '', confirmed = false, body = null, agent = null, history = null } = req.body || {};
     const structured = body && typeof body === 'object' && !Array.isArray(body) ? body : null;
     const spec = registry.get(id) || registry.get(cmd);
     if (!spec) return res.status(404).json({ ok: false, error: `Unknown command: ${id || cmd}` });
@@ -453,6 +477,8 @@ module.exports = function ({ blockReadiness = {}, isVercel = false, writeOSAudit
       // its model calls local is told to. Only routes that declare it get
       // the field, so it never lands in a body a route saves as given.
       if (spec.takesLocalOnly && localOnlyAgent(agent)) payload.localOnly = true;
+      if (spec.takesAgent) payload.agent = typeof agent === 'string' && agent ? agent : null;
+      if (spec.takesHistory && Array.isArray(history)) payload.history = capHistory(history);
       init.body = JSON.stringify(payload);
     }
 
@@ -497,3 +523,6 @@ module.exports = function ({ blockReadiness = {}, isVercel = false, writeOSAudit
 
 // Exposed for tests (the factory above is the module).
 module.exports.tokenizeArgs = tokenizeArgs;
+module.exports.capHistory = capHistory;
+module.exports.HISTORY_MAX_TURNS = HISTORY_MAX_TURNS;
+module.exports.HISTORY_MAX_CHARS_PER_TURN = HISTORY_MAX_CHARS_PER_TURN;

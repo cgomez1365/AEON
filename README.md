@@ -18,7 +18,7 @@
 
 - **Ask your own paperwork.** Drop price lists, contracts or manuals into the Vault and ask "what is our return window?" — `/ask` answers from those files and cites them, or says nothing matched.
 - **Research and write.** Orion Search searches the web and your Vault and links every result; Deep Research runs multi-step web research; Writer drafts documents with an AI co-writer and exports them.
-- **Agents that remember.** Make one agent for research and another for customer replies, each with its own persona and memory, and wake one by name ("scout come online").
+- **Agents that remember and work.** Make one agent for research and another for customer replies, each with its own persona and memory, and wake one by name ("scout come online"). In a chat an agent can search and read your Vault, search the web, save notes and documents to its own folder and ask another agent — every step is shown in the terminal with its real result.
 - **A block for your own work.** A block is a folder: its screen, its routes and its settings. Build one with the guide in [Build your own block](#build-your-own-block).
 
 ---
@@ -102,7 +102,7 @@ then launch as usual. `git pull` leaves your installed packs alone (git does not
 **If you downloaded a ZIP:**
 
 1. Rename your AEON folder, for example to `AEON-old`. Do not delete it yet.
-2. Unzip the new version next to it. GitHub names the folder after what you downloaded: `AEON-3.2.0` for the 3.2.0 release, `AEON-main` for **Code → Download ZIP**. The name does not matter, and you can rename it to `AEON`.
+2. Unzip the new version next to it. GitHub names the folder after what you downloaded: `AEON-3.3.0` for the 3.3.0 release, `AEON-main` for **Code → Download ZIP**. The name does not matter, and you can rename it to `AEON`.
 3. Copy each pack you installed from `AEON-old/src/blocks/` into the new folder's `src/blocks/` — that is, every folder there that the new `src/blocks/` does not already have. If you have builds waiting for approval, copy `AEON-old/staging/` too.
 4. Launch from the new folder. It has no dependencies or interface yet, so the launcher installs and builds them; the first launch takes a few minutes. It also points the Desktop icon at the new folder.
 5. Once your Vault, keys and packs are all there, delete `AEON-old`.
@@ -133,7 +133,7 @@ then launch as usual. `git pull` leaves your installed packs alone (git does not
 | Part | What it does |
 |------|--------------|
 | **Terminal** | Talk to AEON in plain English. `/` commands and drag-and-drop files. |
-| **Agents** | Each agent has a name, a persona, an optional model of its own, and its own memory (`Vault/Agents/<Folder>/memory`); it also reads the shared memory unless its **Reads the shared memory too** box is unticked. Created in **Memory Core**, called with `/agent <name>` or by name ("scout come online"). Every memory has an on/off switch: off keeps it saved and leaves it out of what the agent is given each turn, but it is still indexed with your Vault, so `/ask` can still find it and pass it to the chat model. An agent set to **Local only** is refused cloud models for its own chats, distils and captures; its memory is still indexed with your Vault — through a cloud key when no local embedding model is installed — unless Settings → Models → **Local only** is on. |
+| **Agents** | Each agent has a name, a persona, an optional model of its own, and its own memory (`Vault/Agents/<Folder>/memory`); it also gets the shared memory in its prompt unless its **Reads the shared memory too** box is unticked (or your own AEON is Local only and the agent is Roulette). With agent tools on, it can still read any Vault file that is not withheld, other agents' memory folders included. Created in **Memory Core**, called with `/agent <name>` or by name ("scout come online"). In a chat it can use eight tools — search, read and list your Vault, search the web, save to its own memory, save a document to its folder, keep a scratchpad, ask another agent — at most 6 per reply, 3 of them saves, each shown in the terminal with what it returned. No shell, no code execution, no arbitrary web requests. It keeps a 2,000-character scratchpad it sees every turn, and `/handoff` has it write a note it is shown every turn until it writes a newer one. Every memory has an on/off switch: off keeps it saved and listed, and it is not sent to a model, indexed or recalled. An agent set to **Local only** keeps its chats, its tools, its handoffs and its own memory on local models: it never searches the web, and its folder is never read into an agent's turn that can go to a cloud model. |
 | **Aeon Matrix** | Your documents as a living 3D knowledge graph. Ask with sources, search, and an **Index** tab showing exactly what is embedded. |
 | **Second Brain** | Your Vault is indexed on every launch and nightly at 3 AM; recall answers only from what it finds, and says so when nothing matches. |
 | **Vault** | Everything you save, with a suggested home for every file you drop in. Lives in `~/AEON/Vault`, outside the install, so a reinstall never touches it. API keys encrypted (AES-256-GCM). |
@@ -147,16 +147,19 @@ then launch as usual. `git pull` leaves your installed packs alone (git does not
 - `/model-pull qwen3-1.7b-q8` — download a local model from the curated catalog
 - `/ask` — answer from your Vault, with citations; `/recall` — the matching passages themselves. Nothing found means no answer, and it says so.
 - `/agent` — list your agents; `/agent <name>` talks to one, `/agent off` goes back
+- `/handoff` — the agent you are talking to writes a short handoff note (what it was doing, what is open, the next step) into its folder; it is shown that note every turn until it writes a newer one
 - `/upload` or **drop a file onto the terminal** — AEON reads it, recommends where it belongs in your Vault, and indexes it there (PDF, HTML, Markdown, text, CSV and JSON; images and Word files are refused with a reason)
 - `/help` — every command, with its usage line
 
 Every command either works or fails with a named cause. There is no third outcome, and that is enforced: one command, one outcome, and a failure narrated as success is discarded rather than shown.
 
+In a chat, each tool an agent uses appears as a **TOOL** line above its answer — open it to see what the tool returned — and each save adds a ✎ line saying what changed. AEON also checks the answer for common phrasings such as "I searched your Vault", "I read the file", "I saved it to my memory" or "I asked <agent>", and warns under it when no tool of that kind (a Vault search, a web search, a read, a save, a question to an agent) ran in that reply; other wordings are not caught. When a model stops at its output limit (free OpenRouter models stop at 1,024 tokens), AEON asks it to carry on and joins the parts into one answer: "Continued automatically, 3 parts." Settings → Blocks → **Memory Core** turns tools, web search by agents and automatic continuation on or off.
+
 ---
 
 ## Privacy, in short
 
-Runs on your computer. Your keys stay on it. Your documents stay on it too, unless a cloud model you added a key for is given them — to answer you, or to index your Vault when no local embedding model is installed (Settings → Models → **Local only** stops both); nothing syncs to a cloud unless you connect your own. What else reaches the internet, only when you ask: web search (DuckDuckGo with no key) and the top results Orion Search opens to read, model and runtime downloads (Hugging Face, GitHub), and Deep Research's archive lookups. The full list is in the [Privacy notice](PRIVACY.md).
+Runs on your computer. Your keys stay on it. Your documents stay on it too, unless a cloud model you added a key for is given them — to answer you, or to index your Vault when no local embedding model is installed (Settings → Models → **Local only** stops both); nothing syncs to a cloud unless you connect your own. In a chat you started, an agent on a cloud model may, by itself, list and read Vault files (never switched-off memories, saved chats or a Local only agent's folder) and send search queries to your search provider — both on by default and switched off in Settings → Blocks → **Memory Core**; an agent set to Local only reads only into a local model and never searches the web. What else reaches the internet, only when you ask: web search (DuckDuckGo with no key), the top results Orion Search opens to read, model and runtime downloads (Hugging Face, GitHub), and Deep Research's archive lookups. The full list is in the [Privacy notice](PRIVACY.md).
 
 ---
 
@@ -185,6 +188,7 @@ The manifest is not documentation — it is the source of truth the kernel reads
 - **Block API routes are auth-gated at mount** from the manifest, fail-closed, and enforced whether or not the global guard is on. Before a login exists the gate is a pass-through by design.
 - **Filesystem access beyond a block's own namespace is declared and audited.** Each declaration names the file, a scope, and a reason a reader can check (22 declarations on 2026-09-30). Undeclared access: **0**, enforced by a gate.
 - **No caller-supplied string reaches a shell.** Operator-facing OS actions are named operations with fixed executables and argument arrays, and the terminal's `>` verb is retired. Two internal housekeeping calls still run constant strings through a shell (port reclaim on a busy port, the FFmpeg reaper), and Cookbook's session-gated model serve and download hand validated arguments to a Python or Node interpreter — an operator-only surface, not a shell.
+- **Agents' tools run no shell and no code, and make no arbitrary web requests.** An agent in a chat has exactly eight tools; apart from the model calls a chat already makes (and `vault_search`'s query embedding), the only outside service a tool contacts is your web search provider; its file access is confined to the Vault, its saves go only to its own memory, scratchpad and folder (at most 3 per reply, each shown), and switched-off memories, withheld files and Local only agents' folders cannot be read through them.
 - **No telemetry, no phone-home.** Broken Gear Industries runs zero servers on your behalf and receives nothing. Outbound traffic goes only to services you configure or trigger: model providers you add keys for (including as a fallback when a local model fails, unless Settings → Models → **Local only** is on), your own Supabase or Firebase project, Hugging Face and GitHub for downloads, DuckDuckGo and archive.org during research, the sites of the top three web results Orion Search reads, cdn.jsdelivr.net for OCR language data (only with `AEON_OCR_DOWNLOAD=1` in `.env`), and your browser's speech service if you choose an online Narrator voice. With no local embedding model installed, adding a cloud key can send your Vault's text to that provider for indexing, in the background (Local only stops that too). The interface's fonts are served by AEON itself, and Quick Links draws its icons instead of fetching them. Firebase Analytics, if you configure Firebase, reports to your project and can be switched off. The full list: [Privacy notice](PRIVACY.md).
 - **Not claimed:** process isolation between blocks. See *The honest limit* below.
 
@@ -198,7 +202,7 @@ Found a vulnerability? Report it privately — see the [security policy](.github
 
 Plenty of things look like this from the outside. The difference is what happens *before* a change ships.
 
-<sub>17 blocks (plus two `_` scaffolds the kernel skips) · 6 CI legs (Windows · Ubuntu on Node 24 · Ubuntu on the Node 22.13 floor · Ubuntu on Node 26 · macOS · security) · 0 undeclared block filesystem access, held by the release gate. Test counts are dated readings, not properties: the latest one — the CI run on the v3.2.0 release commit — is in the [Engineering standard](docs/ENGINEERING_STANDARD.md#5-numbers-are-dated-readings).</sub>
+<sub>17 blocks (plus two `_` scaffolds the kernel skips) · 6 CI legs (Windows · Ubuntu on Node 24 · Ubuntu on the Node 22.13 floor · Ubuntu on Node 26 · macOS · security) · 0 undeclared block filesystem access, held by the release gate. Test counts are dated readings, not properties: the latest one, taken from CI's run on a release commit, is in the [Engineering standard](docs/ENGINEERING_STANDARD.md#5-numbers-are-dated-readings).</sub>
 
 ### Every claim in the product must be true of the product
 
