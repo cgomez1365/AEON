@@ -18,7 +18,8 @@ tagged; until then its heading says so.
      commit that points these lines at it and the review fixes on top of it (same
      branch, release/3.3.0: round 3 is 4aafe70, round 4 is c805e4a,
      round 5 is 6d414c7, round 6 is f5e406e,
-     round 7 is ff707d3). Every entry below
+     round 7 is ff707d3,
+     round 8 is 75db814). Every entry below
      except "Not included in 3.3.0" names the commit or commits its behaviour comes
      from. These hashes hold only if the branch reaches main by a merge commit or a
      fast-forward, never a squash or rebase. -->
@@ -123,9 +124,10 @@ data in `~/AEON` is untouched; upgrade as for 3.2.0.
   old name. A new or changed name may not be another agent's name, id or folder, and
   neither may the folder a new name gets ("José" gets `jose`). A saved reference that no
   longer names exactly one agent is answered by your own AEON on this computer only, with
-  a notice, never by a cloud model. When one agent's name is another's id (a clash made
+  a notice, never by a cloud model, and that turn stays out of later cloud turns and of
+  the mission log. When one agent's name is another's id (a clash made
   before 3.3.0 or by hand), a name you type picks the Local only one if exactly one is,
-  and the terminal otherwise asks which. (6d414c7, f5e406e, ff707d3)
+  and the terminal otherwise asks which. (6d414c7, f5e406e, ff707d3, 75db814)
 - **A Local only agent's folder inside a folder named Vault** (an older Vault copied
   in) stays private: that folder is no longer read as the Vault itself. (6d414c7)
 - **Your own AEON set to Local only:** an agent set to Roulette no longer gets the
