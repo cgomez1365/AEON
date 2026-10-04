@@ -54,8 +54,12 @@ export function resolveAgentArg(arg, agents = []) {
   if (!text) return { error: 'Name an agent: /agent <name>. /agent alone lists them.' };
   const self = agents.find((a) => a && a.self);
   if (BACK.has(text) || (self && self.name.toLowerCase() === text)) return { back: true, agent: self || null };
-  const exact = agents.filter((a) => a && (a.id === text || String(a.name).toLowerCase() === text || String(a.folder || '').toLowerCase() === text));
-  if (exact.length === 1) return exact[0].self ? { back: true, agent: exact[0] } : { agent: exact[0] };
+  // The kernel's order (agents.cjs get): an id or folder first, then a name.
+  const byId = agents.filter((a) => a && (a.id === text || String(a.folder || '').toLowerCase() === text));
+  const byName = agents.filter((a) => a && String(a.name).toLowerCase() === text);
+  const one = byId.length === 1 ? byId[0] : (byName.length === 1 && !byId.length ? byName[0] : null);
+  if (one) return one.self ? { back: true, agent: one } : { agent: one };
+  if (byId.length || byName.length) return { error: `"${arg}" could be ${[...byId, ...byName].map((a) => a.name).join(' or ')} — say which.` };
   const byWord = agents.filter((a) => a && String(a.name).toLowerCase().split(' ').some((w) => w === text || w.startsWith(text)));
   if (byWord.length === 1) return byWord[0].self ? { back: true, agent: byWord[0] } : { agent: byWord[0] };
   if (byWord.length > 1) return { error: `"${arg}" could be ${byWord.map((a) => a.name).join(' or ')} — say which.` };

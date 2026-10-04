@@ -93,10 +93,15 @@ below.
     half (a fence of three and the start of `aeon-tool`, or a one-line call) is
     carried into the next part and completed there; any other held text is shown.
     A provider that sends no finish reason is never continued. A later part is sent
-    with `noTrimRetry`: when the provider says it is too large, or a reasoning model
-    returns nothing at the limit, the turn ends with the parts already shown,
-    `truncated: true` and a `continue-stopped` notice — it is never retried with the
-    answer and the question trimmed away.
+    with `noTrimRetry` and `continuation`: when the provider says it is too large, or
+    a reasoning model returns nothing at the limit, the turn ends with the parts
+    already shown, `truncated: true` and a `continue-stopped` notice — it is never
+    retried with the answer and the question trimmed away. A round after a tool
+    result is sent with `noTrimRetry` only: it is never retried trimmed (the trim
+    keeps the system head and the wrapped tool result, and drops the tool rules),
+    but it still falls back to the next provider with the full request; when no
+    provider can take it, the answer so far stays with a `tool-round-stopped` notice
+    (with nothing shown yet, it is an error).
 
   The agent's scratchpad and the newest handoff's first 1,500 characters are
   injected before the tools section (`src/kernel/agentWorkspace.cjs`), on every

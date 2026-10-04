@@ -1923,18 +1923,24 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
         // Too large is the request, not the provider: never a rest, and the
         // same candidate is asked once more with less context.
         const tooLarge = _isTooLarge(e, status);
-        // A continuation round (agentTurn.cjs, opts.noTrimRetry) is never
-        // retried trimmed: the trim drops the cut-off answer and the question
-        // first, and whatever the model then wrote would be stitched on as
-        // the rest of the answer. Nor is a reasoning model that spent its
-        // whole budget thinking a provider failure there. Both are thrown to
-        // the turn engine, which ends the answer where it stopped.
+        // opts.noTrimRetry (agentTurn.cjs: every round after the first) is
+        // never retried trimmed. The trim keeps the system head and the LAST
+        // user message: for a continuation that drops the cut-off answer and
+        // the question, so whatever the model then wrote would be stitched on
+        // as the rest of the answer; after a tool result it keeps the wrapped
+        // result and drops the ## TOOLS rules. A continuation round
+        // (opts.continuation) is not sent anywhere else either — nor is a
+        // reasoning model that spent its budget thinking a provider failure
+        // there — and the turn engine ends the answer where it stopped. Any
+        // other round still goes on to the next provider, with the full request.
         if (opts.noTrimRetry && (tooLarge || e?.reasoningExhausted)) {
           if (tooLarge) e.tooLarge = true;
-          console.warn(`[KERNEL] stream ${c.provider} continuation not sent (${_redactKeys(e.message).slice(0, 160)})`);
-          throw e;
+          if (opts.continuation) {
+            console.warn(`[KERNEL] stream ${c.provider} continuation not sent (${_redactKeys(e.message).slice(0, 160)})`);
+            throw e;
+          }
         }
-        if (tooLarge && !c.trimmedRetry) {
+        if (tooLarge && !c.trimmedRetry && !opts.noTrimRetry) {
           const budget = await _trimBudget(c, e, callOpts);
           const cut = _trimMessages(sent, budget.promptTokens);
           if (cut) {

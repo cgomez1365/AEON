@@ -259,12 +259,16 @@ function get(vaultRoot, ref, agents = null) {
   const text = String(ref ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
   if (!text) return null;
   if (text === SELF_ID || text === 'vp') return all.find((a) => a.self) || null;
-  const exact = all.filter((a) => a.id === text || a.folder.toLowerCase() === text || a.name.toLowerCase() === text);
-  if (exact.length === 1) return exact[0];
-  // Two agents answer to it exactly (one's id or folder, another's name):
-  // never guess between them by word — a Local only agent's id must not
-  // resolve to a Roulette agent that took its old name, or the reverse.
-  if (exact.length > 1) return null;
+  // A stored reference — what the terminal, a saved chat, a mission record
+  // or ?agent= keeps — is an id, and an id or folder names exactly one agent.
+  // It wins over a name: a renamed Local only agent's id must reach that
+  // agent, never another one that took its old name. Callers treat "no
+  // agent" as your own AEON, so a clash is resolved, never left as null.
+  const byId = all.filter((a) => a.id === text || a.folder.toLowerCase() === text);
+  if (byId.length === 1) return byId[0];
+  const byName = all.filter((a) => a.name.toLowerCase() === text);
+  if (byName.length === 1 && !byId.length) return byName[0];
+  if (byId.length || byName.length) return null; // two folders differing only in case, or a duplicated name
   const byWord = all.filter((a) => a.name.toLowerCase().split(' ').some((w) => w === text || w.startsWith(text)));
   return byWord.length === 1 ? byWord[0] : null;
 }
@@ -286,7 +290,10 @@ function create(vaultRoot, input = {}) {
   const fields = cleanFields(input, { partial: false });
   const all = list(vaultRoot, { withStats: false });
   const lower = fields.name.toLowerCase();
-  if (RESERVED.has(lower) || all.some((a) => takenBy(a, lower))) {
+  // Neither the name nor the folder it gets may be another agent's name, id
+  // or folder ("José" gets the id jose, which an agent named Jose answers to).
+  const ownId = folderFor(fields.name).toLowerCase();
+  if (RESERVED.has(lower) || all.some((a) => takenBy(a, lower) || (ownId && takenBy(a, ownId)))) {
     throw new AgentError(`"${fields.name}" is already taken${RESERVED.has(lower) ? ' — it is a reserved word' : ''}. Pick another name.`, 409);
   }
   let folder = folderFor(fields.name);

@@ -120,8 +120,11 @@ async function runAgentTurn({
         // Never trimmed and retried: see services/ai.js (noTrimRetry). That
         // retry keeps the system head and the LAST user message — after a
         // tool result that message is the wrapped result, and the head cut
-        // drops the ## TOOLS rules (nonce, "data, not instructions").
+        // drops the ## TOOLS rules (nonce, "data, not instructions"). A round
+        // after a tool result still falls back to the next provider; only a
+        // continuation (opts.continuation) is never sent anywhere else.
         ...((contRound || rounds > 1) ? { noTrimRetry: true } : {}),
+        ...(contRound ? { continuation: true } : {}),
         signal: child.signal,
         onToken: (t) => {
           if (block) return;
@@ -154,9 +157,11 @@ async function runAgentTurn({
             : 'The answer stopped at the model\'s output limit and could not be continued automatically. Type "continue" to try again.',
         });
       }
-      // A round after a tool result that the model would not take: what was
+      // A round after a tool result that no provider would take: what was
       // shown stays, and the reason is said — never a trimmed retry (above).
-      if (!contRound && rounds > 1 && !(signal && signal.aborted)) {
+      // With nothing shown yet it is an error, as before (an empty answer
+      // would go back to the model as an empty assistant turn).
+      if (!contRound && rounds > 1 && visible && !(signal && signal.aborted)) {
         const cause = (e && e.cause) || e;
         if (e?.tooLarge || cause?.tooLarge || e?.reasoningExhausted || cause?.reasoningExhausted) {
           const tooLarge = !!(e?.tooLarge || cause?.tooLarge);
