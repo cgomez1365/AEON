@@ -127,6 +127,12 @@ describe('plainError', () => {
     expect(workspace.plainError(new Error(`bad PDF at ${vault}/Notes/x.pdf: oops`), vault)).toBe('bad PDF at Notes/x.pdf: oops');
     expect(workspace.plainError(new Error('cannot open /Users/someone/elsewhere/x.pdf: 3/4 done'), vault)).toBe('cannot open <path>: 3/4 done');
   });
+
+  it('a Vault path reads with "/" whichever separator follows the root (Windows messages)', () => {
+    expect(workspace.plainError(new Error(`bad PDF at ${vault}\\Notes\\x.pdf: oops`), vault)).toBe('bad PDF at Notes/x.pdf: oops');
+    expect(workspace.plainError(new Error(`store ${vault}\\Agents\\Ledger\\memory\\memories.json is unreadable`), vault))
+      .toBe('store Agents/Ledger/memory/memories.json is unreadable');
+  });
 });
 
 describe.skipIf(WIN)('saved chats stay out of tool results, however they are reached', () => {

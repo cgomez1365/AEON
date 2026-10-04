@@ -122,7 +122,15 @@ function plainError(e, vaultRoot = null) {
   if (vaultRoot) {
     const roots = [path.resolve(vaultRoot)];
     try { roots.push(fs.realpathSync.native(vaultRoot)); } catch {}
-    for (const r of roots.sort((a, b) => b.length - a.length)) msg = msg.split(r + path.sep).join('').split(r).join('the Vault');
+    // A path under the Vault reads as a Vault path, with "/" whichever
+    // separator follows the root (Windows mixes \ and /); case-insensitive
+    // where the file system is.
+    const flags = process.platform === 'win32' || process.platform === 'darwin' ? 'gi' : 'g';
+    for (const r of roots.sort((a, b) => b.length - a.length)) {
+      const esc = r.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      msg = msg.replace(new RegExp(`${esc}[\\\\/]([^\\s'"\`]*)`, flags), (_, rest) => rest.replace(/\\/g, '/'))
+        .replace(new RegExp(esc, flags), 'the Vault');
+    }
   }
   return msg
     .replace(FILE_URL_RE, '<path>')

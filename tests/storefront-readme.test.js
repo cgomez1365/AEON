@@ -20,6 +20,9 @@ import path from 'path';
 import { execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
 
+// A string as a literal inside a RegExp: every metacharacter escaped, backslash too.
+const escapeRe = (v) => String(v).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8');
 const tracked = new Set(execFileSync('git', ['ls-files'], { cwd: ROOT, encoding: 'utf8' }).split('\n').filter(Boolean));
@@ -107,7 +110,7 @@ describe('versions point at the latest release', () => {
     const std = read('docs/ENGINEERING_STANDARD.md');
     const current = std.slice(std.indexOf('**Current reading'), std.indexOf('**Previous reading'));
     const [major, minor] = pkg.version.split('.');
-    const untagged = new RegExp(`^## ${pkg.version.replace(/\./g, '\\.')} — not tagged yet`, 'm').test(read('CHANGELOG.md'));
+    const untagged = new RegExp(`^## ${escapeRe(pkg.version)} — not tagged yet`, 'm').test(read('CHANGELOG.md'));
     if (untagged) {
       // Not any version: the release line of the newest TAGGED release below
       // the untagged heading (review 2026-10-03: v1.0.0 would have passed).
@@ -123,7 +126,7 @@ describe('versions point at the latest release', () => {
     // the previous release's reading standing for good.
     const ref = process.env.GITHUB_REF || '';
     const changelog = read('CHANGELOG.md');
-    const esc = (v) => v.replace(/\./g, '\\.');
+    const esc = escapeRe;
     if (ref === `refs/tags/v${pkg.version}`) {
       expect(changelog).not.toMatch(new RegExp(`^## ${esc(pkg.version)} — not tagged yet`, 'm'));
       expect(changelog).toMatch(new RegExp(`^## ${esc(pkg.version)} — \\d{4}-\\d\\d-\\d\\d`, 'm'));

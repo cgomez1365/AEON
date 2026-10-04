@@ -93,6 +93,9 @@ const matchesNeverShared = (rel) => NEVER_SHARED.some((re) => re.test(rel) || re
 // Where removing an agent puts its folder (agents.cjs remove()).
 const REMOVED_BIN = '.removed';
 
+// The deepest Vault-relative path judged; deeper is withheld (locate).
+const MAX_PATH_PARTS = 64;
+
 function createScope(vaultRoot) {
   const realRoot = onDisk(path.resolve(vaultRoot));
   const agentsRoot = path.join(vaultRoot, 'Agents');
@@ -164,6 +167,9 @@ function createScope(vaultRoot) {
    * an agent.json), `depth` how many parts of the path name it.
    */
   function locate(parts, own = null) {
+    // No Vault path is this deep; one that is (or a caller passing something
+    // that is not a path) is withheld rather than walked.
+    if (!Array.isArray(parts) || parts.length > MAX_PATH_PARTS) return { local: true, root: null };
     const base = path.resolve(vaultRoot);
     const inAgents = parts.length >= 2 && parts[0].toLowerCase() === 'agents';
     const p = inAgents ? ['Agents', folderOnDisk(parts[1]), ...parts.slice(2)] : parts;
@@ -172,7 +178,8 @@ function createScope(vaultRoot) {
     const ownTree = inAgents && !removed && !!own && p[1].toLowerCase() === own;
     let local = false;
     let root = null;
-    for (let k = 1; k <= p.length; k++) {
+    const depth = Math.min(p.length, MAX_PATH_PARTS);
+    for (let k = 1; k <= depth; k++) {
       const dir = path.join(base, ...p.slice(0, k));
       const agentFolder = inAgents && k === 2 && !removed && !p[1].startsWith('.');
       const removedFolder = removed && k === 3;

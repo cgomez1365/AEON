@@ -93,6 +93,14 @@ describe('a turn for an agent AEON no longer has', () => {
   });
 });
 
+describe('a path deeper than any Vault path is withheld, not walked', () => {
+  it('65 levels: withheld; an ordinary deep path: judged as usual', () => {
+    const vaultPrivacy = require('../src/kernel/vaultPrivacy.cjs');
+    expect(vaultPrivacy.withheld(vault, `${'a/'.repeat(65)}x.md`)).toBe('local-only-agent');
+    expect(vaultPrivacy.withheld(vault, `${'a/'.repeat(10)}x.md`)).toBeNull();
+  });
+});
+
 describe('the removed-agent check matches remove()\'s own bin names only', () => {
   it('a removed "Quill-Pen" does not move a new "Quill" to another folder', () => {
     agents.create(vault, { name: 'Quill-Pen' });
