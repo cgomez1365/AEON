@@ -53,7 +53,7 @@ const post = async (url, body) => (await fetch(url, { method: 'POST', headers: {
 
 const ON_TEXT = 'The operator ships the store packs on Fridays after the gate runbook passes.';
 const OFF_TEXT = 'The operator keeps the bank PIN reminder phrase written as blue heron seven.';
-const SCOUT_TEXT = 'Scout watches card auctions and the ceiling for a Charizard is four hundred dollars.';
+const SCOUT_TEXT = 'Scout tracks supplier invoices and the spend limit for the Larkspur order is four hundred dollars.';
 
 function fixture() {
   write('Notes/plan.md', '# Plan\n\nThe launch plan names three pilot customers and a refund policy draft.\n');
@@ -63,10 +63,10 @@ function fixture() {
   ]);
   write('Agents/Aeon/memory/on1.md', mirror('on1', ON_TEXT));
   write('Agents/Aeon/memory/off1.md', mirror('off1', OFF_TEXT, true));
-  write('Agents/Scout/agent.json', { id: 'scout', name: 'Scout', privacy: 'local-only', persona: 'Card auction watcher.' });
+  write('Agents/Scout/agent.json', { id: 'scout', name: 'Scout', privacy: 'local-only', persona: 'Supplier invoice tracker.' });
   write('Agents/Scout/memory/memories.json', [{ id: 's1', text: SCOUT_TEXT, category: 'fact', timestamp: 3 }]);
   write('Agents/Scout/memory/s1.md', mirror('s1', SCOUT_TEXT));
-  write('Agents/Scout/missions/log.json', [{ at: '2026-10-03T00:00:00Z', asked: 'what is the Charizard ceiling today' }]);
+  write('Agents/Scout/missions/log.json', [{ at: '2026-10-03T00:00:00Z', asked: 'what is the Larkspur spend limit today' }]);
 }
 
 beforeEach(() => {
@@ -116,7 +116,7 @@ describe('the scan never reads, embeds or indexes what is withheld', () => {
     const sent = embedded.map((e) => e.text).join('\n');
     expect(sent).toContain('ships the store packs');
     expect(sent, 'a switched-off memory reached the embedder').not.toContain('blue heron');
-    expect(sent, 'a Local only agent\'s memory reached the embedder').not.toContain('Charizard');
+    expect(sent, 'a Local only agent\'s memory reached the embedder').not.toContain('Larkspur');
   });
 
   it('a memory switched off after it was indexed leaves the index on the next scan, and comes back when switched on', async () => {
@@ -159,7 +159,7 @@ describe('the scan never reads, embeds or indexes what is withheld', () => {
     const base = await listen(app);
     const out = await post(`${base}/crn/second-brain/ingest/document`, { file_path: 'Agents/Scout/memory/s1.md' });
     expect(out).toMatchObject({ ok: true, ingested: 0, withheld: 'local-only-agent' });
-    expect(embedded.map((e) => e.text).join('\n')).not.toContain('Charizard');
+    expect(embedded.map((e) => e.text).join('\n')).not.toContain('Larkspur');
   });
 });
 
@@ -192,7 +192,7 @@ describe('recall never returns what is withheld', () => {
     const paths = out.documents.map((d) => d.id).sort();
     expect(paths).toEqual(['Agents/Aeon/memory/on1.md', 'Notes/plan.md']);
     expect(JSON.stringify(out)).not.toContain('blue heron');
-    expect(JSON.stringify(out)).not.toContain('Charizard');
+    expect(JSON.stringify(out)).not.toContain('Larkspur');
   });
 
   it('/retrieve section lookup ("facts") leaves out a switched-off memory', async () => {
@@ -217,9 +217,9 @@ describe('recall never returns what is withheld', () => {
   it('an agent set to Local only asks recall with localOnly', async () => {
     const bodies = [];
     const fetchImpl = async (_url, init) => { bodies.push(JSON.parse(init.body)); return new Response(JSON.stringify({ documents: [] }), { status: 200 }); };
-    await buildRecallContext('/matrix what is the ceiling', { fetchImpl, localOnly: true });
-    await buildRecallContext('/matrix what is the ceiling', { fetchImpl });
-    expect(bodies).toEqual([{ query: 'what is the ceiling', localOnly: true }, { query: 'what is the ceiling' }]);
+    await buildRecallContext('/matrix what is the spend limit', { fetchImpl, localOnly: true });
+    await buildRecallContext('/matrix what is the spend limit', { fetchImpl });
+    expect(bodies).toEqual([{ query: 'what is the spend limit', localOnly: true }, { query: 'what is the spend limit' }]);
   });
 });
 
@@ -249,10 +249,10 @@ describe('the terminal never reads a switched-off memory back into the conversat
     const data = await (await fetch(`${base}/memory?agent=scout`)).json();
     expect(data.modelText).toBeNull();
     const ctx = await (await fetch(`${base}/memory/context?agent=scout`)).json();
-    expect(ctx.text).toContain('Charizard');
+    expect(ctx.text).toContain('Larkspur');
     expect(ctx.modelText).toBeNull();
     const n = await narrate({ cmd: '/memory', ok: true, text: data.text, data }, async () => 'x');
-    expect(n.narration).not.toContain('Charizard');
+    expect(n.narration).not.toContain('Larkspur');
   });
 });
 
@@ -283,7 +283,7 @@ describe('/doc shows a withheld file to the operator and keeps it out of the con
 
 describe('a Local only agent\'s saved chats stay off cloud models', () => {
   const SCOUT_CHAT = [
-    { role: 'user', content: 'Scout, what is our private ceiling for the Charizard lot tonight?' },
+    { role: 'user', content: 'Scout, what is our private spend limit for the Larkspur order tonight?' },
     { role: 'assistant', content: 'Four hundred.' },
   ];
   const AEON_CHAT = [
@@ -308,7 +308,7 @@ describe('a Local only agent\'s saved chats stay off cloud models', () => {
 
   it('naming a Local only agent\'s chat asks with its privacy (local only); the operator\'s Roulette chat does not', async () => {
     const calls = [];
-    const base = await mountChat(async (prompt, opts) => { calls.push({ prompt, opts }); return 'Charizard Ceiling'; });
+    const base = await mountChat(async (prompt, opts) => { calls.push({ prompt, opts }); return 'Larkspur Spend Limit'; });
     saveChat('scout-chat', { agent: 'scout', updatedAt: '2026-10-03T10:00:00Z', messages: SCOUT_CHAT });
     saveChat('aeon-chat', { updatedAt: '2026-10-03T09:00:00Z', messages: AEON_CHAT });
 
@@ -340,7 +340,7 @@ describe('a Local only agent\'s saved chats stay off cloud models', () => {
 
     const out = await post(`${base}/memory/distill`, {});
     expect(out.session).toBe('aeon-chat');
-    expect(prompts.map((p) => p.prompt).join('\n')).not.toContain('Charizard');
+    expect(prompts.map((p) => p.prompt).join('\n')).not.toContain('Larkspur');
 
     const r = await fetch(`${base}/memory/distill`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: 'scout-chat' }) });
     expect(r.status).toBe(409);
@@ -349,10 +349,10 @@ describe('a Local only agent\'s saved chats stay off cloud models', () => {
 });
 
 describe('one feed, several agents: a Local only agent\'s turns reach only a Local only model', () => {
-  const SCOUT_LINE = 'Scout, keep the Charizard ceiling at four hundred tonight.';
+  const SCOUT_LINE = 'Scout, keep the Larkspur spend limit at four hundred tonight.';
   const feedTurns = [
     { role: 'user', content: SCOUT_LINE, agent: 'scout' },
-    { role: 'assistant', content: 'Holding the Charizard ceiling.', agent: 'scout' },
+    { role: 'assistant', content: 'Holding the Larkspur spend limit.', agent: 'scout' },
     { role: 'user', content: 'Back to you: when is the store packs gate due?', agent: 'aeon' },
     { role: 'assistant', content: 'Friday.', agent: 'aeon' },
     { role: 'user', content: 'An untagged line from a chat saved before tags existed.' },
@@ -363,7 +363,7 @@ describe('one feed, several agents: a Local only agent\'s turns reach only a Loc
     const scout = agents.find((a) => a.id === 'scout');
     expect(scout.privacy).toBe('local-only');
     const toCloud = agentsKernel.shareableTurns(feedTurns, agents.find((a) => a.self), agents);
-    expect(toCloud.map((m) => m.content).join('\n')).not.toContain('Charizard');
+    expect(toCloud.map((m) => m.content).join('\n')).not.toContain('Larkspur');
     expect(toCloud).toHaveLength(3);
     expect(agentsKernel.shareableTurns(feedTurns, null, agents)).toHaveLength(3);
     expect(agentsKernel.shareableTurns(feedTurns, scout, agents)).toHaveLength(5);
@@ -408,10 +408,10 @@ describe('one feed, several agents: a Local only agent\'s turns reach only a Loc
         await r.text();
       };
       await ask(null);
-      expect(JSON.stringify(sent[0])).not.toContain('Charizard');
+      expect(JSON.stringify(sent[0])).not.toContain('Larkspur');
       expect(JSON.stringify(sent[0])).toContain('store packs gate');
       await ask('scout');
-      expect(JSON.stringify(sent[1])).toContain('Charizard');
+      expect(JSON.stringify(sent[1])).toContain('Larkspur');
     } finally {
       if (saved === undefined) delete process.env.AEON_KERNEL_URL; else process.env.AEON_KERNEL_URL = saved;
     }
@@ -426,7 +426,7 @@ describe('one feed, several agents: a Local only agent\'s turns reach only a Loc
     const base = await listen(app);
     await post(`${base}/memory/distill`, { messages: feedTurns });
     expect(prompts).toHaveLength(1);
-    expect(prompts[0]).not.toContain('Charizard');
+    expect(prompts[0]).not.toContain('Larkspur');
     expect(prompts[0]).toContain('store packs gate');
 
     const r = await fetch(`${base}/memory/distill`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -458,12 +458,12 @@ describe('one feed, several agents: a Local only agent\'s turns reach only a Loc
       fs.writeFileSync(path.join(dir, 'mixed.json'), JSON.stringify({ id: 'mixed', name: 'mixed', messages: feedTurns }));
 
       await post(`${base}/terminal/sessions/mixed/name`);
-      expect(calls[0].prompt).not.toContain('Charizard');
+      expect(calls[0].prompt).not.toContain('Larkspur');
       expect(calls[0].opts.localOnly).toBeUndefined();
 
       const r = await post(`${base}/terminal/sessions/mixed/remember`);
       expect(r.ok).toBe(true);
-      expect(JSON.stringify(ingested)).not.toContain('Charizard');
+      expect(JSON.stringify(ingested)).not.toContain('Larkspur');
       expect(JSON.stringify(ingested)).toContain('store packs gate');
     } finally {
       if (saved === undefined) delete process.env.AEON_KERNEL_URL; else process.env.AEON_KERNEL_URL = saved;
@@ -499,7 +499,7 @@ describe('an image in a Local only agent\'s chat is not sent to a vision model',
     app.use('/api/ai', createAIRouter({ VAULT_ROOT: vault, kernelVision: async (image, prompt) => { seen.push(prompt); return 'a chart'; } }));
     const base = await listen(app);
     const ask = (agent) => fetch(`${base}/ai/vision`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ image: 'data:image/png;base64,AAAA', prompt: 'What is the Charizard ceiling here?', ...(agent ? { agent } : {}) }) });
+      body: JSON.stringify({ image: 'data:image/png;base64,AAAA', prompt: 'What is the Larkspur spend limit here?', ...(agent ? { agent } : {}) }) });
     const r = await ask('scout');
     expect(r.status).toBe(409);
     expect(seen).toEqual([]);
@@ -549,7 +549,7 @@ describe('a path is judged as the disk resolves it, not as it was typed', () => 
     const base = await listen(app);
     const out = await post(`${base}/crn/second-brain/ingest/document`, { file_path: MIS });
     expect(out.ingested ?? 0).toBe(0);
-    expect(embedded.map((e) => e.text).join('\n')).not.toContain('Charizard');
+    expect(embedded.map((e) => e.text).join('\n')).not.toContain('Larkspur');
   });
 });
 
@@ -607,10 +607,10 @@ describe('slash commands run for a Local only agent stay on local models', () =>
     const savedPort = process.env.PORT;
     process.env.PORT = new URL(base).port;
     try {
-      await post(`${base}/commands/dispatch`, { cmd: '/ask', arg: 'what is the ceiling', agent: 'scout' });
-      await post(`${base}/commands/dispatch`, { cmd: '/ask', arg: 'what is the ceiling' });
+      await post(`${base}/commands/dispatch`, { cmd: '/ask', arg: 'what is the spend limit', agent: 'scout' });
+      await post(`${base}/commands/dispatch`, { cmd: '/ask', arg: 'what is the spend limit' });
     } finally { if (savedPort === undefined) delete process.env.PORT; else process.env.PORT = savedPort; }
-    expect(seen).toEqual([{ query: 'what is the ceiling', localOnly: true }, { query: 'what is the ceiling' }]);
+    expect(seen).toEqual([{ query: 'what is the spend limit', localOnly: true }, { query: 'what is the spend limit' }]);
   });
 
   it('the operator\'s own AEON set to Local only counts too (no agent named)', async () => {
@@ -664,7 +664,7 @@ describe('a narration that fails never reads a withheld result back', () => {
   it('readBackText honours modelText, and command turns carry their agent', async () => {
     const { readBackText } = await import('../src/components/Terminal2.jsx');
     const { turnAgentId, SELF_AGENT_ID } = await import('../src/utils/terminalAgent.js');
-    expect(readBackText({ data: { modelText: null } }, 'Scout: the Charizard ceiling is $400')).toBeNull();
+    expect(readBackText({ data: { modelText: null } }, 'Scout: the Larkspur spend limit is $400')).toBeNull();
     expect(readBackText({ data: { modelText: '3 memories, 1 switched off.' } }, 'full list')).toBe('3 memories, 1 switched off.');
     expect(readBackText({ data: { files: [] } }, 'plain result')).toBe('plain result');
     expect(readBackText({}, '')).toBeNull();

@@ -201,8 +201,8 @@ describe('the wake phrase', () => {
   });
 
   it('an agent\'s own name wakes it, and null or empty never wakes', () => {
-    const agents = [{ id: 'aeon', name: 'Jarvis', folder: 'Aeon', self: true }, { id: 'card_scout', name: 'Card Scout', folder: 'Card_Scout' }];
-    expect(ctx.parseWake('card scout come online', agents)).toEqual({ wake: true, agent: 'card scout' });
+    const agents = [{ id: 'aeon', name: 'Jarvis', folder: 'Aeon', self: true }, { id: 'ledger_scout', name: 'Ledger Scout', folder: 'Ledger_Scout' }];
+    expect(ctx.parseWake('ledger scout come online', agents)).toEqual({ wake: true, agent: 'ledger scout' });
     expect(ctx.parseWake('jarvis - online', agents)).toEqual({ wake: true, agent: 'jarvis' });
     expect(ctx.parseWake(null)).toEqual({ wake: false, agent: null });
     expect(ctx.parseWake('')).toEqual({ wake: false, agent: null });

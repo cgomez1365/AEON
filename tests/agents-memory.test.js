@@ -48,11 +48,11 @@ describe('agents.cjs — one folder per agent under Vault/Agents', () => {
   });
 
   it('creates an agent with its own folder, agent.json and memory folder', () => {
-    const a = agents.create(vault, { name: 'Card Scout', persona: 'Watches card auctions.', privacy: 'local-only' });
-    expect(a).toMatchObject({ id: 'card_scout', name: 'Card Scout', folder: 'Card_Scout', self: false, privacy: 'local-only', sharedMemory: true, capture: false });
-    expect(readJson('Agents', 'Card_Scout', 'agent.json')).toMatchObject({ name: 'Card Scout', persona: 'Watches card auctions.' });
-    expect(fs.existsSync(path.join(vault, 'Agents', 'Card_Scout', 'memory'))).toBe(true);
-    expect(agents.list(vault).map((x) => x.name)).toEqual(['Aeon', 'Card Scout']);
+    const a = agents.create(vault, { name: 'Ledger Scout', persona: 'Tracks supplier invoices.', privacy: 'local-only' });
+    expect(a).toMatchObject({ id: 'ledger_scout', name: 'Ledger Scout', folder: 'Ledger_Scout', self: false, privacy: 'local-only', sharedMemory: true, capture: false });
+    expect(readJson('Agents', 'Ledger_Scout', 'agent.json')).toMatchObject({ name: 'Ledger Scout', persona: 'Tracks supplier invoices.' });
+    expect(fs.existsSync(path.join(vault, 'Agents', 'Ledger_Scout', 'memory'))).toBe(true);
+    expect(agents.list(vault).map((x) => x.name)).toEqual(['Aeon', 'Ledger Scout']);
   });
 
   it('refuses a taken name, a reserved word and a name that is not a name', () => {
@@ -152,12 +152,12 @@ describe('memory_core routes — ?agent= scopes every store', () => {
   };
 
   it('a memory saved for an agent lands in that agent\'s folder, not the shared one', async () => {
-    const r = await call('POST', '/api/memory/add', { agent: 'scout', text: 'Scout watches PSA 10 Charizards' });
+    const r = await call('POST', '/api/memory/add', { agent: 'scout', text: 'Scout tracks Larkspur invoices' });
     expect(r.status).toBe(200);
     expect(readJson('Agents', 'Scout', 'memory', 'memories.json')).toHaveLength(1);
     expect(fs.existsSync(path.join(vault, 'Agents', 'Aeon', 'memory', 'memories.json'))).toBe(false);
     const own = await call('GET', '/api/memory?agent=scout');
-    expect(own.body.memories.map((m) => m.text)).toEqual(['Scout watches PSA 10 Charizards']);
+    expect(own.body.memories.map((m) => m.text)).toEqual(['Scout tracks Larkspur invoices']);
     expect(own.body.agent).toEqual({ id: 'scout', name: 'Scout' });
     const shared = await call('GET', '/api/memory');
     expect(shared.body.count).toBe(0);
@@ -192,15 +192,15 @@ describe('memory_core routes — ?agent= scopes every store', () => {
   });
 
   it('/memory/context for an agent: its own first, then the shared ones it may read', async () => {
-    await call('POST', '/api/memory/add', { text: 'shared: the operator runs a card shop' });
-    await call('POST', '/api/memory/add', { agent: 'scout', text: 'own: bid ceiling is 400 dollars' });
+    await call('POST', '/api/memory/add', { text: 'shared: the operator runs a bike shop' });
+    await call('POST', '/api/memory/add', { agent: 'scout', text: 'own: spend limit is 400 dollars' });
     let r = await call('GET', '/api/memory/context?agent=scout');
     expect(r.body.count).toBe(2);
-    expect(r.body.text.indexOf('bid ceiling')).toBeLessThan(r.body.text.indexOf('card shop'));
+    expect(r.body.text.indexOf('spend limit')).toBeLessThan(r.body.text.indexOf('bike shop'));
     agents.update(vault, 'scout', { sharedMemory: false });
     r = await call('GET', '/api/memory/context?agent=scout');
     expect(r.body.count).toBe(1);
-    expect(r.body.text).not.toContain('card shop');
+    expect(r.body.text).not.toContain('bike shop');
   });
 
   it('"New memories start on" off: new memories are saved switched off', async () => {
@@ -253,14 +253,14 @@ describe('the streaming chat — the agent speaks with its own memory, name, mod
     app.use(express.json());
     app.use('/api', createStreamRouter({ kernelLLM, loadSettings: () => ({ prefs: {} }), VAULT_ROOT: vault }));
     base = await listen(app);
-    agents.create(vault, { name: 'Scout', persona: 'Watches card auctions.', privacy: 'local-only', model: { provider: 'local', model: 'phi4-mini-q4' } });
+    agents.create(vault, { name: 'Scout', persona: 'Tracks supplier invoices.', privacy: 'local-only', model: { provider: 'local', model: 'phi4-mini-q4' } });
     fs.mkdirSync(path.join(vault, 'Agents', 'Aeon', 'memory'), { recursive: true });
     fs.writeFileSync(path.join(vault, 'Agents', 'Aeon', 'memory', 'memories.json'), JSON.stringify([
-      { id: 's1', text: 'The operator runs a card shop', timestamp: 1 },
+      { id: 's1', text: 'The operator runs a bike shop', timestamp: 1 },
       { id: 's2', text: 'A switched-off shared memory', active: false, timestamp: 2 },
     ]));
     fs.writeFileSync(path.join(vault, 'Agents', 'Scout', 'memory', 'memories.json'), JSON.stringify([
-      { id: 'o1', text: 'Scout bid ceiling is 400 dollars', timestamp: 3 },
+      { id: 'o1', text: 'Scout spend limit is 400 dollars', timestamp: 3 },
     ]));
   });
   const chat = async (body) => {
@@ -277,9 +277,9 @@ describe('the streaming chat — the agent speaks with its own memory, name, mod
     expect(status).toBe(200);
     const { messages, opts } = calls[0];
     expect(messages[0].content).toMatch(/^You are Scout, an agent the operator created inside AEON/);
-    expect(messages[0].content).toContain('Watches card auctions.');
-    expect(messages[0].content).toContain('Scout bid ceiling is 400 dollars');
-    expect(messages[0].content).toContain('The operator runs a card shop');
+    expect(messages[0].content).toContain('Tracks supplier invoices.');
+    expect(messages[0].content).toContain('Scout spend limit is 400 dollars');
+    expect(messages[0].content).toContain('The operator runs a bike shop');
     expect(messages[0].content).not.toContain('switched-off shared memory');
     expect(opts).toMatchObject({ provider: 'local', model: 'phi4-mini-q4', localOnly: true });
     expect(metas[0]).toMatchObject({ provider: 'local', model: 'phi4-mini-q4', agent: { id: 'scout', name: 'Scout', self: false } });
@@ -290,7 +290,7 @@ describe('the streaming chat — the agent speaks with its own memory, name, mod
     const { metas } = await chat({ message: 'hello' });
     const { messages, opts } = calls[0];
     expect(messages[0].content).toMatch(/^You are AEON, a private AI workspace/);
-    expect(messages[0].content).not.toContain('Scout bid ceiling');
+    expect(messages[0].content).not.toContain('Scout spend limit');
     expect(opts.provider).toBeUndefined();
     expect(opts.localOnly).toBeUndefined();
     expect(metas[0].agent).toMatchObject({ id: 'aeon', self: true });

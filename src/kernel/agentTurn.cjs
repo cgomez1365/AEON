@@ -117,8 +117,11 @@ async function runAgentTurn({
         role,
         ...callOpts,
         ...(pinned || {}),
-        // Never trimmed and retried: see services/ai.js (noTrimRetry).
-        ...(contRound ? { noTrimRetry: true } : {}),
+        // Never trimmed and retried: see services/ai.js (noTrimRetry). That
+        // retry keeps the system head and the LAST user message — after a
+        // tool result that message is the wrapped result, and the head cut
+        // drops the ## TOOLS rules (nonce, "data, not instructions").
+        ...((contRound || rounds > 1) ? { noTrimRetry: true } : {}),
         signal: child.signal,
         onToken: (t) => {
           if (block) return;
@@ -150,6 +153,22 @@ async function runAgentTurn({
             ? 'The answer is too long for this model to continue automatically. Type "continue" to ask for the rest.'
             : 'The answer stopped at the model\'s output limit and could not be continued automatically. Type "continue" to try again.',
         });
+      }
+      // A round after a tool result that the model would not take: what was
+      // shown stays, and the reason is said — never a trimmed retry (above).
+      if (!contRound && rounds > 1 && !(signal && signal.aborted)) {
+        const cause = (e && e.cause) || e;
+        if (e?.tooLarge || cause?.tooLarge || e?.reasoningExhausted || cause?.reasoningExhausted) {
+          const tooLarge = !!(e?.tooLarge || cause?.tooLarge);
+          notice('warn', 'tool-round-stopped', tooLarge
+            ? 'The model could not take the tool result: the conversation and the result are more than it accepts in one request.'
+            : 'The model spent its output budget before answering after the tool result.');
+          return finish({
+            stopped: tooLarge
+              ? 'The tool result was too large for this model to answer from. Ask a narrower question, or use a model with a larger context.'
+              : 'The model stopped before answering after the tool result. Ask again, or use another model.',
+          });
+        }
       }
       // What the operator was shown, never the raw round: a tool block the
       // kernel saw as text must not surface in the error.

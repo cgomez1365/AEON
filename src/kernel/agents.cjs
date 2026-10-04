@@ -261,8 +261,18 @@ function get(vaultRoot, ref, agents = null) {
   if (text === SELF_ID || text === 'vp') return all.find((a) => a.self) || null;
   const exact = all.filter((a) => a.id === text || a.folder.toLowerCase() === text || a.name.toLowerCase() === text);
   if (exact.length === 1) return exact[0];
+  // Two agents answer to it exactly (one's id or folder, another's name):
+  // never guess between them by word — a Local only agent's id must not
+  // resolve to a Roulette agent that took its old name, or the reverse.
+  if (exact.length > 1) return null;
   const byWord = all.filter((a) => a.name.toLowerCase().split(' ').some((w) => w === text || w.startsWith(text)));
   return byWord.length === 1 ? byWord[0] : null;
+}
+
+// A name is taken when another agent already answers to it: by its name,
+// or by its id or folder (which keep the name an agent was created with).
+function takenBy(agent, lowerName) {
+  return agent.name.toLowerCase() === lowerName || agent.id === lowerName || agent.folder.toLowerCase() === lowerName;
 }
 
 function requireAgent(vaultRoot, ref) {
@@ -276,7 +286,7 @@ function create(vaultRoot, input = {}) {
   const fields = cleanFields(input, { partial: false });
   const all = list(vaultRoot, { withStats: false });
   const lower = fields.name.toLowerCase();
-  if (RESERVED.has(lower) || all.some((a) => a.name.toLowerCase() === lower)) {
+  if (RESERVED.has(lower) || all.some((a) => takenBy(a, lower))) {
     throw new AgentError(`"${fields.name}" is already taken${RESERVED.has(lower) ? ' — it is a reserved word' : ''}. Pick another name.`, 409);
   }
   let folder = folderFor(fields.name);
@@ -314,7 +324,7 @@ function update(vaultRoot, ref, patch = {}) {
   if (fields.name && fields.name.toLowerCase() !== a.name.toLowerCase()) {
     const lower = fields.name.toLowerCase();
     const others = list(vaultRoot, { withStats: false }).filter((x) => x.id !== a.id);
-    if ((!a.self && RESERVED.has(lower)) || others.some((x) => x.name.toLowerCase() === lower)) {
+    if ((!a.self && RESERVED.has(lower)) || others.some((x) => takenBy(x, lower))) {
       throw new AgentError(`"${fields.name}" is already taken. Pick another name.`, 409);
     }
   }

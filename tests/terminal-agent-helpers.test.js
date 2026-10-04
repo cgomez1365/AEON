@@ -13,8 +13,8 @@ import { readStoredAgent, storeAgent, asCurrent, resolveAgentArg, describeAgent,
 const mem = () => { const m = {}; return { getItem: (k) => (k in m ? m[k] : null), setItem: (k, v) => { m[k] = String(v); }, removeItem: (k) => { delete m[k]; }, _m: m }; };
 const AGENTS = [
   { id: 'aeon', name: 'Jarvis', folder: 'Aeon', self: true },
-  { id: 'card_scout', name: 'Card Scout', folder: 'Card_Scout', privacy: 'local-only', model: { provider: 'local', model: 'phi4-mini-q4' } },
-  { id: 'card_ledger', name: 'Card Ledger', folder: 'Card_Ledger' },
+  { id: 'ledger_scout', name: 'Ledger Scout', folder: 'Ledger_Scout', privacy: 'local-only', model: { provider: 'local', model: 'phi4-mini-q4' } },
+  { id: 'ledger_book', name: 'Ledger Book', folder: 'Ledger_Book' },
   { id: 'orion', name: 'Orion', folder: 'Orion', sharedMemory: false },
 ];
 
@@ -39,16 +39,16 @@ describe('terminalAgent helpers', () => {
 
   it('/agent <arg>: id, name, one word; off / aeon / your AEON\'s name go back', () => {
     expect(resolveAgentArg('orion', AGENTS).agent.id).toBe('orion');
-    expect(resolveAgentArg('Card Scout', AGENTS).agent.id).toBe('card_scout');
-    expect(resolveAgentArg('scout', AGENTS).agent.id).toBe('card_scout');
+    expect(resolveAgentArg('Ledger Scout', AGENTS).agent.id).toBe('ledger_scout');
+    expect(resolveAgentArg('scout', AGENTS).agent.id).toBe('ledger_scout');
     for (const back of ['off', 'aeon', 'self', 'jarvis']) expect(resolveAgentArg(back, AGENTS).back).toBe(true);
-    expect(resolveAgentArg('card', AGENTS).error).toMatch(/could be Card Scout or Card Ledger/);
+    expect(resolveAgentArg('ledger', AGENTS).error).toMatch(/could be Ledger Scout or Ledger Book/);
     expect(resolveAgentArg('ghost', AGENTS).error).toMatch(/No agent called "ghost"/);
     expect(resolveAgentArg('', AGENTS).error).toMatch(/Name an agent/);
   });
 
   it('describes an agent in words: model, privacy, memory', () => {
-    expect(describeAgent(AGENTS[1])).toBe('Card Scout — local · phi4-mini-q4, local only (its chats and its own memory never go to a cloud model); its own memory plus the shared memory.');
+    expect(describeAgent(AGENTS[1])).toBe('Ledger Scout — local · phi4-mini-q4, local only (its chats and its own memory never go to a cloud model); its own memory plus the shared memory.');
     expect(describeAgent(AGENTS[3])).toBe('Orion — the model Settings picks; its own memory only.');
     // The operator's own AEON holds the shared memory, which Roulette agents
     // may still read — so Local only promises its chats, not its memory.

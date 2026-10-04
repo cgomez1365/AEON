@@ -214,12 +214,25 @@ function createScope(vaultRoot) {
    * gets exactly withheld().
    */
   function withheldFor(relPosix, { ownFolder = null } = {}) {
-    const given = split(String(relPosix || '').replace(/\\/g, '/').replace(/^Vault\//, ''));
-    const real = resolveParts(given);
     const own = ownFolder ? String(ownFolder).toLowerCase() : null;
     // Both: the name the disk gives it, and the one it was reached by (a
     // symlink named Agents/Scout is Scout's to the operator, wherever it points).
-    return judge(real, own) || (real.join('/') === given.join('/') ? null : judge(given, own));
+    for (const given of givenReadings(relPosix)) {
+      const real = resolveParts(given);
+      const v = judge(real, own) || (real.join('/') === given.join('/') ? null : judge(given, own));
+      if (v) return v;
+    }
+    return null;
+  }
+
+  // Callers name files "Vault/<rel>" or "<rel>". A path that starts with
+  // "Vault/" is judged both with and without it: a real top-level folder
+  // named Vault (an older Vault copied in) must not be read as the root.
+  function givenReadings(relPosix) {
+    const raw = String(relPosix || '').replace(/\\/g, '/');
+    const out = [split(raw)];
+    if (/^Vault\//.test(raw)) out.unshift(split(raw.replace(/^Vault\//, '')));
+    return out;
   }
 
   function judge(parts, own = null) {
@@ -242,9 +255,13 @@ function createScope(vaultRoot) {
 
   // Both readings of a path: as the disk resolves it, and as given.
   function readings(relPosix) {
-    const given = split(String(relPosix || '').replace(/\\/g, '/').replace(/^Vault\//, ''));
-    const real = resolveParts(given);
-    return real.join('/') === given.join('/') ? [real] : [real, given];
+    const out = [];
+    for (const given of givenReadings(relPosix)) {
+      const real = resolveParts(given);
+      out.push(real);
+      if (real.join('/') !== given.join('/')) out.push(given);
+    }
+    return out;
   }
 
   /**
