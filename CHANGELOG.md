@@ -16,7 +16,7 @@ tagged; until then its heading says so.
 
 <!-- 3.3.0 was built in local branches and lands as one commit, 25a66cd, plus the
      commit that points these lines at it and the review fixes on top of it (same
-     branch, release/3.3.0: round 3 is 4aafe70, round 4 is ROUND4). Every entry below
+     branch, release/3.3.0: round 3 is 4aafe70, round 4 is c805e4a). Every entry below
      except "Not included in 3.3.0" names the commit or commits its behaviour comes
      from. These hashes hold only if the branch reaches main by a merge commit or a
      fast-forward, never a squash or rebase. -->
@@ -50,7 +50,7 @@ data in `~/AEON` is untouched; upgrade as for 3.2.0.
   the file", "I saved it to my memory" or "I asked <agent>", and warns under it when no
   tool of that kind succeeded in that reply (a Vault search does not back "I searched
   the web"); other wordings are not caught. "I asked <agent>" is checked against every
-  agent you have, including ones that agent may not ask. (25a66cd, 4aafe70, ROUND4)
+  agent you have, including ones that agent may not ask. (25a66cd, 4aafe70, c805e4a)
 - **Limits per reply:** at most 6 tool uses, 3 of them saves; each result is capped in
   size, the results together are capped, and each tool has a time limit. When the chat
   role's model has a context window under 4,096 tokens, tools are off for that turn and
@@ -61,7 +61,7 @@ data in `~/AEON` is untouched; upgrade as for 3.2.0.
   recalled into the turn, or in a saved memory. A document's text can still sway a model, so every
   save is shown, and one reply can make at most 3. A model that streams a very long line
   of backticks can no longer stall AEON: what the terminal holds back while it decides
-  whether a line is a tool call is bounded. (25a66cd, ROUND4)
+  whether a line is a tool call is bounded. (25a66cd, c805e4a)
 - **Vault paths stay in the Vault:** no `..`, no absolute paths, no hidden files or OS
   junk, and no way out through a symlink — also for an agent's own scratchpad,
   handoffs and artifacts, which are never opened through a link. (25a66cd)
@@ -95,12 +95,12 @@ data in `~/AEON` is untouched; upgrade as for 3.2.0.
   through a link are not indexed either. No tool reads or lists an agent's memory
   files: the memories that are on are already in its prompt, and `vault_search` finds
   them. A `memory_save` of the same words as a switched-off memory is answered like a
-  new save, so a model cannot learn it exists. (25a66cd, 4aafe70, ROUND4)
+  new save, so a model cannot learn it exists. (25a66cd, 4aafe70, c805e4a)
 - **A removed agent set to Local only stays private.** Removing an agent moves its
   folder to `Agents/.removed/`; any folder whose `agent.json` says Local only (or cannot
   be read), and any folder in `Agents/.removed/` without one, is withheld from tools,
   indexing and recall wherever it is — reached through a link, or moved elsewhere in
-  the Vault by hand. (ROUND4)
+  the Vault by hand. (c805e4a)
 - **A memory store is never read or written through a link.** When an agent's
   `memory/` folder (or the shared one, `Agents/Aeon/memory`) is a link, its prompt gets
   no memories and Memory Core refuses to show or change that store, with the reason; a
@@ -140,7 +140,7 @@ data in `~/AEON` is untouched; upgrade as for 3.2.0.
   tool call whose first line the limit cut is completed in the next part and run; one
   cut later is refused as cut off, and the model is asked to send a shorter call.
   The terminal shows "continuing… part 2 of up to 5" while it works and "Continued
-  automatically, N parts." under the answer. (25a66cd, 4aafe70, ROUND4)
+  automatically, N parts." under the answer. (25a66cd, 4aafe70, c805e4a)
 - Later parts resolve the chat role the same way the first did (its address, key pool
   and pacing), and stay on a fallback model once one has served a part; a provider
   failure on a later part can still fall back. (25a66cd)
@@ -150,7 +150,7 @@ data in `~/AEON` is untouched; upgrade as for 3.2.0.
   never continued on a guess. A later part is never sent with less context: when the
   question and the answer so far are more than the model accepts, or a later part comes
   back empty (a reasoning model that spent its budget thinking), the answer ends where
-  it stopped, says why, and you can type "continue". (25a66cd, ROUND4)
+  it stopped, says why, and you can type "continue". (25a66cd, c805e4a)
 
 ### Scratchpad and handoffs
 
