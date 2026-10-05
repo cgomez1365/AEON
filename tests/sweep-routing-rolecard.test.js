@@ -62,3 +62,68 @@ describe('C33 — the empty option says what an unset role runs on', () => {
     expect(unsetOption(render('chat', { provider: 'groq', model: 'openai/gpt-oss-120b' }))).toBeNull();
   });
 });
+
+/**
+ * A role left as "Same as Chat" has no provider of its own, so the card found
+ * no models for it and printed "No models available from this provider — add a
+ * key under Connections" under a picker that already said "↳ Same as Chat".
+ * Routing was never wrong (_declaredFor hands the role to Chat); the warning
+ * was. An inheriting role now names the Chat model it really runs on, and the
+ * warning stays for a role that has a provider of its own, and for Chat.
+ */
+const NO_MODELS = [
+  { id: 'openrouter', label: 'OpenRouter', icon: '🔀', fallbackModels: [], accounts: [] },
+  { id: 'local', label: 'Local', icon: '💻', fallbackModels: [], accounts: [] },
+];
+const CHAT = { provider: 'openrouter', model: 'nvidia/nemotron-3-ultra-550b-a55b:free' };
+
+// chatConfig has no default on purpose: null must reach the card as null.
+const renderBare = (key, config, chatConfig) => renderToStaticMarkup(React.createElement(RoleCard, {
+  role: { key, label: key, desc: '', icon: '' },
+  config,
+  chatConfig,
+  providers: { openrouter: true, local: true },
+  liveModels: {},
+  freeModels: {},
+  onUpdate: () => {},
+  providerBlocks: {},
+  providerRegistry: NO_MODELS,
+}));
+
+describe('a role left as Same as Chat does not claim there are no models', () => {
+  for (const key of ['analyst', 'naming', 'grading', 'creative']) {
+    for (const config of [undefined, { provider: '', model: '' }]) {
+      it(`${key} (${config ? 'blank entry' : 'no entry'}) names the Chat model`, () => {
+        const html = renderBare(key, config, CHAT);
+        expect(html).not.toMatch(/No models available/);
+        expect(html).toContain('Uses the Chat model (openrouter / nvidia/nemotron-3-ultra-550b-a55b:free)');
+      });
+    }
+  }
+
+  it('Vision and Embedding unset: no warning, and no claim that they use Chat', () => {
+    for (const key of ['vision', 'embed']) {
+      const html = renderBare(key, { provider: '', model: '' }, CHAT);
+      expect(html, key).not.toMatch(/No models available/);
+      expect(html, key).not.toMatch(/Uses the Chat model/);
+    }
+  });
+
+  it('Chat with no provider yet says so rather than naming a model', () => {
+    expect(renderBare('naming', undefined, null)).toMatch(/Uses the Chat model — none is set yet/);
+    expect(renderBare('naming', undefined, { provider: 'none', model: '' })).toMatch(/Uses the Chat model — none is set yet/);
+  });
+
+  it('a role with its own provider and no models still gets the remedy', () => {
+    const own = renderBare('naming', { provider: 'openrouter', model: '' }, CHAT);
+    expect(own).toMatch(/No models available from openrouter — add a key under Connections/);
+    expect(own).not.toMatch(/Uses the Chat model/);
+    expect(renderBare('naming', { provider: 'local', model: '' }, CHAT)).toMatch(/No local model installed yet/);
+  });
+
+  it('Chat itself keeps its warning when it has no provider', () => {
+    const html = renderBare('chat', { provider: '', model: '' }, CHAT);
+    expect(html).toMatch(/No models available from this provider/);
+    expect(html).not.toMatch(/Uses the Chat model/);
+  });
+});

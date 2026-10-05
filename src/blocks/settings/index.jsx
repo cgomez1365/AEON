@@ -455,6 +455,16 @@ function unsetRoleOption(roleKey) {
   if (roleKey === 'chat') return null;
   return UNSET_ROLE_OPTION[roleKey] || '↳ Same as Chat';
 }
+// The line under an inheriting role's blank model picker: the Chat model it
+// really runs on (_declaredFor). Null for a role with a provider of its own,
+// for Chat, and for Vision/Embedding, whose empty option already names their
+// default.
+function inheritedModelNote(roleKey, config, chat) {
+  if (config?.provider || roleKey === 'chat' || UNSET_ROLE_OPTION[roleKey]) return null;
+  // Chat unset or "none": _resolveDeclared hands the call to the registry's auto-pick.
+  if (!chat?.provider || chat.provider === 'none') return 'Uses the Chat model — none is set yet, so the first connected provider answers.';
+  return `Uses the Chat model (${chat.provider}${chat.model ? ` / ${chat.model}` : ''})`;
+}
 
 // The models a provider offers: its live list, else the registry's fallback.
 // `?.length ?` not `||` — an empty array is truthy, so a provider that
@@ -468,8 +478,8 @@ function modelsFor(provider, liveModels, providerRegistry) {
 }
 
 // Exported for tests/sweep-routing-rolecard.test.js (a component export keeps
-// Fast Refresh working; the helper above stays private).
-export function RoleCard({ role, config, providers, liveModels, freeModels, onUpdate, providerBlocks, providerRegistry }) {
+// Fast Refresh working; the helpers above stay private).
+export function RoleCard({ role, config, chatConfig, providers, liveModels, freeModels, onUpdate, providerBlocks, providerRegistry }) {
   const live = liveModels[config?.provider];
   const models = modelsFor(config?.provider, liveModels, providerRegistry);
   // Only real flags, and only for the live list. A fallbackModels list is a
@@ -480,6 +490,7 @@ export function RoleCard({ role, config, providers, liveModels, freeModels, onUp
   const isConfigured = providers[config?.provider];
   const poweredBlocks = providerBlocks?.[config?.provider] || [];
   const unsetOption = unsetRoleOption(role.key);
+  const inheritedNote = inheritedModelNote(role.key, config, chatConfig);
 
   return (
     <div className="admin-card role-card">
@@ -537,8 +548,12 @@ export function RoleCard({ role, config, providers, liveModels, freeModels, onUp
           {/* §08 — an error must name every remedy, cheapest first. A blank
               dropdown tells the operator nothing they can act on, and it looks
               identical whether the provider has no models, no key, or is
-              simply not installed. */}
-          {models.length === 0 && (
+              simply not installed. A role on "Same as Chat" has no provider of
+              its own, so it never has models to list: it says what it uses. */}
+          {inheritedNote && (
+            <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 3 }}>{inheritedNote}</div>
+          )}
+          {models.length === 0 && !(unsetOption && !config?.provider) && (
             <div style={{ fontSize: 11, color: '#ffb454', marginTop: 3 }}>
               {isLocal
                 ? 'No local model installed yet — install one in Cookbook ▸ Hardware, then reopen this page.'
@@ -3619,6 +3634,7 @@ export default function SystemSettings() {
               key={role.key}
               role={role}
               config={settings.models[role.key]}
+              chatConfig={settings.models.chat}
               providers={providers}
               liveModels={liveModels}
               freeModels={freeModels}
