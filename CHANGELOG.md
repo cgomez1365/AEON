@@ -40,7 +40,7 @@ apply to an existing Supabase project.
   empty list cannot tell from an open policy), EXPOSED, or REJECTED (the key itself was refused,
   so the table was not tested), covers all 19 AEON tables, and only prints PASS when a table
   positively answered "permission denied" and nothing went untested — a first version printed
-  PASS after every request had failed. The relay's re-opening
+  PASS after every request had failed (8b54f42). The relay's re-opening
   `db/fix_relay_rls.sql` is removed. Tests: every policy in `db/` must be `TO service_role`
   (`tests/sql-policy-lint.test.js`; the old files fail it with 18 violations in 9 files).
   The server now warns at boot when it has only an anon key.
