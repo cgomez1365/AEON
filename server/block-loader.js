@@ -79,6 +79,17 @@ module.exports = ({ app, ROOT, isVercel, loadSettings, baseDeps }) => {
       });
     }
 
+    // A block may declare an engine (npm packages installed on demand into its
+    // own data folder). The KERNEL runs the install (engineInstall.cjs), so the
+    // block never needs child_process/shell for it and stays Tier 1.5. Only the
+    // packages the manifest declares are installed, reviewed at install time.
+    const declaredEngine = manifest?.contract?.engine;
+    if (declaredEngine && declaredEngine.packages && perms.filesystem !== 'none') {
+      scoped.engineInstall = require('../src/kernel/engineInstall.cjs').forBlock({
+        blockId, declaredEngine, getBlockDataFile: base.getBlockDataFile,
+      });
+    }
+
     if (usesScopedStorage && perms.filesystem !== 'none') {
       // A scoped block must use its declared surface, so the broad resolvers go.
       delete scoped.VAULT_ROOT;

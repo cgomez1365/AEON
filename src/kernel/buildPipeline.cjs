@@ -32,7 +32,16 @@ function stageEnvelope(envelope) {
   if (!id || !/^[a-z0-9_]+$/.test(id)) return { ok: false, error: `invalid block id "${id}"` };
   ensureStagingDir();
   const dir = path.join(STAGING_DIR, id);
-  if (fs.existsSync(dir)) return { ok: false, error: `staging/${id} already exists — decide or remove the previous attempt first (no silent overwrite)` };
+  if (fs.existsSync(dir)) {
+    // A previous attempt left staging/<id> behind. If it is still waiting for
+    // approval, refuse — never clobber an active review. If no pending approval
+    // references it, it is abandoned (a failed boot proof, a cancelled install),
+    // so clear it and re-stage: retries just work instead of nagging.
+    const pending = approvals.list('pending').some((i) => i.blockId === id);
+    if (pending) return { ok: false, error: `staging/${id} is waiting for your approval — approve or reject it first (Settings → Agent), then install again.` };
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* fall through to the guard below */ }
+    if (fs.existsSync(dir)) return { ok: false, error: `staging/${id} already exists and could not be cleared automatically — remove it by hand.` };
+  }
   if (fs.existsSync(path.join(BLOCKS_DIR, id))) return { ok: false, error: `src/blocks/${id} already live — bump version and use the update flow` };
 
   fs.mkdirSync(dir, { recursive: true });
