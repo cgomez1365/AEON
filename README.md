@@ -33,7 +33,7 @@
 ## Get started (no technical skills needed)
 
 1. **Install Node.js** (one time): [nodejs.org](https://nodejs.org) → the **LTS** download → install with all defaults. **On macOS 11 to 13.4**, choose **Node 22 LTS** instead: the newest LTS needs macOS 13.5 (see [Requirements](#requirements)).
-2. **Download AEON**: the [latest release](https://github.com/cgomez1365/AEON/releases/latest) (v3.2.0 or newer) → **Source code (zip)**. Or, for the latest code rather than a release, the green **Code** button above → **Download ZIP**. Unzip anywhere (Desktop is fine).
+2. **Download AEON**: the [latest release](https://github.com/cgomez1365/AEON/releases/latest) (v3.3.3) → **Source code (zip)**. Or, for the latest code rather than a release, the green **Code** button above → **Download ZIP**. Unzip anywhere (Desktop is fine).
 3. **Launch it**:
    - **Windows** — double-click `LAUNCH.bat`
    - **macOS** — double-click `launch.command` (a browser-downloaded copy is blocked the first time — see [First launch on macOS](#first-launch-on-macos-gatekeeper))
@@ -168,6 +168,19 @@ In a chat, each tool an agent uses appears as a **TOOL** line above its answer �
 ## Privacy, in short
 
 Runs on your computer. Your keys stay on it. Your documents stay on it too, unless a cloud model you added a key for is given them — to answer you, or to index your Vault when no local embedding model is installed (Settings → Models → **Local only** stops both); nothing syncs to a cloud unless you connect your own. In a chat you started, any agent not set to Local only — on a local or a cloud model — may, by itself, list and read Vault files (never switched-off memories, saved chats or a Local only agent's folder; on a cloud model, what it reads goes to that provider) and send search queries to your search provider (DuckDuckGo when no search key is set, or when your keyed provider fails). The model writes the search text itself, so it can include words from your chat or from Vault files it just read. Both are on by default: Settings → Blocks → **Memory Core** turns tools or web search by agents off, and Settings → Models → **Local only** turns web search off; an agent set to Local only reads only into a local model and never searches the web. What else reaches the internet, only when you ask: web search (DuckDuckGo with no key), the top results Orion Search opens to read, model and runtime downloads (Hugging Face, GitHub), and Deep Research's archive lookups. The full list is in the [Privacy notice](PRIVACY.md).
+
+---
+
+## Add a block from the store
+
+Blocks sold at [brokengearindustries.com/store](https://www.brokengearindustries.com/store) arrive as one `.aeon` file and need AEON **3.3.3** (the release, or a current `git pull`).
+
+1. In AEON open **Master → Install from the store** and drag the `.aeon` file onto the drop box. (Or, in your computer's own terminal — not AEON's — run `aeon install /path/to/the-file.aeon`.)
+2. AEON checks the file and boots it once before adding it. A block that brings its own engine (Voice Studio's speech engine is about 440 MB) asks for one click to approve the download first.
+3. **Close AEON and open it again.** A block's screen is part of the interface, which AEON rebuilds on start — about a minute the first time. Settings → Restart does the same.
+4. **Settings → Blocks →** the block **→ Start.** A new block always arrives stopped.
+
+Every block lists what it can touch before you install it, and blocks are not sandboxed — see "Blocks share a Node process" below.
 
 ---
 

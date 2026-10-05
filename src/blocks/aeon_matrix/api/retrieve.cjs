@@ -42,6 +42,8 @@ const { loadExtractors, extractText, embed, cosineSimilarity, EMBED_MODEL } = re
 // requires _lib.cjs and nothing else in this block.
 const { chunkText } = require('./ingest.cjs');
 const memorySections = require('../../../kernel/memorySections.cjs');
+// Lazy, like the readiness check below: the wording lives in the kernel.
+const explainEmbedFailure = (...a) => require('../../../kernel/embed.cjs').explainEmbedFailure(...a);
 const vaultPrivacy = require('../../../kernel/vaultPrivacy.cjs');
 
 const DEFAULT_K        = 5;
@@ -249,20 +251,10 @@ module.exports = function retrieveFactory(deps) {
       ({ vector: queryEmbedding, model: queryModel } = await (deps?.embed || embed)(query, { kind: 'query', ...(localOnly ? { localOnly: true } : {}) }));
     } catch (e) {
       console.warn('[RETRIEVE] query embed failed:', e.code || 'error', e.message);
-      // The kernel owns the remedy: it knows whether nothing is assigned, the
-      // key was rejected, or the endpoint is pacing. Naming a vendor here would
-      // be this block guessing at a decision it does not make (§14).
-      return {
-        documents: [],
-        unavailable: {
-          reason: e.code === 'no_embed_model' ? 'no_embedding_model' : (e.code || 'no_embedding_model'),
-          message: e.embedFailure
-            ? e.message
-            : 'Searching your documents by meaning needs an embedding model, and none is available.',
-          action: e.action
-            || 'Install an embedding model in Cookbook — about 150 MB, runs on CPU — or assign one to the Embedding role in Settings → Model Assignment.',
-        },
-      };
+      // The kernel owns the remedy and the wording: it says "not installed"
+      // only when the readiness check agrees (kernel/embed.cjs).
+      const why = explainEmbedFailure(e, deps?.embedReadiness || (deps?.embed ? () => ({ ok: true }) : undefined));
+      return { documents: [], unavailable: why };
     }
 
     // Vectors from different embedding models aren't comparable — only score
@@ -761,11 +753,11 @@ module.exports = function retrieveFactory(deps) {
       try {
         ({ vector: queryEmbedding, model: queryModel } = await (deps?.embed || embed)(query, { kind: 'query', ...(localOnly ? { localOnly: true } : {}) }));
       } catch (e) {
-        const msg = 'Searching this document by meaning needs an embedding model, and none is available.';
+        console.warn('[ASK-DOC] query embed failed:', e.code || 'error', e.message);
+        const why = explainEmbedFailure(e, deps?.embedReadiness || (deps?.embed ? () => ({ ok: true }) : undefined));
         return res.json({
           ok: true, answered: false,
-          reason: e.code === 'no_embed_model' ? 'no_embedding_model' : (e.code || 'no_embedding_model'),
-          message: msg, text: `${msg} Install one in Cookbook, or assign one to the Embedding role in Settings → Model Assignment.`,
+          reason: why.reason, message: why.message, text: `${why.message} ${why.action}`,
         });
       }
       const rec = readChunks()[meta.path];

@@ -25,6 +25,17 @@ boots (routes written in, keys re-ordered), so the same manifest had two byte fo
 rebuilt twice. The build stamp now compares manifests by content (sorted keys). Found by running the customer path
 end to end on a fresh clone. Tests: `tests/build-stamp.test.js`.
 
+**The terminal no longer says a working embedding model is "not installed".** Reported live: Cookbook listed
+Nomic Embed Text as ready, the registry and a running embedder agreed, and a real embed took 22 ms warm — yet an agent
+told the operator "Embedding model not installed". Retrieval answered every embedding failure that was not a
+structured kernel error with a fixed "needs an embedding model, and none is available", and the local embedder's own
+failures (server would not start, timeout, HTTP error) carried no error code, so a failed attempt always read as a
+missing model. Now `kernel/embed.cjs` `explainEmbedFailure` says "not installed" only when the readiness check
+agrees; otherwise it says the model is installed and gives the real cause and a remedy. The local embedder retries
+once. `/ask`, `/recall` and `/ask-doc` all use it. Tests: `tests/embed-honest-errors.test.js`. Also: the Windows
+CI flake in `tests/engine-install.test.js` (a worker still held its temp folder), and a README section on adding a
+block from the store.
+
 **The carried drive now rebuilds too (61877ae).** Found live on the owner's drive: the drive's launchers start
 `server.cjs` themselves, so the stale-build check in `launch.js` never ran there — a block installed on the
 drive stayed screenless through every restart, and the dashboard's own warning told a customer to run

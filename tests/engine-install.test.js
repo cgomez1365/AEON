@@ -39,7 +39,7 @@ afterEach(() => {
   for (const [k, v] of [['AEON_NPM_CLI', savedEnv.npm], ['AEON_TEST_PROVIDER_KEY', savedEnv.secret]]) {
     if (v === undefined) delete process.env[k]; else process.env[k] = v;
   }
-  fs.rmSync(T, { recursive: true, force: true });
+  fs.rmSync(T, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 describe('findNpm', () => {
@@ -138,7 +138,9 @@ describe('fork() — the block never touches child_process', () => {
     fs.mkdirSync(e.dir(), { recursive: true });
     const child = e.fork();
     const reply = await new Promise((resolve, reject) => { child.once('message', resolve); child.once('error', reject); });
-    child.kill();
+    // Wait for the worker to exit before the afterEach removes its folder: on
+    // Windows an exiting process still holds its cwd and the delete fails (EPERM).
+    await new Promise((resolve) => { child.once('exit', resolve); child.kill(); });
     expect(reply.secret).toBeNull();
     expect(reply.hasPath).toBe(true);
   });

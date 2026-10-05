@@ -34,11 +34,28 @@ async function embedLocal(text) {
   let lr;
   try { lr = require('../../services/local-runtime/index.cjs'); }
   catch { throw embedError('no_embed_model', 'The local AI engine is not installed.', 'Install it in Cookbook.'); }
-  const vector = await lr.embed(text);
-  if (!Array.isArray(vector) && !ArrayBuffer.isView(vector)) {
-    throw embedError('embed_failed', 'The local embedding model returned no vector.');
+  // Only these two mean "there is nothing to embed with". Everything else
+  // (the server would not start, a timeout, an HTTP error) means the model IS
+  // installed and the attempt failed — and says so, instead of being reported
+  // as a missing model.
+  const missing = (e) => /No local embedding model installed|No local AI engine installed/i.test(String(e && e.message));
+  let lastErr;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const vector = await lr.embed(text);
+      if (!Array.isArray(vector) && !ArrayBuffer.isView(vector)) {
+        throw embedError('embed_failed', 'The local embedding model returned no vector.');
+      }
+      return Array.from(vector);
+    } catch (e) {
+      if (e && e.embedFailure) throw e;
+      if (missing(e)) throw embedError('no_embed_model', e.message, 'Install one in Cookbook (about 150 MB, runs on CPU).');
+      lastErr = e;   // a failed start leaves the session in `error`, so the second try starts a fresh server
+    }
   }
-  return Array.from(vector);
+  throw embedError('embed_failed',
+    `The local embedding model is installed, but embedding failed: ${String((lastErr && lastErr.message) || lastErr).slice(0, 300)}`,
+    'Try again in a moment. If it keeps failing, restart AEON, or check Cookbook → Active for the embedding model.');
 }
 
 /** OpenAI-compatible /v1/embeddings — the shape every generic endpoint speaks. */
@@ -216,4 +233,35 @@ function embedReadiness() {
   return endpoints.describeRoleLocal(EMBED_ROLE);
 }
 
-module.exports = { kernelEmbed, embedReadiness, embedError, taskPrefix, embedSpace };
+/**
+ * What to tell the operator (and the model) when a query could not be embedded.
+ * Retrieval used to answer EVERY failure with "needs an embedding model, and
+ * none is available" — including when the model was installed and the attempt
+ * merely failed — which is how a working Nomic install read as "not installed".
+ * "Not installed" is said only when the readiness check agrees.
+ * @param {Error & {code?:string, embedFailure?:boolean, action?:string}} e
+ * @param {() => ({ok:boolean})} [readiness] injectable for tests
+ * @returns {{reason:string, message:string, action:string}}
+ */
+function explainEmbedFailure(e, readiness = embedReadiness) {
+  let installed = false;
+  try { installed = !!(readiness() || {}).ok; } catch { /* cannot tell */ }
+  const code = e && e.code;
+  if (!installed && (code === 'no_embed_model' || !code)) {
+    return {
+      reason: 'no_embedding_model',
+      message: 'Searching your documents by meaning needs an embedding model, and none is available.',
+      action: (e && e.action) || 'Install an embedding model in Cookbook — about 150 MB, runs on CPU — or assign one to the Embedding role in Settings → Model Assignment.',
+    };
+  }
+  const detail = e && e.embedFailure ? e.message : `${(e && e.message) || 'unknown error'}`;
+  return {
+    reason: code && code !== 'no_embed_model' ? code : 'embed_failed',
+    message: installed && (!code || code === 'no_embed_model')
+      ? `The embedding model is installed, but embedding your question failed: ${String(detail).slice(0, 300)}`
+      : String(detail).slice(0, 300),
+    action: (e && e.action) || 'Try again in a moment. If it keeps failing, restart AEON, or check Cookbook → Active for the embedding model.',
+  };
+}
+
+module.exports = { kernelEmbed, embedReadiness, embedError, taskPrefix, embedSpace, explainEmbedFailure };
