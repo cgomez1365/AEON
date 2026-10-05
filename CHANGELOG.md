@@ -36,8 +36,11 @@ apply to an existing Supabase project.
   every other policy on the AEON tables and revokes the public roles' privileges, so the
   public key is refused outright (idempotent; Settings → Cloud now applies it last). **If you
   connected Supabase before this, run 002 on that project.** `node tools/rls-canary.cjs`
-  now reports LOCKED (refused), UNPROVEN (answered but empty, which an empty list cannot tell
-  from an open policy) or EXPOSED, and covers all 19 AEON tables. The relay's re-opening
+  now reports LOCKED (Postgres said permission denied), UNPROVEN (answered but empty, which an
+  empty list cannot tell from an open policy), EXPOSED, or REJECTED (the key itself was refused,
+  so the table was not tested), covers all 19 AEON tables, and only prints PASS when a table
+  positively answered "permission denied" and nothing went untested — a first version printed
+  PASS after every request had failed. The relay's re-opening
   `db/fix_relay_rls.sql` is removed. Tests: every policy in `db/` must be `TO service_role`
   (`tests/sql-policy-lint.test.js`; the old files fail it with 18 violations in 9 files).
   The server now warns at boot when it has only an anon key.
