@@ -37,6 +37,20 @@ function walk(dir, rel, out) {
   }
 }
 
+// AEON rewrites block.manifest.json when a block first boots (routes written
+// in, keys re-ordered), so the same manifest has two byte forms. Compare what
+// it says, not how it is laid out, or a new block costs a second rebuild.
+function canonical(v) {
+  if (Array.isArray(v)) return v.map(canonical);
+  if (v && typeof v === 'object') return Object.fromEntries(Object.keys(v).sort().map((k) => [k, canonical(v[k])]));
+  return v;
+}
+function contentOf(root, f) {
+  const raw = fs.readFileSync(path.join(root, f));
+  if (!/(^|\/)block\.manifest\.json$/.test(f)) return raw;
+  try { return Buffer.from(JSON.stringify(canonical(JSON.parse(raw.toString('utf8'))))); } catch { return raw; }
+}
+
 /** Hash of the bundle's inputs: file names and contents, in a fixed order. */
 function sourceHash(root) {
   const files = FILES.filter((f) => fs.existsSync(path.join(root, f)));
@@ -44,7 +58,7 @@ function sourceHash(root) {
   const h = crypto.createHash('sha256');
   for (const f of files) {
     h.update(f); h.update('\0');
-    try { h.update(fs.readFileSync(path.join(root, f))); } catch { h.update('unreadable'); }
+    try { h.update(contentOf(root, f)); } catch { h.update('unreadable'); }
     h.update('\0');
   }
   return h.digest('hex');

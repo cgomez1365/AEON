@@ -53,6 +53,26 @@ describe('buildState', () => {
   it('hashes the same tree the same way twice', () => expect(sourceHash(root)).toBe(sourceHash(root)));
 });
 
+describe('block manifests are compared by content, not byte layout', () => {
+  it('re-ordered keys and whitespace do not make the build stale', () => {
+    put('src/blocks/notes/block.manifest.json', '{"id":"notes","contract":{"b":1,"a":2},"routes":["x"]}');
+    built();
+    put('src/blocks/notes/block.manifest.json', '{\n  "routes": ["x"],\n  "contract": {"a": 2, "b": 1},\n  "id": "notes"\n}\n');
+    expect(buildState(root).stale).toBe(false);
+  });
+  it('a changed value still does', () => {
+    put('src/blocks/notes/block.manifest.json', '{"id":"notes","routes":["x"]}');
+    built();
+    put('src/blocks/notes/block.manifest.json', '{"id":"notes","routes":["x","y"]}');
+    expect(buildState(root).reason).toBe('changed');
+  });
+  it('an unparseable manifest falls back to raw bytes rather than throwing', () => {
+    put('src/blocks/notes/block.manifest.json', '{oops'); built();
+    put('src/blocks/notes/block.manifest.json', '{oops2');
+    expect(buildState(root).reason).toBe('changed');
+  });
+});
+
 describe('ensureInterface (launch and Restart)', () => {
   it('rebuilds a changed tree and says why', () => {
     built(); put('src/blocks/voice_studio/index.jsx', 'export default 2');

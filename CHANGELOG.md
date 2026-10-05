@@ -18,6 +18,11 @@ tagged; until then its heading says so.
      audit fixes below and e56c75e (close and reopen to load a new block). Not tagged; the number stays 3.3.3 by the owner's choice. When a
      release is cut, this heading becomes its number and date. -->
 
+**A new block costs one rebuild, not two.** AEON rewrites a block's `block.manifest.json` the first time it
+boots (routes written in, keys re-ordered), so the same manifest had two byte forms and a block's first restart
+rebuilt twice. The build stamp now compares manifests by content (sorted keys). Found by running the customer path
+end to end on a fresh clone. Tests: `tests/build-stamp.test.js`.
+
 **The carried drive now rebuilds too (61877ae).** Found live on the owner's drive: the drive's launchers start
 `server.cjs` themselves, so the stale-build check in `launch.js` never ran there — a block installed on the
 drive stayed screenless through every restart, and the dashboard's own warning told a customer to run
