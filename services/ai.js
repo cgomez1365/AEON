@@ -100,6 +100,24 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     return status === 413 || e?.code === 'CONTEXT_EXHAUSTED' || _TOO_LARGE_RE.test(msg);
   };
 
+  // gpt-oss is trained on native (harmony) tool calls and writes one after
+  // reading the ## TOOLS section, though no request AEON sends offers tools
+  // (agents use the text aeon-tool protocol). Groq refuses that, mid-stream
+  // under a 200 or as a 400: "Tool choice is none, but model called a tool"
+  // (the CEO's drive, 2026-10-05). It is the model's FORMAT on this request,
+  // not the provider failing: the same model is asked once more, told not to.
+  const _NATIVE_TOOL_RE = /tool choice is none|model called a tool|tool_use_failed/i;
+  const _isNativeToolRefusal = (e) => _NATIVE_TOOL_RE.test(String(e?.message || ''));
+  const NO_NATIVE_TOOLS_NOTE = 'Function calling is not available in this chat: never emit a tool or function call. Reply in plain text only; an AEON tool is used by writing its aeon-tool block as text, when one is described above.';
+  const _withNoNativeTools = (messages) => {
+    const list = Array.isArray(messages) ? messages : [];
+    const at = list.findIndex((m) => m?.role === 'system' && typeof m.content === 'string');
+    if (at !== -1 && list[at].content.includes(NO_NATIVE_TOOLS_NOTE)) return list;
+    if (at === -1) return [{ role: 'system', content: NO_NATIVE_TOOLS_NOTE }, ...list];
+    return list.map((m, i) => (i === at ? { ...m, content: `${m.content}\n\n${NO_NATIVE_TOOLS_NOTE}` } : m));
+  };
+  const _nativeToolNotice = (p) => `${p} tried a native tool call → asked again in plain text`;
+
   // What the operator reads when a provider steps aside: a phrase, never the
   // provider's raw error body. The raw text stays in the server log.
   //
@@ -115,6 +133,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     if (status === 429) return 'rate-limited';
     if (typeof e !== 'number' && _isTooLarge(e, status)) return 'request too large for it';
     if (status === 413) return 'request too large for it';
+    if (_isNativeToolRefusal({ message: msg })) return 'tried a native tool call';
     if (/credit|insufficient.?(funds|balance)|billing/i.test(msg)) return 'out of credits';
     if (/rate.?limit|quota/i.test(msg)) return 'rate-limited';
     if (status === 404) return 'model not available';
@@ -1867,7 +1886,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       }
       opts.onAttempt?.({ provider: c.provider, model: c.model, fallback });
 
-      const sent = c.trimmedMessages || messages;
+      const sent = c.noNativeTools ? _withNoNativeTools(c.trimmedMessages || messages) : (c.trimmedMessages || messages);
       const callOpts = c.trimmedMaxTokens ? { ...opts, max_tokens: c.trimmedMaxTokens } : opts;
       let partial = '';
       let served = 0;
@@ -1931,6 +1950,17 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
           attempts.push({ provider: c.provider, status, message: e.message, configured: root === primary, label: `openrouter (${c.model})`, model: c.model });
           candidates.splice(i + 1, 0, { ...c, model: free, paidFrom: c.model, retryOf: root });
           opts.onFallback?.({ from: c.provider, to: c.provider, model: free, reason: 'out of credits', notice: _paidNotice(c.model) });
+          continue;
+        }
+
+        // A native tool call the provider refused is the model's format, not
+        // the provider: the same candidate is asked once more with a note not
+        // to call functions, and nothing has reached the operator (served is 0
+        // here). A second refusal moves on like any other failure.
+        if (_isNativeToolRefusal(e) && !c.noNativeTools) {
+          console.warn(`[KERNEL] stream ${c.provider} refused a native tool call (${_redactKeys(e.message).slice(0, 120)}); asking again in plain text`);
+          candidates.splice(i + 1, 0, { ...c, retryOf: root, noNativeTools: true });
+          opts.onFallback?.({ from: c.provider, to: c.provider, model: c.model, reason: _plainReason(e), notice: _nativeToolNotice(c.provider) });
           continue;
         }
 
@@ -2412,6 +2442,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     if (broke) return `Add credits for ${broke.a.provider}, or pick a free model in Settings → Models.`;
     const rejected = has('key rejected');
     if (rejected) return `Re-enter the ${rejected.a.provider} key in Settings → Keys.`;
+    if (has('tried a native tool call')) return 'Ask again, or assign a different model for this role in Settings → Models.';
     if (has('request too large for it')) {
       return 'Start a new chat, send a shorter message, or lower "Most memories per turn" in Settings → Blocks → Memory Core.';
     }
