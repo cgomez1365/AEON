@@ -358,6 +358,12 @@ function normalizeManifest(folder) {
       // it to an empty object would add a meaningless field to every manifest
       // on the next sync — drift introduced by the very code meant to heal it.
       ...(m.contract?.filesystem ? { filesystem: m.contract.filesystem } : {}),
+      // contract.engine — the npm packages and worker the KERNEL installs / starts
+      // for this block on demand (src/kernel/engineInstall.cjs). Same rule as
+      // `filesystem` above: it must be named here or the next boot sync erases
+      // it (found 2026-10-04: Voice Studio's engine declaration vanished and the
+      // block was handed no deps.engineInstall). Only when declared.
+      ...(m.contract?.engine ? { engine: m.contract.engine } : {}),
       // Settings keys this block reads from aeon-settings.json
       settings_keys: m.contract?.settings_keys || [],
       // Declared settings controls — Settings renders these automatically.

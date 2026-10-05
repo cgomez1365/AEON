@@ -87,6 +87,7 @@ module.exports = ({ app, ROOT, isVercel, loadSettings, baseDeps }) => {
     if (declaredEngine && declaredEngine.packages && perms.filesystem !== 'none') {
       scoped.engineInstall = require('../src/kernel/engineInstall.cjs').forBlock({
         blockId, declaredEngine, getBlockDataFile: base.getBlockDataFile,
+        blockDir: path.join(BLOCKS_DIR, blockId),
       });
     }
 

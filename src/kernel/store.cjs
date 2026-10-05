@@ -70,6 +70,13 @@ function purchaseSummary(manifest) {
   if (crossRead.length) warnings.push(`Reads data from: ${crossRead.join(', ')} (declared, Tier 1.5).`);
   const secrets = (manifest.requires?.env || []).concat(manifest.contract?.requiredSecrets || []);
   if (secrets.length) warnings.push(`Needs your API keys: ${secrets.join(', ')} (added by you, never bundled).`);
+  // An on-demand engine: AEON installs these exact npm packages into the block's own folder when the
+  // buyer presses Install in the block, and runs the block's worker apart from AEON. Said before purchase.
+  const engine = manifest.contract?.engine;
+  if (engine && engine.packages) {
+    const mb = engine.approxBytes ? ` (about ${Math.round(engine.approxBytes / 1048576)} MB)` : '';
+    warnings.push(`Installs an engine on demand${mb}: ${Object.keys(engine.packages).join(', ')} from the npm registry, into this block's own folder, when you press Install in the block${engine.worker ? '; its worker runs as a separate process' : ''}. AEON asks you to approve this before the block is added.`);
+  }
 
   return {
     id: manifest.id,

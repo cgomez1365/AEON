@@ -18,7 +18,7 @@
  */
 const path = require('path');
 const fs = require('fs');
-const { spawn } = require('child_process');
+const { spawn, fork } = require('child_process');
 
 /**
  * npm found next to the Node that runs AEON (regular install, Windows, and the
@@ -55,14 +55,49 @@ function folderBytes(root, limit = 60000) {
   return bytes;
 }
 
+const PKG_NAME = /^(@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/;
+const PKG_VERSION = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;      // an exact version — never a range, tag, URL, git ref or file path
+const ENGINE_DIR = /^[a-z0-9_-]{1,40}$/;
+const WORKER_REL = /^[A-Za-z0-9_][A-Za-z0-9_./-]*$/;
+const MAX_ENGINE_PACKAGES = 16;
+
+/**
+ * Check a manifest's contract.engine declaration. Returns a list of problems
+ * (empty = fine). Used by the complexity gate (so a malformed or sneaky
+ * declaration is refused before it is ever approved) and again by forBlock at
+ * install time (so nothing the gate never saw can be installed): packages must
+ * be plain registry names at EXACT versions — no ranges, dist-tags, URLs, git
+ * or file specifiers — and the worker must be a file inside the block.
+ */
+function validateEngine(e) {
+  const problems = [];
+  if (!e || typeof e !== 'object') return ['contract.engine must be an object'];
+  const names = Object.keys(e.packages || {});
+  if (!names.length) problems.push('contract.engine.packages must name at least one package');
+  if (names.length > MAX_ENGINE_PACKAGES) problems.push(`contract.engine.packages lists ${names.length} packages (limit ${MAX_ENGINE_PACKAGES})`);
+  for (const n of names) {
+    if (!PKG_NAME.test(n)) problems.push(`engine package name "${n}" is not a plain registry name`);
+    if (typeof e.packages[n] !== 'string' || !PKG_VERSION.test(e.packages[n])) problems.push(`engine package "${n}" must pin an exact version (got "${e.packages[n]}")`);
+  }
+  if (e.dir != null && !ENGINE_DIR.test(String(e.dir))) problems.push('contract.engine.dir must be a simple folder name');
+  if (e.worker != null) {
+    const w = String(e.worker);
+    if (!WORKER_REL.test(w) || w.split('/').includes('..') || w.endsWith('/')) problems.push('contract.engine.worker must be a relative file path inside the block');
+  }
+  return problems;
+}
+
 /**
  * Build the engine installer bound to one block.
  * @param {object} o
  * @param {string} o.blockId
  * @param {object} o.declaredEngine  manifest.contract.engine: { dir?, packages: {name: version}, approxBytes? }
  * @param {function} o.getBlockDataFile  (blockId) -> absolute data dir for that block
+ * @param {string} [o.blockDir]  the block's own folder; the declared worker must live inside it
  */
-function forBlock({ blockId, declaredEngine, getBlockDataFile }) {
+function forBlock({ blockId, declaredEngine, getBlockDataFile, blockDir }) {
+  const invalid = validateEngine(declaredEngine);
+  if (invalid.length) throw new Error(`The engine this block declares is not allowed: ${invalid.join('; ')}.`);
   const dir = (declaredEngine && declaredEngine.dir) || 'engine';
   const packages = { ...((declaredEngine && declaredEngine.packages) || {}) };
   const approxBytes = (declaredEngine && declaredEngine.approxBytes) || 0;
@@ -118,12 +153,40 @@ function forBlock({ blockId, declaredEngine, getBlockDataFile }) {
     return { ok: true, dir: root };
   }
 
+  // The block's own worker process (e.g. the speech engine's renderer), started
+  // by the KERNEL so the block never needs child_process. Only the one file the
+  // manifest declares (contract.engine.worker, inside the block's folder) can be
+  // started; the caller supplies no path, arguments or environment. The worker
+  // gets a minimal environment — no provider keys, no vault secrets.
+  const workerRel = (declaredEngine && declaredEngine.worker) || null;
+  function workerPath() {
+    if (!workerRel || !blockDir) throw new Error('This block declares no engine worker.');
+    const abs = path.resolve(blockDir, workerRel);
+    if (!abs.startsWith(path.resolve(blockDir) + path.sep)) throw new Error('The declared engine worker is outside the block folder.');
+    if (!has(abs)) throw new Error(`The declared engine worker is missing: ${workerRel}`);
+    return abs;
+  }
+  const WORKER_ENV_KEYS = ['PATH', 'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'SystemRoot', 'windir', 'TMPDIR', 'TEMP', 'TMP', 'LANG', 'LC_ALL'];
+  function forkWorker() {
+    const env = {};
+    for (const k of WORKER_ENV_KEYS) if (process.env[k] != null) env[k] = process.env[k];
+    return fork(workerPath(), [], {
+      cwd: engineRoot(),
+      env,
+      execArgv: [],
+      serialization: 'advanced',
+      stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
+      windowsHide: true,
+    });
+  }
+
   return {
     install,
     installed,
+    fork: forkWorker,
     dir: engineRoot,
     packages: () => ({ ...packages }),
   };
 }
 
-module.exports = { forBlock, findNpm, folderBytes };
+module.exports = { forBlock, findNpm, folderBytes, validateEngine };

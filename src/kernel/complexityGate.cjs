@@ -7,6 +7,7 @@
  *   Pure CRUD, own folder, no new perms        → LOW    → auto-build
  *   Cross-block write / shared schema          → MEDIUM → single-click + perm summary
  *   Cost exceeds daily threshold               → MEDIUM → single-click + cost breakdown
+ *   declares an on-demand engine (npm packages)→ MEDIUM → single-click + the exact package list
  *   permissions.shell == true                  → HIGH   → full review + code diff + explicit approve
  *   requiredSecrets not in vault               → HIGH   → full review — new secret grant
  *   Code refs paths outside own block          → HIGH   → full review — sandbox escape attempt
@@ -14,6 +15,7 @@
  * GAP 2 honored: LOW / MEDIUM / HIGH have three DISTINCT approval behaviors.
  */
 const { scanSources, validateManifest, isCodeFile } = require('./staging.cjs');
+const { validateEngine } = require('./engineInstall.cjs');
 
 const DAILY_COST_THRESHOLD = Number(process.env.AEON_BUILD_DAILY_COST_LIMIT || 1.0); // USD/day
 
@@ -38,6 +40,21 @@ function gate(envelope, { vaultSecrets = [] } = {}) {
 
   // permissions.shell == true → HIGH (Tier 3 lane)
   if (perms.shell === true) reasons.push({ sev: 'HIGH', rule: 'shell', why: 'requests shell access — Tier 3 full review' });
+
+  // contract.engine → the kernel will install npm packages for this block and
+  // run its worker process. Third-party code the scanner never reads, so it is
+  // never auto-built: a human sees the exact packages first (MEDIUM). A malformed
+  // or sneaky declaration (a range, a URL, a path outside the block) is HIGH.
+  if (m.contract?.engine) {
+    const e = m.contract.engine;
+    const problems = validateEngine(e);
+    if (problems.length) {
+      reasons.push({ sev: 'HIGH', rule: 'engine', why: `declares an engine AEON will not install: ${problems.join('; ')}` });
+    } else {
+      const list = Object.entries(e.packages).map(([n, v]) => `${n}@${v}`).join(', ');
+      reasons.push({ sev: 'MEDIUM', rule: 'engine', why: `declares an on-demand engine — when you press Install in the block, AEON installs these npm packages into the block's own data folder (exact versions, install scripts off): ${list}${e.worker ? `; and runs the block's worker (${e.worker}) as a separate process with no provider keys` : ''}` });
+    }
+  }
 
   // requiredSecrets not in vault → HIGH
   const required = (m.requires?.env || []).concat(m.contract?.requiredSecrets || []);
