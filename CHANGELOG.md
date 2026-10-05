@@ -15,7 +15,7 @@ tagged; until then its heading says so.
 ## 3.3.3 — update of 2026-10-05 (the number stays 3.3.3; the tag was moved to this)
 
 <!-- 14 commits on top of the first v3.3.3 tag (18dcaed, 2026-10-04): 5840dc9, 4227d9a, 2a69606, 50dacc1, the
-     audit fixes, e56c75e, 61877ae, eac9a47. By the owner's choice the version number stays 3.3.3 and the v3.3.3
+     audit fixes, e56c75e, 61877ae, eac9a47, 5b4e2ab. By the owner's choice the version number stays 3.3.3 and the v3.3.3
      tag and release were moved to include them, because the first 3.3.3 could not install the first paid block
      (it dropped a block's declared engine) and shipped Supabase SQL open to the public key. Anyone holding the
      2026-10-04 3.3.3 should update (README, "Updating AEON"). -->
@@ -25,7 +25,7 @@ boots (routes written in, keys re-ordered), so the same manifest had two byte fo
 rebuilt twice. The build stamp now compares manifests by content (sorted keys). Found by running the customer path
 end to end on a fresh clone. Tests: `tests/build-stamp.test.js`.
 
-**The terminal no longer says a working embedding model is "not installed".** Reported live: Cookbook listed
+**The terminal no longer says a working embedding model is "not installed" (5b4e2ab).** Reported live: Cookbook listed
 Nomic Embed Text as ready, the registry and a running embedder agreed, and a real embed took 22 ms warm — yet an agent
 told the operator "Embedding model not installed". Retrieval answered every embedding failure that was not a
 structured kernel error with a fixed "needs an embedding model, and none is available", and the local embedder's own
