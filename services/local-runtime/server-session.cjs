@@ -184,10 +184,12 @@ class ServerSession {
       ...(this.cacheType ? ['--cache-type-k', this.cacheType, '--cache-type-v', this.cacheType] : []),
       '--no-webui',                   // we are the UI; don't serve another one
       ...(this.embeddings
-        // Embedding mode: pooling must be set or /v1/embeddings 500s, and
-        // n_batch must cover n_ctx the same way the old standalone binary
-        // asserted on.
-        ? ['--embeddings', '--pooling', 'mean', '--batch-size', String(this.contextSize)]
+        // Embedding mode: pooling must be set or /v1/embeddings 500s. An input
+        // must fit ONE physical batch (--ubatch-size, default 512), and with
+        // --embeddings llama-server lowers --batch-size back to it, so both
+        // cover the window or anything over 512 tokens is refused.
+        ? ['--embeddings', '--pooling', 'mean',
+           '--batch-size', String(this.contextSize), '--ubatch-size', String(this.contextSize)]
         : ['--jinja']),               // chat: use the model's own template
     ];
 
@@ -483,17 +485,19 @@ class ServerSession {
     if (!this.embeddings) throw new Error('this session was not started in embedding mode');
     if (this.state !== 'ready') await this.start();
 
-    const res = await fetch(`${this.baseUrl}/v1/embeddings`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ input: String(text) }),
-      // An embedding is a single short forward pass — a wall clock is the
-      // right measurement here, unlike generation (D1b).
-      signal: AbortSignal.timeout(120_000),
-    });
+    let res = await this._postJson('/v1/embeddings', { input: String(text) });
     if (!res.ok) {
-      const detail = await res.text().catch(() => '');
-      throw new Error(`llama-server /v1/embeddings returned ${res.status}: ${detail.slice(0, 300)}`);
+      let detail = await res.text().catch(() => '');
+      // Past the window, only the head of the input can be embedded. Cut to it
+      // and say so; any other refusal is reported as it came.
+      if (res.status === 500 && /too large to process/i.test(detail)) {
+        const cut = await this._cutToWindow(String(text));
+        if (cut !== null) {
+          res = await this._postJson('/v1/embeddings', { input: cut });
+          if (!res.ok) detail = await res.text().catch(() => '');
+        }
+      }
+      if (!res.ok) throw new Error(`llama-server /v1/embeddings returned ${res.status}: ${detail.slice(0, 300)}`);
     }
     const json = await res.json();
     const vec = json?.data?.[0]?.embedding;
@@ -502,6 +506,33 @@ class ServerSession {
       throw new Error('embedding contained a non-finite value');
     }
     return vec;
+  }
+
+  _postJson(route, body, timeoutMs = 120_000) {
+    // An embedding is a single short forward pass — a wall clock is the
+    // right measurement here, unlike generation (D1b).
+    return fetch(`${this.baseUrl}${route}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  }
+
+  /**
+   * The first contextSize - 2 tokens of `text`, as text (the 2 are the BOS and
+   * EOS llama-server adds), or null when it already fits or cannot be cut.
+   */
+  async _cutToWindow(text) {
+    const room = this.contextSize - 2;
+    const json = (route, body) => this._postJson(route, body, 30_000)
+      .then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    const tok = await json('/tokenize', { content: text });
+    if (!Array.isArray(tok?.tokens) || tok.tokens.length <= room) return null;
+    const det = await json('/detokenize', { tokens: tok.tokens.slice(0, room) });
+    if (typeof det?.content !== 'string' || !det.content.trim()) return null;
+    console.warn(`[EMBED] input was ${tok.tokens.length} tokens; the model reads ${room}, so the rest was not embedded`);
+    return det.content;
   }
 
   stop() {
