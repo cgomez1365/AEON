@@ -12,11 +12,13 @@ tagged; until then its heading says so.
      is added here before tagging, and the heading's "not tagged yet" is replaced by
      the date. -->
 
-## Unreleased — on main after v3.3.3 (the version is still 3.3.3)
+## 3.3.3 — update of 2026-10-05 (the number stays 3.3.3; the tag was moved to this)
 
-<!-- Commits on main after the v3.3.3 tag (18dcaed): 5840dc9, 4227d9a, 2a69606, 50dacc1, the
-     audit fixes below and e56c75e (close and reopen to load a new block). Not tagged; the number stays 3.3.3 by the owner's choice. When a
-     release is cut, this heading becomes its number and date. -->
+<!-- 14 commits on top of the first v3.3.3 tag (18dcaed, 2026-10-04): 5840dc9, 4227d9a, 2a69606, 50dacc1, the
+     audit fixes, e56c75e, 61877ae, eac9a47. By the owner's choice the version number stays 3.3.3 and the v3.3.3
+     tag and release were moved to include them, because the first 3.3.3 could not install the first paid block
+     (it dropped a block's declared engine) and shipped Supabase SQL open to the public key. Anyone holding the
+     2026-10-04 3.3.3 should update (README, "Updating AEON"). -->
 
 **A new block costs one rebuild, not two.** AEON rewrites a block's `block.manifest.json` the first time it
 boots (routes written in, keys re-ordered), so the same manifest had two byte forms and a block's first restart
