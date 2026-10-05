@@ -28,12 +28,13 @@ function audit(line) {
   fs.appendFileSync(AUDIT_LOG, `${new Date().toISOString()} ${line}\n`, 'utf8');
 }
 
-/** Explicit toggle — the ONLY way IDE mode changes. */
-function setActive(active, { operator = 'operator' } = {}) {
-  const state = { active: active === true, changedAt: new Date().toISOString(), changedBy: operator };
+/** Explicit toggle — the ONLY way IDE mode changes. `reason` is for the audit
+ * line (e.g. the one-shot auto-disable after a Tier 3 approval). */
+function setActive(active, { operator = 'operator', reason = null } = {}) {
+  const state = { active: active === true, changedAt: new Date().toISOString(), changedBy: operator, reason: reason || undefined };
   fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true });
   fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), 'utf8');
-  audit(`IDE MODE ${state.active ? 'ENABLED' : 'DISABLED'} by ${operator}`);
+  audit(`IDE MODE ${state.active ? 'ENABLED' : 'DISABLED'} by ${operator}${reason ? ` — ${reason}` : ''}`);
   try { global.broadcastTerminalEvent?.('IDE-MODE', state.active ? '⚠ KERNEL IS NOW EDITABLE — IDE mode ON' : 'IDE mode OFF — kernel locked'); } catch {}
   return status();
 }

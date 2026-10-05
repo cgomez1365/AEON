@@ -691,10 +691,17 @@ function BuildQueuePanel() {
   const [blocks, setBlocks] = useState([]);
   const [expanded, setExpanded] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [ide, setIde] = useState({ active: false });        // IDE-mode status
+  const [hasAccount, setHasAccount] = useState(true);
+  const [askPw, setAskPw] = useState(false);                // password prompt open
+  const [pw, setPw] = useState('');
+  const [ideBusy, setIdeBusy] = useState(false);
 
   const load = useCallback(() => {
     fetch('/api/build/queue').then(r => r.json()).then(d => setItems(d.items || [])).catch(() => {});
     fetch('/api/build/blocks').then(r => r.json()).then(d => setBlocks(d.blocks || [])).catch(() => {});
+    fetch('/api/build/ide-mode').then(r => r.json()).then(d => setIde(d || { active: false })).catch(() => {});
+    fetch('/api/auth/status').then(r => r.json()).then(d => setHasAccount(d?.configured !== false)).catch(() => setHasAccount(true));
   }, []);
   useEffect(() => { load(); const t = setInterval(load, 20000); return () => clearInterval(t); }, [load]);
 
@@ -705,18 +712,67 @@ function BuildQueuePanel() {
       const d = await r.json();
       if (!r.ok) window.alert(d.error || `${verb} failed`);
     } catch {}
-    setBusy(false); load();
+    setBusy(false); load();   // reload picks up the one-shot IDE auto-disable after a Tier 3 approve
   };
   const setRun = async (id, on) => {
     await fetch(`/api/build/blocks/${id}/${on ? 'start' : 'stop'}`, { method: 'POST' }).catch(() => {});
     load();
   };
 
+  // IDE mode is password-gated and one-shot: confirm the password → enable →
+  // approve the Tier 3 block → it disarms itself. Turning it off needs no password.
+  const enableIde = async () => {
+    setIdeBusy(true);
+    try {
+      const a = await fetch('/api/auth/reauth', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ purpose: 'ide-mode', password: pw }) });
+      const auth = await a.json().catch(() => ({}));
+      if (!a.ok) { window.alert(auth.error || 'Password not confirmed'); return; }
+      const r = await fetch('/api/build/ide-mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ active: true, reauthToken: auth.token }) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { window.alert(d.error || 'Could not enable IDE mode'); return; }
+      setAskPw(false); setPw('');
+    } finally { setIdeBusy(false); load(); }
+  };
+  const disableIde = async () => {
+    setIdeBusy(true);
+    try { await fetch('/api/build/ide-mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ active: false }) }).catch(() => {}); }
+    finally { setIdeBusy(false); load(); }
+  };
+
   const pending = items.filter(i => i.status === 'pending');
   const stopped = blocks.filter(b => !b.running);
+  const needsTier3 = pending.some(i => i.permissions?.shell === true);
 
   return (
     <div className="admin-card">
+      {(needsTier3 || ide.active) && (
+        <div style={{ border: `1px solid ${ide.active ? '#f87171' : 'rgba(245,158,11,.5)'}`, borderRadius: 8, padding: 10, marginBottom: 10, background: ide.active ? 'rgba(239,68,68,.08)' : 'rgba(245,158,11,.06)' }}>
+          {ide.active ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <b style={{ fontSize: 12, color: '#f87171' }}>⚠ IDE MODE ON — kernel is editable</b>
+              <span style={{ fontSize: 11, color: 'var(--text-dim)', flex: 1 }}>Approve the Tier 3 block now — IDE mode turns itself off the moment you do.</span>
+              <button type="button" className="settings-btn settings-btn--secondary" style={{ fontSize: 11 }} disabled={ideBusy} onClick={disableIde}>Turn off now</button>
+            </div>
+          ) : !askPw ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <b style={{ fontSize: 12 }}>Tier 3 (shell) block waiting</b>
+              <span style={{ fontSize: 11, color: 'var(--text-dim)', flex: 1 }}>Approving a shell block needs IDE mode. It stays on only until you approve, then disarms automatically.</span>
+              {hasAccount
+                ? <button type="button" className="settings-btn" style={{ fontSize: 11 }} disabled={ideBusy} onClick={() => setAskPw(true)}>Enable IDE mode…</button>
+                : <span style={{ fontSize: 11, color: '#fbbf24' }}>Set a password first in Settings → Security.</span>}
+            </div>
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>Confirm your password to enable IDE mode:</span>
+              <input type="password" autoFocus value={pw} onChange={e => setPw(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter' && pw && !ideBusy) enableIde(); }}
+                placeholder="Password" style={{ fontSize: 12, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--border, #1f2937)', background: 'rgba(0,0,0,.25)', color: 'var(--text, #e6edf3)' }} />
+              <button type="button" className="settings-btn" style={{ fontSize: 11 }} disabled={ideBusy || !pw} onClick={enableIde}>{ideBusy ? 'Enabling…' : 'Enable'}</button>
+              <button type="button" className="settings-btn settings-btn--secondary" style={{ fontSize: 11 }} disabled={ideBusy} onClick={() => { setAskPw(false); setPw(''); }}>Cancel</button>
+            </div>
+          )}
+        </div>
+      )}
       {pending.length === 0 && <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>No builds waiting for your approval.</div>}
       {pending.map(item => (
         <div key={item.id} style={{ border: '1px solid var(--border, #1f2937)', borderRadius: 8, padding: 10, marginBottom: 8 }}>

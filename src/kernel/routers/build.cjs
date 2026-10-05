@@ -80,6 +80,22 @@ module.exports = function createBuildRouter(deps) {
   router.get('/ide-mode', (_req, res) => res.json(ideMode.status()));
   router.post('/ide-mode', (req, res) => {
     if (typeof req.body?.active !== 'boolean') return res.status(400).json({ error: 'active:boolean required — explicit toggle only (B7)' });
+    // Turning IDE mode OFF is always allowed (disarming a privileged mode must
+    // never be blocked). Turning it ON is password-gated: an account must exist
+    // (set one first), and the caller must present a fresh re-auth token for
+    // purpose 'ide-mode' — the same single-use, 2-minute token the credential
+    // export uses (POST /api/auth/reauth). No token, no kernel-editable mode.
+    if (req.body.active === true) {
+      let hasAccount = true;
+      try { hasAccount = require('../server-utils/sessionValidator.cjs').hasAccount(); } catch { hasAccount = false; }
+      if (!hasAccount) {
+        return res.status(412).json({ ok: false, code: 'NO_ACCOUNT', error: 'Set a password first (Security) before enabling IDE mode — a kernel-editable switch with no account is not allowed.' });
+      }
+      const reauth = require('../reauth.cjs');
+      if (!reauth.consume(req.body.reauthToken, 'ide-mode')) {
+        return res.status(401).json({ ok: false, code: 'REAUTH_REQUIRED', error: 'Confirm your password to enable IDE mode (POST /api/auth/reauth {"purpose":"ide-mode","password":...} first).' });
+      }
+    }
     res.json(ideMode.setActive(req.body.active, { operator: operator(req) }));
   });
   router.get('/ide-mode/audit', (req, res) => res.json({ lines: ideMode.readAudit(Number(req.query.lines) || 100) }));

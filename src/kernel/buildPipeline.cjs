@@ -207,7 +207,8 @@ function createBuildPipeline({
     if (item.status !== 'pending') return { ok: false, error: `approval already ${item.status}` };
 
     // B7 — Tier 3 (shell) requires the deliberate IDE mode switch, never implicit.
-    if (item.permissions?.shell === true) {
+    const tier3 = item.permissions?.shell === true;
+    if (tier3) {
       if (!ideMode.isActive()) {
         return { ok: false, error: 'Tier 3 build (shell access): enable IDE mode first — POST /api/build/ide-mode {"active":true}', tier3: true };
       }
@@ -225,8 +226,17 @@ function createBuildPipeline({
     }
     runState.registerManual(item.blockId, { by: `pipeline:approved`, reset: true });
     const scan = rescan(`approve:${item.blockId}`);
-    return { ok: true, stage: 'live', blockId: item.blockId, approval: decision.item, rescan: scan,
-             runState: runState.isRunning(item.blockId) ? 'running' : 'stopped', note: `manual-start block — POST /api/build/blocks/${item.blockId}/start to begin serving` };
+    // One-shot: a Tier 3 approval consumes IDE mode and disarms it immediately,
+    // so the kernel-editable window can never be left open after the install it
+    // was turned on for.
+    let ideModeAutoDisabled = false;
+    if (tier3 && ideMode.isActive()) {
+      ideMode.setActive(false, { operator: approver, reason: `one-shot: auto-disabled after Tier 3 approval of ${item.blockId}` });
+      ideModeAutoDisabled = true;
+    }
+    return { ok: true, stage: 'live', blockId: item.blockId, approval: decision.item, rescan: scan, ideModeAutoDisabled,
+             runState: runState.isRunning(item.blockId) ? 'running' : 'stopped',
+             note: `manual-start block — POST /api/build/blocks/${item.blockId}/start to begin serving${ideModeAutoDisabled ? ' · IDE mode auto-disabled' : ''}` };
   }
 
   function rejectBuild(approvalId, { approver = 'operator', note } = {}) {
