@@ -42,7 +42,9 @@ describe('buildState', () => {
   });
   it('ignores OS junk, server code and the stamp itself', () => {
     built();
-    put('src/blocks/notes/.DS_Store', 'junk'); put('src/blocks/notes/._index.jsx', 'junk');
+    put('src/blocks/notes/.DS_Store', 'junk'); put('src/blocks/notes/.aeon.runtime.json', '{"_generated":"a"}'); put('src/blocks/notes/._index.jsx', 'junk');
+    expect(buildState(root).stale).toBe(false);
+    put('src/blocks/notes/.aeon.runtime.json', '{"_generated":"later"}');
     put('server/server.js', 'changed'); put('data/x.json', '{}');
     expect(buildState(root).stale).toBe(false);
     expect(fs.existsSync(path.join(root, 'dist', STAMP_FILE))).toBe(true);

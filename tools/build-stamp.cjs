@@ -21,7 +21,9 @@ const STAMP_FILE = '.aeon-build-stamp';
 // here: changing them never changes what the browser loads.
 const FILES = ['index.html', 'vite.config.js', 'package.json', 'package-lock.json'];
 const TREES = ['src', 'public'];
-const SKIP = (name) => name === '.DS_Store' || name.startsWith('._') || name === 'node_modules';
+// `.aeon.*` is what AEON writes about a running block (`.aeon.runtime.json`
+// carries a boot timestamp), so counting it would make every launch rebuild.
+const SKIP = (name) => name === '.DS_Store' || name.startsWith('._') || name.startsWith('.aeon.') || name === 'node_modules';
 
 function walk(dir, rel, out) {
   let entries;
