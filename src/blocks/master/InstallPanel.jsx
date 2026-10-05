@@ -35,7 +35,7 @@
  * and a block filed silently under Unsorted is one they have to go looking for.
  */
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { Download, FolderInput, Check, AlertTriangle, Loader2 } from 'lucide-react';
+import { Download, FolderInput, Check, AlertTriangle, Loader2, Upload } from 'lucide-react';
 import { getEffectiveBlockGroups } from '../../kernel/blockRegistry.js';
 
 const DIM = { fontSize: 12.5, color: 'var(--dim, #9aa3b2)' };
@@ -159,6 +159,8 @@ export default function InstallPanel({ onInstalled, onBlockLayoutChange }) {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);   // { ok, id, label, detail, queued, error }
   const [store, setStore] = useState(null);     // what GET /api/store/source said, once
+  const [dragOver, setDragOver] = useState(false);
+  const [fileName, setFileName] = useState('');  // the .aeon being installed from disk, while it runs
 
   // Read once on mount. Not refreshed after an install: the count is a hint
   // about what a bare name can reach, not a live catalog.
@@ -178,20 +180,10 @@ export default function InstallPanel({ onInstalled, onBlockLayoutChange }) {
     return () => { alive = false; };
   }, []);
 
-  const install = useCallback(async () => {
-    const cls = classifySource(source);
-    if (cls.kind === 'empty') {
-      setResult({ ok: false, error: 'There is nothing to install yet. Paste a store link or type a block name.' });
-      return;
-    }
-    if (cls.kind === 'insecure') {
-      setResult({ ok: false, error: 'That link is not secure: it starts with http:// instead of https://. A block is a program, so AEON will not download one over a link that could be tampered with on the way. Ask the store for an https link.' });
-      return;
-    }
-    if (cls.kind === 'unknown') {
-      setResult({ ok: false, error: 'That does not look like a store link or a block name. A link starts with https://, and a name is a single word, like reports.' });
-      return;
-    }
+  // The one POST both the link/name field and the dropped file go through. It
+  // owns busy + result; installOutcome reads the id from the server's reply
+  // (blockId/purchase), falling back to cls.body.name for a bare-name install.
+  const postInstall = useCallback(async (cls) => {
     setBusy(true);
     setResult(null);   // also takes down the last section chooser, so the next starts fresh
     try {
@@ -210,8 +202,58 @@ export default function InstallPanel({ onInstalled, onBlockLayoutChange }) {
       setResult({ ok: false, error: `The install could not run: ${e.message}` });
     } finally {
       setBusy(false);
+      setFileName('');
     }
-  }, [source, onInstalled]);
+  }, [onInstalled]);
+
+  const install = useCallback(async () => {
+    const cls = classifySource(source);
+    if (cls.kind === 'empty') {
+      setResult({ ok: false, error: 'There is nothing to install yet. Paste a store link, type a block name, or drop a .aeon file below.' });
+      return;
+    }
+    if (cls.kind === 'insecure') {
+      setResult({ ok: false, error: 'That link is not secure: it starts with http:// instead of https://. A block is a program, so AEON will not download one over a link that could be tampered with on the way. Ask the store for an https link.' });
+      return;
+    }
+    if (cls.kind === 'unknown') {
+      setResult({ ok: false, error: 'That does not look like a store link or a block name. A link starts with https://, and a name is a single word, like reports. To install a file you downloaded, drop it in the box below.' });
+      return;
+    }
+    await postInstall(cls);
+  }, [source, postInstall]);
+
+  // A .aeon the operator downloaded (a paid block from the store, say). It is
+  // read in the browser to base64 and sent to the SAME install route, which
+  // accepts { base64 } — checked and booted once, then left stopped, like any
+  // install. No terminal; the file never has to be a public link.
+  const onFile = useCallback(async (file) => {
+    if (!file) return;
+    if (!/\.aeon$/i.test(file.name)) {
+      setResult({ ok: false, error: `${file.name} is not a .aeon block file. Drop the .aeon you downloaded from the store.` });
+      return;
+    }
+    if (file.size > 9 * 1024 * 1024) {
+      setResult({ ok: false, error: `${file.name} is larger than 9 MB — too big to install from the browser yet. Install it from your computer's terminal instead:  aeon install "${file.name}"` });
+      return;
+    }
+    setResult(null);
+    setFileName(file.name);
+    let base64;
+    try {
+      base64 = await new Promise((resolve, reject) => {
+        const fr = new FileReader();
+        fr.onerror = () => reject(new Error('the file could not be read'));
+        fr.onload = () => { const s = String(fr.result || ''); const i = s.indexOf(','); resolve(i >= 0 ? s.slice(i + 1) : s); };
+        fr.readAsDataURL(file);
+      });
+    } catch (e) {
+      setFileName('');
+      setResult({ ok: false, error: `${file.name} could not be read: ${e.message}` });
+      return;
+    }
+    await postInstall({ kind: 'file', body: { base64 } });
+  }, [postInstall]);
 
   const count = Array.isArray(store?.items) ? store.items.length : 0;
   return (
@@ -250,6 +292,39 @@ export default function InstallPanel({ onInstalled, onBlockLayoutChange }) {
             Store connected — {count} {count === 1 ? 'block' : 'blocks'} available by name.
           </span>
         )}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }} aria-hidden="true">
+        <span style={{ flex: 1, height: 1, background: 'var(--line, #272d39)' }} />
+        <span style={{ ...DIM, fontSize: 12 }}>or install a file you downloaded</span>
+        <span style={{ flex: 1, height: 1, background: 'var(--line, #272d39)' }} />
+      </div>
+      <div
+        onDragOver={(e) => { e.preventDefault(); if (!busy) setDragOver(true); }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(e) => { e.preventDefault(); setDragOver(false); if (!busy) onFile(e.dataTransfer.files && e.dataTransfer.files[0]); }}
+        style={{
+          display: 'grid', gap: 6, justifyItems: 'center', textAlign: 'center',
+          padding: '18px 14px', borderRadius: 8, cursor: busy ? 'default' : 'pointer',
+          border: `1px dashed ${dragOver ? 'var(--accent, #00f2ff)' : 'var(--line, #272d39)'}`,
+          background: dragOver ? 'rgba(0,242,255,0.06)' : 'rgba(0,0,0,0.15)',
+        }}
+      >
+        <input id="master-install-file" type="file" accept=".aeon" style={{ display: 'none' }}
+          onChange={(e) => { onFile(e.target.files && e.target.files[0]); e.target.value = ''; }} />
+        {busy && fileName
+          ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+              <Loader2 size={15} aria-hidden="true" className="spin" /> Installing {fileName}…
+            </span>
+          : <>
+              <Upload size={20} aria-hidden="true" style={{ color: 'var(--accent, #00f2ff)' }} />
+              <div style={{ fontSize: 13 }}>
+                Drag a <b>.aeon</b> file here, or{' '}
+                <label htmlFor="master-install-file" style={{ ...LINK, cursor: 'pointer' }}>browse</label>
+              </div>
+              <div style={{ ...DIM, fontSize: 12, maxWidth: 440 }}>
+                For a block you bought and downloaded. It installs the same way — checked and booted once, then left stopped. No terminal needed.
+              </div>
+            </>}
       </div>
       {result && !result.ok && (
         <p role="alert" style={{
