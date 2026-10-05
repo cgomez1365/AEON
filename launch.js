@@ -134,6 +134,30 @@ function markDependenciesInstalled(root) {
   catch { return false; }
 }
 
+// ── The interface: built, and built from what is on disk now ───────────────
+// A block's screen only exists after `npm run build`, and the launcher built
+// only when dist/ was missing — so closing and reopening AEON, or Settings →
+// Restart, never showed a block installed since the last build. tools/build-
+// stamp.cjs records what the bundle was made from; this rebuilds when that no
+// longer matches. A failed rebuild keeps the old interface and says so: a
+// working AEON without the newest screen beats no AEON.
+function ensureInterface(root, { run, say = () => {}, warnFn = () => {} } = {}) {
+  const { buildState } = require('./tools/build-stamp.cjs');
+  const state = buildState(root);
+  if (!state.stale) return { built: false, ok: true, reason: null };
+  const why = { missing: 'Building the interface (one time)...',
+    unstamped: 'Refreshing the interface...',
+    changed: 'New or changed blocks found — rebuilding the interface (a minute)...' }[state.reason];
+  say(why);
+  try { (run || ((cmd) => execSync(cmd, { cwd: root, stdio: 'inherit', shell: true })))('npm run build'); }
+  catch {
+    if (state.reason === 'missing') return { built: false, ok: false, reason: state.reason };
+    warnFn('Could not rebuild the interface — using the previous one. Run "npm run build" to see why.');
+    return { built: false, ok: false, reason: state.reason };
+  }
+  return { built: true, ok: true, reason: state.reason };
+}
+
 // ── Which port, and whether AEON is what answers there ─────────────────────
 // Every launcher assumed 3001 and opened the browser on the first HTTP reply
 // of any kind. With another program on 3001 the customer got that program's
@@ -340,7 +364,7 @@ if (require.main !== module) {
     INSTALL_MARKER, dependenciesReady, markDependenciesInstalled,
     choosePort, isAeonPing, probeAeon, runningAeon, waitForAeon,
     envValue, vaultKeyPlan, recoverVault, createKeyslots, recoverOnly,
-    nodeDownloadAdvice,
+    nodeDownloadAdvice, ensureInterface,
   };
   return;
 }
@@ -705,11 +729,10 @@ async function main() {
   }
   ok('Dependencies ready.');
 
-  // ── 6. frontend build (one-time; server serves dist/) ───────────────────
-  if (!fs.existsSync(path.join(ROOT, 'dist', 'index.html'))) {
-    info('Building the interface (one time)...');
-    try { execSync('npm run build', { cwd: ROOT, stdio: 'inherit', shell: true }); }
-    catch { fail('Interface build failed. Run "npm run build" to see details.'); process.exit(1); }
+  // ── 6. frontend build (server serves dist/; rebuilt when blocks changed) ──
+  {
+    const r = ensureInterface(ROOT, { say: info, warnFn: warn });
+    if (!r.ok && r.reason === 'missing') { fail('Interface build failed. Run "npm run build" to see details.'); process.exit(1); }
   }
   ok('Interface ready.');
 
@@ -755,7 +778,13 @@ async function main() {
   const startServer = () => {
     const child = spawn('node', ['server/server.js'], { cwd: ROOT, stdio: 'inherit', env: { ...process.env, PORT, AEON_SUPERVISED: '1' } });
     child.on('exit', (code) => {
-      if (code === 75) { p('   Restarting AEON...', GR); startServer(); return; }
+      if (code === 75) {
+        p('   Restarting AEON...', GR);
+        // A block installed while AEON ran has no screen until the interface
+        // is rebuilt; Restart is when the operator expects it to appear.
+        ensureInterface(ROOT, { say: info, warnFn: warn });
+        startServer(); return;
+      }
       // A second double-click while AEON runs: this server refuses at once
       // (one AEON per home, src/kernel/runtime.cjs) and exits before the
       // probe below first fires, so the icon only printed a message where it

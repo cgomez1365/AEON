@@ -16,7 +16,7 @@ export const SELF_REPORTED = { 'x-aeon-self-reported': '1' };
 
 // True tonight: stop/start/remove/restore change the kernel at once, but the
 // block list and nav in the UI are built into the bundle.
-export const UI_NOTE = 'The screen updates after `npm run build` and a reload of this tab — no restart needed.';
+export const UI_NOTE = 'Close AEON and open it again to load the new screen — it rebuilds the interface on start. (Settings → Restart does the same.)';
 
 /** 'Running' | 'Stopped' from a kernel state object. */
 export function runLabel(state) {

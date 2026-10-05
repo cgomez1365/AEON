@@ -230,11 +230,12 @@ describe('Master → Install, wired as the helpers say', () => {
     expect(code).toMatch(/const SELF_REPORTED = \{ 'x-aeon-self-reported': '1' \};/);
   });
 
-  it('says the block lands stopped, and that its screen needs a build — not that AEON starts it', () => {
+  it('says the block lands stopped, and that its screen needs AEON closed and opened again — not that AEON starts it', () => {
     expect(code).not.toMatch(/starts it, and opens its screens/);
     expect(code).toMatch(/It then lands stopped/);
     expect(chooser).toMatch(/start it in Settings → Blocks\. \$\{UI_NOTE\}/);
-    expect(code).toMatch(/npm run build/);
+    expect(code).toMatch(/Close AEON and open it again/);
+    expect(code).not.toMatch(/no restart needed/i);
   });
 
   it('a hidden section named again is shown again, so the block is not sent to Unsorted', () => {

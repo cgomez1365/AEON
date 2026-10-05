@@ -121,7 +121,7 @@ describe('uninstall moves a block aside; restore puts it back; nothing is delete
     expect(commandRescans).toBe(1);
     // Its run state is forgotten, so a later install starts clean.
     expect(rs.listManual().find((b) => b.blockId === 'council')).toBeUndefined();
-    expect(r.body.ui).toMatch(/npm run build/);
+    expect(r.body.ui).toMatch(/opened again/);
   });
 
   it('names the blocks that depend on the one being removed', async () => {

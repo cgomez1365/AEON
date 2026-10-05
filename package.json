@@ -14,7 +14,7 @@
   "scripts": {
     "aeon": "node tools/aeon-cli.cjs",
     "dev": "vite",
-    "build": "node scripts/gen-block-routes.cjs --check && node scripts/gen-block-docs.cjs && node tools/copy-assets.mjs && vite build",
+    "build": "node scripts/gen-block-routes.cjs --check && node scripts/gen-block-docs.cjs && node tools/copy-assets.mjs && vite build && node tools/build-stamp.cjs --write",
     "prep:docs": "node scripts/gen-block-docs.cjs",
     "preview": "vite preview",
     "server": "node server.cjs",

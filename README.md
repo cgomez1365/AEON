@@ -173,7 +173,7 @@ Runs on your computer. Your keys stay on it. Your documents stay on it too, unle
 
 ## Build your own block
 
-A block is a folder. Drop it in `src/blocks/`, run `npm run prep:routes` and `npm run build`, then mount it with `npm run aeon -- block start my_block` (or restart AEON) — nav, routes, and settings wire themselves from one file. A restart alone is not enough: the interface is only rebuilt by `npm run build`.
+A block is a folder. Drop it in `src/blocks/`, run `npm run prep:routes` and `npm run build`, then mount it with `npm run aeon -- block start my_block` (or restart AEON) — nav, routes, and settings wire themselves from one file. A new block's screen is part of the interface, which is rebuilt when AEON starts: after you add or install a block, **close AEON and open it again** (or press Restart in Settings) and the screen appears — AEON notices the change and rebuilds on its own.
 
 ```
 src/blocks/my_block/

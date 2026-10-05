@@ -146,7 +146,7 @@ module.exports = function createBuildRouter(deps) {
       .map((d) => ({ blockId: d.name.split('@')[0], path: path.join(removedDir, d.name), removedAt: d.name.split('@')[1] }))
       .sort((a, b) => String(b.removedAt).localeCompare(String(a.removedAt)));
   };
-  const UI_NOTE = 'The block\'s screen changes after `npm run build` (then reload the tab); no restart is needed.';
+  const UI_NOTE = 'The block\'s screen loads after AEON is closed and opened again (it rebuilds the interface on start; Settings → Restart does the same).';
 
   // Does git track this block's folder? Remove moves the folder out of the
   // working tree, and the drive's app — like ~/Desktop/AEON — is a checkout

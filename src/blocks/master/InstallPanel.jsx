@@ -46,7 +46,7 @@ const DIM = { fontSize: 12.5, color: 'var(--dim, #9aa3b2)' };
 const SELF_REPORTED = { 'x-aeon-self-reported': '1' };
 // Said with every install that lands: the block list and nav are compiled into
 // the screen bundle (Settings → Blocks says the same).
-const UI_NOTE = 'Its screen appears after `npm run build` and a reload of this tab — no restart needed.';
+const UI_NOTE = 'Close AEON and open it again to load the new screen — it rebuilds the interface on start. (Settings → Restart does the same.)';
 const FIELD = {
   width: '100%', boxSizing: 'border-box', padding: '8px 10px', borderRadius: 6, fontSize: 13, fontFamily: 'inherit',
   background: 'rgba(0,0,0,0.25)', color: 'var(--text, #e6edf3)', border: '1px solid var(--line, #272d39)',

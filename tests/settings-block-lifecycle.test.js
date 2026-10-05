@@ -79,17 +79,17 @@ describe('state, stop, start', () => {
     expect(lc.runLabel(r.data)).toBe('Running');
   });
 
-  it('stop then start round-trips, each with the build+reload note', async () => {
+  it('stop then start round-trips, each with the close-and-reopen note', async () => {
     const c = client();
     const stop = await c.stop('writer');
     expect(stop.ok).toBe(true);
     expect(lc.runLabel(stop.data)).toBe('Stopped');
-    expect(stop.message).toMatch(/npm run build/);
+    expect(stop.message).toMatch(/open it again/);
     expect(lc.runLabel((await c.state('writer')).data)).toBe('Stopped');
     const start = await c.start('writer');
     expect(start.ok).toBe(true);
     expect(lc.runLabel(start.data)).toBe('Running');
-    expect(start.message).toMatch(/reload/);
+    expect(start.message).toMatch(/open it again/);
   });
 
   it('Security refuses to stop, and the kernel\'s own words come back', async () => {
@@ -127,7 +127,7 @@ describe('remove and restore', () => {
     expect(r.data.dependents).toEqual(['council']);
     expect(r.message).toMatch(/council/);
     expect(r.message).toMatch(/degraded/);                   // the kernel's warning, shown
-    expect(r.message).toMatch(/npm run build/);
+    expect(r.message).toMatch(/open it again/);
   });
 
   it('the removed list shows it, and restore brings it back', async () => {
@@ -139,7 +139,7 @@ describe('remove and restore', () => {
     expect(back.ok).toBe(true);
     expect(fs.existsSync(path.join(BLOCKS, 'writer', 'block.manifest.json'))).toBe(true);
     expect(back.message).toMatch(/restored/i);
-    expect(back.message).toMatch(/npm run build/);
+    expect(back.message).toMatch(/open it again/);
     expect((await c.removed()).data.removed.map((x) => x.blockId)).not.toContain('writer');
   });
 

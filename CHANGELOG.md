@@ -18,6 +18,14 @@ tagged; until then its heading says so.
      the audit fixes below. Not tagged; the number stays 3.3.3 by the owner's choice. When a
      release is cut, this heading becomes its number and date. -->
 
+**Close and reopen AEON to load a new block.** A block's routes mount live, but its screen is compiled
+into the interface, and the launcher rebuilt that only when `dist/` was missing — so closing and reopening
+AEON, or Settings → Restart, left a freshly installed block without a screen. `npm run build` now ends by
+stamping `dist/` with a hash of what it was built from (`tools/build-stamp.cjs`); the launcher compares it on
+every start and on every Restart (exit 75) and rebuilds when blocks changed. A failed rebuild keeps the
+previous interface and says so. Every post-install notice now says to close and open AEON instead of
+"no restart needed". Tests: `tests/build-stamp.test.js`.
+
 Install a block without a terminal, approve a shell block without leaving the app, blocks that
 bring their own engine, and a database lockdown. One of these is a security fix you should
 apply to an existing Supabase project.
