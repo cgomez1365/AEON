@@ -1,4 +1,12 @@
 -- AEON Second Brain Sync Schema for Supabase
+-- ===========================================================================
+-- Server-side only. AEON reaches this table from its SERVER with the Supabase
+-- SERVICE ROLE key, which bypasses Row Level Security. RLS is ON and there are
+-- NO policies and NO anon/authenticated grants (db/migrations/002_lock_down_anon.sql
+-- revokes them), so the public anon key can neither read nor write anything here.
+-- A policy with no TO clause applies to PUBLIC, which includes anon, whatever the
+-- policy is NAMED. (Audit 2026-10-04: five of these files did exactly that.)
+-- ===========================================================================
 -- This schema establishes the dual source of truth for the RAG terminal and cloud visualizer.
 
 CREATE TABLE IF NOT EXISTS public.aeon_notes (
@@ -10,9 +18,8 @@ CREATE TABLE IF NOT EXISTS public.aeon_notes (
     last_modified_cloud TIMESTAMP WITH TIME ZONE DEFAULT NOW() -- When it was synced to Supabase
 );
 
--- Establish RLS (Row Level Security) - Safe defaults since this is intended to be accessed via server/daemon
+-- RLS on, no policies: only the server's service role can touch this table.
 ALTER TABLE public.aeon_notes ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Allow service role full access to notes" ON public.aeon_notes FOR ALL USING (true);
 
 -- Create a table specifically for Semantic Subjects (The Secretary Bot's taxonomy)
 CREATE TABLE IF NOT EXISTS public.aeon_subjects (
@@ -22,7 +29,6 @@ CREATE TABLE IF NOT EXISTS public.aeon_subjects (
 );
 
 ALTER TABLE public.aeon_subjects ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Allow service role full access to subjects" ON public.aeon_subjects FOR ALL USING (true);
 
 -- Create a sync metadata table to track the last global sync event
 CREATE TABLE IF NOT EXISTS public.aeon_sync_state (
@@ -36,4 +42,3 @@ VALUES ('global_sync', NOW(), 0)
 ON CONFLICT (id) DO NOTHING;
 
 ALTER TABLE public.aeon_sync_state ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Allow service role full access to sync state" ON public.aeon_sync_state FOR ALL USING (true);

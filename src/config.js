@@ -13,5 +13,3 @@ export const WORKSPACE = AEON_WORKSPACE;
 // Second Brain / Matrix now lives under the block's own Vault. Only the dead,
 // unmounted DataNotes.jsx referenced them, and it has been removed.)
 
-export const SB_URL = import.meta.env.VITE_SUPABASE_URL || '';
-export const SB_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || '';

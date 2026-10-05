@@ -29,7 +29,8 @@ CREATE INDEX IF NOT EXISTS idx_sb_chunks_ts
 
 -- RLS
 ALTER TABLE second_brain_chunks ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "service_role_all" ON second_brain_chunks FOR ALL USING (true) WITH CHECK (true);
+-- service_role bypasses RLS; no policy is needed. (A policy named "service_role_all" with no
+-- TO clause used to be created here: it applied to PUBLIC, i.e. to anon. See audit 2026-10-04.)
 
 -- Similarity search function (called from API)
 CREATE OR REPLACE FUNCTION match_second_brain(

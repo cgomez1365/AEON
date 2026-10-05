@@ -46,31 +46,8 @@ export default function TokenHeatmap() {
       }
       status = hRes.ok ? sRes.status : hRes.status;
     } catch { status = 0; }
-    // Supabase mirror — only when this build was configured with one. It ran
-    // unconditionally before; with no VITE_SUPABASE_URL it fetched
-    // "undefined/rest/v1/…" and rendered an all-zero year as if it were data.
-    const sbUrl = import.meta.env.VITE_SUPABASE_URL;
-    const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-    if (sbUrl && sbKey) {
-      try {
-        const r = await fetch(`${sbUrl}/rest/v1/aeon_blocks?block_tag=eq.activity&select=payload`, { headers: { apikey: sbKey, Authorization: `Bearer ${sbKey}` } });
-        const rows = await r.json();
-        const data = rows?.[0]?.payload || {};
-        const days = []; const now = new Date(); let maxR = 0, totalR = 0, totalT = 0, active = 0;
-        for (let i = 364; i >= 0; i--) {
-          const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i, 12);
-          const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-          const e = data[key] || { requests: 0, tokens: 0 };
-          days.push({ date: key, requests: e.requests, tokens: e.tokens, weekday: d.getDay() });
-          if (e.requests > maxR) maxR = e.requests; totalR += e.requests; totalT += e.tokens; if (e.requests > 0) active++;
-        }
-        setHeatmapData({ days, maxRequests: maxR, totalRequests: totalR, totalTokens: totalT, activeDays: active });
-        setSummary(null);
-        setLoadStatus(undefined);
-        setLoading(false);
-        return;
-      } catch {}
-    }
+    // The browser no longer reads or writes Supabase directly with the anon key (audit 2026-10-04):
+    // cloud sync is the server's job (/api/sync, service role), and the tables answer anon with nothing.
     setLoadStatus(status);
     setLoading(false);
   }, []);

@@ -15,6 +15,12 @@ let supabase = null;
 if (!localOnly) {
   const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
   const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
+  if (supabaseUrl && supabaseKey && !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    // AEON's tables are locked to the service role (db/migrations/002_lock_down_anon.sql): the public
+    // anon key can read and write nothing there. Said at boot instead of surfacing as scattered
+    // "permission denied" errors from every sync.
+    console.warn('[CLOUD] Only an anon key is set. AEON\'s Supabase tables are locked to the service role, so sync and mirror calls will be refused. Set SUPABASE_SERVICE_ROLE_KEY (Settings → Cloud) to use the cloud mirror.');
+  }
   if (supabaseUrl && supabaseKey) {
     try {
       const { createClient } = require('@supabase/supabase-js');

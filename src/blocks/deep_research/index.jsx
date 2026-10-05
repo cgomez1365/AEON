@@ -159,18 +159,7 @@ export default function DeepResearch() {
       const res = await fetch(`/api/research/library?${params}`);
       if (res.ok) { const data = await res.json(); setLibrary(data.research || []); return; }
     } catch {}
-    // Supabase fallback — read research_library from aeon_blocks
-    try {
-      const sbUrl = import.meta.env.VITE_SUPABASE_URL;
-      const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-      const sbRes = await fetch(`${sbUrl}/rest/v1/aeon_blocks?block_tag=eq.research_library&select=payload`, { headers: { apikey: sbKey, Authorization: `Bearer ${sbKey}` } });
-      const rows = await sbRes.json();
-      let items = rows?.[0]?.payload || [];
-      if (librarySearch) items = items.filter(i => (i.query||'').toLowerCase().includes(librarySearch.toLowerCase()));
-      if (librarySort === 'recent') items.sort((a,b) => (b.completed_at||0) - (a.completed_at||0));
-      else if (librarySort === 'oldest') items.sort((a,b) => (a.completed_at||0) - (b.completed_at||0));
-      setLibrary(items.slice(0, 50));
-    } catch {}
+    // (The browser used to fall back to reading Supabase with the anon key here; removed — see audit 2026-10-04.)
   }, [librarySort, librarySearch]);
 
   useEffect(() => {
@@ -186,30 +175,6 @@ export default function DeepResearch() {
     }).catch(() => {});
   }, []);
   useEffect(() => { if (showLibrary) loadLibrary(); }, [showLibrary, loadLibrary]);
-
-  // Restore completed jobs from Supabase on mount (so they survive refresh)
-  useEffect(() => {
-    (async () => {
-      try {
-        const sbUrl = import.meta.env.VITE_SUPABASE_URL;
-        const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-        const r = await fetch(`${sbUrl}/rest/v1/aeon_blocks?block_tag=eq.research_library&select=payload`, { headers: { apikey: sbKey, Authorization: `Bearer ${sbKey}` } });
-        const rows = await r.json();
-        const saved = rows?.[0]?.payload || [];
-        if (saved.length > 0) {
-          setJobs(prev => {
-            const existingIds = new Set(prev.map(j => j.id));
-            const restored = saved.filter(s => !existingIds.has(s.id) && s.result).map(s => ({
-              id: s.id, query: s.query, status: 'done', result: s.result, sources: s.sources || [],
-              progress: { phase: 'done' }, startedAt: (s.completed_at || 0) * 1000, elapsed: 0,
-              category: s.category || '', settings: {},
-            }));
-            return [...prev, ...restored];
-          });
-        }
-      } catch {}
-    })();
-  }, []);
 
   // Poll active tasks
   useEffect(() => {
@@ -551,17 +516,6 @@ IMPORTANT: Do NOT fabricate URLs, citations, or specific statistics that were no
         progress: { phase: 'done', total_sources: allSources.length },
         sources: allSources,
       } : j));
-
-      // Save to Supabase so it appears in library on all devices
-      try {
-        const sbUrl = import.meta.env.VITE_SUPABASE_URL;
-        const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-        const sbRes = await fetch(`${sbUrl}/rest/v1/aeon_blocks?block_tag=eq.research_library&select=payload`, { headers: { apikey: sbKey, Authorization: `Bearer ${sbKey}` } });
-        const rows = await sbRes.json();
-        const existing = rows?.[0]?.payload || [];
-        existing.unshift({ id: jobId, query: q, result: finalReport, sources: allSources, status: 'done', completed_at: Math.floor(Date.now()/1000), stats: { Duration: `${Math.round(elapsed/1000)}s`, Sources: allSources.length } });
-        await fetch(`${sbUrl}/rest/v1/aeon_blocks`, { method: 'POST', headers: { ...{ apikey: sbKey, Authorization: `Bearer ${sbKey}`, 'Content-Type': 'application/json' }, Prefer: 'resolution=merge-duplicates' }, body: JSON.stringify({ block_tag: 'research_library', payload: existing.slice(0, 50), updated_at: new Date().toISOString() }) });
-      } catch {}
     } catch (e) {
       setJobs(prev => prev.map(j => j.id === jobId ? {
         ...j,

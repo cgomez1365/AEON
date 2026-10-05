@@ -32,9 +32,7 @@ INSERT INTO aeon_endpoints (id) VALUES (1) ON CONFLICT DO NOTHING;
 
 ALTER TABLE aeon_endpoints ENABLE ROW LEVEL SECURITY;
 
--- Registry holds no secrets, so the roaming client may READ it with anon,
--- but only the service role may WRITE (desktop is the source of truth).
-CREATE POLICY "anon_read_endpoints" ON aeon_endpoints
-  FOR SELECT TO anon USING (true);
+-- Server only. The registry holds endpoint addresses and role assignments, so it
+-- is not served to anon either (it used to be: "anon_read_endpoints").
 CREATE POLICY "service_write_endpoints" ON aeon_endpoints
   FOR ALL TO service_role USING (true) WITH CHECK (true);

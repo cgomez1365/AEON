@@ -473,8 +473,12 @@ module.exports = (app, deps) => {
         });
       }
 
+      // The lockdown migration goes LAST: the schemas enable RLS and create no anon policy, and
+      // 002 also strips any permissive policy an earlier AEON version left on a project that is
+      // being set up again, and revokes anon/authenticated outright (audit 2026-10-04).
       const schemas = ['supabase_migration_aeon_blocks.sql', 'aeon_vault_schema.sql',
-                        'aeon_notes_schema.sql', 'cloud_relay_schema.sql', 'aeon_governance_schema.sql'];
+                        'aeon_notes_schema.sql', 'cloud_relay_schema.sql', 'aeon_governance_schema.sql',
+                        'migrations/002_lock_down_anon.sql'];
       const dbDir = path.join(ROOT, 'db');
       const applied = [];
       const skipped = [];

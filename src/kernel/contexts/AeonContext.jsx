@@ -2,7 +2,6 @@ import React, { createContext, useContext, useState, useEffect, useCallback } fr
 import { collection, onSnapshot, doc, setDoc, deleteDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from './AuthContext';
-import { getSupabase } from '../supabase';
 import { authFetch } from '../auth';
 import { loadLinks, saveLinks, readLocalLinks } from './linksStore';
 
@@ -31,20 +30,6 @@ const syncToFirestore = async (key, data) => {
   } catch (e) {
     console.error(`[AEON] Firestore sync error (${key}):`, e);
   }
-};
-
-/** Mirror block data to Supabase aeon_blocks table (non-blocking). */
-const mirrorToSupabase = async (blockTag, payload) => {
-  // BO-K — the client is resolved at runtime now. Still non-blocking: callers
-  // fire and forget, and an unconfigured install returns null exactly as before.
-  const supabase = await getSupabase();
-  if (!supabase) return;
-  supabase
-    .from('aeon_blocks')
-    .upsert({ block_tag: blockTag, payload, updated_at: new Date().toISOString() }, { onConflict: 'block_tag' })
-    .then(({ error }) => {
-      if (error) console.error(`[AEON] Supabase mirror error (${blockTag}):`, error.message);
-    });
 };
 
 // ── Provider ─────────────────────────────────────────────────────────
@@ -172,15 +157,6 @@ export function AeonProvider({ children }) {
     return r;
   }, []);
 
-  // ── Supabase auto-mirror on Firebase state changes ─────────────────
-  useEffect(() => {
-    if (clients.length > 0) mirrorToSupabase('clients', clients);
-  }, [clients]);
-
-  useEffect(() => {
-    if (inventory.length > 0) mirrorToSupabase('inventory', inventory);
-  }, [inventory]);
-
   // ── TRASH / RECOVERY ───────────────────────────────────────────────
   const moveToTrash = useCallback((item, storeName) => {
     const deletedItem = {
@@ -259,7 +235,6 @@ export function AeonProvider({ children }) {
       const updated = { ...scheduler, [store]: [...scheduler[store], newItem] };
       setScheduler(updated);
       syncToFirestore('scheduler', updated);
-      mirrorToSupabase('scheduler', updated);
     } else if (args.action === 'delete') {
       const target = args.targetTitle?.toLowerCase();
       const itemToDelete = scheduler[store].find(i =>
@@ -270,7 +245,6 @@ export function AeonProvider({ children }) {
         const updated = { ...scheduler, [store]: scheduler[store].filter(i => i.id !== itemToDelete.id) };
         setScheduler(updated);
         syncToFirestore('scheduler', updated);
-        mirrorToSupabase('scheduler', updated);
       }
     } else if (args.action === 'complete') {
       const target = args.targetTitle?.toLowerCase();
@@ -283,7 +257,6 @@ export function AeonProvider({ children }) {
       };
       setScheduler(updated);
       syncToFirestore('scheduler', updated);
-      mirrorToSupabase('scheduler', updated);
     } else if (args.action === 'update') {
       const target = args.targetTitle?.toLowerCase();
       const updated = {
@@ -295,14 +268,12 @@ export function AeonProvider({ children }) {
       };
       setScheduler(updated);
       syncToFirestore('scheduler', updated);
-      mirrorToSupabase('scheduler', updated);
     }
   }, [scheduler, moveToTrash]);
 
   const updateSchedulerData = useCallback((data) => {
     setScheduler(data);
     syncToFirestore('scheduler', data);
-    mirrorToSupabase('scheduler', data);
   }, []);
 
   // ── CLIENTS (Firebase-synced via "clients" collection) ─────────────
@@ -311,7 +282,6 @@ export function AeonProvider({ children }) {
     const newId = client.id || Date.now().toString();
     const newClient = { ...client, invoices: client.invoices || [] };
     await setDoc(doc(db, "clients", newId), newClient);
-    mirrorToSupabase('clients', [...clients, { id: newId, ...newClient }]);
   };
 
   const updateClients = async (data) => {
@@ -321,7 +291,6 @@ export function AeonProvider({ children }) {
         await setDoc(doc(db, "clients", c.id.toString()), c, { merge: true });
       }
     }
-    mirrorToSupabase('clients', data);
   };
 
   const manageInvoice = async (args) => {
@@ -358,13 +327,11 @@ export function AeonProvider({ children }) {
       delete newClient.action;
       delete newClient.clientName;
       await setDoc(doc(db, "clients", newClient.id.toString()), newClient);
-      mirrorToSupabase('clients', [...clients, newClient]);
     } else if (args.action === 'delete') {
       const clientToDelete = clients.find(c => c.name.toLowerCase().includes(args.clientName.toLowerCase()));
       if (clientToDelete) {
         moveToTrash(clientToDelete, 'clients');
         await deleteDoc(doc(db, "clients", clientToDelete.id.toString()));
-        mirrorToSupabase('clients', clients.filter(c => c.id !== clientToDelete.id));
       }
     } else {
       const clientToUpdate = clients.find(c => c.name.toLowerCase().includes(args.clientName.toLowerCase()));
@@ -374,7 +341,6 @@ export function AeonProvider({ children }) {
           delete updates.clientName;
           const merged = { ...clientToUpdate, ...updates };
           await setDoc(doc(db, "clients", clientToUpdate.id.toString()), merged, { merge: true });
-          mirrorToSupabase('clients', clients.map(c => c.id === clientToUpdate.id ? merged : c));
       }
     }
   };
@@ -385,7 +351,6 @@ export function AeonProvider({ children }) {
       const updated = [...inventory, { id: Date.now().toString(), ...args }];
       setInventory(updated);
       syncToFirestore('inventory', { items: updated });
-      mirrorToSupabase('inventory', updated);
     } else if (args.action === 'delete') {
       const itemToDel = inventory.find(i => i.name?.toLowerCase().includes(args.name?.toLowerCase()));
       if (itemToDel) {
@@ -393,20 +358,17 @@ export function AeonProvider({ children }) {
         const updated = inventory.filter(i => i.id !== itemToDel.id);
         setInventory(updated);
         syncToFirestore('inventory', { items: updated });
-        mirrorToSupabase('inventory', updated);
       }
     } else if (args.action === 'update' || args.action === 'decrement') {
       const updated = inventory.map(i => i.name?.toLowerCase().includes(args.name?.toLowerCase()) ? { ...i, ...args } : i);
       setInventory(updated);
       syncToFirestore('inventory', { items: updated });
-      mirrorToSupabase('inventory', updated);
     }
   }, [inventory, moveToTrash]);
 
   const updateInventoryList = useCallback((data) => {
     setInventory(data);
     syncToFirestore('inventory', { items: data });
-    mirrorToSupabase('inventory', data);
   }, []);
 
   // ── LINKS ──────────────────────────────────────────────────────────

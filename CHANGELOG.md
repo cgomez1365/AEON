@@ -12,6 +12,60 @@ tagged; until then its heading says so.
      is added here before tagging, and the heading's "not tagged yet" is replaced by
      the date. -->
 
+## Unreleased — on main after v3.3.3 (the version is still 3.3.3)
+
+<!-- Commits on main after the v3.3.3 tag (18dcaed): 5840dc9, 4227d9a, 2a69606, 50dacc1 and
+     the audit fixes below. Not tagged; the number stays 3.3.3 by the owner's choice. When a
+     release is cut, this heading becomes its number and date. -->
+
+Install a block without a terminal, approve a shell block without leaving the app, blocks that
+bring their own engine, and a database lockdown. One of these is a security fix you should
+apply to an existing Supabase project.
+
+- **Security — your Supabase tables answered the public key.** The schemas AEON shipped (and
+  that Settings → Cloud applied) created policies such as `"Allow service role full access"
+  … FOR ALL USING (true)` with no `TO` clause. A policy with no `TO` applies to everyone,
+  including the `anon` role whose key ships in every browser app, so the name changed
+  nothing. Measured on real Postgres with Supabase-style roles, 9 of 10 AEON tables were
+  readable with that key and 6 writable, among them your notes, block data, mirrored
+  document text and the relay's `desktop_commands` queue. `001_enable_rls.sql` did not close
+  it (permissive policies are OR-ed together) and added an `authed_all` policy for
+  `authenticated`, a role anyone can join by signing up on a project that allows sign-ups.
+  Now: every shipped schema enables RLS and creates no policy for anyone but `service_role`
+  (the server's key, which bypasses RLS); **`db/migrations/002_lock_down_anon.sql`** drops
+  every other policy on the AEON tables and revokes the public roles' privileges, so the
+  public key is refused outright (idempotent; Settings → Cloud now applies it last). **If you
+  connected Supabase before this, run 002 on that project.** `node tools/rls-canary.cjs`
+  now reports LOCKED (refused), UNPROVEN (answered but empty, which an empty list cannot tell
+  from an open policy) or EXPOSED, and covers all 19 AEON tables. The relay's re-opening
+  `db/fix_relay_rls.sql` is removed. Tests: every policy in `db/` must be `TO service_role`
+  (`tests/sql-policy-lint.test.js`; the old files fail it with 18 violations in 9 files).
+  The server now warns at boot when it has only an anon key.
+- **The browser no longer talks to those tables.** Deep Research (including saving research
+  to the cloud), Activity, the Dashboard heatmap, the Second Brain visualizer's "cloud index"
+  and a legacy clients/inventory/scheduler mirror read and wrote Supabase directly with the
+  anon key. They are removed; cloud sync is the server's job (`/api/sync`, service role), and
+  `tests/no-browser-anon-supabase.test.js` keeps it that way. The Files block's optional
+  Supabase **Storage** mode is unchanged: keep its bucket private.
+- **Drag a downloaded block into AEON.** Master → Install from the store takes a `.aeon`
+  file you drop or browse to; it goes through the same pipeline as a link or a name, so a paid
+  block never needs a public URL (5840dc9).
+- **IDE mode is reachable, password-gated, and one-shot.** Approving a shell (Tier 3) block
+  needed IDE mode, which had no switch anywhere. Settings → Agent now shows one when such a
+  block waits: it needs your password (the same one-use token as the credential export),
+  refuses with no account, and turns itself off the moment the block is approved (4227d9a).
+- **A failed install no longer blocks the retry.** A leftover `staging/<id>` with no
+  approval waiting is cleared and re-staged; one still awaiting approval is protected
+  (2a69606).
+- **A block can declare an engine.** `contract.engine` names npm packages (exact versions)
+  and a worker; AEON installs exactly those into the block's own folder (scripts off) and
+  starts that one worker without provider keys, so the block needs no shell access. An engine
+  is never auto-built: the approval card lists every package. The boot sync used to erase the
+  declaration, which only an end-to-end install caught (50dacc1).
+- **Store, site and README claims corrected.** The README no longer says nothing in the store
+  is for sale (it sells only blocks Broken Gear Industries wrote), and now states that AEON
+  binds to loopback by default and that the tunnel refuses to start without an account.
+
 ## 3.3.3 — 2026-10-04
 
 <!-- Range: v3.3.0 (f353caa) to f3b31f4, two commits, plus "Release 3.3.3". The number

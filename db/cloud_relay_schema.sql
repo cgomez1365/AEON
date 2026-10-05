@@ -1,4 +1,12 @@
 -- Supabase Schema for AEON Cloud-to-Local Command Relay
+-- ===========================================================================
+-- Server-side only. AEON reaches this table from its SERVER with the Supabase
+-- SERVICE ROLE key, which bypasses Row Level Security. RLS is ON and there are
+-- NO policies and NO anon/authenticated grants (db/migrations/002_lock_down_anon.sql
+-- revokes them), so the public anon key can neither read nor write anything here.
+-- A policy with no TO clause applies to PUBLIC, which includes anon, whatever the
+-- policy is NAMED. (Audit 2026-10-04: five of these files did exactly that.)
+-- ===========================================================================
 -- Run this in your Supabase SQL Editor.
 
 -- 1. Table for enqueuing commands from the web frontend (Vercel)
@@ -31,17 +39,10 @@ CREATE TABLE IF NOT EXISTS bot_status (
 ALTER TABLE desktop_commands ENABLE ROW LEVEL SECURITY;
 ALTER TABLE bot_status ENABLE ROW LEVEL SECURITY;
 
--- 3. Row Level Security Policies
--- Since we use the service role key or API key from Vercel, we can allow authenticated/anon roles
--- to read and write rows for both tables.
-CREATE POLICY "Allow read for all" ON desktop_commands
-    FOR SELECT USING (true);
-
-CREATE POLICY "Allow insert for all" ON desktop_commands
-    FOR INSERT WITH CHECK (true);
-
-CREATE POLICY "Allow update for all" ON desktop_commands
-    FOR UPDATE USING (true) WITH CHECK (true);
-
-CREATE POLICY "Allow all for bot_status" ON bot_status
-    FOR ALL USING (true) WITH CHECK (true);
+-- 3. Access: server only.
+-- This schema used to open both tables to anon ("Allow insert for all" on
+-- desktop_commands, whose `command` column a desktop daemon polls) so a browser
+-- terminal could enqueue commands with the public anon key. That let anyone
+-- holding the anon key queue commands for your desktop and read their output.
+-- The relay is now server-side only: enqueue and poll with the SERVICE ROLE key
+-- from a server you control. No anon or authenticated policies exist.

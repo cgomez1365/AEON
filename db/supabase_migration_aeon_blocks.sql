@@ -1,5 +1,13 @@
 -- AEON 2-Way Sync: Generic Block Storage Table
--- Run this in Supabase SQL Editor to create the aeon_blocks table
+-- Run this in Supabase SQL Editor to create the aeon_blocks table.
+-- ===========================================================================
+-- Server-side only. AEON reaches this table from its SERVER with the Supabase
+-- SERVICE ROLE key, which bypasses Row Level Security. RLS is ON and there are
+-- NO policies and NO anon/authenticated grants (db/migrations/002_lock_down_anon.sql
+-- revokes them), so the public anon key can neither read nor write anything here.
+-- A policy with no TO clause applies to PUBLIC, which includes anon, whatever the
+-- policy is NAMED. (Audit 2026-10-04: five of these files did exactly that.)
+-- ===========================================================================
 
 CREATE TABLE IF NOT EXISTS aeon_blocks (
   block_tag TEXT PRIMARY KEY,
@@ -7,22 +15,7 @@ CREATE TABLE IF NOT EXISTS aeon_blocks (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Enable RLS
 ALTER TABLE aeon_blocks ENABLE ROW LEVEL SECURITY;
-
--- Allow authenticated and anon users full access (matches existing AEON pattern)
-CREATE POLICY "aeon_blocks_all" ON aeon_blocks
-  FOR ALL USING (true) WITH CHECK (true);
-
--- Seed rows for all blocks so upserts work immediately
-INSERT INTO aeon_blocks (block_tag, payload) VALUES
-  ('inventory', '[]'::jsonb),
-  ('clients', '[]'::jsonb),
-  ('scheduler', '{"events":[],"workouts":[],"deadlines":[]}'::jsonb),
-  ('staff', '[]'::jsonb),
-  ('hr_arsenal', '[]'::jsonb),
-  ('logistics', '[]'::jsonb)
-ON CONFLICT (block_tag) DO NOTHING;
 
 -- Index for fast lookups
 CREATE INDEX IF NOT EXISTS idx_aeon_blocks_tag ON aeon_blocks (block_tag);

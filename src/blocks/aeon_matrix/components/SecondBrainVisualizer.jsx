@@ -227,20 +227,8 @@ const SecondBrainVisualizer = () => {
             } else tried.push(`local file: HTTP ${response.status}`);
           } catch (e) { tried.push(`local file: ${e.message}`); }
 
-          if (!fetched) {
-            try {
-              const sbUrl = import.meta.env.VITE_SUPABASE_URL || '';
-              const sbKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
-              const encoded = encodeURIComponent(nodeId);
-              const sbRes = await fetch(
-                `${sbUrl}/rest/v1/documents?or=(metadata->>original_id.eq.${encoded},metadata->>title.eq.${encoded})&select=content,metadata&limit=1`,
-                { headers: { apikey: sbKey, Authorization: `Bearer ${sbKey}` } }
-              );
-              const rows = await sbRes.json();
-              if (rows?.[0]?.content) { setFileContent(rows[0].content); setContentSource('cloud'); fetched = true; }
-              else tried.push('cloud index: no matching document');
-            } catch (e) { tried.push(`cloud index: ${e.message}`); }
-          }
+          // (A "cloud index" step used to read the Supabase `documents` table here with the anon key —
+          // that put document text one public key away from anyone; removed, see audit 2026-10-04.)
 
           if (!fetched) {
             try {
