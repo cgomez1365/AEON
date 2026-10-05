@@ -14,8 +14,8 @@ tagged; until then its heading says so.
 
 ## Unreleased — on main after v3.3.3 (the version is still 3.3.3)
 
-<!-- Commits on main after the v3.3.3 tag (18dcaed): 5840dc9, 4227d9a, 2a69606, 50dacc1 and
-     the audit fixes below. Not tagged; the number stays 3.3.3 by the owner's choice. When a
+<!-- Commits on main after the v3.3.3 tag (18dcaed): 5840dc9, 4227d9a, 2a69606, 50dacc1, the
+     audit fixes below and e56c75e (close and reopen to load a new block). Not tagged; the number stays 3.3.3 by the owner's choice. When a
      release is cut, this heading becomes its number and date. -->
 
 **Close and reopen AEON to load a new block.** A block's routes mount live, but its screen is compiled
@@ -24,7 +24,7 @@ AEON, or Settings → Restart, left a freshly installed block without a screen. 
 stamping `dist/` with a hash of what it was built from (`tools/build-stamp.cjs`); the launcher compares it on
 every start and on every Restart (exit 75) and rebuilds when blocks changed. A failed rebuild keeps the
 previous interface and says so. Every post-install notice now says to close and open AEON instead of
-"no restart needed". Tests: `tests/build-stamp.test.js`.
+"no restart needed". Tests: `tests/build-stamp.test.js` (e56c75e).
 
 Install a block without a terminal, approve a shell block without leaving the app, blocks that
 bring their own engine, and a database lockdown. One of these is a security fix you should
