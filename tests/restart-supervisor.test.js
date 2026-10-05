@@ -58,7 +58,7 @@ describe('Windows launcher', () => {
   it('loops on errorlevel 75 under AEON_SUPERVISED', () => {
     const bat = carry.windowsLauncher();
     expect(bat).toMatch(/set AEON_SUPERVISED=1/);
-    expect(bat).toMatch(/if "%errorlevel%"=="75" \(echo {3}Restarting AEON\.\.\. & goto run\)/);
+    expect(bat).toMatch(/if "%errorlevel%"=="75" \(\r?\n\s+echo {3}Restarting AEON\.\.\.\r?\n[\s\S]*?\r?\n\s+goto run\r?\n\)/);
   });
 });
 

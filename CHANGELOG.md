@@ -18,6 +18,14 @@ tagged; until then its heading says so.
      audit fixes below and e56c75e (close and reopen to load a new block). Not tagged; the number stays 3.3.3 by the owner's choice. When a
      release is cut, this heading becomes its number and date. -->
 
+**The carried drive now rebuilds too.** Found live on the owner's drive: the drive's launchers start
+`server.cjs` themselves, so the stale-build check in `launch.js` never ran there — a block installed on the
+drive stayed screenless through every restart, and the dashboard's own warning told a customer to run
+`npm run build`, which a customer cannot. The check is now `tools/ensure-interface.cjs`, shared by
+`launch.js` and all three drive launchers (before the first start and after every Restart); the drive points it
+at its own npm via `AEON_NPM_CLI`. An install with no build tools (installed with `--omit=dev`) keeps its
+interface and says how to fix it. The warning now says to close and reopen AEON. Tests: `tests/build-stamp.test.js`.
+
 **Close and reopen AEON to load a new block.** A block's routes mount live, but its screen is compiled
 into the interface, and the launcher rebuilt that only when `dist/` was missing — so closing and reopening
 AEON, or Settings → Restart, left a freshly installed block without a screen. `npm run build` now ends by

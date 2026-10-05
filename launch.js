@@ -141,21 +141,8 @@ function markDependenciesInstalled(root) {
 // stamp.cjs records what the bundle was made from; this rebuilds when that no
 // longer matches. A failed rebuild keeps the old interface and says so: a
 // working AEON without the newest screen beats no AEON.
-function ensureInterface(root, { run, say = () => {}, warnFn = () => {} } = {}) {
-  const { buildState } = require('./tools/build-stamp.cjs');
-  const state = buildState(root);
-  if (!state.stale) return { built: false, ok: true, reason: null };
-  const why = { missing: 'Building the interface (one time)...',
-    unstamped: 'Refreshing the interface...',
-    changed: 'New or changed blocks found — rebuilding the interface (a minute)...' }[state.reason];
-  say(why);
-  try { (run || ((cmd) => execSync(cmd, { cwd: root, stdio: 'inherit', shell: true })))('npm run build'); }
-  catch {
-    if (state.reason === 'missing') return { built: false, ok: false, reason: state.reason };
-    warnFn('Could not rebuild the interface — using the previous one. Run "npm run build" to see why.');
-    return { built: false, ok: false, reason: state.reason };
-  }
-  return { built: true, ok: true, reason: state.reason };
+function ensureInterface(root, opts) {
+  return require('./tools/ensure-interface.cjs').ensureInterface(root, opts);
 }
 
 // ── Which port, and whether AEON is what answers there ─────────────────────

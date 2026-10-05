@@ -72,6 +72,6 @@ describe('the stale-screen notice', () => {
     const src = code('src', 'components', 'DesktopLayout.jsx');
     expect(src).toMatch(/setUiStale\(r\.headers\.get\('X-AEON-UI-Stale'\)\)/);
     expect(src).toMatch(/\{uiStale && \(\s*<div role="alert"/);
-    expect(src).toMatch(/npm run build<\/code> in the AEON folder and reload this tab/);
+    expect(src).toMatch(/until you close AEON and open it again — it rebuilds this screen when it starts/);
   });
 });

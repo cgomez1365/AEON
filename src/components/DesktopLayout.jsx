@@ -439,7 +439,7 @@ export default function DesktopLayout({ chatHistory, auditLogs }) {
         <div id="aeon-main" role="main" style={{ height: "100%", width: "100%", overflowY: "auto", paddingTop: "52px" }}>
           {uiStale && (
             <div role="alert" style={{ margin: '8px 16px', padding: '8px 12px', borderRadius: 6, fontSize: 12, lineHeight: 1.5, color: '#ffaa00', background: 'rgba(255,170,0,0.08)', border: '1px solid rgba(255,170,0,0.35)' }}>
-              This screen is older than AEON's code ({String(uiStale).replace(/built=/, 'built ').replace(/source=/, 'code changed ')}). Some buttons may not work until you run <code>npm run build</code> in the AEON folder and reload this tab.
+              This screen is older than AEON's code ({String(uiStale).replace(/built=/, 'built ').replace(/source=/, 'code changed ')}). Some buttons may not work, and a newly installed block may be missing, until you close AEON and open it again — it rebuilds this screen when it starts.
             </div>
           )}
           <Suspense fallback={

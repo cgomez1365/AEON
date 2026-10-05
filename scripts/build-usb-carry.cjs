@@ -518,6 +518,13 @@ if ! "$NODE" -e "require('express')" >/dev/null 2>&1; then
   "$NODE" "$ROOT/runtime/npm/bin/npm-cli.js" ci --omit=dev --no-audit --no-fund || { echo "  [X] Reinstall failed."; exit 1; }
 fi
 
+# A block installed since the last build has no screen until the interface is
+# rebuilt; this is what makes "close AEON and open it again" load it.
+export AEON_NPM_CLI="$ROOT/runtime/npm/bin/npm-cli.js"
+if [ -f "$APP/tools/ensure-interface.cjs" ]; then
+  "$NODE" "$APP/tools/ensure-interface.cjs" || { echo "  [X] No interface to serve and it could not be built."; exit 1; }
+fi
+
 echo
 echo "  AEON (carried)  http://localhost:$PORT"
 echo "  data            $AEON_HOME"
@@ -532,6 +539,7 @@ while :; do
   "$NODE" server.cjs; rc=$?
   [ "$rc" -eq 75 ] || exit "$rc"
   echo "  Restarting AEON..."
+  [ -f "$APP/tools/ensure-interface.cjs" ] && { "$NODE" "$APP/tools/ensure-interface.cjs" || true; }
 done
 `;
 }
@@ -573,6 +581,13 @@ if ! "$NODE" -e "require('express')" >/dev/null 2>&1; then
   "$NODE" "$ROOT/runtime/npm/bin/npm-cli.js" ci --omit=dev --no-audit --no-fund || { echo "  [X] Reinstall failed."; exit 1; }
 fi
 
+# A block installed since the last build has no screen until the interface is
+# rebuilt; this is what makes "close AEON and open it again" load it.
+export AEON_NPM_CLI="$ROOT/runtime/npm/bin/npm-cli.js"
+if [ -f "$APP/tools/ensure-interface.cjs" ]; then
+  "$NODE" "$APP/tools/ensure-interface.cjs" || { echo "  [X] No interface to serve and it could not be built."; exit 1; }
+fi
+
 echo
 echo "  AEON (carried)  http://localhost:$PORT"
 echo "  data            $AEON_HOME"
@@ -586,6 +601,7 @@ while :; do
   "$NODE" server.cjs; rc=$?
   [ "$rc" -eq 75 ] || exit "$rc"
   echo "  Restarting AEON..."
+  [ -f "$APP/tools/ensure-interface.cjs" ] && { "$NODE" "$APP/tools/ensure-interface.cjs" || true; }
 done
 `;
 }
@@ -627,6 +643,12 @@ if errorlevel 1 (
   if errorlevel 1 (echo   [X] Reinstall failed. & pause & exit /b 1)
 )
 
+set "AEON_NPM_CLI=%ROOT%\\runtime\\npm\\bin\\npm-cli.js"
+if exist "%APP%\\tools\\ensure-interface.cjs" (
+  "%NODE%" "%APP%\\tools\\ensure-interface.cjs"
+  if errorlevel 1 (echo   [X] No interface to serve and it could not be built. & pause & exit /b 1)
+)
+
 echo.
 echo   AEON (carried)  http://localhost:%PORT%
 echo   data            %AEON_HOME%
@@ -637,7 +659,11 @@ REM Settings -^> RESTART exits with 75 and AEON starts again; any other exit end
 set AEON_SUPERVISED=1
 :run
 "%NODE%" server.cjs
-if "%errorlevel%"=="75" (echo   Restarting AEON... & goto run)
+if "%errorlevel%"=="75" (
+  echo   Restarting AEON...
+  if exist "%APP%\\tools\\ensure-interface.cjs" "%NODE%" "%APP%\\tools\\ensure-interface.cjs"
+  goto run
+)
 echo.
 pause
 endlocal

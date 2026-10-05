@@ -9,6 +9,7 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const { buildState, writeStamp, sourceHash, STAMP_FILE } = require('../tools/build-stamp.cjs');
 const { ensureInterface } = require('../launch.js');
+const tool = require('../tools/ensure-interface.cjs');
 
 let root;
 const put = (rel, body) => { const f = path.join(root, rel); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, body); };
@@ -95,5 +96,37 @@ describe('wiring', () => {
     for (const f of ['src/blocks/master/InstallPanel.jsx', 'src/blocks/settings/blockLifecycle.js', 'src/kernel/routers/build.cjs']) {
       expect(read(f)).not.toMatch(/UI_NOTE = .*no restart/i);
     }
+  });
+});
+
+describe('tools/ensure-interface.cjs (the carried drive starts server.cjs itself)', () => {
+  const read = (f) => fs.readFileSync(new URL(`../${f}`, import.meta.url), 'utf8');
+  it('is the same function launch.js uses', () => expect(typeof tool.ensureInterface).toBe('function'));
+  it('an install without build tools keeps the old interface and says how to fix it', () => {
+    built(); put('src/blocks/voice_studio/index.jsx', 'export default 2');
+    const warned = [];
+    const r = tool.ensureInterface(root, { warnFn: (m) => warned.push(m) });
+    expect(r).toMatchObject({ built: false, ok: false, reason: 'changed', noTools: true });
+    expect(warned.join(' ')).toMatch(/npm ci && npm run build/);
+  });
+  it('with no interface and no build tools it is a hard stop for the launcher', () => {
+    expect(tool.ensureInterface(root)).toMatchObject({ ok: false, reason: 'missing' });
+  });
+  it('builds through the drive\'s own npm-cli when AEON_NPM_CLI points at it', () => {
+    put('node_modules/vite/package.json', '{}');
+    put('npm-cli.js', "require('fs').writeFileSync(require('path').join(process.cwd(),'ran.txt'), process.argv.slice(2).join(' '))");
+    const r = tool.ensureInterface(root, { env: { ...process.env, AEON_NPM_CLI: path.join(root, 'npm-cli.js') } });
+    expect(r).toMatchObject({ built: true, ok: true, reason: 'missing' });
+    expect(fs.readFileSync(path.join(root, 'ran.txt'), 'utf8')).toBe('run build');
+  });
+  it('every carried launcher builds before it serves, and again after a Restart', () => {
+    const src = read('scripts/build-usb-carry.cjs');
+    expect((src.match(/ensure-interface\.cjs/g) || []).length).toBeGreaterThanOrEqual(6);
+    expect(src).toMatch(/Restarting AEON\.\.\."\n  \[ -f "\$APP\/tools\/ensure-interface\.cjs" \] && \{ "\$NODE"/);
+    expect(src).toMatch(/Restarting AEON\.\.\.\n  if exist "%APP%\\\\tools\\\\ensure-interface\.cjs" "%NODE%"[^\n]*\n  goto run/);
+    expect((src.match(/export AEON_NPM_CLI=/g) || []).length).toBe(2);
+  });
+  it('the stale-screen banner no longer sends customers to npm', () => {
+    expect(read('src/components/DesktopLayout.jsx')).not.toMatch(/until you run <code>npm run build/);
   });
 });
