@@ -1082,6 +1082,44 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     return err;
   };
 
+  // A Gemini answer is every text part that is not a thought. A thinking model
+  // (Gemini 3.x) may lead with a `thought: true` part and split its answer over
+  // several; parts[0] read the wrong one, or half of it.
+  const _geminiText = (cand) =>
+    (cand?.content?.parts || []).filter((p) => p && p.thought !== true).map((p) => p.text || '').join('');
+
+  // Google's error as an event or body under HTTP 200 (`{"error":{"code":503,
+  // ...}}`), in the "Gemini error NNN" form _geminiError uses, so the chain
+  // reads the status the same way.
+  const _geminiBodyError = (obj) => {
+    const e = obj?.error;
+    if (!e) return null;
+    const code = Number(e.code);
+    const status = Number.isInteger(code) && code >= 400 && code < 600 ? code : null;
+    const err = new Error(`Gemini error ${status || 'in the response body'}: ${_redactKeys(String(e.message || e.status || 'provider error')).slice(0, 200)}`);
+    err.status = status;
+    err.inBody = true;
+    return err;
+  };
+
+  // Why a Gemini reply carried no text. A thinking model's thought counts
+  // against maxOutputTokens: a spent budget is not an empty model, and a
+  // refusal is not a wrong model name.
+  const _geminiNoText = ({ finishReason, blockReason, maxTokens }) => {
+    if (finishReason === 'MAX_TOKENS') {
+      const err = new Error(
+        `The model used its whole output budget${maxTokens ? ` (${maxTokens} tokens)` : ''} before it answered `
+        + '(finishReason MAX_TOKENS). Gemini 3 models spend part of it thinking.'
+      );
+      err.reasoningExhausted = true;
+      return err;
+    }
+    const why = blockReason ? `the prompt was blocked (${blockReason})`
+      : finishReason && finishReason !== 'STOP' ? `it stopped with finishReason ${finishReason}` : '';
+    if (!why) return _emptyStreamError();
+    return new Error(`Gemini returned no answer: ${why}.`);
+  };
+
   const genericGeminiRequest = async (prompt, model, baseUrl, apiKey, opts = {}) => {
     const _t0 = Date.now();
     const base = (baseUrl || 'https://generativelanguage.googleapis.com/v1beta').replace(/\/$/, '');
@@ -1092,9 +1130,10 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     // Gemini paced nowhere, so a free key's per-minute cap was discovered only
     // by hitting it. Same budget seam as every other transport.
     await _pace(_paceKey(base, 'gemini', opts.credential_ref), opts.rpm_limit);
+    const maxTokens = opts.max_tokens || 4096;
     const response = await fetch(url, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contents, generationConfig: { maxOutputTokens: opts.max_tokens || 4096 } }),
+      body: JSON.stringify({ contents, generationConfig: { maxOutputTokens: maxTokens } }),
       signal: fetchTimeout(opts),
     });
     if (!response.ok) {
@@ -1106,8 +1145,21 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       if (ra) err.retryAfterMs = ra;
       throw err;
     }
-    const data = await response.json();
-    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    const data = await response.json().catch(() => null);
+    const bodyErr = _geminiBodyError(data);
+    if (bodyErr) {
+      _trackLLM('gemini', model, 0, Date.now() - _t0, false, { status: bodyErr.status, error: bodyErr.message });
+      throw bodyErr;
+    }
+    const cand = data?.candidates?.[0];
+    const text = _geminiText(cand);
+    // Callers write what this returns over the operator's document: an answer
+    // with no text is an error, never an empty string reported as success.
+    if (text.trim() === '') {
+      const err = _geminiNoText({ finishReason: cand?.finishReason, blockReason: data?.promptFeedback?.blockReason, maxTokens });
+      _trackLLM('gemini', model, 0, Date.now() - _t0, false, { error: err.message });
+      throw err;
+    }
     const tokens = data?.usageMetadata?.totalTokenCount || Math.ceil(flatText.length / 4) + Math.ceil(text.length / 4);
     _trackLLM('gemini', model, tokens, Date.now() - _t0, true);
     return text;
@@ -1370,6 +1422,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       .filter(m => m.role !== 'system')
       .map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: String(m.content ?? '') }] }));
     const url = `${base}/models/${model}:streamGenerateContent?alt=sse&key=${apiKey}`;
+    const maxTokens = opts.max_tokens || 4096;
     const { signal, connected } = _streamSignal(opts);
     let response;
     try {
@@ -1378,7 +1431,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
         body: JSON.stringify({
           contents,
           ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),
-          generationConfig: { maxOutputTokens: opts.max_tokens || 4096 },
+          generationConfig: { maxOutputTokens: maxTokens },
         }),
         signal,
       });
@@ -1401,18 +1454,28 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     let text = '';
     let usageTotal = 0;
     let finishReason = null;
+    let blockReason = null;
+    let bodyErr = null;
     await _readSSE(response.body, (payload) => {
       let chunk;
       try { chunk = JSON.parse(payload); } catch { return true; }
+      // A failure mid-stream arrives as an event, under a 200.
+      bodyErr = _geminiBodyError(chunk);
+      if (bodyErr) return false;
       const cand = chunk.candidates?.[0];
-      const t = cand?.content?.parts?.map(p => p.text || '').join('') || '';
+      const t = _geminiText(cand);
       if (t) { text += t; opts.onToken?.(t); }
       if (cand?.finishReason) finishReason = cand.finishReason;
+      if (chunk.promptFeedback?.blockReason) blockReason = chunk.promptFeedback.blockReason;
       if (chunk.usageMetadata?.totalTokenCount) usageTotal = chunk.usageMetadata.totalTokenCount;
       return true;
     });
+    if (bodyErr) {
+      _trackLLM('gemini', model, 0, Date.now() - _t0, false, { status: bodyErr.status, error: bodyErr.message });
+      throw bodyErr;
+    }
     if (text.trim() === '') {
-      const err = _emptyStreamError();
+      const err = _geminiNoText({ finishReason, blockReason, maxTokens });
       _trackLLM('gemini', model, 0, Date.now() - _t0, false, { error: err.message });
       throw err;
     }
