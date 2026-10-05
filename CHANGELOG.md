@@ -22,7 +22,7 @@ Install a block without a terminal, approve a shell block without leaving the ap
 bring their own engine, and a database lockdown. One of these is a security fix you should
 apply to an existing Supabase project.
 
-- **Security — your Supabase tables answered the public key.** The schemas AEON shipped (and
+- **Security — your Supabase tables answered the public key** (fe45e34). The schemas AEON shipped (and
   that Settings → Cloud applied) created policies such as `"Allow service role full access"
   … FOR ALL USING (true)` with no `TO` clause. A policy with no `TO` applies to everyone,
   including the `anon` role whose key ships in every browser app, so the name changed
@@ -62,7 +62,7 @@ apply to an existing Supabase project.
   starts that one worker without provider keys, so the block needs no shell access. An engine
   is never auto-built: the approval card lists every package. The boot sync used to erase the
   declaration, which only an end-to-end install caught (50dacc1).
-- **Store, site and README claims corrected.** The README no longer says nothing in the store
+- **Store, site and README claims corrected** (fe45e34). The README no longer says nothing in the store
   is for sale (it sells only blocks Broken Gear Industries wrote), and now states that AEON
   binds to loopback by default and that the tunnel refuses to start without an account.
 
