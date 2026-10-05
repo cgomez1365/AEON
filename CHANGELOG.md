@@ -18,7 +18,7 @@ tagged; until then its heading says so.
      audit fixes below and e56c75e (close and reopen to load a new block). Not tagged; the number stays 3.3.3 by the owner's choice. When a
      release is cut, this heading becomes its number and date. -->
 
-**The carried drive now rebuilds too.** Found live on the owner's drive: the drive's launchers start
+**The carried drive now rebuilds too (61877ae).** Found live on the owner's drive: the drive's launchers start
 `server.cjs` themselves, so the stale-build check in `launch.js` never ran there — a block installed on the
 drive stayed screenless through every restart, and the dashboard's own warning told a customer to run
 `npm run build`, which a customer cannot. The check is now `tools/ensure-interface.cjs`, shared by
