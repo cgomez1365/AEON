@@ -191,7 +191,24 @@ in the commit that replaces the CHANGELOG's "not tagged yet" with the date
 tag while the heading still says "not tagged yet"). Until then the reading below is
 the latest one recorded, of the release line before it.
 
-**Current reading — v3.3.3, CI run 37227642556 on `f3b31f4` ("Contact:
+**Current reading — v3.3.3 as updated 2026-10-05, CI run 37292388691 on `aa37f8e`
+("changelog: name the embedding-errors commit"), the last commit before the v3.3.3 tag was
+moved; the code is `5b4e2ab`, and the commits after it change only the CHANGELOG and this
+reading. Started 2026-10-05
+09:47 UTC (02:47 US Pacific time), all six jobs green:** 357 test files and 3,709 tests on
+every build leg, 0 failures. Skips differ by platform:
+
+| Leg | Passed | Skipped | What the skips are |
+|---|---|---|---|
+| Ubuntu, Node 24 | 3,704 | 5 | tests that need macOS or Windows |
+| Ubuntu, Node 26 | 3,704 | 5 | the same five |
+| Ubuntu, Node 22.13 floor | 3,704 | 5 | the same five |
+| macOS, Node 24 | 3,708 | 1 | the real-PowerShell Desktop shortcut |
+| Windows, Node 24 | 3,616 | 93 | tests marked POSIX-only or macOS-only, 4 whole files among them |
+
+The security job (dependency audit gate) passed, and so did CodeQL. Taken from the run's own logs.
+
+**Previous reading — v3.3.3 as first tagged 2026-10-04, CI run 37227642556 on `f3b31f4` ("Contact:
 aeon@brokengearindustries.com for help, security and conduct reports"), the last code
 commit before "Release 3.3.3", which changes only the version and its test, this
 reading, the CHANGELOG and the README's example folder name; started 2026-10-04 19:16 UTC (12:16 US Pacific time), all six jobs green:** 350
