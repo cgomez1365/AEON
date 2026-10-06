@@ -1154,6 +1154,81 @@ function BlockAssignPicker({ provider, providerBlocks, allBlocks, selected, onCh
   );
 }
 
+/**
+ * How AEON paces this connection, and the operator's control over it.
+ *
+ * The number is the operator's own account policy, read off their provider's
+ * dashboard: AEON ships none for any named provider, so this says how to find
+ * it rather than offering one. Shown on every card (a local or keyless
+ * connection can be paced too), not only for generic endpoints.
+ */
+function PacingRow({ ep, onChange }) {
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  const limit = ep.rpm_limit ?? null;
+  const dflt = ep.rpm_default ?? null;
+  const line =
+    limit == null ? 'Not paced'
+    : limit === 0 ? 'Not paced (limit set to 0)'
+    : limit === dflt ? `Default: ${limit}/min`
+    : `Paced to ${limit} ${limit === 1 ? 'request' : 'requests'}/min`;
+
+  const begin = () => { setValue(limit == null ? '' : String(limit)); setErr(''); setOpen(true); };
+  const save = async (raw) => {
+    setErr(''); setBusy(true);
+    try {
+      const r = await fetch(`/api/connections/${encodeURIComponent(ep.id)}/rpm`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rpm_limit: raw === '' ? null : Number(raw) }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || 'That limit could not be saved.');
+      showToast('Limit saved — applies to the next request', 'success');
+      setOpen(false);
+      onChange();
+    } catch (e) { setErr(e.message); }
+    setBusy(false);
+  };
+
+  return (
+    <div className="conn-pacing">
+      <div className="conn-pacing-line">
+        <span>{line}</span>
+        <button type="button" className="conn-pacing-change" onClick={() => (open ? setOpen(false) : begin())}
+          aria-expanded={open} aria-controls={`pacing-${ep.id}`}>{open ? 'Close' : 'Change'}</button>
+      </div>
+      {open && (
+        <div className="conn-pacing-edit" id={`pacing-${ep.id}`}>
+          <div className="conn-pacing-fields">
+            <input className="settings-select conn-pacing-input" type="number" min="0" max="600" step="1" inputMode="numeric"
+              value={value} placeholder="Requests per minute"
+              aria-label={`Requests per minute for ${ep.label || ep.provider}`}
+              onChange={e => setValue(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') save(value); if (e.key === 'Escape') setOpen(false); }} />
+            <button type="button" className="settings-btn settings-btn--primary" disabled={busy} onClick={() => save(value)}>{busy ? 'Saving…' : 'Save'}</button>
+            <button type="button" className="settings-btn settings-btn--secondary" disabled={busy} onClick={() => save('')}>Use default</button>
+            <button type="button" className="settings-btn settings-btn--secondary" disabled={busy} onClick={() => setOpen(false)}>Cancel</button>
+          </div>
+          {err && <div className="keypool-err" role="alert">{err}</div>}
+          <div className="conn-pacing-help">
+            Copy this number from your provider's own rate-limits page (for Google AI Studio, your
+            project's Rate limits; for Groq and OpenRouter, the limits shown in your account). Some
+            providers limit each model separately, so use the lowest number among the models you use.
+            AEON waits between requests to stay under it and tells you in the chat when it does.
+            0 turns pacing off; empty uses the default. The limit counts each key on its own, so keys
+            that share one provider project should each be given their share. Only requests per
+            minute are paced: a daily request cap is not enforced. When a provider's daily limit is
+            reached it answers with an error, that key rests, and AEON moves to the next provider.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Key pool: several accounts behind one connection ────────────────
 //
 // A connection can hold several keys the operator is entitled to use, for
@@ -1445,6 +1520,7 @@ function ConnectionsPanel({ nervousSystem }) {
             </div>
             <button type="button" className="conn-remove" onClick={() => removeConn(ep.id)} title="Remove" aria-label={`Remove connection: ${ep.label || ep.provider}`}><X size={14} /></button>
             </div>
+            <PacingRow ep={ep} onChange={load} />
             {(ep.auth_refs?.length || ep.auth_ref) && data.vault.unlocked && (
               <KeyPool ep={ep} pool={data.keyPools?.[ep.id]} onChange={load} />
             )}
@@ -1546,20 +1622,21 @@ function ConnectionsPanel({ nervousSystem }) {
             </button>
           )}
 
-          {/* Free tiers commonly cap near 40 requests a minute, and one
-              multi-step task can spend that. Pacing here beats finding out
-              halfway through a run. */}
-          {prov?.requiresBaseUrl && (
-            <label className="settings-field" style={{ marginTop: 8 }}>
-              <span className="settings-label">Requests per minute limit</span>
-              <input className="settings-input" type="number" min="0" max="600"
-                value={form.rpmLimit} onChange={e => setForm(f => ({ ...f, rpmLimit: e.target.value }))}
-                placeholder="30" />
-              <span style={{ fontSize: 10.5, color: 'var(--text-dim)', marginTop: 3, display: 'block', lineHeight: 1.5 }}>
-                AEON spaces out requests so it stays under this. Free plans are often capped near 40 per minute — leave blank for 30, or enter 0 for no limit.
-              </span>
-            </label>
-          )}
+          {/* The number comes from the operator's own provider dashboard; AEON
+              ships none for a named provider. Offered for every provider so a
+              connection can be created already paced. */}
+          <label className="settings-field" style={{ marginTop: 8 }}>
+            <span className="settings-label">Requests per minute limit (optional)</span>
+            <input className="settings-input" type="number" min="0" max="600" step="1"
+              value={form.rpmLimit} onChange={e => setForm(f => ({ ...f, rpmLimit: e.target.value }))}
+              placeholder={prov?.requiresBaseUrl ? 'default' : 'none'} />
+            <span style={{ fontSize: 10.5, color: 'var(--text-dim)', marginTop: 3, display: 'block', lineHeight: 1.5 }}>
+              AEON spaces out requests so it stays under this. Copy the number from your provider's own
+              rate-limits page; some providers limit each model separately, so use the lowest number among
+              the models you use. Leave blank to use the default (only a generic custom endpoint has one),
+              or enter 0 for no limit. You can change it later on the connection's card.
+            </span>
+          </label>
           <div className="conn-add-footer">
             <button type="button" className="settings-btn settings-btn--secondary" onClick={() => setAdding(false)}>Cancel</button>
             <button type="button" className="settings-btn settings-btn--primary" onClick={saveConn}
@@ -4400,6 +4477,13 @@ export default function SystemSettings() {
         .conn-row--stack { flex-direction: column; align-items: stretch; gap: 0; }
         .conn-row-top { display: flex; align-items: center; gap: 10px; }
         /* Key pool */
+        .conn-pacing { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 8px; }
+        .conn-pacing-line { display: flex; align-items: center; gap: 8px; font-size: 10px; color: var(--text-dim); }
+        .conn-pacing-change { background: none; border: none; padding: 0; cursor: pointer; font-size: 10px; color: var(--accent); text-decoration: underline; }
+        .conn-pacing-edit { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; }
+        .conn-pacing-fields { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+        .conn-pacing-input { flex: 0 1 150px; min-width: 110px; font-size: 11px; }
+        .conn-pacing-help { font-size: 10px; line-height: 1.5; color: var(--text-dim); max-width: 70ch; }
         .keypool { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 8px; }
         .keypool-summary { display: flex; align-items: center; gap: 8px; width: 100%; background: none; border: none; padding: 2px 0; cursor: pointer; font-size: 10px; color: var(--text-dim); text-align: left; }
         .keypool-summary:hover .keypool-count { color: var(--accent); }
