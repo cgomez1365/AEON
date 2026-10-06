@@ -365,6 +365,32 @@ describe('when AEON gives up waiting, that is the operator\'s limit, not an outa
     expect(logLines.join('\n')).not.toMatch(/resting|failing repeatedly/);
   });
 
+  // The give-up message quotes the operator's number. A limit of exactly 429 or
+  // 402 used to be read back out of that sentence as an HTTP status, and the
+  // limit was treated as a provider refusal (the whole provider rested).
+  it.each([429, 402])('a limit of exactly %i requests/min is still the operator\'s limit, not an HTTP status', async (n) => {
+    const gaveUp = Object.assign(new Error(`gemini is at your limit of ${n} requests/min and the next free slot is 12s away. AEON stopped waiting. Raise or clear the limit in Settings → Keys.`), { localThrottle: true, rpm: n, waitMs: 12000 });
+    expect(ai._failureStatus(gaveUp)).toBeNull();
+    // A real provider refusal is still read.
+    expect(ai._failureStatus(Object.assign(new Error('nope'), { status: 429 }))).toBe(429);
+
+    // And on the wire: the stream gives up at that limit, the next provider
+    // answers, and gemini is not rested.
+    writeRegistry([{ ...geminiRow(n) }, groqRow()], { chat: { endpoint_id: 'gem', model: 'gemini-flash-latest' } });
+    settings = { models: { chat: { provider: 'gemini', model: 'gemini-flash-latest' } }, prefs: {} };
+    pacing._reset();
+    for (let i = 0; i < n; i++) await pacing.pace(key(), 1000);
+    const reasons = [];
+    const p = stream({ onFallback: (f) => reasons.push(f.reason) }).run();
+    await idle(3_000);
+    for (let i = 0; i < n; i++) await pacing.pace(key(), 1000);
+    const r = await settle(p);
+    expect(r.provider).toBe('groq');
+    expect(geminiHits).toBe(0);
+    expect(reasons.join('\n')).toMatch(new RegExp(`at your limit of ${n} requests/min`));
+    expect(ai.getProviderHealth?.().gemini?.blockedUntil || 0, 'gemini was rested as if it were down').toBeLessThanOrEqual(Date.now());
+  });
+
   it('the blocking chain says the same in its notice', async () => {
     writeRegistry([geminiRow(1), groqRow()], { chat: { endpoint_id: 'gem', model: 'gemini-flash-latest' } });
     settings = { models: { chat: { provider: 'gemini', model: 'gemini-flash-latest' } }, prefs: {} };

@@ -263,7 +263,9 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   const _bareStatus = (msg, code) => new RegExp(
     `(?<![\\d,.])${code}(?!\\d|[,.]\\d|\\s*(?:-\\s*)?(?:tokens?|bytes?|chars?|characters?|words?|kb|mb)\\b)`, 'i',
   ).test(String(msg || '')) ? code : null;
-  const _failureStatus = (e) => e?.status
+  // The operator's own limit has no status. Its message quotes their number,
+  // and a limit of exactly 429 or 402 requests/min would read as a refusal.
+  const _failureStatus = (e) => e?.localThrottle ? null : e?.status
     || Number(/error (\d{3})/i.exec(e?.message || '')?.[1])
     // The runtime's own words quote token counts and llama-server's log tail
     // quotes sizes ("uses 4,402 of a 2,048-token window"): not a status.
