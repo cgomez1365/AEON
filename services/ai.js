@@ -453,10 +453,11 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   function _trackLLM(engine, model, tokens, latencyMs, success, info = {}) {
     // Why a call failed rides into the durable record. The ledger used to say
     // only success:false, so a rate limit, an empty body and a retired model
-    // were indistinguishable in the 2026-09-23 call log.
+    // were indistinguishable in the 2026-09-23 call log. On one line: a
+    // provider's pretty-printed JSON body would spend the cap on indentation.
     const why = success ? {} : {
       status: info.status ?? null,
-      error: info.error ? _redactKeys(String(info.error)).slice(0, 160) : null,
+      error: info.error ? _redactKeys(String(info.error)).replace(/\s+/g, ' ').slice(0, 160) : null,
     };
     // Settings → System → Telemetry. The toggle existed and was read by
     // nothing, so switching it off recorded exactly as much as switching it

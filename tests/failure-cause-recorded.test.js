@@ -81,6 +81,8 @@ fake.post(/[gG]enerateContent$/, (_req, res) => {
     res.write(`data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text: 'Half an ans' }] } }] })}\n\n`);
     return setTimeout(() => res.destroy(), 30);
   }
+  // Google pretty-prints its error bodies; the indentation is most of a 160-character cap.
+  if (gemini.pretty) return res.status(gemini.status).type('json').send(JSON.stringify(gemini.body, null, 2));
   return res.status(gemini.status).json(gemini.body);
 });
 fake.post('/v1/chat/completions', (req, res) => {
@@ -260,6 +262,18 @@ describe('a stream that dies after the first words', () => {
     const row = failedRow('gemini');
     expect(row.error).toEqual(expect.any(String));
     expect(row.error.length).toBeGreaterThan(0);
+  });
+});
+
+describe('a pretty-printed provider body', () => {
+  it('is recorded on one line, so the cap holds words and not indentation', async () => {
+    const message = 'Request contains an invalid argument: thinking_budget must be between 0 and 24576 for this model.';
+    gemini = { status: 400, pretty: true, body: { error: { code: 400, message, status: 'INVALID_ARGUMENT' } } };
+    await ask();
+    const row = failedRow('gemini');
+    expect(row.error).not.toMatch(/\s{2}|\n/);
+    expect(row.error).toContain('thinking_budget must be between');
+    expect(failedAudit('gemini')[1]).not.toMatch(/\s{2}|\n/);
   });
 });
 
