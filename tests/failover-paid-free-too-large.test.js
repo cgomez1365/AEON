@@ -114,25 +114,30 @@ fakeGroq.post('/v1/chat/completions', (req, res) => {
 
 // The local runtime: a window the prompt must fit (the budget engine's own
 // refusal), or a llama-server that never came up.
-const local = { on: true, window: 8192, fail: null };
+const budgetMod = require(path.join(ROOT, 'services', 'local-runtime', 'budget.cjs'));
+const local = { on: true, window: 8192, fail: null, known: true, warm: false, starts: 0 };
 const localSeen = [];
 const lrStub = {
   isAvailable: () => local.on,
   defaultModel: () => (local.on ? 'phi4-mini-q4' : null),
   listReadyModels: () => (local.on ? [{ id: 'phi4-mini-q4', capabilities: ['chat'] }] : []),
   status: () => ({ available: local.on, readyModels: local.on ? [{ id: 'phi4-mini-q4', capabilities: ['chat'] }] : [] }),
-  plannedContext: async () => ({ contextTokens: local.window }),
+  plannedContext: async () => (local.known ? { contextTokens: local.window } : null),
   cancelAll: () => 0,
   infer: async () => ({ text: 'from-local', model: 'phi4-mini-q4', tokens: 3 }),
   inferStream: async (_p, o, onToken) => {
     localSeen.push(o.messages);
     if (local.fail === 'exited') throw new Error('llama-server exited during startup (code 1). error: failed to load model');
+    // llama-server's log tail quotes buffer sizes; "4402.34" is not an HTTP status.
+    if (local.fail === 'oom') throw new Error('llama-server exited during startup (code 1). ggml_metal_buffer_alloc: failed to allocate buffer, size = 4402.34 MiB');
     if (local.fail === 'llama400') {
       throw new Error('llama-server returned 400: {"error":{"code":400,"message":"the request exceeds the available context size, try increasing it","type":"exceed_context_size_error"}}');
     }
-    const prompt = estimateMessageTokens(o.messages);
-    if (prompt + 512 > local.window) {
-      const e = new Error(`The prompt uses ${prompt.toLocaleString()} of a ${local.window.toLocaleString()}-token window, leaving 0 for the answer. Shorten the input, or serve this model with a larger context.`);
+    // _sessionForModel starts the weights before session.chat() checks the budget.
+    if (!local.warm) { local.starts++; local.warm = true; }
+    const plan = budgetMod.outputBudget({ contextTokens: local.window, promptTokens: estimateMessageTokens(o.messages), requested: o.maxTokens });
+    if (!plan.fits) {
+      const e = new Error(plan.reason);
       e.code = 'CONTEXT_EXHAUSTED';
       throw e;
     }
@@ -204,7 +209,7 @@ afterAll(() => {
 beforeEach(() => {
   keyPool._reset(); ai._resetProviderHealth();
   orMode = 'paid402'; groqLimit = 8000;
-  Object.assign(local, { on: true, window: 8192, fail: null });
+  Object.assign(local, { on: true, window: 8192, fail: null, known: true, warm: false, starts: 0 });
   orSeen.length = 0; orMaxTokens.length = 0; groqSeen.length = 0; localSeen.length = 0; notices.length = 0;
   settingsNow = { models: { chat: { provider: 'openrouter', model: OPUS } }, roulette: false, prefs: {} };
 });
@@ -351,8 +356,10 @@ describe('a request too large for the model is retried once with less context', 
     const switches = [];
     const r = await stream(bigTurn(), switches);
     expect(r).toMatchObject({ provider: 'local', text: 'from-local' });
-    expect(localSeen).toHaveLength(2);
-    expect(estimateMessageTokens(localSeen[1])).toBeLessThan(local.window);
+    // The window is known without starting the model, so the full request is
+    // never sent: only the trimmed one is.
+    expect(localSeen).toHaveLength(1);
+    expect(estimateMessageTokens(localSeen[0])).toBeLessThan(local.window);
     expect(switches.map(noticeOf)).toContain('local request too large for it → retried with less context');
   });
 });
@@ -362,6 +369,7 @@ describe('when nothing can answer, the reasons are true and the next step is use
     orMode = 'free503';
     groqLimit = 500;
     local.fail = 'exited';
+    local.known = false;   // this is about the wording of a runtime failure, not the window
     const switches = [];
     const err = await stream(bigTurn(), switches).catch((e) => e);
     expect(err).toBeInstanceOf(Error);
@@ -402,9 +410,81 @@ describe('when nothing can answer, the reasons are true and the next step is use
     orMode = 'all402';
     groqLimit = 500;
     local.fail = 'llama400';
+    local.known = false;   // llama-server's own 400 is what is under test, not the window
     const err = await stream(bigTurn()).catch((e) => e);
     expect(err.message).toMatch(/local request too large for it/);
     expect(err.message).not.toMatch(/local unavailable/);
     expect(localSeen).toHaveLength(2);   // tried, then tried trimmed
+  });
+});
+
+describe('a local window the request cannot fit is decided before the model is started', () => {
+  // The drive on 2026-10-05: the smallest window step ("Even 2,048 tokens is
+  // tight"), a 4,407-token prompt, and 80 s spent loading the weights to be told so.
+  const noCloud = () => { orMode = 'all402'; groqLimit = 100; };   // under Groq's floor even trimmed
+  const FITS = 2048 - 768;   // budget.cjs: margin 512 + the 256-token floor for an answer
+  beforeEach(() => { local.window = 2048; noCloud(); });
+
+  // A system prompt whose token count by the repo's estimator is exactly `n`
+  // in all (the digits of the runtime's "uses N of a M-token window" matter).
+  const turnOfTokens = (n) => {
+    const need = (n - 4 - estimateMessageTokens([QUESTION])) * 4;
+    const prefix = `${IDENTITY}\n\n## MEMORY\n`;
+    const sys = { role: 'system', content: prefix + 'word '.repeat(Math.ceil(need / 5)).slice(0, need - prefix.length) };
+    expect(estimateMessageTokens([sys, QUESTION])).toBe(n);
+    return [sys, QUESTION];
+  };
+
+  it('the live case: the full request is never sent to Local, the trimmed one is, and answers', async () => {
+    const switches = [];
+    const r = await stream(bigTurn(), switches);
+    expect(r).toMatchObject({ provider: 'local', text: 'from-local' });
+    expect(localSeen).toHaveLength(1);
+    expect(estimateMessageTokens(localSeen[0])).toBeLessThanOrEqual(FITS);
+    expect(switches.map(noticeOf)).toContain('local request too large for it → retried with less context');
+  });
+
+  it('a request still over the window after trimming never starts the model, and says so', async () => {
+    // Retrieved passages ride in the operator's own message, which is kept whole.
+    const recall = [...bigTurn().slice(0, -1), { role: 'user', content: `${QUESTION.content}\n\n${'passage '.repeat(2000)}` }];
+    const switches = [];
+    const err = await stream(recall, switches).catch((e) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(localSeen).toHaveLength(0);
+    expect(local.starts).toBe(0);
+    expect(err.message).toMatch(/local request too large for it/);
+    expect(switches.map(noticeOf)).not.toContain('local request too large for it → retried with less context');
+    expect(ai.getProviderHealth().local.healthy).toBe(true);
+  });
+
+  it.each([[4402, 'looks like an HTTP 402'], [4429, 'looks like an HTTP 429']])(
+    'a prompt of %i tokens (%s) is still too large for the window, not out of credits or rate-limited',
+    async (n) => {
+      const r = await stream(turnOfTokens(n));
+      expect(r).toMatchObject({ provider: 'local', text: 'from-local' });
+      expect(ai.getProviderHealth().local.healthy).toBe(true);
+    },
+  );
+
+  it('the refusal reaches the call log with the runtime\'s own words', async () => {
+    await stream(bigTurn()).catch(() => {});
+    const row = ledgerRows().reverse().find((x) => x.provider === 'local' && x.success === false);
+    expect(String(row?.error)).toMatch(/uses [\d,]+ of a 2,048-token window/);
+  });
+
+  it('a llama-server start failure that quotes "4402.34 MiB" is not an HTTP 402: Local is not rested as out of credits', async () => {
+    local.fail = 'oom';
+    const err = await stream([{ role: 'user', content: 'hello' }]).catch((e) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).toMatch(/local no chat model running/);
+    expect(err.message).not.toMatch(/local out of credits|rate-limited/);
+    expect(ai.getProviderHealth().local.healthy).toBe(true);
+  });
+
+  it('a window the runtime cannot report changes nothing: the runtime\'s own refusal is retried trimmed', async () => {
+    local.window = 8192; local.known = false;
+    const r = await stream(bigTurn());
+    expect(r).toMatchObject({ provider: 'local', text: 'from-local' });
+    expect(localSeen).toHaveLength(2);
   });
 });

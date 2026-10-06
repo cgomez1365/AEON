@@ -193,7 +193,9 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   // replaces). Narrower _statusOf below feeds key rotation and stays as it is.
   const _failureStatus = (e) => e?.status
     || Number(/error (\d{3})/i.exec(e?.message || '')?.[1])
-    || (/429/.test(e?.message || '') ? 429 : /402/.test(e?.message || '') ? 402 : null);
+    // The runtime's own words quote token counts and llama-server's log tail
+    // quotes sizes ("uses 4,402 of a 2,048-token window"): not a status.
+    || (e?.localRuntime ? null : /429/.test(e?.message || '') ? 429 : /402/.test(e?.message || '') ? 402 : null);
   // Any other configured provider that could take a turn right now. Under
   // Local only (Settings → Models) the cloud ones cannot.
   const _anotherCanServe = (p, localOnly = false) => (localOnly ? ['local'] : ['groq', 'gemini', 'openrouter', 'local'])
@@ -371,6 +373,19 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     return { promptTokens, maxTokens };
   };
   const _tooLargeNotice = (p) => `${p} request too large for it → retried with less context`;
+  // The local window is exact arithmetic (budget.cjs), known without starting
+  // the model. A request it cannot hold is refused here, in the runtime's own
+  // words, instead of after loading the weights (80 s on the CEO's drive,
+  // 2026-10-05) to be told so. Null when it fits or the window is not known:
+  // the runtime's own check then decides, as before.
+  const _localWindowRefusal = async (c, messages) => {
+    try {
+      const ctx = (await _getLocalRT()?.plannedContext?.(c.model))?.contextTokens;
+      if (!ctx) return null;
+      const plan = require('./local-runtime/budget.cjs').outputBudget({ contextTokens: ctx, promptTokens: _tokens.estimateMessageTokens(messages) });
+      return plan.fits ? null : Object.assign(new Error(plan.reason), { code: 'CONTEXT_EXHAUSTED', budget: plan });
+    } catch { return null; }
+  };
 
   // ── Local-model confirmation gate ──────────────────────────────────────────
   // When every cloud provider is down/exhausted, the INTERACTIVE chat path
@@ -1955,6 +1970,10 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       let served = 0;
       const onToken = (t) => { if (!t) return; served++; partial += t; opts.onToken(t); };
       try {
+        if (c.provider === 'local') {
+          const refusal = await _localWindowRefusal(c, sent);
+          if (refusal) throw _localFailure(refusal, c.model, Date.now());
+        }
         const r = await _dispatchStream(sent, c, { ...callOpts, onToken });
         noteProviderSuccess(c.provider);
         const usedModel = r.model || c.model;
@@ -2050,7 +2069,9 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
         if (tooLarge && !c.trimmedRetry && !opts.noTrimRetry) {
           const budget = await _trimBudget(c, e, callOpts);
           const cut = _trimMessages(sent, budget.promptTokens);
-          if (cut) {
+          // A local window is exact: a cut that still does not fit would fail
+          // the same way, after another trip to the model.
+          if (cut && !(c.provider === 'local' && await _localWindowRefusal(c, cut.messages))) {
             console.warn(`[KERNEL] stream ${c.provider} request too large (~${cut.before} tokens: ${_redactKeys(e.message).slice(0, 160)}); retrying with ~${cut.after}`);
             candidates.splice(i + 1, 0, { ...c, retryOf: root, trimmedRetry: true, trimmedMessages: cut.messages, trimmedMaxTokens: budget.maxTokens });
             opts.onFallback?.({ from: c.provider, to: c.provider, model: c.model, reason: 'request too large for it', notice: _tooLargeNotice(c.provider) });
