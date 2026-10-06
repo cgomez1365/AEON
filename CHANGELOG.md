@@ -21,8 +21,9 @@ tagged; until then its heading says so.
      583d020, 7734563, 7c086bc, 4647906, 58586fc: terminal bugs and their review fixes; 24964eb, 72fc893, a8ce8c0,
      e3bc8d6, 67d73ee, fd7ace6, 4196884, 104537a, d32b30a, f5c1e27, 9ea53cd: the rate-limit control; 3d4e411, 6f26f5d,
      42a774b, 5be5748, d04f857, bf6567b: gap closures and docs), then four fixes from the final review (0975f5d,
-     1099f91, d4f0657, 9c07925), the lockfile refresh for two new advisories (e859fa6) and three changelog commits
-     (ace26f1, 721d484 and the one holding this note): 41 commits in `git rev-list --count a26af72..HEAD`. History is not squashed. By the owner's choice the version number stays
+     1099f91, d4f0657, 9c07925), the lockfile refresh for two new advisories (e859fa6), the banner fix found in a browser
+     check (1a73a12) and four changelog commits (ace26f1, 721d484, 4cafb53 and the one holding this note): 43 commits in
+     `git rev-list --count a26af72..HEAD`. History is not squashed. By the owner's choice the version number stays
      3.3.3 and the v3.3.3 tag and release were moved to include them, because the first 3.3.3 could not install the
      first paid block (it dropped a block's declared engine) and shipped Supabase SQL open to the public key. Anyone
      holding the 2026-10-04 3.3.3 should update (README, "Updating AEON"). -->
@@ -147,6 +148,12 @@ only proof is a test against a stand-in for the outside service; CI cannot prove
   not to write one (not measured to lower how often it does). Not covered: a marker split across an auto-continue seam,
   and turns with tools off. Tests: `tests/result-marker-echo.test.js` (58586fc adds tests for the Claude notice, the
   native-tool remedy and the embed cut warning).
+- **Settings no longer prints a refusal twice (1a73a12).** Found checking the new screens in a browser: a refused
+  pacing limit was worded in the card and printed again by AEON's failure banner across the top of the page. The
+  pacing limit, the role assignment and Save now send `x-aeon-self-reported`, the header AEON's interceptor policy
+  defines for a caller that words its own refusal (4xx and 501/503 are then not bannered; a 5xx still is). Checked in a
+  browser for the pacing limit (the refusal shown once with no banner, a valid save, the card updating, the audit line) and for the provider
+  switch and "Same as Chat"; the other two are covered by a source-level test, `tests/self-reported-failures.test.js`.
 - **Two new dependency advisories cleared (e859fa6).** `npm audit` began reporting two advisories published after the
   last green run: `proxy-addr` (critical, IP spoofing through an IPv4-mapped IPv6 trust subnet; it arrives through
   `express`) and `source-map-js` (high, denial of service through source-map section offsets; a build-time
