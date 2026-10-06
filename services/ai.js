@@ -81,21 +81,33 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   // system log — instead of a silent pause. When pace() gives up, the error is
   // reworded from its structured fields to say whose limit it is and where to
   // change it: that is the operator's setting, not a provider outage.
+  // Said once per burst (Council, parallel agent tools would print a line per
+  // call), and per audience: the log line is stamped per bucket, the chat
+  // notice per channel (the onNotice function) and bucket. A caller with no
+  // channel (an indexing or agent job) therefore never uses up the chat's
+  // notice, and two chat streams each hear about their own wait.
   const _paceNoticeAt = {};
+  let _paceTold = new WeakMap();
+  const _toldRecently = (at) => { const since = Date.now() - (at || 0); return since >= 0 && since < 10_000; };
   const _paceFor = async (opts, key, label) => {
     if (!opts.rpm_limit || opts.rpm_limit <= 0) return;
     try {
       await _pace(key, opts.rpm_limit, {
         signal: opts.signal,
         onWait: ({ waitMs, rpm }) => {
-          // A burst (Council, parallel agent tools) would print one line per call.
-          const since = Date.now() - (_paceNoticeAt[key] || 0);
-          if (since >= 0 && since < 10_000) return;
-          _paceNoticeAt[key] = Date.now();
           const message = `pacing: waiting ${Math.ceil(waitMs / 1000)}s for ${label} (your limit: ${rpm}/min — change it in Settings → Keys)`;
-          console.warn(`[KERNEL] ${message}`);
-          notify(message, { provider: label });
-          try { opts.onNotice?.(message); } catch { /* a notice never breaks the call */ }
+          if (!_toldRecently(_paceNoticeAt[key])) {
+            _paceNoticeAt[key] = Date.now();
+            console.warn(`[KERNEL] ${message}`);
+            notify(message, { provider: label });
+          }
+          if (typeof opts.onNotice === 'function') {
+            const told = _paceTold.get(opts.onNotice) || {};
+            if (_toldRecently(told[key])) return;
+            told[key] = Date.now();
+            _paceTold.set(opts.onNotice, told);
+            try { opts.onNotice(message); } catch { /* a notice never breaks the call */ }
+          }
         },
       });
     } catch (e) {
@@ -295,6 +307,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     for (const k of Object.keys(_failStreak)) delete _failStreak[k];
     for (const k of Object.keys(paidRest)) delete paidRest[k];
     for (const k of Object.keys(_paceNoticeAt)) delete _paceNoticeAt[k];
+    _paceTold = new WeakMap();
   };
 
   // ── OpenRouter: paid out of credits is not OpenRouter down ─────────────

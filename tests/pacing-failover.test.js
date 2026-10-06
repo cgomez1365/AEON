@@ -460,3 +460,53 @@ describe('the closing step names the limit even when a local floor failed too', 
     } finally { Object.assign(lrStub, saved); }
   });
 });
+
+describe('the notice is one line per burst, and never swallowed by a caller who could not show it', () => {
+  const take = async () => {
+    use([geminiRow(1)], 'gemini', 'gemini-flash-latest');
+    await settle(stream().run(), 0); // the one slot of this minute
+  };
+
+  it('a background call with no notice channel does not silence the next chat turn', async () => {
+    await take();
+    const ac = new AbortController();
+    const bg = ai.kernelLLM('index this', { role: 'chat', signal: ac.signal }).catch(() => null); // no onNotice
+    await idle(2_000);
+    const chat = stream({ signal: ac.signal });
+    const pc = chat.run();
+    await idle(2_000);
+    expect(chat.notices.join('\n'), 'the chat paused with no explanation').toMatch(WAIT);
+    ac.abort();
+    await settle(bg); await settle(pc);
+  });
+
+  it('two chat streams each hear about their own wait', async () => {
+    await take();
+    const ac = new AbortController();
+    const a = stream({ signal: ac.signal });
+    const b = stream({ signal: ac.signal });
+    const pa = a.run(); const pb = b.run();
+    await idle(2_000);
+    expect(a.notices.join('\n')).toMatch(WAIT);
+    expect(b.notices.join('\n')).toMatch(WAIT);
+    ac.abort();
+    await settle(pa); await settle(pb);
+  });
+
+  it('a burst through one channel prints one line, and prints again once the window has passed', async () => {
+    await take();
+    const ac = new AbortController();
+    const notices = [];
+    const onNotice = (m) => notices.push(m);
+    const run = () => ai.kernelLLM('q', { role: 'chat', signal: ac.signal, onNotice }).catch(() => null);
+    const burst = [run(), run(), run()];
+    await idle(3_000);
+    expect(notices, 'three waiting calls printed a line each').toHaveLength(1);
+    await idle(12_000);
+    const later = run();
+    await idle(1_000);
+    expect(notices, 'a wait ten seconds later should be announced again').toHaveLength(2);
+    ac.abort();
+    await settle(Promise.all([...burst, later]));
+  });
+});
