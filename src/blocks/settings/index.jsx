@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Settings as SettingsIcon, Check, X, RefreshCw, Zap, Shield, ChevronDown, ChevronUp, Search, Wifi, WifiOff, Activity, Cpu, Database, Layers, ToggleLeft, ToggleRight, User, Lock, KeyRound, LogOut, LogIn, Save, Eye, Palette, Wrench } from 'lucide-react';
 import { authFetch, login as apiLogin, logout as apiLogout } from '../../kernel/auth';
-import { matchesModelQuery, modelAfterProviderSwitch } from '../../kernel/modelQuery';
+import { matchesModelQuery, modelAfterProviderSwitch, snapshotRole, revertRefusedRole, refusedRoleNotice } from '../../kernel/modelQuery';
 import { BLOCKS as INSTALLED_BLOCKS } from '../../kernel/blockRegistry';
 import { BlockIcon } from '../../components/BlockIcon';
 import { applyAppearance, applyThemeBuilder } from '../../kernel/appearance';
@@ -3593,6 +3593,8 @@ export default function SystemSettings() {
   // until the next render.
   const updateRole = (role, change) => {
     setDirty(true);
+    // What the role was, so a refusal below can put it back.
+    const snap = snapshotRole(patchRef.current, settings?.models, role);
     addPatch({ models: { [role]: change } });
     const next = { ...settings?.models?.[role], ...change };
     setSettings(prev => ({
@@ -3612,7 +3614,19 @@ export default function SystemSettings() {
       });
       if (!r.ok) {
         const body = await r.json().catch(() => ({}));
-        showToast(body.error || `Could not assign ${next.model} (HTTP ${r.status})`, 'error');
+        if (r.status === 400) {
+          // Refused: the pair must not stay in the page or in the patch Save
+          // posts. Idempotent on purpose (a re-run of the updater finds the
+          // role already restored and the patch already clean).
+          setSettings(prev => {
+            const back = revertRefusedRole(patchRef.current, prev.models, role, next, snap);
+            patchRef.current = back.patch;
+            return back.reverted ? { ...prev, models: back.models } : prev;
+          });
+          showToast(refusedRoleNotice(role, snap.value, body.error), 'error');
+        } else {
+          showToast(body.error || `Could not assign ${next.model} (HTTP ${r.status})`, 'error');
+        }
       }
     }).catch(() => showToast('Could not sync this change to your connections', 'error'));
   };

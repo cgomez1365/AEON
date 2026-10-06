@@ -35,10 +35,11 @@ change specifically so they never drift apart — if you add a new way to set
 a role's model, it must write both too. `POST /api/settings/nl` and
 `POST /api/connections/assign-role` refuse (400) a model a hosted provider's
 connection does not list (`endpoints.modelRefusal`; a local runtime, LM Studio,
-a custom server or an empty list is never refused). `updateRole()` reaches that
-check only through assign-role: the refusal shows a toast, but the pair stays in
-the page's unsaved settings and the Save button writes `settings.models` without
-checking it.
+a custom server or an empty list is never refused). `POST /api/settings` (the Save
+button) applies the same check to every role it would change and answers 400,
+writing nothing, when one is refused. `updateRole()` also puts a role back to its
+previous value when assign-role answers 400 (`revertRefusedRole` in
+`src/kernel/modelQuery.js`), so a refused pair never sits in the unsaved page.
 
 ## The tabs
 

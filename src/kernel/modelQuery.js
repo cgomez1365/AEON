@@ -72,3 +72,49 @@ export function modelAfterProviderSwitch(models, current, role) {
   if (role === 'embed') return list.find(m => /embed/i.test(m)) || '';
   return list.find(m => !NON_CHAT_MODEL_RE.test(m)) || list[0];
 }
+
+// ── A role the server refused goes back ─────────────────────────────────────
+//
+// updateRole shows the new pair at once (page settings + the patch Save posts)
+// and only then asks POST /api/connections/assign-role to accept it. A 400 used
+// to leave the pair in both, and the Save button wrote it. These three are the
+// pure part: take what the role was, put it back, say so. Pure for the same
+// reason as the matcher above — the suite has no DOM.
+
+const copy = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
+
+/** What `role` is in the page settings and in the unsaved patch, before a change. */
+export function snapshotRole(patch, models, role) {
+  return { value: copy(models?.[role]), pending: copy(patch?.models?.[role]) };
+}
+
+/**
+ * Put `role` back to `snap` after the server refused `refused`.
+ *
+ * Only while the role still holds the refused pair: if the operator has since
+ * picked something else, that newer choice is theirs and is left alone.
+ * Returns new objects (`reverted` says whether anything moved).
+ */
+export function revertRefusedRole(patch, models, role, refused, snap) {
+  const now = models?.[role];
+  if (!now || now.provider !== refused?.provider || now.model !== refused?.model) {
+    return { patch, models, reverted: false };
+  }
+  const nextModels = { ...models };
+  if (snap.value === undefined) delete nextModels[role]; else nextModels[role] = copy(snap.value);
+  const nextPatch = { ...patch };
+  const pending = { ...(patch?.models || {}) };
+  if (snap.pending === undefined) delete pending[role]; else pending[role] = copy(snap.pending);
+  if (Object.keys(pending).length) nextPatch.models = pending; else delete nextPatch.models;
+  return { patch: nextPatch, models: nextModels, reverted: true };
+}
+
+/** The toast: the server's sentence (it names the remedy) plus where the role went. */
+export function refusedRoleNotice(role, previous, serverError) {
+  const said = String(serverError || '').trim()
+    || 'That model is not one this provider offers. Pick another in Settings → Model Assignment, or re-scan the provider\'s model list.';
+  const back = previous && previous.model
+    ? `${role} is back on ${previous.provider} / ${previous.model}.`
+    : `${role} was put back as it was.`;
+  return `${said} ${back}`;
+}
