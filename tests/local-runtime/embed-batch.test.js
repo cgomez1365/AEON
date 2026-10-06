@@ -19,7 +19,7 @@
  * error, and tokenises on whitespace. A mocked fetch would paper over exactly
  * what failed: the arguments the child is started with.
  */
-import { afterEach, beforeEach, expect, it } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -114,6 +114,27 @@ it.skipIf(process.platform === 'win32')('an input over the whole window is cut t
   const vec = await session.embed(prose(3000));
   expect(vec[0]).toBe(2048);   // 2046 tokens + BOS/EOS
   expect(stub.hits()).toEqual(['/v1/embeddings', '/tokenize', '/detokenize', '/v1/embeddings']);
+}, 40000);
+
+it.skipIf(process.platform === 'win32')('a cut input is said so in the log, with both sizes', async () => {
+  stubSession();
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    await session.embed(prose(3000));
+    const line = warn.mock.calls.map((c) => c.join(' ')).find((l) => /\[EMBED\]/.test(l));
+    expect(line).toMatch(/3000 tokens/);
+    expect(line).toMatch(/2046/);
+    expect(line).toMatch(/not embedded/);
+  } finally { warn.mockRestore(); }
+}, 40000);
+
+it.skipIf(process.platform === 'win32')('an input that fits is not warned about', async () => {
+  stubSession();
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    await session.embed(prose(300));
+    expect(warn.mock.calls.some((c) => /\[EMBED\]/.test(c.join(' ')))).toBe(false);
+  } finally { warn.mockRestore(); }
 }, 40000);
 
 it.skipIf(process.platform === 'win32')('an input that fits costs exactly one request', async () => {

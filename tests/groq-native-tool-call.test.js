@@ -73,11 +73,15 @@ const fakeFetch = async (url, init = {}) => {
   const step = plan[Math.min(groqSeen.length - 1, plan.length - 1)];
   if (step === 'refuse') return sseResponse({ error: REFUSAL });
   if (step === 'refuse400') return new Response(JSON.stringify({ error: REFUSAL }), { status: 400, headers: { 'content-type': 'application/json' } });
+  // The refusal in each of the other two wordings the detector knows, alone.
+  if (step === 'refuseCode') return new Response(JSON.stringify({ error: { message: 'Failed to call a function. Please adjust your prompt.', type: 'invalid_request_error', code: 'tool_use_failed' } }), { status: 400, headers: { 'content-type': 'application/json' } });
+  if (step === 'refuseWords') return new Response(JSON.stringify({ error: { message: 'the model called a tool this request did not offer' } }), { status: 400, headers: { 'content-type': 'application/json' } });
   if (step === 'tooLarge') return new Response(JSON.stringify({ error: { message: 'Request too large for model' } }), { status: 413, headers: { 'content-type': 'application/json' } });
   if (step === 'down500') return new Response(JSON.stringify({ error: { message: 'internal error' } }), { status: 500 });
   return sseResponse(textChunk('from-groq'), '[DONE]');
 };
 
+let localDown = false;
 const lrStub = {
   isAvailable: () => true,
   defaultModel: () => 'llama3-8b-q4',
@@ -88,6 +92,7 @@ const lrStub = {
   infer: async () => ({ text: 'from-local', model: 'llama3-8b-q4', tokens: 3 }),
   inferStream: async (_p, o, onToken) => {
     localSeen.push(o.messages);
+    if (localDown) throw new Error('no local runtime in this test');
     onToken?.('from-local');
     return { text: 'from-local', tokens: 3, model: 'llama3-8b-q4', complete: true };
   },
@@ -121,7 +126,7 @@ afterAll(() => {
   for (const d of [tempSecrets, ledgerDir]) { try { fs.rmSync(d, { recursive: true, force: true }); } catch {} }
 });
 
-beforeEach(() => { keyPool._reset(); ai._resetProviderHealth(); groqSeen.length = 0; localSeen.length = 0; plan = []; });
+beforeEach(() => { keyPool._reset(); ai._resetProviderHealth(); groqSeen.length = 0; localSeen.length = 0; plan = []; localDown = false; });
 
 const TURN = () => [
   { role: 'system', content: 'You are AEON.\n\n## TOOLS\nTools:\n- vault_search {"query"} — search the Vault.' },
@@ -202,5 +207,33 @@ describe('a native tool call that Groq refuses (tool_choice is none)', () => {
     expect(r).toMatchObject({ provider: 'groq', text: 'from-groq', trimmed: true });
     const note = /never emit a tool or function call/ig;
     expect(groqSeen[2].messages[0].content.match(note)?.length).toBe(1);
+  });
+
+  for (const shape of ['refuseCode', 'refuseWords']) {
+    it(`${shape}: a refusal worded only that way is still the model's format, retried once`, async () => {
+      plan = [shape, 'answer'];
+      const { r, fallbacks } = await run();
+      expect(groqSeen.length).toBe(2);
+      expect(r).toMatchObject({ provider: 'groq', text: 'from-groq' });
+      expect(fallbacks.map((f) => `${f.from}>${f.to}`)).toEqual(['groq>groq']);
+    });
+  }
+
+  it('a turn with no system message gets the note as one, ahead of the conversation', async () => {
+    plan = ['refuse', 'answer'];
+    await run([{ role: 'user', content: 'what is in my plan?' }]);
+    expect(groqSeen.length).toBe(2);
+    expect(groqSeen[1].messages[0]).toMatchObject({ role: 'system' });
+    expect(groqSeen[1].messages[0].content).toMatch(/never emit a tool or function call/i);
+    expect(groqSeen[1].messages[1]).toMatchObject({ role: 'user', content: 'what is in my plan?' });
+  });
+
+  it('when nothing else can answer, the error names the refusal and the remedy', async () => {
+    plan = ['refuse', 'refuse'];
+    localDown = true;
+    const err = await run().catch((e) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).toMatch(/groq tried a native tool call/);
+    expect(err.message).toMatch(/Ask again, or assign a different model for this role in Settings/);
   });
 });

@@ -109,12 +109,13 @@ let aiWithEnvKey;
 const audits = [];
 const notices = [];
 let settingsChat = { provider: 'gemini', model: 'gemini-3.8-flash' };
+let settingsExtra = {};
 
 const deps = () => ({
   supabase: null,
   writeOSAudit: (...a) => audits.push(a),
   TOKEN_LEDGER_FILE: path.join(ledgerDir, 'token_ledger.json'),
-  loadSettings: () => ({ models: { chat: settingsChat }, prefs: {} }),
+  loadSettings: () => ({ models: { chat: settingsChat, ...settingsExtra }, prefs: {} }),
   aeonTerminalStream: { emit: (_t, e) => notices.push(e?.message || '') },
 });
 
@@ -168,6 +169,7 @@ beforeEach(() => {
   for (const k of Object.keys(hosted)) delete hosted[k];
   customStatus = 200;
   settingsChat = { provider: 'gemini', model: 'gemini-3.8-flash' };
+  settingsExtra = {};
   try { fs.rmSync(path.join(ledgerDir, 'llm_calls.jsonl'), { force: true }); } catch {}
 });
 
@@ -303,6 +305,17 @@ describe('the terminal notice on the blocking chain', () => {
     customStatus = 503;
     await expect(ask()).rejects.toThrow();
     expect(notices.some((n) => /custom provider error \(HTTP 503\) — trying the next provider/.test(n))).toBe(true);
+  });
+});
+
+describe('the terminal notice when Claude is the role\'s provider', () => {
+  it('names the status behind the plain phrase, like every other provider', async () => {
+    // A role with no registry connection reaches the Claude branch of the chain.
+    settingsExtra = { research: { provider: 'claude', model: 'claude-test' } };
+    hosted['api.anthropic.com'] = { status: 401, body: { type: 'error', error: { type: 'authentication_error', message: 'invalid x-api-key' } } };
+    process.env.ANTHROPIC_API_KEY = 'test-only-key';
+    try { await ai.kernelLLM('hello', { role: 'research' }).catch(() => {}); } finally { delete process.env.ANTHROPIC_API_KEY; }
+    expect(notices.some((n) => /↪ claude key rejected \(HTTP 401\) — trying the next provider/.test(n))).toBe(true);
   });
 });
 
