@@ -191,7 +191,23 @@ in the commit that replaces the CHANGELOG's "not tagged yet" with the date
 tag while the heading still says "not tagged yet"). Until then the reading below is
 the latest one recorded, of the release line before it.
 
-**Current reading — v3.3.3 as updated 2026-10-05, CI run 37292388691 on `aa37f8e`
+**Current reading — v3.3.3 as updated 2026-10-05 (second update), CI run 37403174715 on `10217c0`
+("Changelog: add the Settings banner fix and correct the commit count to 43"), the last commit before the
+v3.3.3 tag was moved again; the last code commit is `1a73a12`, and the commit after `10217c0` changes only the
+CHANGELOG and this reading. Started 2026-10-06 02:14 UTC (2026-10-05 19:14 US Pacific time), all six jobs
+green:** 378 test files and 3,984 tests on every build leg, 0 failures. Skips differ by platform:
+
+| Leg | Passed | Skipped | What the skips are |
+|---|---|---|---|
+| Ubuntu, Node 24 | 3,979 | 5 | tests that need macOS or Windows |
+| Ubuntu, Node 26 | 3,979 | 5 | the same five |
+| Ubuntu, Node 22.13 floor | 3,979 | 5 | the same five |
+| macOS, Node 24 | 3,983 | 1 | the real-PowerShell Desktop shortcut |
+| Windows, Node 24 | 3,884 | 100 | tests marked POSIX-only or macOS-only, 5 whole files among them (one is the embedding-server test, `tests/local-runtime/embed-batch.test.js`, which needs a POSIX stub, so the embedding retry is not exercised on Windows) |
+
+The security job (dependency audit gate) passed, and so did CodeQL. Taken from the run's own logs.
+
+**Previous reading — v3.3.3 as updated 2026-10-05 (first update), CI run 37292388691 on `aa37f8e`
 ("changelog: name the embedding-errors commit"), the last commit before the v3.3.3 tag was
 moved; the code is `5b4e2ab`, and the commits after it change only the CHANGELOG and this
 reading. Started 2026-10-05

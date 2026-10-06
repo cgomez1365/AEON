@@ -22,8 +22,8 @@ tagged; until then its heading says so.
      e3bc8d6, 67d73ee, fd7ace6, 4196884, 104537a, d32b30a, f5c1e27, 9ea53cd: the rate-limit control; 3d4e411, 6f26f5d,
      42a774b, 5be5748, d04f857, bf6567b: gap closures and docs), then four fixes from the final review (0975f5d,
      1099f91, d4f0657, 9c07925), the lockfile refresh for two new advisories (e859fa6), the banner fix found in a browser
-     check (1a73a12) and four changelog commits (ace26f1, 721d484, 4cafb53 and the one holding this note): 43 commits in
-     `git rev-list --count a26af72..HEAD`. History is not squashed. By the owner's choice the version number stays
+     check (1a73a12), four changelog commits (ace26f1, 721d484, 4cafb53, 10217c0) and the commit that records the CI
+     reading and holds this note: 44 commits in `git rev-list --count a26af72..HEAD`. History is not squashed. By the owner's choice the version number stays
      3.3.3 and the v3.3.3 tag and release were moved to include them, because the first 3.3.3 could not install the
      first paid block (it dropped a block's declared engine) and shipped Supabase SQL open to the public key. Anyone
      holding the 2026-10-04 3.3.3 should update (README, "Updating AEON"). -->
