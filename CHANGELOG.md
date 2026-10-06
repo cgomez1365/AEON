@@ -21,8 +21,8 @@ tagged; until then its heading says so.
      583d020, 7734563, 7c086bc, 4647906, 58586fc: terminal bugs and their review fixes; 24964eb, 72fc893, a8ce8c0,
      e3bc8d6, 67d73ee, fd7ace6, 4196884, 104537a, d32b30a, f5c1e27, 9ea53cd: the rate-limit control; 3d4e411, 6f26f5d,
      42a774b, 5be5748, d04f857, bf6567b: gap closures and docs), then four fixes from the final review (0975f5d,
-     1099f91, d4f0657, 9c07925) and two changelog commits (ace26f1 and the one holding this note): 39 commits in
-     `git rev-list --count a26af72..HEAD`. History is not squashed. By the owner's choice the version number stays
+     1099f91, d4f0657, 9c07925), the lockfile refresh for two new advisories (e859fa6) and three changelog commits
+     (ace26f1, 721d484 and the one holding this note): 41 commits in `git rev-list --count a26af72..HEAD`. History is not squashed. By the owner's choice the version number stays
      3.3.3 and the v3.3.3 tag and release were moved to include them, because the first 3.3.3 could not install the
      first paid block (it dropped a block's declared engine) and shipped Supabase SQL open to the public key. Anyone
      holding the 2026-10-04 3.3.3 should update (README, "Updating AEON"). -->
@@ -147,6 +147,12 @@ only proof is a test against a stand-in for the outside service; CI cannot prove
   not to write one (not measured to lower how often it does). Not covered: a marker split across an auto-continue seam,
   and turns with tools off. Tests: `tests/result-marker-echo.test.js` (58586fc adds tests for the Claude notice, the
   native-tool remedy and the embed cut warning).
+- **Two new dependency advisories cleared (e859fa6).** `npm audit` began reporting two advisories published after the
+  last green run: `proxy-addr` (critical, IP spoofing through an IPv4-mapped IPv6 trust subnet; it arrives through
+  `express`) and `source-map-js` (high, denial of service through source-map section offsets; a build-time
+  dependency). Both have non-breaking fixes, so the lockfile now pins `proxy-addr` 2.0.8 and `source-map-js` 1.2.2.
+  `package.json` and the version are untouched. `npm run scan:audit` passes with only the reviewed `@grpc/grpc-js`
+  acceptance (review by 2026-10-31).
 
 **A new block costs one rebuild, not two.** AEON rewrites a block's `block.manifest.json` the first time it
 boots (routes written in, keys re-ordered), so the same manifest had two byte forms and a block's first restart
