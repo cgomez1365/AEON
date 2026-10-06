@@ -261,7 +261,8 @@ whether a value came from a default or a user override.
   /api/connections/discover` (probe a base URL for models), `DELETE
   /api/connections/:id`, `POST /api/connections/:id/rpm` (the operator's
   requests-per-minute limit, 0 to 600, 0 = no pacing, empty = the provider
-  default; changes only that field and is audited as `CONN_RPM`), `POST
+  default; changes only that field and is audited as `CONN_RPM`; refused for the
+  `local` connection, which is not paced), `POST
   /api/connections/assign-role`, `GET /api/connections/resolve/:role`
   (debug — never leaks the key, only reports presence), `POST
   /api/connections/sync` (force-push the local registry + vault to the

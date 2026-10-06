@@ -139,6 +139,7 @@ module.exports = (app, deps) => {
         const n = endpoints.normalizeRpmLimit(rpm_limit);
         if (!n.ok) return res.status(400).json({ error: n.error });
         if (!n.unset) rpmValue = n.value;
+        if (rpmValue !== undefined && !endpoints.isPaced(provider)) return res.status(400).json({ error: endpoints.LOCAL_NOT_PACED });
       }
       // Stored trimmed — it used to go into the vault exactly as pasted.
       const apiKey = req.body?.apiKey ? String(req.body.apiKey).trim() : '';

@@ -56,6 +56,15 @@ describe('the words that explain the limit', () => {
     expect(help).toMatch(/lowest number among the models you use/);
   });
 
+  it('says the local runtime is not paced, in the README and on the card', () => {
+    expect(section).toMatch(/runs on this computer/i);
+    expect(section).toMatch(/not paced/i);
+    expect(help).toMatch(/ep\.provider === 'local'/);
+    expect(help).toMatch(/runs on this computer/);
+    // The Add form does not offer a limit for it, and does not send a stale one.
+    expect(ui).toMatch(/form\.provider === 'local' \? undefined/);
+  });
+
   it('quotes no provider rate number anywhere it explains the limit', () => {
     // The numbers on a provider's dashboard change. The words must not carry them.
     for (const [where, text] of [['README section', section], ['PacingRow help', help], ['Add form help', form]]) {

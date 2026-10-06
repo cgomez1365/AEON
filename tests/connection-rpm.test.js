@@ -292,6 +292,38 @@ describe('an update never discards what the operator set', () => {
   });
 });
 
+describe('the model that runs on this computer is not paced, and says so', () => {
+  // The native local runtime has no provider quota to stay under, and no call
+  // to it passes through the pacing seam. A limit saved on it would read
+  // "Paced to N requests/min" on the card while nothing was ever delayed.
+  it('POST /:id/rpm refuses a local connection and leaves the row as it was', async () => {
+    fs.rmSync(REG_FILE, { force: true });
+    await endpoints.addEndpoint({ id: 'loc', provider: 'local', models: ['m'] });
+    const r = await setRpm('loc', 5);
+    expect(r.status).toBe(400);
+    expect(r.body.error).toMatch(/runs on this computer/);
+    expect(r.body.error).toMatch(/does not pace it/);
+    expect(rowOnDisk('loc').rpm_limit ?? null).toBeNull();
+    expect(audits.filter((a) => a.action === 'CONN_RPM')).toHaveLength(0);
+  });
+
+  it('the Add form refuses a limit on a local connection before saving anything', async () => {
+    const r = await post('/api/connections', { id: 'loc2', provider: 'local', rpm_limit: 5 });
+    expect(r.status).toBe(400);
+    expect(r.body.error).toMatch(/runs on this computer/);
+    expect(rowOnDisk('loc2')).toBeUndefined();
+  });
+
+  it('a local connection with no limit is added as before, and a cloud one is still paced', async () => {
+    const ok = await post('/api/connections', { id: 'loc3', provider: 'local' });
+    expect(ok.status, JSON.stringify(ok.body)).toBe(200);
+    expect(rowOnDisk('loc3').rpm_limit ?? null).toBeNull();
+    const cloud = await post('/api/connections', { id: 'g7', provider: 'gemini', rpm_limit: 4 });
+    expect(cloud.status).toBe(200);
+    expect(rowOnDisk('g7').rpm_limit).toBe(4);
+  });
+});
+
 describe('the registry helpers', () => {
   it('normalizeRpmLimit separates "unset" from a number from a refusal', () => {
     expect(endpoints.normalizeRpmLimit(7)).toEqual({ ok: true, value: 7 });

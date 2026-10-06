@@ -318,6 +318,12 @@ function rpmDefault(provider) {
 const RPM_MAX = 600;
 const RPM_REFUSAL = `Requests per minute must be a whole number from 0 to ${RPM_MAX}. Type the number from your provider's own rate-limits page, 0 to turn pacing off, or leave it empty to use the default.`;
 
+// The native local runtime runs on this computer: it has no provider quota to
+// stay under, and no call to it passes through the pacing seam, so a limit saved
+// on it would be a promise nothing keeps. Refused instead (claim discipline).
+const LOCAL_NOT_PACED = "This connection is the model that runs on this computer. It has no provider limit to stay under, so AEON does not pace it.";
+const isPaced = (provider) => provider !== 'local';
+
 /**
  * Read an operator-typed limit. Returns { ok: true, value } for a number
  * (0 = no limit), { ok: true, unset: true } for empty/null (use the provider
@@ -355,6 +361,7 @@ async function setRpmLimit(id, raw, supabase) {
     err.status = 404;
     throw err;
   }
+  if (!isPaced(ep.provider)) { const err = new Error(LOCAL_NOT_PACED); err.status = 400; throw err; }
   const previous = ep.rpm_limit ?? null;
   const next = n.unset ? rpmDefault(ep.provider) : n.value;
   if (next !== previous || !('rpm_limit' in ep)) {
@@ -1213,7 +1220,7 @@ module.exports = {
   PROVIDER_TRANSPORT, load, save, modelRefusal,
   addEndpoint: serialized(addEndpoint),
   setRpmLimit: serialized(setRpmLimit),
-  normalizeRpmLimit, rpmDefault,
+  normalizeRpmLimit, rpmDefault, isPaced, LOCAL_NOT_PACED,
   removeEndpoint: serialized(removeEndpoint),
   assignRole: serialized(assignRole),
   discoverModels, discoverModelCatalogue, resolveForRole, resolveForProvider, isVercel,

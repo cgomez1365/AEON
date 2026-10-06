@@ -1168,6 +1168,15 @@ function PacingRow({ ep, onChange }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
 
+  // The model that runs on this computer has no provider quota; AEON paces
+  // nothing on it, so the card says that instead of offering a number.
+  if (ep.provider === 'local') {
+    return (
+      <div className="conn-pacing">
+        <div className="conn-pacing-line"><span>Not paced (runs on this computer)</span></div>
+      </div>
+    );
+  }
   const limit = ep.rpm_limit ?? null;
   const dflt = ep.rpm_default ?? null;
   const line =
@@ -1429,7 +1438,7 @@ function ConnectionsPanel({ nervousSystem }) {
           models: form.selectedModel ? [form.selectedModel, ...form.models.filter(m => m !== form.selectedModel)] : form.models,
           apiKey: form.apiKey || undefined,
           preferred_model: (form.manualModel ? form.modelName : form.selectedModel) || undefined,
-          rpm_limit: form.rpmLimit === '' || form.rpmLimit == null ? undefined : Number(form.rpmLimit),
+          rpm_limit: form.provider === 'local' ? undefined : form.rpmLimit === '' || form.rpmLimit == null ? undefined : Number(form.rpmLimit),
         }),
       });
       const d = await r.json();
@@ -1624,7 +1633,9 @@ function ConnectionsPanel({ nervousSystem }) {
 
           {/* The number comes from the operator's own provider dashboard; AEON
               ships none for a named provider. Offered for every provider so a
-              connection can be created already paced. */}
+              connection can be created already paced. Not for the model that runs
+              on this computer: nothing paces it, so no limit is offered. */}
+          {form.provider !== 'local' && (
           <label className="settings-field" style={{ marginTop: 8 }}>
             <span className="settings-label">Requests per minute limit (optional)</span>
             <input className="settings-input" type="number" min="0" max="600" step="1"
@@ -1637,6 +1648,7 @@ function ConnectionsPanel({ nervousSystem }) {
               or enter 0 for no limit. You can change it later on the connection's card.
             </span>
           </label>
+          )}
           <div className="conn-add-footer">
             <button type="button" className="settings-btn settings-btn--secondary" onClick={() => setAdding(false)}>Cancel</button>
             <button type="button" className="settings-btn settings-btn--primary" onClick={saveConn}
