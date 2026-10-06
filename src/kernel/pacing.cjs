@@ -35,11 +35,19 @@ function paceKey(baseUrl, provider, credentialRef) {
  * Wait until this endpoint's budget allows another call. Delays rather than
  * rejecting, so a long run slows down instead of failing — but never waits
  * unboundedly: past the cap it throws a flagged error the caller can report.
+ *
+ * `onWait({ waitMs, rpm })` is called ONCE per call, the first time it has to
+ * wait, so the caller can tell the operator their limit is slowing this call.
+ * `signal` ends the wait at once (Stop). The give-up error carries `rpm` and
+ * `waitMs` as fields; callers build their sentence from those, never from the
+ * message text.
  */
-async function pace(key, rpm, { maxWaitMs = 60_000 } = {}) {
+async function pace(key, rpm, { maxWaitMs = 60_000, onWait, signal } = {}) {
   if (!rpm || rpm <= 0) return;
   const started = Date.now();
+  let announced = false;
   for (;;) {
+    if (signal && signal.aborted) throw signal.reason || new Error('Cancelled');
     const b = _buckets.get(key) || { stamps: [] };
     const cutoff = Date.now() - 60_000;
     b.stamps = b.stamps.filter(t => t > cutoff);
@@ -53,10 +61,27 @@ async function pace(key, rpm, { maxWaitMs = 60_000 } = {}) {
     if (Date.now() - started + waitFor > maxWaitMs) {
       const err = new Error('This endpoint is at its requests-per-minute limit. Wait a moment and try again, or raise the limit in Settings → Keys.');
       err.localThrottle = true; // structural — never scraped from message text
+      err.rpm = rpm;
+      err.waitMs = waitFor;
       throw err;
     }
-    await new Promise(r => setTimeout(r, Math.min(waitFor, 2000)));
+    if (!announced && typeof onWait === 'function') {
+      announced = true;
+      try { onWait({ waitMs: waitFor, rpm }); } catch { /* a notice must never break the call it describes */ }
+    }
+    await _sleep(Math.min(waitFor, 2000), signal);
   }
+}
+
+// A sleep Stop can interrupt. Resolves on abort too; the loop re-checks the
+// signal and throws, so there is one place that decides what cancelling means.
+function _sleep(ms, signal) {
+  return new Promise((resolve) => {
+    if (signal && signal.aborted) return resolve();
+    const t = setTimeout(done, ms);
+    function done() { clearTimeout(t); if (signal) signal.removeEventListener('abort', done); resolve(); }
+    if (signal) signal.addEventListener('abort', done, { once: true });
+  });
 }
 
 /**

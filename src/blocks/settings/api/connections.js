@@ -65,7 +65,10 @@ module.exports = (app, deps) => {
       const reg = await endpoints.load(supabase);
       const refs = vault.isUnlocked() ? await vault.listRefs(supabase) : [];
       res.json({
-        endpoints: reg.endpoints,
+        // rpm_default is added to this response copy only (the Settings card
+        // shows "Default: N/min" when the limit is the provider's own); it is
+        // never written back to the registry.
+        endpoints: (reg.endpoints || []).map(e => ({ ...e, rpm_default: endpoints.rpmDefault(e.provider) })),
         roles: reg.roles,
         // Per connection: how many accounts it holds, which one is up next,
         // which are resting. Refs only — a ref is a name, never key material.
@@ -129,6 +132,14 @@ module.exports = (app, deps) => {
       const { id, label, provider, base_url, models, reachable_from,
               preferred_model, rpm_limit } = req.body || {};
       if (!provider) return res.status(400).json({ error: 'provider required' });
+      // Same reading of the limit as POST /:id/rpm, and before anything is
+      // written: a refused limit must not leave a key behind in the vault.
+      let rpmValue;
+      if (rpm_limit !== undefined) {
+        const n = endpoints.normalizeRpmLimit(rpm_limit);
+        if (!n.ok) return res.status(400).json({ error: n.error });
+        if (!n.unset) rpmValue = n.value;
+      }
       // Stored trimmed — it used to go into the vault exactly as pasted.
       const apiKey = req.body?.apiKey ? String(req.body.apiKey).trim() : '';
       if (apiKey) {
@@ -164,14 +175,20 @@ module.exports = (app, deps) => {
         if (Array.isArray(found)) modelList = found;
       }
       // Keep a hand-typed model usable even when discovery returned nothing.
-      if (preferred_model && !(modelList || []).includes(preferred_model)) {
-        modelList = [preferred_model, ...(modelList || [])];
+      // On a re-save the list it joins is the one already on the connection.
+      if (preferred_model) {
+        const prior = id ? ((await endpoints.load(supabase)).endpoints || []).find(e => e.id === id && e.provider === provider) : null;
+        const known = modelList && modelList.length ? modelList : (prior?.models || []);
+        if (!known.includes(preferred_model)) modelList = [preferred_model, ...known];
       }
 
+      // What the caller did not send is passed as undefined, which addEndpoint
+      // reads as "leave it as it is" — an empty list or a null is a decision.
       const ep = await endpoints.addEndpoint({
-        id, label, provider, base_url, models: modelList, reachable_from, auth_ref,
-        preferred_model: preferred_model || null,
-        rpm_limit: Number.isFinite(rpm_limit) ? rpm_limit : undefined,
+        id, label, provider, base_url, reachable_from, auth_ref,
+        models: Array.isArray(modelList) && modelList.length ? modelList : undefined,
+        preferred_model: preferred_model || undefined,
+        rpm_limit: rpmValue,
       }, supabase);
       audit('CONN_ADD', `Endpoint ${ep.id} (${provider})`, 200, 0);
       res.json({ ok: true, endpoint: ep });
@@ -181,6 +198,32 @@ module.exports = (app, deps) => {
       // "internal server error".
       res.status(e.status || 500).json({ error: e.message });
     }
+  });
+
+  // ── POST /api/connections/:id/rpm — the operator's requests-per-minute limit ─
+  //
+  // ONE field, nothing else on the row. The value is the operator's own account
+  // policy, read off their provider's dashboard; no provider's number lives in
+  // AEON. 0 = no pacing, empty = the provider default (only "custom" has one).
+  // Takes effect on the next call: the router re-reads the registry per resolve.
+  app.post('/api/connections/:id/rpm', async (req, res) => {
+    try {
+      const body = req.body || {};
+      if (!Object.prototype.hasOwnProperty.call(body, 'rpm_limit')) {
+        return res.status(400).json({ error: 'Send rpm_limit: a whole number from 0 to 600, 0 for no pacing, or empty to use the default.' });
+      }
+      const { endpoint, previous } = await endpoints.setRpmLimit(req.params.id, body.rpm_limit, supabase);
+      const next = endpoint.rpm_limit ?? null;
+      const changed = next !== previous;
+      if (changed) {
+        audit('CONN_RPM', `Endpoint ${endpoint.id} (${endpoint.provider}) rpm_limit ${previous ?? 'unset'} -> ${next ?? 'unset'}`, 200, 0);
+      }
+      res.json({
+        ok: true, changed,
+        endpoint: { ...endpoint, rpm_default: endpoints.rpmDefault(endpoint.provider) },
+        rpm: { limit: next, previous, default: endpoints.rpmDefault(endpoint.provider) },
+      });
+    } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
   });
 
   // ── DELETE /api/connections/:id ────────────────────────────────────

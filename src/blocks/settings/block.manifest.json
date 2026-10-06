@@ -122,6 +122,11 @@
     },
     {
       "method": "POST",
+      "path": "/api/connections/:id/rpm",
+      "auth": true
+    },
+    {
+      "method": "POST",
       "path": "/api/connections/assign-role",
       "auth": true
     },
