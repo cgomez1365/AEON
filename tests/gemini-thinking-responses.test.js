@@ -110,6 +110,8 @@ fake.post(/[gG]enerateContent$/, (req, res) => {
   if (mode === 'errorInStream') {
     return streaming ? sse(res, [GOOGLE_503]) : res.status(503).json(GOOGLE_503);
   }
+  // The same failure as a 200 body on the non-streaming call too.
+  if (mode === 'errorBody200') return reply([GOOGLE_503]);
   if (mode === 'http503') return res.status(503).json(GOOGLE_503);
   if (mode === 'trulyEmpty') return reply([cand([{ text: '' }], 'STOP')]);
   res.status(500).end();
@@ -209,15 +211,16 @@ describe('an answer that never came says why', () => {
     mode = 'thinkingSpent';
     const err = await stream().catch((e) => e);
     expect(err).toBeInstanceOf(Error);
-    expect(block(err)).toMatch(/budget|max_tokens/i);
+    expect(block(err)).toMatch(/whole output budget/);
     expect(block(err)).not.toMatch(/empty response/i);
+    expect(err.reasoningExhausted || err.cause?.reasoningExhausted).toBeTruthy();
   });
 
   it('non-streaming: the same turn is an error, never an empty string returned as success', async () => {
     mode = 'thinkingSpent';
     const out = await ai.kernelLLM('hello', { role: 'chat' }).then((t) => ({ t }), (e) => ({ e }));
     expect(out.e).toBeInstanceOf(Error);
-    expect(block(out.e)).toMatch(/budget|max_tokens/i);
+    expect(block(out.e)).toMatch(/whole output budget/);
   });
 
   it('a prompt Google refused names the block reason', async () => {
@@ -247,6 +250,23 @@ describe('a provider failure is reported as that failure', () => {
     const err = await stream().catch((e) => e);
     expect(block(err)).toMatch(/503|overloaded/i);
     expect(block(err)).not.toMatch(/empty response/i);
+  });
+
+  it('non-streaming: an error body under HTTP 200 is the 503, not "empty response"', async () => {
+    mode = 'errorBody200';
+    const out = await ai.kernelLLM('hello', { role: 'chat' }).then((t) => ({ t }), (e) => ({ e }));
+    expect(out.e).toBeInstanceOf(Error);
+    expect(block(out.e)).toMatch(/503|overloaded/i);
+    expect(block(out.e)).not.toMatch(/empty response/i);
+  });
+
+  it('the call log records the status of an error body under HTTP 200 (non-streaming)', async () => {
+    mode = 'errorBody200';
+    await ai.kernelLLM('hello', { role: 'chat' }).catch(() => {});
+    const row = ledgerRows().reverse().find((r) => r.success === false);
+    expect(row).toBeTruthy();
+    expect(row.status).toBe(503);
+    expect(String(row.error)).toMatch(/overloaded/i);
   });
 
   it('the call log records the status and the reason of an HTTP 503 (streaming)', async () => {
