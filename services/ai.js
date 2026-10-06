@@ -2585,6 +2585,10 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   const _nextStep = (attempts, o = {}) => {
     const seen = attempts.map((a) => ({ a, why: _attemptReason(a) }));
     const has = (why, p) => seen.find((x) => x.why === why && (!p || x.a.provider === p));
+    // The operator's own limit is the cheapest remedy there is (a number they
+    // set, free to change), so it leads whatever else the chain met.
+    const atLimit = seen.find((x) => x.a.localThrottle);
+    if (atLimit) return `Raise or clear the requests-per-minute limit on ${atLimit.a.provider} in Settings → Keys, or try again in a minute.`;
     const orBroke = seen.filter((x) => x.why === 'out of credits' && x.a.provider === 'openrouter');
     if (orBroke.some((x) => _isFreeOpenRouterModel(x.a.model))) {
       return 'Add OpenRouter credits — its free models were refused too — or assign another provider in Settings → Models.';
@@ -2603,8 +2607,6 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     if (has('no chat model running') || has('no chat model installed') || has('no local engine installed') || has('stopped responding')) {
       return o.localOnly ? 'Check the local model in Cookbook.' : 'Check the local model in Cookbook, or add a key or credits in Settings.';
     }
-    const atLimit = seen.find((x) => x.a.localThrottle);
-    if (atLimit) return `Raise or clear the requests-per-minute limit on ${atLimit.a.provider} in Settings → Keys, or try again in a minute.`;
     return 'Add a key or credits in Settings, or try again shortly.';
   };
 

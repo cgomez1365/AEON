@@ -439,3 +439,24 @@ describe('Claude assigned in Settings: the legacy branch cannot bypass the limit
     } finally { delete process.env.ANTHROPIC_API_KEY; }
   });
 });
+
+describe('the closing step names the limit even when a local floor failed too', () => {
+  it('a limit plus a local runtime with no chat model ends on the limit\'s remedy', async () => {
+    const saved = { isAvailable: lrStub.isAvailable, infer: lrStub.infer };
+    lrStub.isAvailable = () => true;
+    lrStub.infer = async () => { throw new Error('No local model is installed'); };
+    try {
+      use([geminiRow(1)], 'gemini', 'gemini-flash-latest');
+      const key = burstKey(`http://127.0.0.1:${ports.gemini}/v1beta`, 'gemini', 'gem-k1');
+      pacing._reset();
+      await pacing.pace(key, 1000);
+      const p = ai.kernelLLM('second', { role: 'chat' }).catch((e) => e);
+      await idle(3_000);
+      await pacing.pace(key, 1000);
+      const err = await settle(p);
+      expect(err.message).toMatch(/gemini is at your limit of 1 requests\/min/);
+      expect(err.message).toMatch(/Raise or clear the requests-per-minute limit on gemini in Settings → Keys/);
+      expect(err.message, 'the closing step sent the operator to keys and credits').not.toMatch(/Check the local model|add a key or credits/i);
+    } finally { Object.assign(lrStub, saved); }
+  });
+});
