@@ -150,6 +150,11 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   // under a 200 or as a 400: "Tool choice is none, but model called a tool"
   // (the CEO's drive, 2026-10-05). It is the model's FORMAT on this request,
   // not the provider failing: the same model is asked once more, told not to.
+  //
+  // That is learned once, not every round: a refusal is remembered per
+  // provider+model for 30 minutes (in memory only, cleared with the health
+  // reset), and the note then goes on the FIRST request. Only a refusal that
+  // still comes with the note up front is held against the provider.
   const _NATIVE_TOOL_RE = /tool choice is none|model called a tool|tool_use_failed/i;
   const _isNativeToolRefusal = (e) => _NATIVE_TOOL_RE.test(String(e?.message || ''));
   const NO_NATIVE_TOOLS_NOTE = 'Function calling is not available in this chat: never emit a tool or function call. Reply in plain text only; an AEON tool is used by writing its aeon-tool block as text, when one is described above.';
@@ -159,6 +164,17 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     if (at !== -1 && list[at].content.includes(NO_NATIVE_TOOLS_NOTE)) return list;
     if (at === -1) return [{ role: 'system', content: NO_NATIVE_TOOLS_NOTE }, ...list];
     return list.map((m, i) => (i === at ? { ...m, content: `${m.content}\n\n${NO_NATIVE_TOOLS_NOTE}` } : m));
+  };
+  const NATIVE_REFUSAL_MEMORY_MS = 30 * 60 * 1000;
+  const _nativeRefusedAt = new Map(); // `${provider}\u0000${model}` -> when it last refused
+  const _nativeKey = (c) => `${c.provider}\u0000${c.model || ''}`;
+  const _rememberNativeRefusal = (c) => { _nativeRefusedAt.set(_nativeKey(c), Date.now()); };
+  const _knowsNativeRefusal = (c) => {
+    const at = _nativeRefusedAt.get(_nativeKey(c));
+    if (at === undefined) return false;
+    if (Date.now() - at < NATIVE_REFUSAL_MEMORY_MS) return true;
+    _nativeRefusedAt.delete(_nativeKey(c));
+    return false;
   };
   const _nativeToolNotice = (p) => `${p} tried a native tool call → asked again in plain text`;
 
@@ -306,6 +322,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     for (const k of Object.keys(providerHealth)) delete providerHealth[k];
     for (const k of Object.keys(_failStreak)) delete _failStreak[k];
     for (const k of Object.keys(paidRest)) delete paidRest[k];
+    _nativeRefusedAt.clear();
     for (const k of Object.keys(_paceNoticeAt)) delete _paceNoticeAt[k];
     _paceTold = new WeakMap();
   };
@@ -2032,7 +2049,10 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       }
       opts.onAttempt?.({ provider: c.provider, model: c.model, fallback });
 
-      const sent = c.noNativeTools ? _withNoNativeTools(c.trimmedMessages || messages) : (c.trimmedMessages || messages);
+      // The note is up front when this model has refused before; a refusal
+      // that comes back anyway is not asked again (see below).
+      const noteUpFront = !!c.noNativeTools || _knowsNativeRefusal(c);
+      const sent = noteUpFront ? _withNoNativeTools(c.trimmedMessages || messages) : (c.trimmedMessages || messages);
       const callOpts = c.trimmedMaxTokens ? { ...opts, max_tokens: c.trimmedMaxTokens } : opts;
       let partial = '';
       let served = 0;
@@ -2106,8 +2126,11 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
         // A native tool call the provider refused is the model's format, not
         // the provider: the same candidate is asked once more with a note not
         // to call functions, and nothing has reached the operator (served is 0
-        // here). A second refusal moves on like any other failure.
-        if (_isNativeToolRefusal(e) && !c.noNativeTools) {
+        // here). It is remembered for the model, so the next request sends the
+        // note first. A refusal that comes WITH the note moves on like any
+        // other failure, and counts toward resting the provider.
+        if (_isNativeToolRefusal(e)) _rememberNativeRefusal(c);
+        if (_isNativeToolRefusal(e) && !noteUpFront) {
           console.warn(`[KERNEL] stream ${c.provider} refused a native tool call (${_redactKeys(e.message).slice(0, 120)}); asking again in plain text`);
           candidates.splice(i + 1, 0, { ...c, retryOf: root, noNativeTools: true });
           opts.onFallback?.({ from: c.provider, to: c.provider, model: c.model, reason: _plainReason(e), notice: _nativeToolNotice(c.provider) });

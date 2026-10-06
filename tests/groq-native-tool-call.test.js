@@ -17,7 +17,7 @@
  *
  * REAL services/ai.js; fetch is mocked, so nothing leaves the machine.
  */
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -72,6 +72,11 @@ const fakeFetch = async (url, init = {}) => {
   groqSeen.push(body);
   const step = plan[Math.min(groqSeen.length - 1, plan.length - 1)];
   if (step === 'refuse') return sseResponse({ error: REFUSAL });
+  // A model that calls a tool until it is told not to, as gpt-oss did live.
+  if (step === 'refuseUnlessTold') {
+    return JSON.stringify(body.messages).includes('never emit a tool or function call')
+      ? sseResponse(textChunk('from-groq'), '[DONE]') : sseResponse({ error: REFUSAL });
+  }
   if (step === 'refuse400') return new Response(JSON.stringify({ error: REFUSAL }), { status: 400, headers: { 'content-type': 'application/json' } });
   // The refusal in each of the other two wordings the detector knows, alone.
   if (step === 'refuseCode') return new Response(JSON.stringify({ error: { message: 'Failed to call a function. Please adjust your prompt.', type: 'invalid_request_error', code: 'tool_use_failed' } }), { status: 400, headers: { 'content-type': 'application/json' } });
@@ -167,10 +172,14 @@ describe('a native tool call that Groq refuses (tool_choice is none)', () => {
   }
 
   it('a refusal is the model\'s format, not Groq down: no rest, no failure streak', async () => {
+    // It refuses until told not to; told, it answers. After the first turn it
+    // is told up front, so the later turns refuse nothing and strike nothing.
+    plan = ['refuseUnlessTold'];
     for (let i = 0; i < 4; i++) {
-      plan = ['refuse', 'answer'];
       groqSeen.length = 0;
-      await run();
+      const { r } = await run();
+      expect(r).toMatchObject({ provider: 'groq', text: 'from-groq' });
+      expect(groqSeen.length).toBe(i === 0 ? 2 : 1);
     }
     const h = ai.getProviderHealth().groq;
     expect(h.healthy).toBe(true);
@@ -235,5 +244,124 @@ describe('a native tool call that Groq refuses (tool_choice is none)', () => {
     expect(err).toBeInstanceOf(Error);
     expect(err.message).toMatch(/groq tried a native tool call/);
     expect(err.message).toMatch(/Ask again, or assign a different model for this role in Settings/);
+  });
+});
+
+// The refusal is remembered. Without that, every round of an agent turn spent
+// a free-tier Groq request on a call known to fail, then retried; and a model
+// that refuses even WITH the note took two requests a turn and a strike each.
+// Memory is per provider+model, in process only, for 30 minutes, and ends with
+// the same health reset the cooldowns use.
+describe('a refusal is remembered for the model, for a while', () => {
+  const NOTE = /never emit a tool or function call/ig;
+  const noteCount = (body) => (body.messages.map((m) => String(m.content)).join('\n').match(NOTE) || []).length;
+  const MIN = 60 * 1000;
+  afterEach(() => { vi.restoreAllMocks(); delete settingsNow.local_only; });
+  const later = (ms) => { const t = Date.now() + ms; vi.spyOn(Date, 'now').mockImplementation(() => t); };
+
+  it('the next turn sends the note on its FIRST request and spends exactly one', async () => {
+    plan = ['refuse', 'answer'];
+    await run();
+    expect(groqSeen.length).toBe(2);
+    groqSeen.length = 0;
+    plan = ['answer'];
+    const { r, fallbacks } = await run();
+    expect(groqSeen.length).toBe(1);
+    expect(noteCount(groqSeen[0])).toBe(1);
+    expect(groqSeen[0].model).toBe('openai/gpt-oss-120b');
+    expect(r).toMatchObject({ provider: 'groq', text: 'from-groq' });
+    expect(fallbacks).toEqual([]);
+    expect(localSeen.length).toBe(0);
+  });
+
+  it('nothing is remembered before a first refusal: a plain turn carries no note', async () => {
+    plan = ['answer', 'answer'];
+    await run(); await run();
+    expect(groqSeen.map(noteCount)).toEqual([0, 0]);
+  });
+
+  it('a refusal even WITH the note up front is one request, one strike, and a failover; three rest Groq', async () => {
+    plan = ['refuse', 'answer'];
+    await run();
+    groqSeen.length = 0;
+    plan = ['refuse'];
+    for (let i = 1; i <= 3; i++) {
+      const before = groqSeen.length;
+      const { r, fallbacks } = await run();
+      expect(groqSeen.length - before).toBe(1);
+      expect(noteCount(groqSeen[groqSeen.length - 1])).toBe(1);
+      expect(r).toMatchObject({ provider: 'local', text: 'from-local' });
+      expect(fallbacks.find((f) => f.to === 'local').reason).toMatch(/tool call/i);
+      expect(ai.getProviderHealth().groq.healthy).toBe(i < 3);
+    }
+  });
+
+  it('it is remembered for 30 minutes and then forgotten: the next try is a plain one again', async () => {
+    plan = ['refuse', 'answer'];
+    await run();
+    later(29 * MIN);
+    groqSeen.length = 0; plan = ['answer'];
+    await run();
+    expect(noteCount(groqSeen[0])).toBe(1);
+    later(31 * MIN);
+    groqSeen.length = 0; plan = ['refuse', 'answer'];
+    const { r } = await run();
+    expect(groqSeen.map(noteCount)).toEqual([0, 1]);
+    expect(r).toMatchObject({ provider: 'groq', text: 'from-groq' });
+  });
+
+  it('it is kept per model: another model on the same provider is not sent the note', async () => {
+    plan = ['refuse', 'answer'];
+    await run();
+    groqSeen.length = 0; plan = ['answer'];
+    const saved = settingsNow.models.chat.model;
+    settingsNow.models.chat.model = 'openai/gpt-oss-20b';
+    try { await run(); } finally { settingsNow.models.chat.model = saved; }
+    expect(groqSeen[0].model).toBe('openai/gpt-oss-20b');
+    expect(noteCount(groqSeen[0])).toBe(0);
+  });
+
+  it('the health reset forgets it', async () => {
+    plan = ['refuse', 'answer'];
+    await run();
+    ai._resetProviderHealth();
+    groqSeen.length = 0; plan = ['answer'];
+    await run();
+    expect(noteCount(groqSeen[0])).toBe(0);
+  });
+
+  it('the note is not doubled when a remembered turn is retried trimmed', async () => {
+    plan = ['refuse', 'answer'];
+    await run();
+    const long = [
+      { role: 'system', content: 'You are AEON. Tools: vault_search.' },
+      ...Array.from({ length: 30 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: `turn ${i} `.repeat(400) })),
+      { role: 'user', content: 'what is in my plan?' },
+    ];
+    groqSeen.length = 0; plan = ['tooLarge', 'answer'];
+    const { r } = await run(long);
+    expect(groqSeen.length).toBe(2);
+    expect(r).toMatchObject({ provider: 'groq', trimmed: true });
+    expect(groqSeen.map(noteCount)).toEqual([1, 1]);
+  });
+
+  it('a caller whose own messages already carry the note is not given it twice', async () => {
+    plan = ['refuse', 'answer'];
+    await run();
+    const once = TURN();
+    once[0] = { ...once[0], content: `${once[0].content}\n\nFunction calling is not available in this chat: never emit a tool or function call. Reply in plain text only; an AEON tool is used by writing its aeon-tool block as text, when one is described above.` };
+    groqSeen.length = 0; plan = ['answer'];
+    await run(once);
+    expect(noteCount(groqSeen[0])).toBe(1);
+  });
+
+  it('Local only still wins: a remembered refusal sends nothing to Groq', async () => {
+    plan = ['refuse', 'answer'];
+    await run();
+    groqSeen.length = 0; plan = ['answer'];
+    settingsNow.local_only = true;
+    const r = await run().catch((e) => e);
+    expect(groqSeen.length).toBe(0);
+    expect(r instanceof Error ? r.localOnly : r.r.provider).toBeTruthy();
   });
 });
