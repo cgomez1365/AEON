@@ -217,8 +217,10 @@ async function kernelEmbed(text, { supabase = null, kind = 'document', localOnly
     return { vector: await embedLocal(input), model: space, provider: 'local' };
   }
 
-  // Cloud: pace against the SAME per-address budget chat uses, before the call.
-  await pace(paceKey(r.base_url, r.provider), r.rpm_limit);
+  // Cloud: pace against the SAME per-credential budget chat uses, before the
+  // call. The credential is part of the key (pacing.cjs paceKey); leaving it
+  // out put indexing in a bucket of its own, beside the operator's limit.
+  await pace(paceKey(r.base_url, r.provider, r.credential_ref), r.rpm_limit);
 
   const style = (endpoints.PROVIDER_TRANSPORT[r.provider] || {}).style || 'openai';
   const vector = style === 'gemini'

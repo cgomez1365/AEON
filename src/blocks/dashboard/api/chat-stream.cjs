@@ -313,7 +313,13 @@ module.exports = function ({ kernelLLM, loadSettings: loadSettingsDep, VAULT_ROO
         role,
         // The agent's own model and privacy, on EVERY round and continuation;
         // nothing for a stock AEON, so Settings and roulette decide as before.
-        callOpts,
+        // onNotice carries one line when the operator's own requests-per-minute
+        // limit (Settings → Keys) makes the kernel wait, so a pause is explained
+        // on screen rather than looking like a hang.
+        callOpts: {
+          ...callOpts,
+          onNotice: (message) => sseWrite(res, 'notice', { level: 'info', code: 'pacing', message }),
+        },
         signal: abort.signal,
         toolbox,
         autoContinue,

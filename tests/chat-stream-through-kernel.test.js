@@ -13,7 +13,7 @@
  * fake OpenAI-compatible endpoint registered for the chat role and the local
  * runtime stubbed, and assert on the SSE the terminal would receive.
  */
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -27,6 +27,8 @@ const ENDPOINTS_PATH = path.join(ROOT, 'src', 'kernel', 'endpoints.cjs');
 const AI_PATH = path.join(ROOT, 'services', 'ai.js');
 const LR_PATH = path.join(ROOT, 'services', 'local-runtime', 'index.cjs');
 const STREAM_PATH = path.join(ROOT, 'src', 'blocks', 'dashboard', 'api', 'chat-stream.cjs');
+const PACING_PATH = path.join(ROOT, 'src', 'kernel', 'pacing.cjs');
+const realSetTimeout = globalThis.setTimeout;
 
 // AEON_SECRETS_DIR must be set BEFORE endpoints.cjs is loaded — it resolves
 // its registry path at module scope. Another file in this worker may already
@@ -278,5 +280,46 @@ describe('POST /api/chat/stream streams through kernelLLM.stream', () => {
     });
     expect(await ai.kernelLLM.describeRole('chat')).toEqual({ provider: 'custom', model: 'fake-model', contextTokens: 8192 });
     expect(typeof ai.kernelLLM.cancelAll()).toBe('number');
+  });
+});
+
+describe('the operator\'s requests-per-minute limit reaches the terminal', () => {
+  it('a paced wait is relayed as a notice event, in words, ahead of the answer', async () => {
+    mode = 'ok';
+    seen.length = 0;
+    const reg = JSON.parse(fs.readFileSync(REG_FILE, 'utf8'));
+    const row = reg.endpoints.find((e) => e.id === 'fake');
+    row.rpm_limit = 1; // the operator's number; arbitrary here
+    fs.writeFileSync(REG_FILE, JSON.stringify(reg, null, 2));
+
+    const pacing = require(PACING_PATH);
+    pacing._reset();
+    // The one slot is already spent, so this turn has to wait for it.
+    await pacing.pace(pacing.paceKey(row.base_url, 'custom', null), 1000);
+
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    try {
+      let events = null;
+      const turn = stream({ message: 'paced' }).then((e) => { events = e; });
+      const deadline = performance.now() + 15_000;
+      while (!events && performance.now() < deadline) {
+        await vi.advanceTimersByTimeAsync(1000);
+        await new Promise((r) => realSetTimeout(r, 5));
+      }
+      await turn;
+      expect(events, 'the turn never finished').toBeTruthy();
+      const names = events.map((e) => e.event);
+      const note = events.find((e) => e.event === 'notice' && e.data?.code === 'pacing');
+      expect(note, `no pacing notice in: ${names.join(',')}`).toBeTruthy();
+      expect(note.data.level).toBe('info');
+      expect(note.data.message).toMatch(/^pacing: waiting \d+s for custom \(your limit: 1\/min/);
+      expect(names.indexOf('notice')).toBeLessThan(names.indexOf('token'));
+      expect(events.find((e) => e.event === 'done').data.text).toBe('Hello');
+    } finally {
+      vi.useRealTimers();
+      pacing._reset();
+      row.rpm_limit = null;
+      fs.writeFileSync(REG_FILE, JSON.stringify(reg, null, 2));
+    }
   });
 });

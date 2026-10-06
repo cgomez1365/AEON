@@ -74,6 +74,38 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   // buckets would each grant the full quota and the endpoint would answer with
   // the 429 this exists to prevent.
   const { pace: _pace, paceKey: _paceKey } = require('../src/kernel/pacing.cjs');
+
+  // The operator's own requests-per-minute limit (Settings → Keys), applied at
+  // every transport. When it makes AEON wait, the operator is told in one line
+  // — through opts.onNotice (the chat stream turns it into a notice) and the
+  // system log — instead of a silent pause. When pace() gives up, the error is
+  // reworded from its structured fields to say whose limit it is and where to
+  // change it: that is the operator's setting, not a provider outage.
+  const _paceNoticeAt = {};
+  const _paceFor = async (opts, key, label) => {
+    if (!opts.rpm_limit || opts.rpm_limit <= 0) return;
+    try {
+      await _pace(key, opts.rpm_limit, {
+        signal: opts.signal,
+        onWait: ({ waitMs, rpm }) => {
+          // A burst (Council, parallel agent tools) would print one line per call.
+          const since = Date.now() - (_paceNoticeAt[key] || 0);
+          if (since >= 0 && since < 10_000) return;
+          _paceNoticeAt[key] = Date.now();
+          const message = `pacing: waiting ${Math.ceil(waitMs / 1000)}s for ${label} (your limit: ${rpm}/min — change it in Settings → Keys)`;
+          console.warn(`[KERNEL] ${message}`);
+          notify(message, { provider: label });
+          try { opts.onNotice?.(message); } catch { /* a notice never breaks the call */ }
+        },
+      });
+    } catch (e) {
+      if (e && e.localThrottle) {
+        e.provider = label;
+        e.message = `${label} is at your limit of ${e.rpm} requests/min and the next free slot is ${Math.ceil(e.waitMs / 1000)}s away. AEON stopped waiting. Raise or clear the limit in Settings → Keys.`;
+      }
+      throw e;
+    }
+  };
   // One reading of Retry-After, shared with the credential pool that acts on it.
   const { parseRetryAfter: _parseRetryAfter } = require('../src/kernel/keyPool.cjs');
 
@@ -124,6 +156,8 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   // A status is read before any body text: Groq's 413 body links its billing
   // page and a Gemini 429 body mentions billing, and neither is out of credits.
   const _plainReason = (e) => {
+    // The operator's own requests-per-minute limit, not anything the provider did.
+    if (typeof e !== 'number' && e?.localThrottle) return `at your limit of ${e.rpm} requests/min (Settings → Keys)`;
     const status = typeof e === 'number' ? e : _failureStatus(e);
     const msg = typeof e === 'number' ? '' : String(e?.message || '');
     if (status === 402) return 'out of credits';
@@ -180,6 +214,9 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   const _roleConfigFault = (p, e) => p === 'local' && /^Model ".*" is not ready$/.test(String(e?.message || ''));
   const noteProviderFailure = (p, e) => {
     if (_roleConfigFault(p, e)) return;
+    // The operator's own limit made AEON stop waiting. The provider did nothing
+    // wrong, so it is not counted toward the streak that rests it.
+    if (e?.localThrottle) return;
     const n = (_failStreak[p] || 0) + 1;
     _failStreak[p] = n;
     if (n >= FAIL_STREAK_LIMIT) {
@@ -257,6 +294,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     for (const k of Object.keys(providerHealth)) delete providerHealth[k];
     for (const k of Object.keys(_failStreak)) delete _failStreak[k];
     for (const k of Object.keys(paidRest)) delete paidRest[k];
+    for (const k of Object.keys(_paceNoticeAt)) delete _paceNoticeAt[k];
   };
 
   // ── OpenRouter: paid out of credits is not OpenRouter down ─────────────
@@ -761,6 +799,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       body.system = 'If this task involves a non-obvious judgment call, an ambiguous tradeoff, or something you are not fully certain about, consult the advisor tool before finalizing your answer. For straightforward tasks, answer directly.';
       body.tools = [{ type: 'advisor_20260301', name: 'advisor', model: advisorModel }];
     }
+    await _paceFor(opts, _paceKey('https://api.anthropic.com/v1', 'claude', opts.credential_ref), 'claude');
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST', headers, body: JSON.stringify(body),
     });
@@ -1050,7 +1089,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     if (opts.system) messages.unshift({ role: 'system', content: opts.system });
     const maxTokens = _maxTokensFor(opts.provider, baseUrl, model, opts.max_tokens);
     // Pace before the call, not after the 429.
-    await _pace(_paceKey(baseUrl, opts.provider, opts.credential_ref), opts.rpm_limit);
+    await _paceFor(opts, _paceKey(baseUrl, opts.provider, opts.credential_ref), opts.provider || 'this endpoint');
     const response = await fetch(url, {
       method: 'POST', headers,
       body: JSON.stringify({ model, messages, max_tokens: maxTokens }),
@@ -1154,7 +1193,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     if (opts.system) contents.unshift({ role: 'user', parts: [{ text: opts.system }] });
     // Gemini paced nowhere, so a free key's per-minute cap was discovered only
     // by hitting it. Same budget seam as every other transport.
-    await _pace(_paceKey(base, 'gemini', opts.credential_ref), opts.rpm_limit);
+    await _paceFor(opts, _paceKey(base, 'gemini', opts.credential_ref), 'gemini');
     const maxTokens = opts.max_tokens || 4096;
     const response = await fetch(url, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1248,6 +1287,8 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
         const status = _statusOf(e);
         const rotatable = total > 1 && tries < total
           && !e.streamStarted
+          // The operator's own limit on this connection is not a key's fault.
+          && !e.localThrottle
           && (e.keyUnsendable || aeonEndpoints?.isCredentialFault?.(status) || status === 429 || status === 402 || /429|402|rate limit|quota/i.test(e.message || ''));
         if (!rotatable) throw e;
 
@@ -1369,7 +1410,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     // Free-tier models reserve max_tokens against the credit balance and 402
     // on a large reservation (_maxTokensFor).
     const maxTokens = _maxTokensFor(provider, base, model, opts.max_tokens);
-    await _pace(_paceKey(base, provider, opts.credential_ref), opts.rpm_limit);
+    await _paceFor(opts, _paceKey(base, provider, opts.credential_ref), provider);
     const { signal, connected } = _streamSignal(opts);
     let response;
     try {
@@ -1448,6 +1489,9 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       .map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: String(m.content ?? '') }] }));
     const url = `${base}/models/${model}:streamGenerateContent?alt=sse&key=${apiKey}`;
     const maxTokens = opts.max_tokens || 4096;
+    // Before the connect clock starts: waiting on the operator's own limit is
+    // not a provider that failed to answer.
+    await _paceFor(opts, _paceKey(base, 'gemini', opts.credential_ref), 'gemini');
     const { signal, connected } = _streamSignal(opts);
     let response;
     try {
@@ -1527,6 +1571,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     const turns = messages.filter(m => m.role !== 'system').map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: String(m.content ?? '') }));
     const body = { model, max_tokens: opts.max_tokens || 4096, messages: turns, stream: true };
     if (system) body.system = system;
+    await _paceFor(opts, _paceKey('https://api.anthropic.com/v1', 'claude', opts.credential_ref), 'claude');
     const { signal, connected } = _streamSignal(opts);
     let response;
     try {
@@ -2263,6 +2308,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     ...(cand?.provider === 'openrouter' && cand.model ? { model: cand.model } : {}),
     ...(e?.code ? { code: e.code } : {}),
     ...(e?.localRuntime ? { localRuntime: true } : {}),
+    ...(e?.localThrottle ? { localThrottle: true, rpm: e.rpm } : {}),
   });
 
   // The blocking twin of the stream loop's recovery. One candidate, then — for
@@ -2382,6 +2428,9 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
           else if (!_isTooLarge(e, status)) noteProviderFailure(r.provider, e);
           registryErr = e;
           registryAttempt = { provider: r.provider, status: status || null, message: e.message, configured: true, ..._attemptExtras(res.cand, e) };
+          // A registry failure is otherwise narrated only by the answer that
+          // follows. The operator's own limit is theirs to change, so say so.
+          if (e?.localThrottle) notify(`↪ ${r.provider} ${_plainReason(e)} — trying the next provider`, { provider: r.provider });
           console.warn(`[KERNEL] registry ${r.provider} failed (${e.message.slice(0, 120)}), trying the chain`);
         }
       }
@@ -2523,7 +2572,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   // bare status cannot.
   const _attemptReason = (a) => _plainReason(a.status && a.status !== 400 && !a.localRuntime
     ? a.status
-    : { status: a.status || null, message: a.message || '', code: a.code, localRuntime: a.localRuntime });
+    : { status: a.status || null, message: a.message || '', code: a.code, localRuntime: a.localRuntime, localThrottle: a.localThrottle, rpm: a.rpm });
   const _attemptName = (a) => a.label || a.provider;
 
   // The one step most likely to get the next turn answered, for the causes
@@ -2549,6 +2598,8 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     if (has('no chat model running') || has('no chat model installed') || has('no local engine installed') || has('stopped responding')) {
       return o.localOnly ? 'Check the local model in Cookbook.' : 'Check the local model in Cookbook, or add a key or credits in Settings.';
     }
+    const atLimit = seen.find((x) => x.a.localThrottle);
+    if (atLimit) return `Raise or clear the requests-per-minute limit on ${atLimit.a.provider} in Settings → Keys, or try again in a minute.`;
     return 'Add a key or credits in Settings, or try again shortly.';
   };
 
@@ -2575,6 +2626,23 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   // call report the same failure the same way.
   function _chainExhaustedError(attempts, lastErr, o = {}) {
     const throttled = attempts.find((a) => a.status === 429);
+    // AEON's own wait ran out against the operator's limit. Not a provider that
+    // is down, and not "add a key": the remedy is the number in Settings → Keys.
+    const atLimit = attempts.find((a) => a.localThrottle);
+    if (atLimit && !throttled) {
+      const others = attempts.filter((a) => a !== atLimit).map((a) => `${_attemptName(a)} ${_attemptReason(a)}`).join(', ');
+      const err = new Error(
+        `${atLimit.provider} is at your limit of ${atLimit.rpm} requests/min (Settings → Keys)`
+        + (others ? `, and the other providers in the chain could not serve either: ${others}. ` : '. ')
+        + `${_nextStep(attempts, o)}`
+      );
+      err.rateLimited = true;
+      err.provider = atLimit.provider;
+      err.retryable = true;
+      err.localThrottle = true;
+      err.attempts = attempts;
+      return err;
+    }
     if (throttled) {
       const err = new Error(
         `${throttled.provider} is rate-limited right now (HTTP 429). This is temporary — `
