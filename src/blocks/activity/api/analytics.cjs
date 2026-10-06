@@ -44,7 +44,7 @@ module.exports = (deps) => {
         const s = staffUsage[key] || (staffUsage[key] = { requests: 0, tokens: 0, errors: 0 });
         s.requests++;
         s.tokens += Number(r.tokens) || 0;
-        if (r.success === false) s.errors++;
+        if (r.success === false && !r.cancelled) s.errors++;
         totalTokens += Number(r.tokens) || 0;
       }
 

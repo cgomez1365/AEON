@@ -72,6 +72,8 @@ function createLedger({ file, maxRecords = DEFAULT_MAX_RECORDS } = {}) {
       if (!row.success) {
         if (entry.status != null && Number.isInteger(Number(entry.status))) row.status = Number(entry.status);
         if (entry.error) row.error = String(entry.error).slice(0, 160);
+        // A Stop is not a provider failure: kept in the log, left out of every error count.
+        if (entry.cancelled) row.cancelled = true;
       }
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.appendFileSync(file, `${JSON.stringify(row)}\n`, 'utf8');
@@ -111,7 +113,7 @@ function createLedger({ file, maxRecords = DEFAULT_MAX_RECORDS } = {}) {
       if (!out[k]) out[k] = { requests: 0, tokens: 0, errors: 0, models: {} };
       out[k].requests++;
       out[k].tokens += r.tokens || 0;
-      if (r.success === false) out[k].errors++;
+      if (r.success === false && !r.cancelled) out[k].errors++;
       const m = out[k].models[r.model] || (out[k].models[r.model] = { requests: 0, tokens: 0 });
       m.requests++;
       m.tokens += r.tokens || 0;
@@ -126,7 +128,7 @@ function createLedger({ file, maxRecords = DEFAULT_MAX_RECORDS } = {}) {
       const m = out[r.model] || (out[r.model] = { provider: r.provider, requests: 0, tokens: 0, errors: 0 });
       m.requests++;
       m.tokens += r.tokens || 0;
-      if (r.success === false) m.errors++;
+      if (r.success === false && !r.cancelled) m.errors++;
     }
     return out;
   }
@@ -135,7 +137,7 @@ function createLedger({ file, maxRecords = DEFAULT_MAX_RECORDS } = {}) {
     return rows.reduce((a, r) => {
       a.requests++;
       a.tokens += r.tokens || 0;
-      if (r.success === false) a.errors++;
+      if (r.success === false && !r.cancelled) a.errors++;
       return a;
     }, { requests: 0, tokens: 0, errors: 0 });
   }

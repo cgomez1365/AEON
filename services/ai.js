@@ -256,11 +256,18 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   // The chain's reading of a failure's status: the structured field, the
   // "error NNN" text, then a bare 429/402 (kept from the inline version it
   // replaces). Narrower _statusOf below feeds key rotation and stays as it is.
+  // A bare 429/402 counts only as a standalone number: not inside a longer one
+  // ("14290", "4,429", "4.429") and not a quantity ("429 tokens"). Provider
+  // errors quote request sizes; reading one as a status rested a healthy
+  // provider and sent the turn elsewhere.
+  const _bareStatus = (msg, code) => new RegExp(
+    `(?<![\\d,.])${code}(?!\\d|[,.]\\d|\\s*(?:-\\s*)?(?:tokens?|bytes?|chars?|characters?|words?|kb|mb)\\b)`, 'i',
+  ).test(String(msg || '')) ? code : null;
   const _failureStatus = (e) => e?.status
     || Number(/error (\d{3})/i.exec(e?.message || '')?.[1])
     // The runtime's own words quote token counts and llama-server's log tail
     // quotes sizes ("uses 4,402 of a 2,048-token window"): not a status.
-    || (e?.localRuntime ? null : /429/.test(e?.message || '') ? 429 : /402/.test(e?.message || '') ? 402 : null);
+    || (e?.localRuntime ? null : _bareStatus(e?.message, 429) || _bareStatus(e?.message, 402) || null);
   // Any other configured provider that could take a turn right now. Under
   // Local only (Settings → Models) the cloud ones cannot.
   const _anotherCanServe = (p, localOnly = false) => (localOnly ? ['local'] : ['groq', 'gemini', 'openrouter', 'local'])
@@ -560,7 +567,12 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     const why = success ? {} : {
       status: info.status ?? null,
       error: info.error ? _redactKeys(String(info.error)).replace(/\s+/g, ' ').slice(0, 160) : null,
+      // The operator pressed Stop: the call did not fail, it was ended.
+      ...(info.cancelled ? { cancelled: true } : {}),
     };
+    // No HTTP status exists for a Stop; the audit code is the conventional
+    // "client closed request", not a made-up server error.
+    const auditStatus = success ? 200 : (info.cancelled ? 499 : (why.status || 500));
     // Settings → System → Telemetry. The toggle existed and was read by
     // nothing, so switching it off recorded exactly as much as switching it
     // on. Measurement stops here, at the one place every provider path funnels
@@ -571,7 +583,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     // stands between the operator and a surprise bill. Turning off performance
     // stats must not quietly turn off spend tracking.
     if (!_capabilities.enabled('telemetry_enabled')) {
-      writeOSAudit(`LLM_${engine.toUpperCase()}`, `${model} | ${tokens} tok | ${latencyMs}ms${success ? '' : ` | FAILED${why.error ? `: ${why.error}` : ''}`}`, success ? 200 : (why.status || 500), tokens);
+      writeOSAudit(`LLM_${engine.toUpperCase()}`, `${model} | ${tokens} tok | ${latencyMs}ms${success ? '' : ` | FAILED${why.error ? `: ${why.error}` : ''}`}`, auditStatus, tokens);
       try { if (callLedger) callLedger.record({ provider: engine, model, tokens, latencyMs, success, ...why }); } catch {}
       return;
     }
@@ -580,12 +592,12 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     const c = _llmTelemetry.calls[key];
     c.requests++;
     c.tokens += tokens;
-    if (!success) c.errors++;
+    if (!success && !info.cancelled) c.errors++;
     c.avgLatency = Math.round((c.avgLatency * (c.requests - 1) + latencyMs) / c.requests);
     _llmTelemetry.totalCalls++;
     _llmTelemetry.totalTokens += tokens;
-    writeOSAudit(`LLM_${engine.toUpperCase()}`, `${model} | ${tokens} tok | ${latencyMs}ms${success ? '' : ` | FAILED${why.error ? `: ${why.error}` : ''}`}`, success ? 200 : (why.status || 500), tokens);
-    try { if (_recordActivity) _recordActivity(tokens, model, engine, { success, latencyMs }); } catch {}
+    writeOSAudit(`LLM_${engine.toUpperCase()}`, `${model} | ${tokens} tok | ${latencyMs}ms${success ? '' : ` | FAILED${why.error ? `: ${why.error}` : ''}`}`, auditStatus, tokens);
+    try { if (_recordActivity) _recordActivity(tokens, model, engine, { success, latencyMs, cancelled: !!info.cancelled }); } catch {}
     // D2g — the durable record. Everything above this line is in memory and
     // dies on restart, which is why the panels showed live calls and the
     // persistent surfaces showed nothing. Failures included: a day of failed
@@ -596,6 +608,8 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   // What a failed call records and announces: the status the provider sent (a
   // rejected Gemini key rides the credential pool as 401; Google said 400) and
   // its words. _trackLLM redacts and caps them.
+  // An operator Stop, as the call log and audit line record it.
+  const _STOP_INFO = { cancelled: true, error: 'cancelled by operator' };
   const _failInfo = (e) => ({ status: e?.httpStatus || _statusOf(e), error: e?.message });
   // The phrase the operator reads, with the status behind it when there is one.
   const _reasonWithStatus = (e) => {
@@ -1679,7 +1693,8 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     } catch (e) { throw opts.signal?.aborted ? e : _localFailure(e, model, _t0); }
     // A stop for an agent tool call (agentTurn.cjs) is the turn working, not
     // a failed generation.
-    _trackLLM('local', result.model || model || 'local', result.tokens || 0, Date.now() - _t0, !result.cancelled || _isToolStop(opts.signal));
+    const _stopped = !!result.cancelled && !_isToolStop(opts.signal);
+    _trackLLM('local', result.model || model || 'local', result.tokens || 0, Date.now() - _t0, !_stopped, _stopped ? _STOP_INFO : {});
     return {
       text: result.text || '',
       tokens: result.tokens || 0,
@@ -2093,7 +2108,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
         }
         if (opts.signal?.aborted) {
           // The operator stopped it. Not a provider failure — do not fall back.
-          _trackLLM(c.provider, c.model || 'unknown', _estimateTokens(sent, partial), Date.now() - t0, false);
+          _trackLLM(c.provider, c.model || 'unknown', _estimateTokens(sent, partial), Date.now() - t0, false, _STOP_INFO);
           return {
             text: partial, tokens: Math.ceil(partial.length / 4), latencyMs: Date.now() - t0,
             provider: c.provider, model: c.model, fallback,
@@ -2752,7 +2767,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     GEMINI_KEY_POOL, _trackLLM, _llmTelemetry, setActivityRecorder,
     getDailyCost, addRunCost,
     KILL_SWITCH_THRESHOLD, GEMINI_PRICE_PER_TOKEN, GROQ_PRICE_PER_TOKEN,
-    getProviderHealth, _resetProviderHealth, _chainExhaustedError, getKeyPoolInfo, dehydrateProvider, forgetKey, hydrateEnvFromVault,
+    getProviderHealth, _resetProviderHealth, _failureStatus, _chainExhaustedError, getKeyPoolInfo, dehydrateProvider, forgetKey, hydrateEnvFromVault,
     defaultLocalModel, localRuntimePresent,
     envHydrated,
   };

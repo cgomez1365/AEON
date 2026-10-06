@@ -75,7 +75,7 @@ module.exports = function createTokenAnalyticsRouter(deps) {
     if (!data[day]) data[day] = { requests: 0, tokens: 0, models: {} };
     data[day].requests++;
     data[day].tokens += tokens;
-    if (meta.success === false) data[day].errors = (data[day].errors || 0) + 1;
+    if (meta.success === false && !meta.cancelled) data[day].errors = (data[day].errors || 0) + 1;
     if (model) {
       if (!data[day].models[model]) data[day].models[model] = { requests: 0, tokens: 0 };
       data[day].models[model].requests++;
@@ -150,7 +150,7 @@ module.exports = function createTokenAnalyticsRouter(deps) {
       m.provider = m.provider || r.provider || null;
       m.requests++;
       m.tokens += r.tokens || 0;
-      if (r.success === false) m.errors++;
+      if (r.success === false && !r.cancelled) m.errors++;
       if (r.latencyMs > 0) { m.latencyMs += r.latencyMs; m.timed++; }
     }
     for (const [day, e] of Object.entries(days)) {
@@ -209,7 +209,7 @@ module.exports = function createTokenAnalyticsRouter(deps) {
       out.push({
         ts: r.ts, provider: r.provider, model: r.model, tokens: r.tokens || 0,
         latencyMs: r.latencyMs || 0, success: r.success !== false,
-        status: r.status ?? null, error: r.error ?? null,
+        status: r.status ?? null, error: r.error ?? null, ...(r.cancelled ? { cancelled: true } : {}),
       });
     }
     res.json({ calls: out, ledger: !!ledger });
