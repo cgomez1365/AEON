@@ -195,6 +195,30 @@ describe('POST /api/connections/:id/rpm', () => {
     expect(lines[1].status).toBe(200);
   });
 
+  // The README says changing a limit is written to the audit log. The Add form
+  // (POST /api/connections) is a second way to change it.
+  it('audits a limit changed through the Add form (re-saving a connection) the same way', async () => {
+    await setRpm('g1', 7);
+    audits.length = 0;
+    const r = await post('/api/connections', { id: 'g1', provider: 'gemini', rpm_limit: 5 });
+    expect(r.status).toBe(200);
+    expect(rowOnDisk('g1').rpm_limit).toBe(5);
+    expect(audits.filter((a) => a.action === 'CONN_RPM').map((a) => a.details)).toEqual(['Endpoint g1 (gemini) rpm_limit 7 -> 5']);
+    // A new connection added with a limit records it too.
+    audits.length = 0;
+    await post('/api/connections', { id: 'g2', provider: 'gemini', rpm_limit: 9, models: ['m'] });
+    expect(audits.filter((a) => a.action === 'CONN_RPM').map((a) => a.details)).toEqual(['Endpoint g2 (gemini) rpm_limit unset -> 9']);
+  });
+
+  it('a re-save that sends no limit, or the same one, writes no CONN_RPM line', async () => {
+    await setRpm('g1', 7);
+    audits.length = 0;
+    await post('/api/connections', { id: 'g1', provider: 'gemini', label: 'Renamed' });
+    await post('/api/connections', { id: 'g1', provider: 'gemini', rpm_limit: 7 });
+    expect(audits.filter((a) => a.action === 'CONN_RPM')).toEqual([]);
+    expect(audits.filter((a) => a.action === 'CONN_ADD')).toHaveLength(2);
+  });
+
   it('writes no audit line when nothing changed', async () => {
     await setRpm('g1', 7);
     audits.length = 0;

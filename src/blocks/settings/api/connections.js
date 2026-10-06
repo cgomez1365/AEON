@@ -183,6 +183,10 @@ module.exports = (app, deps) => {
         if (!known.includes(preferred_model)) modelList = [preferred_model, ...known];
       }
 
+      // For the audit line below: what the limit was before this save.
+      const priorRow = id ? ((await endpoints.load(supabase)).endpoints || []).find(e => e.id === id && e.provider === provider) : null;
+      const priorLimit = priorRow ? (priorRow.rpm_limit ?? null) : null;
+
       // What the caller did not send is passed as undefined, which addEndpoint
       // reads as "leave it as it is" — an empty list or a null is a decision.
       const ep = await endpoints.addEndpoint({
@@ -192,6 +196,11 @@ module.exports = (app, deps) => {
         rpm_limit: rpmValue,
       }, supabase);
       audit('CONN_ADD', `Endpoint ${ep.id} (${provider})`, 200, 0);
+      // The limit is the operator's own policy, so a change made here is
+      // recorded exactly as one made through POST /:id/rpm is.
+      if (rpmValue !== undefined && rpmValue !== priorLimit) {
+        audit('CONN_RPM', `Endpoint ${ep.id} (${provider}) rpm_limit ${priorLimit ?? 'unset'} -> ${ep.rpm_limit ?? 'unset'}`, 200, 0);
+      }
       res.json({ ok: true, endpoint: ep });
     } catch (e) {
       // addEndpoint throws operator-facing refusals with e.status = 400. This
