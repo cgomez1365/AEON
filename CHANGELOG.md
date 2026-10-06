@@ -14,16 +14,18 @@ tagged; until then its heading says so.
 
 ## 3.3.3 — update of 2026-10-05 (the number stays 3.3.3; the tag was moved to this)
 
-<!-- 14 commits on top of the first v3.3.3 tag (18dcaed, 2026-10-04): 5840dc9, 4227d9a, 2a69606, 50dacc1, the
-     audit fixes, e56c75e, 61877ae, eac9a47, 5b4e2ab (that is a26af72); then 33 commits on top of a26af72, 47 in all
-     since 18dcaed, the same-day terminal and rate-limit work: d02a98c, 869d913, cac4868, 756f856, de764cc, 81b493a,
-     985ef04, 8ac92cd, 12e19a3, a3c731c, 8e3bbff, 583d020, 7734563, 7c086bc, 4647906, 58586fc (terminal bugs and their
-     review fixes); 24964eb, 72fc893, a8ce8c0, e3bc8d6, 67d73ee, fd7ace6, 4196884, 104537a, d32b30a, f5c1e27, 9ea53cd
-     (the rate-limit control); 3d4e411, 6f26f5d, 42a774b, 5be5748, d04f857, bf6567b (gap closures and docs). History
-     is not squashed. By the owner's choice the version number stays 3.3.3 and the v3.3.3
-     tag and release were moved to include them, because the first 3.3.3 could not install the first paid block
-     (it dropped a block's declared engine) and shipped Supabase SQL open to the public key. Anyone holding the
-     2026-10-04 3.3.3 should update (README, "Updating AEON"). -->
+<!-- From the first v3.3.3 tag (18dcaed, 2026-10-04) to a26af72: 18 commits (`git rev-list --count 18dcaed..a26af72`),
+     11 of them code (5840dc9, 4227d9a, 2a69606, 50dacc1, fe45e34, 8b54f42, e56c75e, 9f81181, 61877ae, eac9a47,
+     5b4e2ab) and 7 changelog or docs only. On top of a26af72, the same-day terminal and rate-limit work: 33 commits
+     named here (d02a98c, 869d913, cac4868, 756f856, de764cc, 81b493a, 985ef04, 8ac92cd, 12e19a3, a3c731c, 8e3bbff,
+     583d020, 7734563, 7c086bc, 4647906, 58586fc: terminal bugs and their review fixes; 24964eb, 72fc893, a8ce8c0,
+     e3bc8d6, 67d73ee, fd7ace6, 4196884, 104537a, d32b30a, f5c1e27, 9ea53cd: the rate-limit control; 3d4e411, 6f26f5d,
+     42a774b, 5be5748, d04f857, bf6567b: gap closures and docs), then four fixes from the final review (0975f5d,
+     1099f91, d4f0657, 9c07925) and two changelog commits (ace26f1 and the one holding this note): 39 commits in
+     `git rev-list --count a26af72..HEAD`. History is not squashed. By the owner's choice the version number stays
+     3.3.3 and the v3.3.3 tag and release were moved to include them, because the first 3.3.3 could not install the
+     first paid block (it dropped a block's declared engine) and shipped Supabase SQL open to the public key. Anyone
+     holding the 2026-10-04 3.3.3 should update (README, "Updating AEON"). -->
 
 **You set each connection's requests-per-minute limit (Settings → Keys).** AEON paced only the generic custom
 endpoint, so a Gemini key whose free tier allows a handful of calls a minute could only be discovered by hitting
@@ -31,8 +33,10 @@ the 429. Every connection card now shows how it is paced (*Paced to N requests/m
 and a **Change** button; the Add form takes the number too. The number is yours: AEON ships none for any named
 provider (only the generic custom connection starts at 30), because a provider's limit is your account's policy
 and changes — type the one from your provider's own rate-limits page. 0 turns pacing off, whole numbers to 600.
-It takes effect on the next request, is counted per key, is written to the audit log, and applies to every
-hosted transport (OpenAI-compatible, Gemini, Claude, streamed or not) and to indexing. When the limit makes AEON
+It takes effect on the next request, is counted per key, is written to the audit log (whether changed with the
+Change button or by re-saving the connection), and applies to every hosted transport (OpenAI-compatible, Gemini,
+Claude, streamed or not), to a call that names its provider (a Council seat) as well as one routed by role, to
+image reads, and to indexing. When the limit makes AEON
 wait, the chat shows one line (`pacing: waiting 12s for gemini (your limit: 8/min)`); past a minute AEON stops
 waiting, tries the next provider and names the setting instead of calling your provider down or telling you to add
 a key. Not enforced, and said so in the README: a daily-request cap, tokens per minute, and the on-device Local
@@ -41,9 +45,16 @@ chat for that key; an indexing wait goes to the system log, not the chat. Also f
 connection (a label edit, an added key) no longer resets its limit or empties its model list. After review: Claude
 assigned in Settings is not called a second time, unpaced, once the limit has stopped it; the closing step of the
 error leads with the limit; a background call with no chat no longer swallows the chat's pacing line; the rule that
-the limit never rotates your keys now has a test. Commits: 24964eb, 72fc893, a8ce8c0, e3bc8d6, 67d73ee, fd7ace6,
-4196884, 104537a, d32b30a, f5c1e27, 9ea53cd. Tests: `tests/connection-rpm.test.js`, `tests/pacing-failover.test.js`,
-`tests/pacing.test.js`, `tests/embed-shares-pacing-bucket.test.js`, `tests/rate-limit-docs-claims.test.js`. The Settings
+the limit never rotates your keys now has a test. After the final review: a call that names groq, gemini,
+openrouter or claude, and every image read, had skipped the limit (three named Groq calls at a limit of 1 went out
+in 28 ms) and now wait on it (d4f0657; with one key on the connection they share that key's budget with calls routed
+by role, with several they are counted together on their own); a limit of exactly 429 or 402 was read back out of
+AEON's own message as an HTTP status and rested the provider (0975f5d); the Save button showed "Failed to save
+settings" instead of the server's sentence naming the model and the remedy (1099f91); re-saving a connection with a
+new limit was not audited (9c07925). Commits: 24964eb, 72fc893, a8ce8c0, e3bc8d6, 67d73ee, fd7ace6, 4196884, 104537a,
+d32b30a, f5c1e27, 9ea53cd, and the four above. Tests: `tests/connection-rpm.test.js`, `tests/pacing-failover.test.js`,
+`tests/pacing-named-providers.test.js`, `tests/pacing.test.js`, `tests/embed-shares-pacing-bucket.test.js`,
+`tests/rate-limit-docs-claims.test.js`, `tests/settings-save-model-guard.test.js`, `tests/role-refusal-revert.test.js`. The Settings
 screens (the card, the Change button, the Add form) are covered by source-level tests and a clean build; the author
 of these changes did not drive them in a browser.
 
