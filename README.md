@@ -65,6 +65,16 @@ After that first launch, open AEON from the Desktop icon, which AEON builds on y
 - **Cloud (free keys)** — grab a free key from [aistudio.google.com](https://aistudio.google.com) (Gemini) or [console.groq.com](https://console.groq.com) (Groq). Paste it when the launcher asks on first run, or later under **Settings**. A connection can hold more than one key: when one is rate-limited, out of credit or rejected, AEON fails over to the next. That is for keys from accounts or projects you are entitled to use — it is not a way around a provider's limits, and whether a provider allows more than one account or key is set by its own terms, so check them.
 - **Local (no keys)** — open the **Cookbook** block, install the local runtime, download a model with one click. Models run inside AEON on a llama.cpp worker that the Cookbook downloads (a pinned, hash-verified release) into `~/AEON/data` — it is not bundled with AEON, nothing is installed system-wide, nothing lands in the AEON folder, and no internet is needed after the download. Local stays private only while Settings → Models → **Local only** is on. With it off (the default) and a cloud key added, a local model that cannot answer hands the prompt to that cloud provider, and the chat shows a one-line notice when it does.
 
+### Rate limits for your keys (Settings → Keys)
+Every connection card in **Settings → Keys** shows how AEON paces it — *Paced to N requests/min*, *Not paced*, or *Default: N/min* — and a **Change** button, for any provider. The limit is yours to set. AEON ships no number for any named provider, because a provider's limit belongs to your account and changes: type the number from your provider's own rate-limits page (in Google AI Studio, your project's **Rate limits**; for Groq and OpenRouter, the limits shown in your account).
+
+- **Some providers limit each model separately.** Use the lowest number among the models you use.
+- **`0` means no pacing; empty means the default.** Only the generic *custom* connection has a default (30 a minute); every named provider starts unpaced. A whole number from 0 to 600 is accepted.
+- **It counts each key on its own.** Keys that share one provider project share that project's limit, so give each key its share.
+- **It takes effect on the next request**, with no restart.
+- **AEON waits instead of failing, and says so.** When your limit makes a request wait, the chat shows one line, for example `pacing: waiting 12s for gemini (your limit: 8/min)`. If it would have to wait longer than a minute it stops waiting, moves to the next provider and names the setting, rather than treating the provider as down. Changing a limit is written to the audit log.
+- **Known limit: there is no daily-request cap.** Providers reset daily limits at different times and often per model, so a per-connection daily counter would be wrong. When a provider answers that a daily limit is reached, that key rests and AEON fails over to the next provider. Tokens per minute are not paced either.
+
 ### Requirements
 
 | | |

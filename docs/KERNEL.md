@@ -56,6 +56,15 @@ a model:
 2. Dispatch to the resolved endpoint — a cloud provider or the local llama.cpp runtime (downloaded by Cookbook, not bundled).
 3. Only if the registry cannot resolve the role, fall back to the legacy per-role settings.
 
+A connection can carry `rpm_limit`, the operator's requests-per-minute limit (Settings → Keys,
+`POST /api/connections/:id/rpm`, read from the registry on every resolve so a change applies to the
+next call). `services/ai.js` paces every transport to it, per credential, through
+`src/kernel/pacing.cjs`: a call that has to wait announces it (`opts.onNotice`, which the chat stream
+relays as a `notice` event, and the system log), and a call that waits past the cap fails with
+`localThrottle`. The failover treats that as "this connection is at its limit": no streak toward resting
+the provider, the next provider is tried, and the reason and the final error name Settings → Keys. No
+named provider ships a default; only the generic `custom` connection starts at one. There is no daily-request cap.
+
 HTTP surface (`src/kernel/routers/ai.cjs`):
 
 ```

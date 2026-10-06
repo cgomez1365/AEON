@@ -256,8 +256,12 @@ whether a value came from a default or a user override.
   (`GET /api/settings/setup-status`, `POST /api/settings/env`,
   `POST /api/settings/restart`).
 - **`api/connections.js`** — the endpoint registry + vault: `GET`/`POST
-  /api/connections`, `POST /api/connections/discover` (probe a base URL
-  for models), `DELETE /api/connections/:id`, `POST
+  /api/connections` (a re-save of an existing id keeps whatever the request
+  does not send, including its limit and model list), `POST
+  /api/connections/discover` (probe a base URL for models), `DELETE
+  /api/connections/:id`, `POST /api/connections/:id/rpm` (the operator's
+  requests-per-minute limit, 0 to 600, 0 = no pacing, empty = the provider
+  default; changes only that field and is audited as `CONN_RPM`), `POST
   /api/connections/assign-role`, `GET /api/connections/resolve/:role`
   (debug — never leaks the key, only reports presence), `POST
   /api/connections/sync` (force-push the local registry + vault to the
