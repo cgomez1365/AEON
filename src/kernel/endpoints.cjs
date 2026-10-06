@@ -227,7 +227,16 @@ async function save(reg, supabase) {
 async function addEndpoint(ep, supabase) {
   const reg = await load(supabase);
   const profile = PROVIDER_TRANSPORT[ep.provider] || {};
-  const base_url = String(ep.base_url || profile.base || '').trim();
+
+  // An id that already exists makes this an UPDATE, and an update changes only
+  // what the caller named. It used to rebuild the row from the argument alone:
+  // a re-save that left out `rpm_limit` reset the operator's limit to the
+  // provider default, one that left out `models` emptied the list, and a bare
+  // `{ id, provider }` renamed the connection back to its provider. Only
+  // auth_refs was ever merged. Same provider only — reusing an id for another
+  // provider is a different connection, not an edit of this one.
+  const prior = ep.id ? reg.endpoints.find(e => e.id === ep.id && e.provider === ep.provider) : undefined;
+  const base_url = String(ep.base_url || prior?.base_url || profile.base || '').trim();
 
   // A generic endpoint IS its address — there is nothing else identifying the
   // server. Saved blank it would resolve to '' and die inside fetch() three
@@ -252,39 +261,107 @@ async function addEndpoint(ep, supabase) {
   const derivedReach = profile.requiresBaseUrl
     ? (isPriv ? ['local'] : ['local', 'cloud'])
     : (profile.reach || ['local']);
+  // The address did not change, so neither did where it can be reached from.
+  const keepPlace = !!prior && !ep.base_url;
 
   // A connection can hold several accounts. A caller that names `auth_refs`
   // states the whole pool; a caller that names only `auth_ref` — which is
   // every caller that predates pools, including the Add-connection form adding
   // a second key — ADDS to the pool rather than replacing it. Editing a
   // connection's label must not silently drop the operator's other keys.
-  const priorRefs = credentialRefs(reg.endpoints.find(e => e.id === ep.id));
+  const priorRefs = credentialRefs(prior);
   const auth_refs = Array.isArray(ep.auth_refs)
     ? [...new Set(ep.auth_refs.filter(Boolean))]
     : [...new Set([...priorRefs, ...(ep.auth_ref ? [ep.auth_ref] : [])])];
 
   const endpoint = {
+    // Fields this version does not know about survive an update too.
+    ...(prior || {}),
     // Date.now() alone is one millisecond of resolution — fine for a human
     // clicking Save, not for a double-submitted form or a scripted add, and
     // this list upserts BY id, so a collision silently overwrites.
     id: ep.id || `${ep.provider}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
-    label: ep.label || defaultLabel(ep.provider, base_url, reg, ep.id),
-    kind: ep.kind || (derivedReach.includes('cloud') ? 'cloud' : 'local'),
+    label: ep.label || prior?.label || defaultLabel(ep.provider, base_url, reg, ep.id),
+    kind: ep.kind || (keepPlace && prior.kind) || (derivedReach.includes('cloud') ? 'cloud' : 'local'),
     provider: ep.provider,
     base_url,
     auth_ref: auth_refs[0] || null,
     auth_refs,
-    models: ep.models || [],
-    reachable_from: ep.reachable_from || derivedReach,
+    // Left out means "unchanged"; an array, even an empty one, is the caller's word.
+    models: Array.isArray(ep.models) ? ep.models : (prior?.models || []),
+    reachable_from: ep.reachable_from || (keepPlace && prior.reachable_from) || derivedReach,
     // Model the operator typed themselves, when the service publishes no list.
-    preferred_model: ep.preferred_model || null,
-    // Client-side pacing, requests per minute. 0 means uncapped.
-    rpm_limit: Number.isFinite(ep.rpm_limit) ? ep.rpm_limit : (profile.rpm ?? null),
+    // `undefined` is "not sent"; null or '' clears it.
+    preferred_model: ep.preferred_model !== undefined ? (ep.preferred_model || null) : (prior?.preferred_model ?? null),
+    // Client-side pacing, requests per minute. 0 means uncapped. A row written
+    // before this field existed has no key at all: that is "use the provider
+    // default", not "the operator chose none".
+    rpm_limit: Number.isFinite(ep.rpm_limit) ? ep.rpm_limit
+      : (prior && 'rpm_limit' in prior ? prior.rpm_limit : rpmDefault(ep.provider)),
   };
   reg.endpoints = reg.endpoints.filter(e => e.id !== endpoint.id);
   reg.endpoints.push(endpoint);
   await save(reg, supabase);
   return endpoint;
+}
+
+/**
+ * The pacing a provider carries before the operator says anything. Only the
+ * generic "custom" transport has one; every named provider answers null, and
+ * that is deliberate — a provider's limit is the operator's account policy,
+ * read off their own dashboard (Principle 05), never a number this file knows.
+ */
+function rpmDefault(provider) {
+  return PROVIDER_TRANSPORT[provider]?.rpm ?? null;
+}
+
+const RPM_MAX = 600;
+const RPM_REFUSAL = `Requests per minute must be a whole number from 0 to ${RPM_MAX}. Type the number from your provider's own rate-limits page, 0 to turn pacing off, or leave it empty to use the default.`;
+
+/**
+ * Read an operator-typed limit. Returns { ok: true, value } for a number
+ * (0 = no limit), { ok: true, unset: true } for empty/null (use the provider
+ * default), or { ok: false, error } naming the remedy. Strict: a fraction or
+ * text is refused, not rounded into a number the operator did not type.
+ */
+function normalizeRpmLimit(raw) {
+  if (raw === null || raw === undefined) return { ok: true, unset: true };
+  if (typeof raw === 'string') {
+    const t = raw.trim();
+    if (t === '') return { ok: true, unset: true };
+    if (!/^\d+$/.test(t)) return { ok: false, error: RPM_REFUSAL };
+    raw = Number(t);
+  }
+  if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 0 || raw > RPM_MAX) {
+    return { ok: false, error: RPM_REFUSAL };
+  }
+  return { ok: true, value: raw };
+}
+
+/**
+ * Change ONE field of one connection: its requests-per-minute limit. Nothing
+ * else on the row is read from the caller, so this cannot reset anything.
+ * Empty/null stores the provider's default (a number for "custom", null for
+ * everyone else) so every reader of `rpm_limit ?? null` is untouched.
+ * Returns { endpoint, previous }.
+ */
+async function setRpmLimit(id, raw, supabase) {
+  const n = normalizeRpmLimit(raw);
+  if (!n.ok) { const err = new Error(n.error); err.status = 400; throw err; }
+  const reg = await load(supabase);
+  const ep = reg.endpoints.find(e => e.id === id);
+  if (!ep) {
+    const err = new Error(`Connection "${id}" not found. Open Settings → Keys to see your connections.`);
+    err.status = 404;
+    throw err;
+  }
+  const previous = ep.rpm_limit ?? null;
+  const next = n.unset ? rpmDefault(ep.provider) : n.value;
+  if (next !== previous || !('rpm_limit' in ep)) {
+    ep.rpm_limit = next;
+    await save(reg, supabase);
+  }
+  return { endpoint: ep, previous };
 }
 
 // "custom" is a transport, not a name. Two generic connections both shown as
@@ -1135,6 +1212,8 @@ function serialized(fn) {
 module.exports = {
   PROVIDER_TRANSPORT, load, save, modelRefusal,
   addEndpoint: serialized(addEndpoint),
+  setRpmLimit: serialized(setRpmLimit),
+  normalizeRpmLimit, rpmDefault,
   removeEndpoint: serialized(removeEndpoint),
   assignRole: serialized(assignRole),
   discoverModels, discoverModelCatalogue, resolveForRole, resolveForProvider, isVercel,

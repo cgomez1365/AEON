@@ -184,6 +184,22 @@ describe('a connection holds a pool the operator can edit', () => {
     expect(ep.auth_ref).toBe('or-1');
   });
 
+  it('a label edit keeps the limit the operator set; a new generic connection still starts at its default', async () => {
+    writeRegistry([{
+      id: 'g', provider: 'gemini', label: 'Mine', base_url: 'https://generativelanguage.googleapis.com/v1beta',
+      auth_ref: 'g-1', auth_refs: ['g-1'], models: ['x', 'y'], preferred_model: 'y', rpm_limit: 7, reachable_from: ['local', 'cloud'],
+    }]);
+    const ep = await endpoints.addEndpoint({ id: 'g', provider: 'gemini', label: 'Renamed' });
+    expect(ep.rpm_limit).toBe(7);
+    expect(ep.models).toEqual(['x', 'y']);
+    expect(ep.preferred_model).toBe('y');
+    const fresh = await endpoints.addEndpoint({ id: 'c', provider: 'custom', base_url: 'http://127.0.0.1:9/v1' });
+    expect(fresh.rpm_limit).toBe(30);
+    const explicit = await endpoints.addEndpoint({ id: 'c', provider: 'custom', rpm_limit: 12 });
+    expect(explicit.rpm_limit).toBe(12);
+    expect((await endpoints.addEndpoint({ id: 'c', provider: 'custom', label: 'Again' })).rpm_limit).toBe(12);
+  });
+
   it('removing the last key is refused — a keyless connection just fails later', async () => {
     writeRegistry([{ id: 'solo', provider: 'groq', base_url: 'https://api.groq.com/openai/v1', auth_ref: 'k1', auth_refs: ['k1'], models: ['m'], reachable_from: ['local'] }]);
     await expect(endpoints.removeCredential('solo', 'k1')).rejects.toThrow(/only key/i);
