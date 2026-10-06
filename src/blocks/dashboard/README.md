@@ -74,7 +74,10 @@ below.
     toolbox (`src/kernel/agentTools.cjs`) runs it between rounds, and the result goes
     back as a `user` message wrapped as data (`<<<AEON-TOOL-RESULT <nonce> …>>>`, with
     a random nonce per turn that the system prompt names; fences and markers inside it
-    neutralised in any case). At most 6 tool calls per turn, 3 of them writes; result
+    neutralised in any case). A result marker the model writes itself in its answer is
+    left out of the answer, the feed and the next round (a `result-marker` notice says
+    so): no tool returned that text, and a real result shows only as a TOOL line.
+    At most 6 tool calls per turn, 3 of them writes; result
     and time caps per tool; off when the chat role's model window is under 4,096 tokens, for
     non-chat roles, or with Memory Core's `agent_tools` off. Every outcome is also
     written to the OS audit log (`AGENT_TOOL`).

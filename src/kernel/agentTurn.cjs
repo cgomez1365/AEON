@@ -12,7 +12,8 @@
  *
  * Everything the operator sees goes through `emit(event, data)`: `token`,
  * `tool_call`, `tool_result`, `continue`, `notice`. The answer (`text`) is
- * exactly the concatenated `token` events — tool blocks never reach it.
+ * exactly the concatenated `token` events — tool blocks never reach it, nor
+ * result markers the model wrote itself (toolProtocol.cjs createMarkerFilter).
  *
  * Privacy: `callOpts` (agents.callOptions — the agent's model and Local only)
  * is spread into EVERY stream call, rounds and continuations alike. Tools run
@@ -72,6 +73,7 @@ async function runAgentTurn({
   let contBase = '';         // the cut-off answer so far, as the model is shown it (without `carry`)
   let needSep = false;       // a new segment after a tool result
   let contTail = false;      // convo ends with [assistant, CONTINUE_PROMPT]
+  const scanners = [];       // one per round: each counts the result markers the model wrote itself
   const roundCap = (toolbox ? toolbox.callsLeft() : 0) + 1 + maxParts + 1;
 
   const out = (t) => {
@@ -108,6 +110,7 @@ async function runAgentTurn({
     const scanner = toolbox ? protocol.createScanner({
       onText: sink, initialFence: seamPrev != null ? protocol.codeFenceState(seamPrev) : null, carry,
     }) : null;
+    if (scanner) scanners.push(scanner);
     carry = '';
     let block = null;
 
@@ -276,6 +279,9 @@ async function runAgentTurn({
   return finish({});
 
   function finish({ cancelled = false, stopped = null }) {
+    if (scanners.some((sc) => sc.removed())) {
+      notice('warn', 'result-marker', 'The model wrote a tool-result marker itself; AEON left it out. No tool returned that text: a real result shows as a TOOL line above the answer.');
+    }
     const truncated = !cancelled && (!!stopped || !!last?.truncated);
     let truncationReason = null;
     if (stopped && truncated) truncationReason = stopped;

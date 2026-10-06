@@ -182,10 +182,86 @@ function parseBlock(block) {
   return { ok: true, tool: normalizeTool(tool), rawTool: tool, args };
 }
 
+// ── Result markers in the model's own answer ───────────────────────────
+//
+// <<<AEON-TOOL-RESULT …>>> and <<<END-AEON-TOOL-RESULT …>>> are AEON's: they
+// open and close a result it sends the model (wrapResult). The ## TOOLS rules
+// show the model that shape with this turn's nonce, and a model that copies it
+// into its own answer shows the operator a "result" no tool returned (found
+// 2026-10-05: a recall that could not run, quoted between markers). They are
+// protocol, hidden from the visible answer like a tool block; only the marker
+// goes, the text around it stays. What the model is sent is not touched.
+// Not covered: a marker the output limit cuts in half across an auto-continue
+// seam (the half is shown), and one longer than MARKER_HOLD_MAX with no ">>>"
+// or line end (shown once the hold is spent).
+const RESULT_MARKER_RE = /<<<[ \t]*(?:END[-_ ]?)?AEON[-_ ]?TOOL[-_ ]?RESULT[^\n]*?(?:>>>|(?=\n))/gi;
+// The end of a line that may still become a marker: a run of "<", then either
+// the whole keyword and what follows, or the start of one.
+const MARKER_TAIL_RE = /<{1,3}[ \t]*(?:(?:END[-_ ]?)?AEON[-_ ]?TOOL[-_ ]?RESULT[^\n]*|[A-Za-z_ \t-]*)$/i;
+const MARKER_OPEN_RE = /^<<<[ \t]*(?:END[-_ ]?)?AEON[-_ ]?TOOL[-_ ]?RESULT[^\n]*$/i;
+const MARKER_WORDS = ['ENDAEONTOOLRESULT', 'AEONTOOLRESULT'];
+const MARKER_HOLD_MAX = 160;
+
+// The part of `s` that may still become a marker (held back), or ''.
+function markerTail(s) {
+  const m = MARKER_TAIL_RE.exec(s.slice(Math.max(s.lastIndexOf('\n') + 1, s.length - MARKER_HOLD_MAX)));
+  if (!m) return '';
+  const word = m[0].replace(/^<+/, '').replace(/[ \t_-]/g, '').toUpperCase();
+  return MARKER_WORDS.some((w) => w.startsWith(word) || word.startsWith(w)) ? m[0] : '';
+}
+
+/**
+ * createMarkerFilter(onText) → { push(chunk), end(), removed() }: passes text
+ * on minus result markers, at any chunk split. A marker alone on its line
+ * takes the line break with it. A tail that may still become a marker is held
+ * (at most MARKER_HOLD_MAX characters) until it is one or cannot be.
+ */
+function createMarkerFilter(onText = () => {}) {
+  let held = '';
+  let lineStart = true;  // the text passed on so far ends a line, or is empty
+  let dropBreak = false; // a marker alone on its line ended the last chunk
+  let count = 0;
+  const pass = (t) => { if (t) { lineStart = t.endsWith('\n'); onText(t); } };
+
+  function push(chunk) {
+    let s = held + String(chunk ?? '');
+    held = '';
+    if (dropBreak && s) {
+      if (s === '\r') { held = s; return; } // may be half a CRLF
+      dropBreak = false;
+      s = s.replace(/^\r?\n/, '');
+    }
+    let out = '';
+    let at = 0;
+    for (const m of s.matchAll(RESULT_MARKER_RE)) {
+      out += s.slice(at, m.index);
+      at = m.index + m[0].length;
+      count++;
+      if (!(out ? out.endsWith('\n') : lineStart)) continue;
+      if (s.startsWith('\n', at)) at += 1;
+      else if (s.startsWith('\r\n', at)) at += 2;
+      else if (at === s.length || (s[at] === '\r' && at + 1 === s.length)) dropBreak = true;
+    }
+    s = out + s.slice(at);
+    held = dropBreak && s.endsWith('\r') ? '\r' : markerTail(s);
+    pass(held ? s.slice(0, s.length - held.length) : s);
+  }
+
+  // The stream is over: what is held is text, unless it is an unfinished marker.
+  function end() {
+    const t = held;
+    held = '';
+    if (MARKER_OPEN_RE.test(t)) count++;
+    else pass(t);
+  }
+
+  return { push, end, removed: () => count };
+}
+
 // ── The streaming scanner ───────────────────────────────────────────────
 
 /**
- * createScanner({ onText }) → { push(chunk), end({truncated}), visible() }
+ * createScanner({ onText }) → { push(chunk), end({truncated}), visible(), removed() }
  *
  * push returns { block } once a tool block closes (first block wins; nothing
  * after it is shown), else null. end flushes held text and reports an
@@ -212,9 +288,11 @@ function createScanner({ onText = () => {}, initialFence = null, carry = '' } = 
   let codeFence = initialFence && FENCE_CHARS.has(initialFence.char) ? { char: initialFence.char, len: Number(initialFence.len) || 3 } : null;
 
   // Released text is passed on once per push, so a chunk stays one chunk.
+  // Result markers the model wrote itself are dropped on the way out.
+  const markers = createMarkerFilter((t) => { visibleText += t; onText(t); });
   let outBuf = '';
-  const emit = (t) => { if (!t) return; visibleText += t; outBuf += t; };
-  const flush = () => { if (outBuf) { const t = outBuf; outBuf = ''; onText(t); } };
+  const emit = (t) => { if (!t) return; outBuf += t; };
+  const flush = () => { if (outBuf) { const t = outBuf; outBuf = ''; markers.push(t); } };
 
   // What is known about `pending` while it is held, so one more character is
   // decided without re-reading all of it: an opener whose header started
@@ -353,6 +431,7 @@ function createScanner({ onText = () => {}, initialFence = null, carry = '' } = 
   function push(chunk) {
     const r = pushInner(chunk);
     flush();
+    if (r) markers.end(); // a block closes the answer: nothing more comes
     return r;
   }
 
@@ -387,6 +466,7 @@ function createScanner({ onText = () => {}, initialFence = null, carry = '' } = 
   function end(opts) {
     const r = endInner(opts);
     flush();
+    markers.end();
     return r;
   }
 
@@ -435,7 +515,7 @@ function createScanner({ onText = () => {}, initialFence = null, carry = '' } = 
     return { block: partial, unterminated: true, truncated: !!truncated, raw: partial.raw };
   }
 
-  return { push, end, visible: () => visibleText };
+  return { push, end, visible: () => visibleText, removed: () => markers.removed() };
 }
 
 // ── The result block fed back to the model ──────────────────────────────
@@ -574,7 +654,7 @@ function claimCheck(text, outcomes = [], { agentNames = [] } = {}) {
 }
 
 module.exports = {
-  createScanner, parseBlock, parseHeader, repairJson, normalizeTool, wrapResult, neutralise, newNonce, codeFenceState,
+  createScanner, createMarkerFilter, parseBlock, parseHeader, repairJson, normalizeTool, wrapResult, neutralise, newNonce, codeFenceState,
   systemText, claimCheck, TOOL_NAMES, WRITE_TOOLS, ALIASES,
   OPENER_RE, ONE_LINE_RE, ONE_LINE_PROSE_RE, HOLD_RE, CARRY_RE, HOLD_RUN_MAX, HOLD_LINE_MAX,
 };
