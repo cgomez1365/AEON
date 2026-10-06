@@ -311,6 +311,9 @@ module.exports = (app, deps) => {
       const reg = await endpoints.load(supabase);
       const ep = (reg.endpoints || []).find((e) => e.id === endpoint_id);
       if (!ep) return res.status(404).json({ error: `Connection "${endpoint_id}" not found` });
+      // A model this connection's provider does not list is refused (400) before
+      // either store is written, so settings.models never gets a pair the
+      // provider would 404 on.
       const mapping = await endpoints.assignRole(role, endpoint_id, model, cloud_fallback, supabase);
       // settings.models is what the kernel routes by; keep it the same.
       if (deps && deps.loadSettings && deps.saveSettings) {
@@ -320,7 +323,7 @@ module.exports = (app, deps) => {
       }
       audit('CONN_ASSIGN', `${role} → ${endpoint_id}/${model}`, 200, 0);
       res.json({ ok: true, mapping });
-    } catch (e) { res.status(500).json({ error: e.message }); }
+    } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
   });
 
 

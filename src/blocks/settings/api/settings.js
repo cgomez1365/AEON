@@ -293,16 +293,26 @@ module.exports = (app, deps) => {
       if (model.includes('/')) provider = 'openrouter';
       else provider = settings.models[role]?.provider || 'local';
     }
+    // The registry is read first: a model the provider's connection does not
+    // list is refused before either store is written, so a mismatched pair
+    // is never saved and reported ok.
+    let registry = 'skipped';
+    let ep = null;
+    const endpointsMod = require(path.join(__dirname, '..', '..', '..', 'kernel', 'endpoints.cjs'));
+    const supa = deps && deps.supabase ? deps.supabase : null;
+    try {
+      const eps = (await endpointsMod.load(supa)).endpoints || [];
+      // The connection that lists the model, as resolveForProvider chooses.
+      ep = eps.find(e => e.provider === provider && (e.models || []).includes(model))
+        || eps.find(e => e.provider === provider) || null;
+    } catch (e) { registry = 'error:' + e.message; }
+    const why = endpointsMod.modelRefusal(ep, model);
+    if (why) return res.status(400).json({ error: why, roles });
     // 1) settings.models (the fallback source)
     settings.models[role] = { provider, model };
     saveSettings(settings);
     // 2) endpoint-registry role (the primary source) — keep them in lockstep
-    let registry = 'skipped';
     try {
-      const endpointsMod = require(path.join(__dirname, '..', '..', '..', 'kernel', 'endpoints.cjs'));
-      const supa = deps && deps.supabase ? deps.supabase : null;
-      const reg = await endpointsMod.load(supa);
-      const ep = (reg.endpoints || []).find(e => e.provider === provider);
       if (ep && endpointsMod.assignRole) { await endpointsMod.assignRole(role, ep.id, model, null, supa); registry = 'updated'; }
     } catch (e) { registry = 'error:' + e.message; }
     res.json({ ok: true, role, provider, model, registry, message: `${role} → ${provider} / ${model}` });

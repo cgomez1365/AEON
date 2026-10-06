@@ -315,8 +315,36 @@ async function removeEndpoint(id, supabase) {
   return reg;
 }
 
+// The one sentence for "this provider does not have that model" — the refusal
+// below and the readiness detail say it the same way.
+function notOnProvider(provider, model) {
+  return `${provider} does not serve "${model}". Pick a model this provider offers in Settings → Model Assignment, or re-scan the provider's model list.`;
+}
+
+/**
+ * Why `ep` cannot be given `model`, or null.
+ *
+ * Switching a role's provider used to save the old provider's model against the
+ * new provider's connection (chat → openrouter/gemini-flash-latest, four times
+ * in sixteen minutes, 2026-10-05), and settings.models — what the router sends
+ * to the provider — took it at once. Readiness already reported the pair as
+ * broken afterwards; this refuses it at write time.
+ *
+ * Only a hosted vendor's stored list is authoritative. A local runtime and LM
+ * Studio load models without telling the registry, a custom server's list can
+ * be one hand-typed entry, and an empty list means discovery never ran.
+ */
+function modelRefusal(ep, model) {
+  const profile = ep && PROVIDER_TRANSPORT[ep.provider];
+  if (!profile || profile.requiresBaseUrl || !profile.reach.includes('cloud')) return null;
+  const known = Array.isArray(ep.models) ? ep.models : [];
+  return known.length && !known.includes(model) ? notOnProvider(ep.provider, model) : null;
+}
+
 async function assignRole(role, endpoint_id, model, cloud_fallback, supabase) {
   const reg = await load(supabase);
+  const why = modelRefusal((reg.endpoints || []).find(e => e.id === endpoint_id), model);
+  if (why) { const err = new Error(why); err.status = 400; throw err; }
   reg.roles[role] = { endpoint_id, model, cloud_fallback: cloud_fallback || null };
   await save(reg, supabase);
   return reg.roles[role];
@@ -888,7 +916,7 @@ function describeDeclaredRole(role, models) {
     if (known.length && !known.includes(model)) {
       return {
         ok: false, provider: ep.provider, model, reason: 'model_not_on_endpoint',
-        detail: `${ep.provider} does not serve "${model}". Pick a model this provider offers in Settings → Model Assignment, or re-scan the provider's model list.`,
+        detail: notOnProvider(ep.provider, model),
       };
     }
     return { ok: true, provider: ep.provider, model };
@@ -999,7 +1027,7 @@ function describeRoleLocal(role) {
       model: mapping.model,
       reason: 'model_not_on_endpoint',
       // Name the remedy, and name the cheaper one first (BO-F3's rule).
-      detail: `${ep.provider} does not serve "${mapping.model}". Pick a model this provider offers in Settings → Model Assignment, or re-scan the provider's model list.`,
+      detail: notOnProvider(ep.provider, mapping.model),
     };
   }
 
@@ -1105,7 +1133,7 @@ function serialized(fn) {
 }
 
 module.exports = {
-  PROVIDER_TRANSPORT, load, save,
+  PROVIDER_TRANSPORT, load, save, modelRefusal,
   addEndpoint: serialized(addEndpoint),
   removeEndpoint: serialized(removeEndpoint),
   assignRole: serialized(assignRole),
