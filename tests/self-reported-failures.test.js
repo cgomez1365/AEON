@@ -57,6 +57,20 @@ describe('callers that show their own failure say so', () => {
     expect(chat).toMatch(/SELF_REPORTED_HEADER|x-aeon-self-reported/);
   });
 
+  it('Settings marks the three requests whose refusal it words itself (pacing limit, role assignment, Save)', () => {
+    // Each of these answers 400 with a sentence naming the remedy and shows it
+    // inline or as a toast. Without the header AEON's failure banner printed the
+    // same refusal a second time across the top of the page.
+    const src = read('src', 'blocks', 'settings', 'index.jsx');
+    const near = (needle) => { const i = src.indexOf(needle); expect(i).toBeGreaterThan(-1); return src.slice(i, i + 420); };
+    expect(near("/rpm`, {")).toMatch(/x-aeon-self-reported/);
+    expect(near("fetch('/api/connections/assign-role'")).toMatch(/x-aeon-self-reported/);
+    // The Save handler is the one that posts the unsaved patch (other /api/settings calls are not Save).
+    const si = src.indexOf('body: JSON.stringify({ patch: patchRef.current })');
+    expect(si).toBeGreaterThan(-1);
+    expect(src.slice(Math.max(0, si - 260), si)).toMatch(/x-aeon-self-reported/);
+  });
+
   it('the terminal names the Dashboard block when chat is not served', () => {
     expect(read('src', 'components', 'Terminal2.jsx')).toMatch(/Dashboard block/);
   });

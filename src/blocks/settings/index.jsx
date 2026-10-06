@@ -1190,7 +1190,8 @@ function PacingRow({ ep, onChange }) {
     setErr(''); setBusy(true);
     try {
       const r = await fetch(`/api/connections/${encodeURIComponent(ep.id)}/rpm`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        // Self-reported: a refusal is worded inline below, so AEON's failure banner stays out of it.
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-aeon-self-reported': '1' },
         body: JSON.stringify({ rpm_limit: raw === '' ? null : Number(raw) }),
       });
       const d = await r.json().catch(() => ({}));
@@ -3571,7 +3572,7 @@ export default function SystemSettings() {
     try {
       const r = await fetch('/api/settings', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-aeon-self-reported': '1' },
         body: JSON.stringify({ patch: patchRef.current }),
       });
       if (r.ok) {
@@ -3611,7 +3612,7 @@ export default function SystemSettings() {
         || d.endpoints.find(e => e.provider === next.provider);
       if (!ep) return;
       const r = await fetch('/api/connections/assign-role', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-aeon-self-reported': '1' },
         body: JSON.stringify({ role, endpoint_id: ep.id, model: next.model }),
       });
       if (!r.ok) {
