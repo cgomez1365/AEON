@@ -9,7 +9,7 @@
  *
  * Drives the real kernelEmbed against a fake Gemini embedder on 127.0.0.1.
  */
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -68,5 +68,38 @@ describe('an embedding call spends the same budget a chat call on that key does'
     expect(pacing.waitEstimateMs(chatKey, 1), 'embedding took a slot in a bucket chat never reads').toBeGreaterThan(0);
     // And not in an address-only bucket of its own.
     expect(pacing.waitEstimateMs(pacing.paceKey(base, 'gemini'), 1)).toBe(0);
+  });
+});
+
+describe('an embedding wait is not silent', () => {
+  it('says in the log that indexing shares the limit, once for a run of calls, and still completes', async () => {
+    const pacing = require(MODS[3]);
+    pacing._reset();
+    const { kernelEmbed } = require(MODS[2]);
+    const lines = [];
+    const warn = vi.spyOn(console, 'warn').mockImplementation((...a) => { lines.push(a.join(' ')); });
+    await kernelEmbed('one', { kind: 'document' });         // the one slot of this minute
+    const hitsBefore = hits;
+    const realSetTimeout = globalThis.setTimeout;
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    try {
+      const calls = [kernelEmbed('two', { kind: 'document' }), kernelEmbed('three', { kind: 'document' })];
+      await vi.advanceTimersByTimeAsync(3_000);
+      const said = lines.filter((l) => /pacing: waiting \d+s for gemini \(your limit: 1\/min/.test(l));
+      expect(said, 'an embedding waited on the limit with no line anywhere').toHaveLength(1);
+      expect(said[0]).toMatch(/indexing and chat share it/);
+      expect(said[0]).toMatch(/Settings → Keys/);
+      expect(hits).toBe(hitsBefore);
+      // Let the first waiter through; the second is out of patience (it gives
+      // up with the limit's own error rather than hanging).
+      let done = false;
+      const all = Promise.allSettled(calls).then((r) => { done = true; return r; });
+      for (let i = 0; i < 80 && !done; i++) { await vi.advanceTimersByTimeAsync(1000); await new Promise((r) => realSetTimeout(r, 5)); }
+      const settled = await all;
+      expect(settled.filter((r) => r.status === 'fulfilled').length).toBeGreaterThanOrEqual(1);
+    } finally {
+      vi.useRealTimers();
+      warn.mockRestore();
+    }
   });
 });

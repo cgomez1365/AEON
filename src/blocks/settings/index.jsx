@@ -1231,6 +1231,9 @@ function PacingRow({ ep, onChange }) {
             that share one provider project should each be given their share. Only requests per
             minute are paced: a daily request cap is not enforced. When a provider's daily limit is
             reached it answers with an error, that key rests, and AEON moves to the next provider.
+            Indexing your vault and searching it draw on the same limit as chat for that key, so a
+            long indexing run can make a chat turn wait (an indexing wait is written to the system
+            log, not to the chat).
           </div>
         </div>
       )}
@@ -1646,6 +1649,7 @@ function ConnectionsPanel({ nervousSystem }) {
               rate-limits page; some providers limit each model separately, so use the lowest number among
               the models you use. Leave blank to use the default (only a generic custom endpoint has one),
               or enter 0 for no limit. You can change it later on the connection's card.
+              Indexing and search use the same limit as chat for that key.
             </span>
           </label>
           )}

@@ -73,6 +73,7 @@ Every connection card in **Settings → Keys** shows how AEON paces it — *Pace
 - **It counts each key on its own.** Keys that share one provider project share that project's limit, so give each key its share.
 - **It takes effect on the next request**, with no restart.
 - **AEON waits instead of failing, and says so.** When your limit makes a request wait, the chat shows one line, for example `pacing: waiting 12s for gemini (your limit: 8/min)`. If it would have to wait longer than a minute it stops waiting, moves to the next provider and names the setting, rather than treating the provider as down. Changing a limit is written to the audit log.
+- **Indexing and search share it.** Embedding (indexing your vault, `/ask`, `/recall`) draws on the same limit as chat for that key, so a long indexing run can make a chat turn wait, and the other way round. A chat turn shows the pacing line; an embedding wait is written to the system log (`[EMBED] pacing: waiting …`), not to the chat.
 - **Known limit: there is no daily-request cap.** Providers reset daily limits at different times and often per model, so a per-connection daily counter would be wrong. When a provider answers that a daily limit is reached, that key rests and AEON fails over to the next provider. Tokens per minute are not paced either.
 
 ### Requirements

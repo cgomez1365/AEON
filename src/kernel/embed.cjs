@@ -148,6 +148,9 @@ function taskPrefix(model, kind) {
   return kind === 'query' ? 'search_query: ' : 'search_document: ';
 }
 
+// When an embedding wait on a bucket was last announced (see kernelEmbed).
+const _paceToldAt = {};
+
 /**
  * The space tag a vector from `model` carries — the value stored as
  * `embeddingModel` and compared against at search time.
@@ -220,7 +223,17 @@ async function kernelEmbed(text, { supabase = null, kind = 'document', localOnly
   // Cloud: pace against the SAME per-credential budget chat uses, before the
   // call. The credential is part of the key (pacing.cjs paceKey); leaving it
   // out put indexing in a bucket of its own, beside the operator's limit.
-  await pace(paceKey(r.base_url, r.provider, r.credential_ref), r.rpm_limit);
+  // Embedding has no chat to show a notice in, so a wait is said in the log, once
+  // per burst (an indexing run is hundreds of calls).
+  const bucket = paceKey(r.base_url, r.provider, r.credential_ref);
+  await pace(bucket, r.rpm_limit, {
+    onWait: ({ waitMs, rpm }) => {
+      const since = Date.now() - (_paceToldAt[bucket] || 0);
+      if (since >= 0 && since < 10_000) return;
+      _paceToldAt[bucket] = Date.now();
+      console.warn(`[EMBED] pacing: waiting ${Math.ceil(waitMs / 1000)}s for ${r.provider} (your limit: ${rpm}/min; indexing and chat share it — change it in Settings → Keys)`);
+    },
+  });
 
   const style = (endpoints.PROVIDER_TRANSPORT[r.provider] || {}).style || 'openai';
   const vector = style === 'gemini'

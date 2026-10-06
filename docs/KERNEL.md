@@ -63,7 +63,7 @@ next call). `services/ai.js` paces every transport to it, per credential, throug
 relays as a `notice` event, and the system log), and a call that waits past the cap fails with
 `localThrottle`. The failover treats that as "this connection is at its limit": no streak toward resting
 the provider, the next provider is tried, and the reason and the final error name Settings → Keys. No
-named provider ships a default; only the generic `custom` connection starts at one. The native `local` connection is not paced (no provider quota, and no call to it passes through the pacing seam), so the registry refuses a limit on it. There is no daily-request cap.
+named provider ships a default; only the generic `custom` connection starts at one. Embedding (`src/kernel/embed.cjs`) pays into the same per-credential bucket, so indexing and chat share the limit; its waits are logged (`[EMBED] pacing: …`), there being no chat to carry a notice. The native `local` connection is not paced (no provider quota, and no call to it passes through the pacing seam), so the registry refuses a limit on it. There is no daily-request cap.
 
 HTTP surface (`src/kernel/routers/ai.cjs`):
 

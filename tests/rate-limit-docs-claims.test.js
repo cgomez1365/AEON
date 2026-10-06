@@ -56,6 +56,14 @@ describe('the words that explain the limit', () => {
     expect(help).toMatch(/lowest number among the models you use/);
   });
 
+  it('says indexing and search draw on the same limit as chat, and that the wait is in the log', () => {
+    expect(section).toMatch(/indexing/i);
+    expect(section).toMatch(/same limit as chat/i);
+    expect(section).toMatch(/system log/i);
+    expect(help).toMatch(/same limit as chat/);
+    expect(form).toMatch(/same limit as chat/);
+  });
+
   it('says the local runtime is not paced, in the README and on the card', () => {
     expect(section).toMatch(/runs on this computer/i);
     expect(section).toMatch(/not paced/i);
