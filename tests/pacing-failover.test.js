@@ -148,7 +148,7 @@ const use = (rows, provider, model) => {
 beforeAll(async () => {
   ports = { gemini: await listen(gemini), custom: await listen(openai(() => customHits++, 'custom')), groq: await listen(openai(() => groqHits++, 'groq')) };
   const vault = require(VAULT_PATH);
-  for (const ref of ['gem-k1', 'grq-k1', 'cus-k1', 'cla-k1']) await vault.setSecret(ref, `test-only-${ref}`);
+  for (const ref of ['gem-k1', 'gem-k2', 'grq-k1', 'cus-k1', 'cla-k1']) await vault.setSecret(ref, `test-only-${ref}`);
   endpoints = require(ENDPOINTS_PATH);
   require.cache[LR_PATH] = { id: LR_PATH, filename: LR_PATH, loaded: true, exports: lrStub };
   pacing = require(PACING_PATH);
@@ -387,5 +387,32 @@ describe('when AEON gives up waiting, that is the operator\'s limit, not an outa
     expect(err.message).not.toMatch(/Add a key or credits/);
     expect(err.rateLimited).toBe(true);
     expect(err.retryable).toBe(true);
+  });
+});
+
+// ── review round: what the first pass left open ───────────────────────
+
+// The first slot of this connection's credential, taken a moment ago, and the
+// second taken while a caller waits for it: the shape of a burst, after which
+// pace() gives up (see giveUpOnce above).
+const burstKey = (base, provider, ref) => pacing.paceKey(base, provider, ref);
+
+describe('the limit is not a key\'s fault: no rotation to the next key', () => {
+  it('a limit of 429 (a number that reads like an HTTP status) still does not rotate', async () => {
+    const two = { ...geminiRow(429), auth_ref: 'gem-k1', auth_refs: ['gem-k1', 'gem-k2'] };
+    writeRegistry([two, groqRow()], { chat: { endpoint_id: 'gem', model: 'gemini-flash-latest' } });
+    settings = { models: { chat: { provider: 'gemini', model: 'gemini-flash-latest' } }, prefs: {} };
+    pacing._reset();
+    const key = burstKey(`http://127.0.0.1:${ports.gemini}/v1beta`, 'gemini', 'gem-k1');
+    for (let i = 0; i < 429; i++) await pacing.pace(key, 1000);   // the key's whole minute, spent
+    const s = stream();
+    const p = s.run();
+    await idle(3_000);
+    // Other callers spend the next minute's budget too, so the wait cannot end.
+    for (let i = 0; i < 429; i++) await pacing.pace(key, 1000);
+    const r = await settle(p);
+    expect(logLines.join('\n')).not.toMatch(/switching to key|rotated to key/);
+    expect(geminiHits, 'the limit was read as a bad key and the request went out on another').toBe(0);
+    expect(r.provider).toBe('groq');
   });
 });
