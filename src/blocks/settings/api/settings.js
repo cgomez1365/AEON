@@ -208,11 +208,44 @@ module.exports = (app, deps) => {
     res.json({ settings, envKeys, cloudProviders });
   });
 
+  // The first role in `next` whose provider+model this save would CHANGE and the
+  // provider's own connection does not list — as a sentence, or null.
+  //
+  // assign-role and /nl refuse such a pair, but the Save button writes
+  // settings.models through the route below, so a pair assign-role refused sat
+  // in the page's unsaved settings and was saved anyway. This is the same
+  // endpoints.modelRefusal, applied to what is about to be written. Only changed
+  // roles are checked (a pair already on disk is not this save's business), the
+  // embed role has its own models, and a registry that cannot be read proves
+  // nothing, so it refuses nothing.
+  async function staleModelRefusal(current, next) {
+    const after = next && typeof next.models === 'object' && next.models ? next.models : {};
+    const before = current && typeof current.models === 'object' && current.models ? current.models : {};
+    const changed = Object.keys(after).filter((role) => {
+      const a = after[role];
+      const b = before[role] || {};
+      return role !== kernelEndpoints.EMBED_ROLE && a && typeof a === 'object' && a.provider && a.model
+        && (a.provider !== b.provider || a.model !== b.model);
+    });
+    if (!changed.length) return null;
+    let eps;
+    try { eps = (await kernelEndpoints.load(deps && deps.supabase ? deps.supabase : null)).endpoints || []; } catch { return null; }
+    for (const role of changed) {
+      const { provider, model } = after[role];
+      // The connection that lists the model, as /nl and the Models tab choose.
+      const ep = eps.find(e => e.provider === provider && (e.models || []).includes(model))
+        || eps.find(e => e.provider === provider) || null;
+      const why = kernelEndpoints.modelRefusal(ep, model);
+      if (why) return `${role}: ${why} Nothing was saved.`;
+    }
+    return null;
+  }
+
   // ── POST /api/settings — merge a patch (preferred) or replace whole file ──
   // { patch: {...} }    → deep-merged into the file on disk (read-modify-write,
   //                       concurrent writers can't clobber each other)
   // { settings: {...} } → full replace, kept ONLY for explicit import/restore
-  app.post('/api/settings', (req, res) => {
+  app.post('/api/settings', async (req, res) => {
     const { settings, patch, cloudProvider } = req.body;
     if (cloudProvider) {
       try {
@@ -224,10 +257,15 @@ module.exports = (app, deps) => {
     }
     if (patch && typeof patch === 'object') {
       const current = loadSettings();
-      saveSettings(deepMerge(current, patch));
+      const merged = deepMerge(JSON.parse(JSON.stringify(current)), patch);
+      const why = await staleModelRefusal(current, merged);
+      if (why) return res.status(400).json({ error: why });
+      saveSettings(merged);
       return res.json({ ok: true, merged: true });
     }
     if (!settings) return res.status(400).json({ error: 'patch or settings object required' });
+    const why = await staleModelRefusal(loadSettings(), settings);
+    if (why) return res.status(400).json({ error: why });
     saveSettings(settings);
     res.json({ ok: true });
   });
