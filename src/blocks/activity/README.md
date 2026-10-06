@@ -43,7 +43,7 @@ AEON looking at its own activity log, not a user-facing content feature.
 |---|---|---|
 | GET | `/api/token-analytics/heatmap` | 365 calendar days ending **today** of `{date, requests, tokens, errors, weekday}` + `maxRequests`/`totalRequests`/`totalTokens`/`activeDays`. Backs the grid. |
 | GET | `/api/token-analytics/summary` | Totals + `errors`, `today`/`last7`/`last30`/`last90` (calendar days, today included), current streak (run reaching today, or yesterday before today's first call) and longest streak, per-model breakdown with provider/errors/avgLatency, `dailyCost` (the kernel's `getDailyCost()` when injected), `pricedProviders`, `firstDay`, `source`. |
-| GET | `/api/token-analytics/calls` | Newest ledger records; `?failed=1` for failures only, each with the HTTP `status` and `error` the kernel kept. `?limit=` (max 200). |
+| GET | `/api/token-analytics/calls` | Newest ledger records; `?failed=1` for failures only, each with the HTTP `status` and `error` the kernel kept; a call the operator stopped carries `cancelled: true` (it still has `success: false`, so `?failed=1` lists it, but no `errors` count includes it). `?limit=` (max 200). |
 | GET | `/api/token-analytics/daily/:date` | Full detail for one day, including per-model request/token counts and `errors`. |
 | POST | `/api/token-analytics/record` | Records one usage event `{tokens, model, engine}` for today. HTTP entry point for external callers. |
 

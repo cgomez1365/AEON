@@ -80,6 +80,10 @@ Every call crosses one seam, `_trackLLM`, and is appended once to the LLM ledger
 (`src/kernel/llm-ledger.cjs`), which the Activity and Fleet Control blocks read. A failed
 call's row carries the provider's HTTP status and its words (keys redacted, 160 characters
 at most), so a failure can still be explained after a restart.
+A call the operator stopped is recorded as "cancelled by operator" with `cancelled: true`
+(audit code 499): it is not counted as an error, and it never strikes or rests a provider.
+A native tool-call refusal (Groq) is remembered per provider and model for 30 minutes, in
+memory only, and the no-native-tool-calls note is then sent on the first request.
 
 ## Agent turns
 
