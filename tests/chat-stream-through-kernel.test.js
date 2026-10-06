@@ -211,7 +211,7 @@ describe('POST /api/chat/stream streams through kernelLLM.stream', () => {
     // A switch is ONE quiet notice, in words — no warning event, no raw body.
     expect(names).not.toContain('warning');
     const corrected = events.find(e => e.event === 'meta' && e.data.notice);
-    expect(corrected.data).toMatchObject({ provider: 'local', notice: 'custom provider error → local' });
+    expect(corrected.data).toMatchObject({ provider: 'local', notice: 'custom provider error (HTTP 503) → local' });
     expect(events.indexOf(corrected)).toBeLessThan(names.indexOf('token'));
 
     expect(events.filter(e => e.event === 'token').map(e => e.data.t)).toEqual(['local-']);

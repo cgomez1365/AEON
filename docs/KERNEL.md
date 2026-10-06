@@ -68,7 +68,9 @@ POST /api/ai/vision     { image, prompt?, provider?, model? }   (model only with
 ```
 
 Every call crosses one seam, `_trackLLM`, and is appended once to the LLM ledger
-(`src/kernel/llm-ledger.cjs`), which the Activity and Fleet Control blocks read.
+(`src/kernel/llm-ledger.cjs`), which the Activity and Fleet Control blocks read. A failed
+call's row carries the provider's HTTP status and its words (keys redacted, 160 characters
+at most), so a failure can still be explained after a restart.
 
 ## Agent turns
 

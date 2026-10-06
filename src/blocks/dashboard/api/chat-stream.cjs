@@ -328,13 +328,14 @@ module.exports = function ({ kernelLLM, loadSettings: loadSettingsDep, VAULT_ROO
             sseWrite(res, 'meta', { provider: p, model: m, role });
           }
         },
-        onFallback: ({ from, to, model: m, reason, notice }) => {
+        onFallback: ({ from, to, model: m, reason, status, notice }) => {
           announced = to;
           // One quiet line, in words: a switch is a notice, not a failure.
           // The kernel words a retry on the SAME connection itself ("openrouter
           // (x) out of credits → openrouter free model", "groq request too
-          // large for it → retried with less context").
-          sseWrite(res, 'meta', { provider: to, model: m, role, notice: notice || `${from} ${reason} → ${to}` });
+          // large for it → retried with less context"). The provider's status
+          // rides behind the phrase when it sent one.
+          sseWrite(res, 'meta', { provider: to, model: m, role, notice: notice || `${from} ${reason}${status ? ` (HTTP ${status})` : ''} → ${to}` });
         },
       });
 

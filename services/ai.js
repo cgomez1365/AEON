@@ -490,6 +490,16 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     try { if (callLedger) callLedger.record({ provider: engine, model, tokens, latencyMs, success, ...why }); } catch {}
   }
 
+  // What a failed call records and announces: the status the provider sent (a
+  // rejected Gemini key rides the credential pool as 401; Google said 400) and
+  // its words. _trackLLM redacts and caps them.
+  const _failInfo = (e) => ({ status: e?.httpStatus || _statusOf(e), error: e?.message });
+  // The phrase the operator reads, with the status behind it when there is one.
+  const _reasonWithStatus = (e) => {
+    const s = _failInfo(e).status;
+    return s ? `${_plainReason(e)} (HTTP ${s})` : _plainReason(e);
+  };
+
   // ── Normalize input: callers can pass a string OR a messages array ──
   // This is the bridge — old callers still pass (prompt_string, opts) and
   // everything works; new callers can pass messages: [{role,content},...] in
@@ -557,7 +567,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       _trackLLM('gemini', modelName, tokens, Date.now() - _t0, true);
       return text;
     } catch (err) {
-      _trackLLM('gemini', modelName, 0, Date.now() - _t0, false);
+      _trackLLM('gemini', modelName, 0, Date.now() - _t0, false, _failInfo(err));
       if (retries < GEMINI_KEY_POOL.length - 1) {
         rotateKey(`Error: ${err.message.substring(0, 60)}`);
         return geminiRequest(prompt, modelName, retries + 1, opts);
@@ -583,7 +593,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     });
     if (!response.ok) {
       const errBody = await response.text();
-      _trackLLM('groq', modelName, 0, Date.now() - _t0, false);
+      _trackLLM('groq', modelName, 0, Date.now() - _t0, false, { status: response.status, error: `Groq API error ${response.status}: ${errBody}` });
       if (response.status === 429 || response.status === 402) {
         rotateKeyPool('groq');
         const maxRetries = Math.max(pool.length, 1) - 1;
@@ -711,7 +721,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     });
     if (!response.ok) {
       const errBody = await response.text();
-      _trackLLM('claude', modelName, 0, Date.now() - _t0, false);
+      _trackLLM('claude', modelName, 0, Date.now() - _t0, false, { status: response.status, error: `Claude API error ${response.status}: ${errBody}` });
       if (response.status === 429 || response.status === 402) { markUnhealthy('claude', response.status, errBody); rotateKeyPool('claude'); }
       throw new Error(`Claude API error ${response.status}: ${errBody}`);
     }
@@ -1068,10 +1078,10 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       signal: fetchTimeout(opts),
     });
     if (!response.ok) {
-      _trackLLM('gemini', model, 0, Date.now() - _t0, false);
       // Structured, so the credential pool classifies this without scraping
       // the message — a 429 here is the KEY's minute, not the provider's.
       const err = _geminiError(response, await response.text().catch(() => ''));
+      _trackLLM('gemini', model, 0, Date.now() - _t0, false, _failInfo(err));
       const ra = _parseRetryAfter(response.headers.get('retry-after'));
       if (ra) err.retryAfterMs = ra;
       throw err;
@@ -1359,13 +1369,14 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     // key out from under it, spending two accounts on one turn.
     if (response.status === 429 && !opts.credential_ref
         && GEMINI_KEY_POOL.length > 1 && retries < GEMINI_KEY_POOL.length - 1) {
-      _trackLLM('gemini', model, 0, Date.now() - _t0, false);
+      _trackLLM('gemini', model, 0, Date.now() - _t0, false, { status: 429, error: 'Gemini error 429: rate limited, key rotated' });
       rotateKey('429 Rate Limit');
       return streamGemini(messages, model, baseUrl, getActiveKey(), opts, retries + 1);
     }
     if (!response.ok) {
-      _trackLLM('gemini', model, 0, Date.now() - _t0, false);
-      throw _geminiError(response, await response.text().catch(() => ''));
+      const err = _geminiError(response, await response.text().catch(() => ''));
+      _trackLLM('gemini', model, 0, Date.now() - _t0, false, _failInfo(err));
+      throw err;
     }
     let text = '';
     let usageTotal = 0;
@@ -1381,8 +1392,9 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       return true;
     });
     if (text.trim() === '') {
-      _trackLLM('gemini', model, 0, Date.now() - _t0, false);
-      throw _emptyStreamError();
+      const err = _emptyStreamError();
+      _trackLLM('gemini', model, 0, Date.now() - _t0, false, { error: err.message });
+      throw err;
     }
     const tokens = usageTotal || _estimateTokens(messages, text);
     _trackLLM('gemini', model, tokens, Date.now() - _t0, true);
@@ -1416,10 +1428,10 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     } finally { connected(); }
     if (!response.ok) {
       const errBody = await response.text().catch(() => '');
-      _trackLLM('claude', model, 0, Date.now() - _t0, false);
       if (response.status === 429 || response.status === 402) { markUnhealthy('claude', response.status, errBody); rotateKeyPool('claude'); }
       const err = new Error(`Claude API error ${response.status}: ${_redactKeys(errBody)}`);
       err.status = response.status;
+      _trackLLM('claude', model, 0, Date.now() - _t0, false, _failInfo(err));
       throw err;
     }
     let text = '';
@@ -1446,12 +1458,13 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       return true;
     });
     if (streamErr) {
-      _trackLLM('claude', model, 0, Date.now() - _t0, false);
+      _trackLLM('claude', model, 0, Date.now() - _t0, false, _failInfo(streamErr));
       throw streamErr;
     }
     if (text.trim() === '') {
-      _trackLLM('claude', model, 0, Date.now() - _t0, false);
-      throw _emptyStreamError();
+      const err = _emptyStreamError();
+      _trackLLM('claude', model, 0, Date.now() - _t0, false, { error: err.message });
+      throw err;
     }
     const tokens = (inputTokens + outputTokens) || _estimateTokens(messages, text);
     _trackLLM('claude', model, tokens, Date.now() - _t0, true);
@@ -1797,7 +1810,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
    *
    *   opts = { role='chat', signal, onToken(delta) [required],
    *            onAttempt({provider, model, fallback}),
-   *            onFallback({from, to, model, reason, notice?}),
+   *            onFallback({from, to, model, reason, status?, notice?}),
    *            max_tokens, timeout_ms, provider, model }
    *
    * Resolves like kernelLLM (registry, then settings, then the fallback
@@ -1849,7 +1862,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       const fallback = root !== primary || !!c.paidFrom;
       // A recovery attempt's notice went out when it was queued.
       if (!c.retryOf && c !== primary && lastFailed) {
-        opts.onFallback?.({ from: lastFailed.provider, to: c.provider, model: c.model, reason: _plainReason(lastErr) });
+        opts.onFallback?.({ from: lastFailed.provider, to: c.provider, model: c.model, reason: _plainReason(lastErr), status: _failInfo(lastErr).status });
       }
       opts.onAttempt?.({ provider: c.provider, model: c.model, fallback });
 
@@ -1900,7 +1913,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
         if (served > 0) {
           // Tokens already reached the caller; a silent retry would show the
           // operator two answers. Surface it with what arrived.
-          _trackLLM(c.provider, c.model || 'unknown', _estimateTokens(sent, partial), Date.now() - t0, false);
+          _trackLLM(c.provider, c.model || 'unknown', _estimateTokens(sent, partial), Date.now() - t0, false, _failInfo(e));
           e.partialText = partial;
           e.provider = c.provider;
           e.model = c.model;
@@ -2047,7 +2060,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       });
       if (!response.ok) {
         const errBody = await response.text();
-        _trackLLM(provider, model, 0, Date.now() - _t0, false);
+        _trackLLM(provider, model, 0, Date.now() - _t0, false, { status: response.status, error: `${provider} vision error ${response.status}: ${errBody}` });
         // A paid OpenRouter model out of credits rests the paid models only;
         // chat on a ':free' model keeps working.
         if (_paidOutOfCredits({ provider, model }, response.status)) _restPaid(provider, model, errBody);
@@ -2071,7 +2084,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       });
       if (!response.ok) {
         const errBody = await response.text();
-        _trackLLM('gemini', model, 0, Date.now() - _t0, false);
+        _trackLLM('gemini', model, 0, Date.now() - _t0, false, { status: response.status, error: `Gemini vision error ${response.status}: ${errBody}` });
         throw new Error(`Gemini vision error ${response.status}: ${errBody}`);
       }
       const data = await response.json();
@@ -2093,7 +2106,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       });
       if (!response.ok) {
         const errBody = await response.text();
-        _trackLLM('claude', model, 0, Date.now() - _t0, false);
+        _trackLLM('claude', model, 0, Date.now() - _t0, false, { status: response.status, error: `Claude vision error ${response.status}: ${errBody}` });
         if (response.status === 429 || response.status === 402) { markUnhealthy('claude', response.status, errBody); rotateKeyPool('claude'); }
         throw new Error(`Claude vision error ${response.status}: ${errBody}`);
       }
@@ -2274,7 +2287,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
           throw e;
         }
         if (!registryErr) { registryErr = e; registryAttempt = { provider: 'claude', status: status || null, message: e.message, configured: true }; }
-        notify(`↪ claude ${_plainReason(e)} — trying the next provider`, { provider: 'claude' });
+        notify(`↪ claude ${_reasonWithStatus(e)} — trying the next provider`, { provider: 'claude' });
       }
     }
 
@@ -2358,7 +2371,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       // Too large is the request, not the provider: no rest, no streak.
       else if (!_isTooLarge(e, status)) noteProviderFailure(p, e);
       attempts.push({ provider: p, status: status ? Number(status) : null, message: e.message, ..._attemptExtras(res.cand, e) });
-      if (prev !== p) notify(`↪ ${p} ${_plainReason(e)} — trying the next provider`, { provider: p });
+      if (prev !== p) notify(`↪ ${p} ${_reasonWithStatus(e)} — trying the next provider`, { provider: p });
       prev = p;
       console.warn(`[KERNEL] ${p} failed (${e.message.slice(0, 120)}), trying next provider`);
     }
