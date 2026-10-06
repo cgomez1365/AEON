@@ -416,3 +416,26 @@ describe('the limit is not a key\'s fault: no rotation to the next key', () => {
     expect(r.provider).toBe('groq');
   });
 });
+
+describe('Claude assigned in Settings: the legacy branch cannot bypass the limit', () => {
+  it('after the registry gave up on the limit, Claude is not called again unpaced', async () => {
+    use([claudeRow(1)], 'claude', 'claude-sonnet-5');
+    // The legacy branch would find this key; the bug sent the request with it.
+    process.env.ANTHROPIC_API_KEY = 'test-only-legacy-claude';
+    try {
+      const key = burstKey('https://api.anthropic.com/v1', 'claude', 'cla-k1');
+      pacing._reset();
+      await pacing.pace(key, 1000);
+      const p = ai.kernelLLM('second', { role: 'chat' }).catch((e) => e);
+      await idle(3_000);
+      await pacing.pace(key, 1000);
+      const err = await settle(p);
+      expect(anthropicHits, 'a request went out past the operator\'s limit').toBe(0);
+      expect(err).toBeInstanceOf(Error);
+      expect(err.message).toMatch(/claude is at your limit of 1 requests\/min/);
+      // One line about the limit; no "trying the next provider" followed by Claude again.
+      const trying = logLines.filter((l) => /claude .*trying the next provider/.test(l));
+      expect(trying.length).toBeLessThanOrEqual(1);
+    } finally { delete process.env.ANTHROPIC_API_KEY; }
+  });
+});

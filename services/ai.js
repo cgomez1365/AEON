@@ -2447,7 +2447,12 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     // chat role's cloud model and answered "not ready".
     const model = opts.model || (opts.provider && opts.provider !== roleConfig.provider ? undefined : roleConfig.model);
 
-    if (provider === 'claude') {
+    // The registry already asked Claude and AEON stopped waiting on the
+    // operator's own limit. This branch carries no limit (opts has no
+    // rpm_limit, the key comes from the env pool), so asking again would send
+    // the request the limit exists to hold back.
+    const claudeAtLimit = registryAttempt?.provider === 'claude' && registryErr?.localThrottle;
+    if (provider === 'claude' && !claudeAtLimit) {
       try {
         const text = await claudeRequest(prompt, model, undefined, opts.advisorModel, opts);
         noteProviderSuccess('claude');
