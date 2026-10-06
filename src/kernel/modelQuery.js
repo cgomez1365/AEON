@@ -118,3 +118,14 @@ export function refusedRoleNotice(role, previous, serverError) {
     : `${role} was put back as it was.`;
   return `${said} ${back}`;
 }
+
+/**
+ * The toast for a Save the server refused. POST /api/settings answers a 400
+ * with a sentence that names the model, the provider and the remedy (and says
+ * nothing was saved); the page threw it away for "Failed to save settings".
+ * The server's sentence wins; without one, the status is still said.
+ */
+export function saveFailureNotice(status, body) {
+  const said = typeof body?.error === 'string' ? body.error.trim() : '';
+  return said || `Failed to save settings (HTTP ${status})`;
+}

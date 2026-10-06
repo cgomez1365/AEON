@@ -8,7 +8,7 @@
  * no DOM): the snapshot is taken before the change, the revert after the 400.
  */
 import { describe, expect, it } from 'vitest';
-import { snapshotRole, revertRefusedRole, refusedRoleNotice } from '../src/kernel/modelQuery.js';
+import { snapshotRole, revertRefusedRole, refusedRoleNotice, saveFailureNotice } from '../src/kernel/modelQuery.js';
 
 const OLD = { provider: 'gemini', model: 'gemini-2.5-flash' };
 const REFUSED = { provider: 'openrouter', model: 'gemini-flash-latest' };
@@ -79,5 +79,20 @@ describe('refusedRoleNotice', () => {
   it('still names the remedy when the server sent no sentence or the role had no earlier pair', () => {
     expect(refusedRoleNotice('chat', OLD, '')).toMatch(/Model Assignment/);
     expect(refusedRoleNotice('vision', undefined, 'no')).toMatch(/vision was put back as it was/);
+  });
+});
+
+describe('saveFailureNotice', () => {
+  // The refusal the route really sends is checked in settings-save-model-guard
+  // (the page shows that sentence through this function).
+  it('shows the sentence the server answered with', () => {
+    const why = 'openrouter does not serve "gemini-flash-latest". Pick another model, or re-scan the provider\'s model list. Nothing was saved.';
+    expect(saveFailureNotice(400, { error: why })).toBe(why);
+  });
+
+  it('still says something, with the status, when the answer has no sentence', () => {
+    expect(saveFailureNotice(500, {})).toBe('Failed to save settings (HTTP 500)');
+    expect(saveFailureNotice(502, null)).toBe('Failed to save settings (HTTP 502)');
+    expect(saveFailureNotice(400, { error: '   ' })).toBe('Failed to save settings (HTTP 400)');
   });
 });

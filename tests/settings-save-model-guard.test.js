@@ -17,6 +17,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { createRequire } from 'module';
+import { saveFailureNotice } from '../src/kernel/modelQuery.js';
 
 const require = createRequire(import.meta.url);
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'aeon-save-guard-'));
@@ -79,6 +80,14 @@ describe('POST /api/settings with a model the provider does not list', () => {
     expect(r.body.error).toMatch(/Settings → Model Assignment/);
     expect(r.body.error).toMatch(/Nothing was saved/);
     expect(onDisk()).toBe(before);
+  }));
+
+  it('the page shows that refusal to the operator, not a generic failure', () => withServer(async (base) => {
+    const r = await save(base, { patch: { models: { chat: STALE } } });
+    const toast = saveFailureNotice(r.status, r.body);
+    expect(toast).toBe(r.body.error);
+    expect(toast).toMatch(/Settings → Model Assignment/);
+    expect(toast).not.toMatch(/^Failed to save settings/);
   }));
 
   it('refuses a model-only patch that leaves the saved provider with a model it lacks', () => withServer(async (base) => {

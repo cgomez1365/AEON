@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Settings as SettingsIcon, Check, X, RefreshCw, Zap, Shield, ChevronDown, ChevronUp, Search, Wifi, WifiOff, Activity, Cpu, Database, Layers, ToggleLeft, ToggleRight, User, Lock, KeyRound, LogOut, LogIn, Save, Eye, Palette, Wrench } from 'lucide-react';
 import { authFetch, login as apiLogin, logout as apiLogout } from '../../kernel/auth';
-import { matchesModelQuery, modelAfterProviderSwitch, snapshotRole, revertRefusedRole, refusedRoleNotice } from '../../kernel/modelQuery';
+import { matchesModelQuery, modelAfterProviderSwitch, snapshotRole, revertRefusedRole, refusedRoleNotice, saveFailureNotice } from '../../kernel/modelQuery';
 import { BLOCKS as INSTALLED_BLOCKS } from '../../kernel/blockRegistry';
 import { BlockIcon } from '../../components/BlockIcon';
 import { applyAppearance, applyThemeBuilder } from '../../kernel/appearance';
@@ -3581,7 +3581,9 @@ export default function SystemSettings() {
         showToast('Settings saved');
         setTimeout(() => setSaved(false), 2000);
       } else {
-        showToast('Failed to save settings', 'error');
+        // The server's refusal names the model and the remedy; show it.
+        const body = await r.json().catch(() => ({}));
+        showToast(saveFailureNotice(r.status, body), 'error');
       }
     } catch { showToast('Save failed — server unreachable', 'error'); }
     setSaving(false);
