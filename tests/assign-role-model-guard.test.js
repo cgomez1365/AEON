@@ -13,7 +13,7 @@
  * and a custom server load models without telling the registry, and a hand-typed
  * model is a one-entry list, so they are never refused on their list.
  */
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -50,6 +50,9 @@ beforeAll(async () => {
   await add({ provider: 'groq', id: 'gq1', models: [] });
   await add({ provider: 'custom', id: 'cu1', base_url: 'http://127.0.0.1:9/v1', models: ['only-one'] });
 });
+
+// Each test starts from unrouted settings, whatever order they run in.
+beforeEach(() => { settings = { models: {} }; });
 
 afterAll(async () => {
   if (server) await new Promise((r) => server.close(r));
