@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Settings as SettingsIcon, Check, X, RefreshCw, Zap, Shield, ChevronDown, ChevronUp, Search, Wifi, WifiOff, Activity, Cpu, Database, Layers, ToggleLeft, ToggleRight, User, Lock, KeyRound, LogOut, LogIn, Save, Eye, Palette, Wrench } from 'lucide-react';
 import { authFetch, login as apiLogin, logout as apiLogout } from '../../kernel/auth';
-import { matchesModelQuery } from '../../kernel/modelQuery';
+import { matchesModelQuery, modelAfterProviderSwitch } from '../../kernel/modelQuery';
 import { BLOCKS as INSTALLED_BLOCKS } from '../../kernel/blockRegistry';
 import { BlockIcon } from '../../components/BlockIcon';
 import { applyAppearance, applyThemeBuilder } from '../../kernel/appearance';
@@ -456,15 +456,22 @@ function unsetRoleOption(roleKey) {
   return UNSET_ROLE_OPTION[roleKey] || '↳ Same as Chat';
 }
 
+// The models a provider offers: its live list, else the registry's fallback.
+// `?.length ?` not `||` — an empty array is truthy, so a provider that
+// answered with zero models short-circuited the fallback and rendered a
+// blank <select>. That is how a ready local model stayed invisible.
+// The picker and the provider switch both read it, so they cannot disagree.
+function modelsFor(provider, liveModels, providerRegistry) {
+  const live = liveModels?.[provider];
+  const providerReg = (providerRegistry || []).find(p => p.id === provider);
+  return (live?.length ? live : providerReg?.fallbackModels) || [];
+}
+
 // Exported for tests/sweep-routing-rolecard.test.js (a component export keeps
 // Fast Refresh working; the helper above stays private).
 export function RoleCard({ role, config, providers, liveModels, freeModels, onUpdate, providerBlocks, providerRegistry }) {
-  const providerReg = (providerRegistry || []).find(p => p.id === config?.provider);
-  // `?.length ?` not `||` — an empty array is truthy, so a provider that
-  // answered with zero models short-circuited the fallback and rendered a
-  // blank <select>. That is how a ready local model stayed invisible.
   const live = liveModels[config?.provider];
-  const models = (live?.length ? live : providerReg?.fallbackModels) || [];
+  const models = modelsFor(config?.provider, liveModels, providerRegistry);
   // Only real flags, and only for the live list. A fallbackModels list is a
   // hardcoded guess about a provider we could not reach — nothing there is
   // known to be free.
@@ -496,7 +503,13 @@ export function RoleCard({ role, config, providers, liveModels, freeModels, onUp
             id={`role-provider-${role.key}`}
             className="settings-select"
             value={config?.provider || ''}
-            onChange={e => onUpdate(role.key, 'provider', e.target.value)}
+            onChange={e => {
+              // One change, provider and model together: the model must not stay
+              // the previous provider's. "Same as Chat" ('') changes only the provider.
+              const provider = e.target.value;
+              const model = provider ? modelAfterProviderSwitch(modelsFor(provider, liveModels, providerRegistry), config?.model, role.key) : config?.model;
+              onUpdate(role.key, model === config?.model ? { provider } : { provider, model });
+            }}
           >
             {unsetOption && <option value="">{unsetOption}</option>}
             {(providerRegistry || []).filter(p => providers[p.id]).map(p => (
@@ -519,7 +532,7 @@ export function RoleCard({ role, config, providers, liveModels, freeModels, onUp
             models={models}
             freeModels={free}
             value={config?.model || ''}
-            onChange={v => onUpdate(role.key, 'model', v)}
+            onChange={v => onUpdate(role.key, { model: v })}
           />
           {/* §08 — an error must name every remedy, cheapest first. A blank
               dropdown tells the operator nothing they can act on, and it looks
@@ -3466,27 +3479,34 @@ export default function SystemSettings() {
     setSaving(false);
   };
 
-  const updateRole = (role, field, value) => {
+  // `change` is { provider?, model? }, applied in one step — a provider switch
+  // carries its new model with it, and the registry mirror below is posted once
+  // from the merged result rather than from a settings closure that is stale
+  // until the next render.
+  const updateRole = (role, change) => {
     setDirty(true);
-    addPatch({ models: { [role]: { [field]: value } } });
+    addPatch({ models: { [role]: change } });
+    const next = { ...settings?.models?.[role], ...change };
     setSettings(prev => ({
       ...prev,
-      models: { ...prev.models, [role]: { ...prev.models[role], [field]: value } }
+      models: { ...prev.models, [role]: { ...prev.models[role], ...change } }
     }));
     // Also sync to endpoint registry if connections exist (bridge settings → registry)
-    fetch('/api/connections').then(r => r.json()).then(d => {
-      if (d.endpoints?.length) {
-        const provider = field === 'provider' ? value : settings?.models?.[role]?.provider;
-        const model = field === 'model' ? value : settings?.models?.[role]?.model;
-        const ep = d.endpoints.find(e => e.provider === provider);
-        if (ep) {
-          fetch('/api/connections/assign-role', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ role, endpoint_id: ep.id, model }),
-          }).catch(() => {});
-        }
+    fetch('/api/connections').then(r => r.json()).then(async d => {
+      if (!d.endpoints?.length || !next.model) return;
+      // The connection that lists the model, as the server chooses.
+      const ep = d.endpoints.find(e => e.provider === next.provider && (e.models || []).includes(next.model))
+        || d.endpoints.find(e => e.provider === next.provider);
+      if (!ep) return;
+      const r = await fetch('/api/connections/assign-role', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role, endpoint_id: ep.id, model: next.model }),
+      });
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        showToast(body.error || `Could not assign ${next.model} (HTTP ${r.status})`, 'error');
       }
-    }).catch(() => {});
+    }).catch(() => showToast('Could not sync this change to your connections', 'error'));
   };
 
   // Per-block settings: set once into blockSettings[<id>][<key>], saved with

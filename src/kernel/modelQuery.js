@@ -44,3 +44,31 @@ export function matchesModelQuery(id, query, freeSet) {
   // startsWith, not includes: "fre" should find free models, "ee" should not.
   return !!freeSet && freeSet.has(id) && 'free'.startsWith(q);
 }
+
+// Restated from NON_CHAT_MODEL_RE in src/kernel/endpoints.cjs, for the reason in
+// this file's header: a browser module cannot import a .cjs source file.
+// tests/model-after-provider-switch.test.js fails if the two ever differ.
+export const NON_CHAT_MODEL_RE = /whisper|(^|[-_/])tts([-_]|$)|text-to-speech|orpheus|embed|guard|moderation|rerank|stable-diffusion|sdxl|flux|dall-?e/i;
+
+/**
+ * The model a role should hold after its provider is switched to one offering
+ * `models`.
+ *
+ * The Provider <select> used to change the provider and leave the model, so the
+ * previous provider's model was saved against the new provider's connection
+ * (chat -> openrouter/gemini-flash-latest). The model survives only if the new
+ * provider lists it. Otherwise the first listed model that can do the job: for
+ * Embedding an embedding model (else none), for every other role the first that
+ * is not a speech, guard or embedding model, because a provider's list can
+ * start with one (Groq's starts with a speech model).
+ *
+ * An empty or unknown list returns `current` unchanged: not knowing what a
+ * provider offers is not the same as it offering nothing, and the server
+ * refuses on the same terms.
+ */
+export function modelAfterProviderSwitch(models, current, role) {
+  const list = (Array.isArray(models) ? models : []).filter(m => typeof m === 'string' && m);
+  if (!list.length || list.includes(current)) return current;
+  if (role === 'embed') return list.find(m => /embed/i.test(m)) || '';
+  return list.find(m => !NON_CHAT_MODEL_RE.test(m)) || list[0];
+}
