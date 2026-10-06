@@ -879,6 +879,26 @@ async function resolveForProvider(provider, model, supabase, prefer = []) {
 }
 
 /**
+ * The operator's limit for a provider, WITHOUT drawing a key: what a caller
+ * that names a legacy provider (groq, gemini, openrouter, claude) needs. Those
+ * calls run on the environment key pool and never resolve a connection, so the
+ * limit set on the connection never reached them. Picks the connection
+ * resolveForProvider would. `credential_ref` is that connection's only
+ * credential (null when it has several), so the env-key call and a role-routed
+ * call on the same single key share one pacing bucket instead of two.
+ */
+async function limitFor(provider, model, supabase) {
+  if (!provider) return null;
+  const reg = await load(supabase);
+  const eps = reg.endpoints.filter(e => e.provider === provider && (e.reachable_from || []).includes(RUNTIME));
+  if (!eps.length) return null;
+  const ep = (model && eps.find(e => (e.models || []).includes(model)))
+    || eps.find(e => credentialRefs(e).length) || eps[0];
+  const refs = credentialRefs(ep);
+  return { rpm_limit: ep.rpm_limit ?? null, credential_ref: refs.length === 1 ? refs[0] : null };
+}
+
+/**
  * Can this role be served right now? Synchronous, local registry only.
  *
  * resolveForRole() is async because it awaits the Supabase mirror and unwraps
@@ -1223,7 +1243,7 @@ module.exports = {
   normalizeRpmLimit, rpmDefault, isPaced, LOCAL_NOT_PACED,
   removeEndpoint: serialized(removeEndpoint),
   assignRole: serialized(assignRole),
-  discoverModels, discoverModelCatalogue, resolveForRole, resolveForProvider, isVercel,
+  discoverModels, discoverModelCatalogue, resolveForRole, resolveForProvider, limitFor, isVercel,
   lmStudioHost, isPortable, describeRoleLocal, describeRoleFromEnv,
   // Exported so the gate tests the REAL predicate rather than re-implementing it.
   pickChatModel, NON_CHAT_MODEL_RE, isProviderConfigured, configuredProviders,

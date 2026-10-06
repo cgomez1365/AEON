@@ -118,6 +118,27 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       throw e;
     }
   };
+  // A caller that NAMES a legacy provider (groq, gemini, openrouter, claude: a
+  // Council seat, an agent's first streamed round, an image read) never
+  // resolves a connection, so the limit set on it never reached the call. This
+  // reads it from the registry and returns opts carrying it. Registry-routed
+  // calls arrive with their limit (or their credential) and are left alone.
+  // `pace_ref` is the connection's single credential, so this call and a
+  // role-routed call on the same key spend one budget, not two.
+  const _withOperatorLimit = async (provider, opts = {}, model) => {
+    if (opts.rpm_limit !== undefined || opts.credential_ref || !aeonEndpoints?.limitFor) return opts;
+    let found = null;
+    try { found = await aeonEndpoints.limitFor(provider, model, supabase); }
+    catch (e) { console.warn(`[KERNEL] ${provider}: the registry could not be read for the operator's rate limit, so this call is not paced: ${e.message}`); }
+    if (!found || !(found.rpm_limit > 0)) return opts;
+    return { ...opts, rpm_limit: found.rpm_limit, ...(found.credential_ref ? { pace_ref: found.credential_ref } : {}) };
+  };
+  // The transports that run on the environment key pool (groq, gemini, vision):
+  // read the limit, then wait for it.
+  const _paceNamed = async (provider, opts, model, base) => {
+    const o = await _withOperatorLimit(provider, opts, model);
+    await _paceFor(o, _paceKey(base, provider, o.credential_ref || o.pace_ref), provider);
+  };
   // One reading of Retry-After, shared with the credential pool that acts on it.
   const { parseRetryAfter: _parseRetryAfter } = require('../src/kernel/keyPool.cjs');
 
@@ -665,6 +686,9 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     const flatText = _flatPrompt(prompt, opts);
     const contents = [{ parts: [{ text: flatText }] }];
     if (opts.system) contents.unshift({ role: 'user', parts: [{ text: opts.system }] });
+    // The operator's limit, before the try: a refusal to wait is theirs to
+    // raise, not a key to rotate.
+    await _paceNamed('gemini', opts, modelName, 'https://generativelanguage.googleapis.com/v1beta');
     try {
       const response = await fetch(url, {
         method: 'POST',
@@ -713,6 +737,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     const _t0 = Date.now();
     const messages = _toMessages(prompt, opts);
     if (opts.system) messages.unshift({ role: 'system', content: opts.system });
+    await _paceNamed('groq', opts, modelName, 'https://api.groq.com/openai/v1');
 
     const response = await fetch(url, {
       method: 'POST',
@@ -827,6 +852,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   const claudeRequest = async (prompt, modelName = 'claude-sonnet-5', apiKeyOverride, advisorModel, opts = {}) => {
     const apiKey = apiKeyOverride || nextKey('claude') || process.env.ANTHROPIC_API_KEY;
     if (!apiKey) throw new Error('ANTHROPIC_API_KEY missing in .env or vault');
+    opts = await _withOperatorLimit('claude', opts, modelName);
     const _t0 = Date.now();
     const headers = {
       'x-api-key': apiKey,
@@ -845,7 +871,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       body.system = 'If this task involves a non-obvious judgment call, an ambiguous tradeoff, or something you are not fully certain about, consult the advisor tool before finalizing your answer. For straightforward tasks, answer directly.';
       body.tools = [{ type: 'advisor_20260301', name: 'advisor', model: advisorModel }];
     }
-    await _paceFor(opts, _paceKey('https://api.anthropic.com/v1', 'claude', opts.credential_ref), 'claude');
+    await _paceFor(opts, _paceKey('https://api.anthropic.com/v1', 'claude', opts.credential_ref || opts.pace_ref), 'claude');
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST', headers, body: JSON.stringify(body),
     });
@@ -1045,6 +1071,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   const openRouterRequest = async (prompt, model = 'openai/gpt-4o-mini', opts = {}) => {
     const apiKey = nextKey('openrouter') || process.env.OPENROUTER_API_KEY;
     if (!apiKey) throw new Error('OPENROUTER_API_KEY missing in .env');
+    opts = await _withOperatorLimit('openrouter', { ...opts, provider: opts.provider || 'openrouter' }, model);
     // Free-tier models (openrouter/free, or any :free suffix) are $0/token
     // but OpenRouter still reserves max_tokens against your credit balance to
     // prevent abuse — a large reservation 402s even with zero cost.
@@ -1135,7 +1162,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     if (opts.system) messages.unshift({ role: 'system', content: opts.system });
     const maxTokens = _maxTokensFor(opts.provider, baseUrl, model, opts.max_tokens);
     // Pace before the call, not after the 429.
-    await _paceFor(opts, _paceKey(baseUrl, opts.provider, opts.credential_ref), opts.provider || 'this endpoint');
+    await _paceFor(opts, _paceKey(baseUrl, opts.provider, opts.credential_ref || opts.pace_ref), opts.provider || 'this endpoint');
     const response = await fetch(url, {
       method: 'POST', headers,
       body: JSON.stringify({ model, messages, max_tokens: maxTokens }),
@@ -1239,7 +1266,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     if (opts.system) contents.unshift({ role: 'user', parts: [{ text: opts.system }] });
     // Gemini paced nowhere, so a free key's per-minute cap was discovered only
     // by hitting it. Same budget seam as every other transport.
-    await _paceFor(opts, _paceKey(base, 'gemini', opts.credential_ref), 'gemini');
+    await _paceFor(opts, _paceKey(base, 'gemini', opts.credential_ref || opts.pace_ref), 'gemini');
     const maxTokens = opts.max_tokens || 4096;
     const response = await fetch(url, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1456,7 +1483,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     // Free-tier models reserve max_tokens against the credit balance and 402
     // on a large reservation (_maxTokensFor).
     const maxTokens = _maxTokensFor(provider, base, model, opts.max_tokens);
-    await _paceFor(opts, _paceKey(base, provider, opts.credential_ref), provider);
+    await _paceFor(opts, _paceKey(base, provider, opts.credential_ref || opts.pace_ref), provider);
     const { signal, connected } = _streamSignal(opts);
     let response;
     try {
@@ -1537,7 +1564,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     const maxTokens = opts.max_tokens || 4096;
     // Before the connect clock starts: waiting on the operator's own limit is
     // not a provider that failed to answer.
-    await _paceFor(opts, _paceKey(base, 'gemini', opts.credential_ref), 'gemini');
+    await _paceFor(opts, _paceKey(base, 'gemini', opts.credential_ref || opts.pace_ref), 'gemini');
     const { signal, connected } = _streamSignal(opts);
     let response;
     try {
@@ -1617,7 +1644,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     const turns = messages.filter(m => m.role !== 'system').map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: String(m.content ?? '') }));
     const body = { model, max_tokens: opts.max_tokens || 4096, messages: turns, stream: true };
     if (system) body.system = system;
-    await _paceFor(opts, _paceKey('https://api.anthropic.com/v1', 'claude', opts.credential_ref), 'claude');
+    await _paceFor(opts, _paceKey('https://api.anthropic.com/v1', 'claude', opts.credential_ref || opts.pace_ref), 'claude');
     const { signal, connected } = _streamSignal(opts);
     let response;
     try {
@@ -1727,7 +1754,11 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     const transport = aeonEndpoints?.PROVIDER_TRANSPORT || {};
     const profile = transport[c.provider] || {};
     const style = profile.style || (c.provider === 'local' ? 'local' : 'openai');
-    const o = { ...opts, provider: c.provider, ...(c.rpm_limit != null ? { rpm_limit: c.rpm_limit } : {}) };
+    // A candidate with no connection behind it (a caller's named provider, an
+    // env-key fallback) still answers to the limit the operator set.
+    const limited = style === 'local' || c.rpm_limit != null || c.endpoint_id
+      ? opts : await _withOperatorLimit(c.provider, opts, c.model);
+    const o = { ...limited, provider: c.provider, ...(c.rpm_limit != null ? { rpm_limit: c.rpm_limit } : {}) };
     if (style === 'local') return streamLocal(messages, c.model, o);
     const apiKey = c.apiKey || _legacyKeyFor(c.provider);
     if (!apiKey && _KEY_REQUIRED[c.provider]) {
@@ -2272,6 +2303,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       const apiKey = provider === 'groq' ? (nextKey('groq') || process.env.GROQ_API_KEY) : (nextKey('openrouter') || process.env.OPENROUTER_API_KEY);
       if (!apiKey) throw new Error(`${provider === 'groq' ? 'GROQ_API_KEY' : 'OPENROUTER_API_KEY'} missing in .env`);
       const base = provider === 'groq' ? 'https://api.groq.com/openai/v1' : 'https://openrouter.ai/api/v1';
+      await _paceNamed(provider, opts, model, base);
       const response = await fetch(`${base}/chat/completions`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
@@ -2301,6 +2333,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       const apiKey = getActiveKey();
       if (!apiKey) throw new Error('No Gemini API keys configured in .env');
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+      await _paceNamed('gemini', opts, model, 'https://generativelanguage.googleapis.com/v1beta');
       const response = await fetch(url, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ contents: [{ parts: [{ text: prompt }, { inline_data: { mime_type: mimeType, data: b64 } }] }] }),
@@ -2325,6 +2358,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     if (provider === 'claude') {
       const apiKey = nextKey('claude') || process.env.ANTHROPIC_API_KEY;
       if (!apiKey) throw new Error('ANTHROPIC_API_KEY missing in .env or vault');
+      await _paceNamed('claude', opts, model, 'https://api.anthropic.com/v1');
       const response = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
