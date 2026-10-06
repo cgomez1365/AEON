@@ -597,11 +597,21 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
         throw new Error(`Gemini API error ${response.status}: ${errBody}`);
       }
       const data = await response.json();
-      const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      const cand = data?.candidates?.[0];
+      const text = _geminiText(cand);
+      // An answer with no text is the model's answer, not the key's fault:
+      // recorded and thrown past the rotation below, never '' as success.
+      if (text.trim() === '') {
+        const noText = _geminiNoText({ finishReason: cand?.finishReason, blockReason: data?.promptFeedback?.blockReason, maxTokens: opts.max_tokens || 4096 });
+        _trackLLM('gemini', modelName, 0, Date.now() - _t0, false, { error: noText.message });
+        noText.noAnswer = true;
+        throw noText;
+      }
       const tokens = data?.usageMetadata?.totalTokenCount || Math.ceil(flatText.length / 4) + Math.ceil(text.length / 4);
       _trackLLM('gemini', modelName, tokens, Date.now() - _t0, true);
       return text;
     } catch (err) {
+      if (err.noAnswer) throw err;
       _trackLLM('gemini', modelName, 0, Date.now() - _t0, false, _failInfo(err));
       if (retries < GEMINI_KEY_POOL.length - 1) {
         rotateKey(`Error: ${err.message.substring(0, 60)}`);
@@ -2203,7 +2213,13 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
         throw new Error(`Gemini vision error ${response.status}: ${errBody}`);
       }
       const data = await response.json();
-      const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      const cand = data?.candidates?.[0];
+      const text = _geminiText(cand);
+      if (text.trim() === '') {
+        const noText = _geminiNoText({ finishReason: cand?.finishReason, blockReason: data?.promptFeedback?.blockReason, maxTokens: null });
+        _trackLLM('gemini', model, 0, Date.now() - _t0, false, { error: noText.message });
+        throw noText;
+      }
       _trackLLM('gemini', model, data?.usageMetadata?.totalTokenCount || 0, Date.now() - _t0, true);
       return text;
     }
