@@ -15,10 +15,127 @@ tagged; until then its heading says so.
 ## 3.3.3 — update of 2026-10-05 (the number stays 3.3.3; the tag was moved to this)
 
 <!-- 14 commits on top of the first v3.3.3 tag (18dcaed, 2026-10-04): 5840dc9, 4227d9a, 2a69606, 50dacc1, the
-     audit fixes, e56c75e, 61877ae, eac9a47, 5b4e2ab. By the owner's choice the version number stays 3.3.3 and the v3.3.3
+     audit fixes, e56c75e, 61877ae, eac9a47, 5b4e2ab (that is a26af72); then 33 commits on top of a26af72, 47 in all
+     since 18dcaed, the same-day terminal and rate-limit work: d02a98c, 869d913, cac4868, 756f856, de764cc, 81b493a,
+     985ef04, 8ac92cd, 12e19a3, a3c731c, 8e3bbff, 583d020, 7734563, 7c086bc, 4647906, 58586fc (terminal bugs and their
+     review fixes); 24964eb, 72fc893, a8ce8c0, e3bc8d6, 67d73ee, fd7ace6, 4196884, 104537a, d32b30a, f5c1e27, 9ea53cd
+     (the rate-limit control); 3d4e411, 6f26f5d, 42a774b, 5be5748, d04f857, bf6567b (gap closures and docs). History
+     is not squashed. By the owner's choice the version number stays 3.3.3 and the v3.3.3
      tag and release were moved to include them, because the first 3.3.3 could not install the first paid block
      (it dropped a block's declared engine) and shipped Supabase SQL open to the public key. Anyone holding the
      2026-10-04 3.3.3 should update (README, "Updating AEON"). -->
+
+**You set each connection's requests-per-minute limit (Settings → Keys).** AEON paced only the generic custom
+endpoint, so a Gemini key whose free tier allows a handful of calls a minute could only be discovered by hitting
+the 429. Every connection card now shows how it is paced (*Paced to N requests/min*, *Not paced*, *Default: N/min*)
+and a **Change** button; the Add form takes the number too. The number is yours: AEON ships none for any named
+provider (only the generic custom connection starts at 30), because a provider's limit is your account's policy
+and changes — type the one from your provider's own rate-limits page. 0 turns pacing off, whole numbers to 600.
+It takes effect on the next request, is counted per key, is written to the audit log, and applies to every
+hosted transport (OpenAI-compatible, Gemini, Claude, streamed or not) and to indexing. When the limit makes AEON
+wait, the chat shows one line (`pacing: waiting 12s for gemini (your limit: 8/min)`); past a minute AEON stops
+waiting, tries the next provider and names the setting instead of calling your provider down or telling you to add
+a key. Not enforced, and said so in the README: a daily-request cap, tokens per minute, and the on-device Local
+connection (nothing to stay under, so a limit on it is refused). Indexing and search draw on the same limit as
+chat for that key; an indexing wait goes to the system log, not the chat. Also fixed on the way: re-saving a
+connection (a label edit, an added key) no longer resets its limit or empties its model list. After review: Claude
+assigned in Settings is not called a second time, unpaced, once the limit has stopped it; the closing step of the
+error leads with the limit; a background call with no chat no longer swallows the chat's pacing line; the rule that
+the limit never rotates your keys now has a test. Commits: 24964eb, 72fc893, a8ce8c0, e3bc8d6, 67d73ee, fd7ace6,
+4196884, 104537a, d32b30a, f5c1e27, 9ea53cd. Tests: `tests/connection-rpm.test.js`, `tests/pacing-failover.test.js`,
+`tests/pacing.test.js`, `tests/embed-shares-pacing-bucket.test.js`, `tests/rate-limit-docs-claims.test.js`. The Settings
+screens (the card, the Change button, the Add form) are covered by source-level tests and a clean build; the author
+of these changes did not drive them in a browser.
+
+**Terminal bugs from the owner's live session (d02a98c to 58586fc, and the gap closures below).** Each was traced to a
+cause before it was changed, most from the drive's own call log and audit log. Where a line says "not verified", the
+only proof is a test against a stand-in for the outside service; CI cannot prove what a live provider does.
+
+- **A long message no longer fails the local embedder (cac4868).** Embedding mode started `llama-server` with a batch
+  size but no `--ubatch-size`, and an embedding input must fit one physical batch (512 tokens), so any input over about
+  510 tokens came back HTTP 500. Seen as "vault: embed failed" under a reply whose text tripped auto-recall, because the
+  recall query is the whole message. Now `--ubatch-size` matches the window, and an input past the window itself is cut
+  to its head and embedded with a warning instead of failing. Proven on the real shipped llama.cpp b10216 binary and the
+  nomic-embed-text v1.5 Q8 model, run with the old and the new setting: an input of 513 tokens or more was refused with
+  HTTP 500 before and answered with HTTP 200 and a 768-dimension vector after; stub-server tests
+  (`tests/local-runtime/embed-batch.test.js`) prove the arguments and the retry in CI. For inputs of 512 tokens or fewer
+  (counting the begin and end markers) the vectors from the old and the new setting were identical, exact equality,
+  largest difference 0, cosine 1.0, at about 22, 102, 302, 482 and 512 tokens, so those need no re-indexing; that was
+  measured on one machine with one model, and the cut-and-retry past the window was not run on the real binary. A
+  document whose chunk embeddings failed while the bug was live keeps its summary vector and is repaired by the next
+  index pass (`/index-brain`, Matrix Index or the nightly run), with no re-index: a document whose summary vector also
+  failed gets its vector on the first pass and its chunks on the second. The index status counts document vectors only,
+  so it does not show missing chunks; the repair does not depend on it. Repair is covered by
+  `tests/embed-failed-chunks-recover.test.js` (d04f857) against a stub embedder, not llama-server, and not against a real
+  vault. It takes effect when AEON is restarted.
+- **A fallback says why (d02a98c, 869d913).** Only the OpenAI-compatible transports recorded the cause of a failed call;
+  a Gemini, Groq or Claude failure wrote `success:false` and nothing else, every audit line read code 500, and the
+  terminal said "gemini unavailable -> groq" for a 400, a 404 and a 500 alike. The call log now keeps the status and a
+  one-line reason (keys redacted, 160 characters), and the notice reads "gemini unavailable (HTTP 400) -> groq". Tests:
+  `tests/failure-cause-recorded.test.js`, `tests/chat-stream-through-kernel.test.js`.
+- **Gemini 3.x replies are read from every non-thought part, and an empty reply says why (8ac92cd, 583d020).** The reply
+  is now the non-thought text parts, not the first part; a reply with no text says why (output budget spent on thinking,
+  blocked prompt, finish reason) instead of "check the model name"; an error inside an HTTP 200 carries its status; the
+  non-streaming call throws rather than returning an empty string as success. This covers the registry transports, the
+  `GEMINI_*_KEY` environment path and Gemini vision. This does not make Gemini 3.x work: AEON still sends no thinking
+  setting, so a 3.x turn that spends its whole output budget on thinking still comes back empty and falls through to the
+  next provider, now with its reason in the call log. A 5xx from Google is still not retried. Not verified against live
+  Gemini: run one turn on a 3.x model and read the call log. Tests: `tests/gemini-thinking-responses.test.js`,
+  `tests/gemini-legacy-thinking.test.js` (4647906 pins the spent-budget message).
+- **Groq's native tool call is retried once, and the refusal is remembered (985ef04, 3d4e411).** `gpt-oss-120b` answered
+  some turns with a native tool call, which Groq refuses when none are offered. The refusal read as "groq unavailable",
+  counted toward the rest after three failures and sent the turn to the 2,048-token local model, which could not hold
+  it. A refused native call is now the model's format, not the provider being down: the same model is asked once more
+  with a note, without a failure strike. The refusal is then remembered per provider and model for 30 minutes (in
+  memory only, forgotten on restart and by the provider-health reset), and the note goes on the first request, so later
+  rounds no longer spend a request on an attempt known to fail; no model name is written into the code. A model that
+  still refuses with the note already sent counts toward resting the provider and fails over. The 30 minutes is a
+  fixed constant, not a setting. Not verified against Groq's real wire format or the live service, and not verified
+  that a model stops refusing once the note is up front; if Groq rewords the error, behaviour is as before. Tests:
+  `tests/groq-native-tool-call.test.js`.
+- **A prompt too big for the local window no longer costs a model load (8e3bbff).** A 4,402-token prompt read as HTTP 402
+  (and 4,429 as 429) because the failure check matched digits in the message, so Local was rested for 30 minutes and the
+  operator read "out of credits". The window is now checked before the model is started and a cut that still cannot
+  fit queues no retry. Tests: `tests/failover-paid-free-too-large.test.js`.
+- **A size in an error message is no longer read as an HTTP status (6f26f5d).** A message with no status that quoted a
+  size ("Requested 14290", "4,429 tokens") could still read as 429 or 402 and rest a cloud provider. A bare 429 or 402
+  now counts only when it stands alone: not inside a longer number and not before a size unit. "HTTP 429", "error 429"
+  and a bare "429" are read as before. Tested on the status reader directly; no full failover chain was driven with such
+  an error.
+- **Pressing Stop is recorded as a Stop, not a failure (6f26f5d).** A Stop was logged as a failed call with no cause, so
+  the call log, the audit line (a made-up 500) and the error counts all showed a failure. It is now recorded as
+  "cancelled by operator", marked cancelled, audited as 499 and left out of the error counts in the call ledger and the
+  Activity block; it never struck or rested a provider, and still does not. It covers the stream Stop and the local
+  runtime's own cancel. Old rows in an existing call log keep their old shape. Not run against a real llama-server Stop,
+  and other code that counts `success: false` directly was found by search only, not audited. Separately, the local
+  runtime's queue has no wait limit: a call can sit behind a long generation with no reason shown. That is not
+  changed. Tests: `tests/operator-stop-recorded.test.js`.
+- **Switching a role's provider no longer saves the old provider's model (756f856, de764cc).** Settings saved the
+  previous provider's model against the new provider's connection (chat to openrouter with a Gemini model, four times
+  in sixteen minutes on the drive). A hosted provider's connection now refuses a model its stored list does not name, in
+  the readiness badge's own words, and the Provider select changes provider and model together, keeping the model if the
+  new provider lists it. Tests: `tests/model-refusal.test.js`, `tests/assign-role-model-guard.test.js`,
+  `tests/nl-model-guard.test.js`, `tests/model-after-provider-switch.test.js`, `tests/rolecard-provider-switch.test.js`.
+- **The Save button refuses a stale model too, and a refused role goes back (42a774b, 5be5748).** Saving Settings →
+  Models wrote whatever the page held. `POST /api/settings` (patch or full replace) now applies the same check to every
+  role it would change and answers 400, writing nothing, with a sentence naming the remedy; providers with an empty or
+  never-scanned model list, local and custom endpoints, the embed role and saves that leave a model unchanged still
+  save. The check uses the connection's stored list, so a model a provider added since the last model scan is refused
+  until the list is re-scanned. When the Model Assignment change is refused, the role now returns to its previous model
+  in the page instead of leaving the refused pair unsaved on screen. The screens were not driven in a browser: the
+  server route is tested by driving it; the page revert is covered by tests of its pure helpers and a clean build
+  only. Tests: `tests/settings-save-model-guard.test.js`, `tests/role-refusal-revert.test.js` (7c086bc and 7734563 are
+  the README and test-order follow-ups).
+- **"Same as Chat" no longer warns (81b493a).** A role set to Same as Chat showed "No models available from this
+  provider" under a picker that already said Same as Chat. Routing was never wrong; it now reads "Uses the Chat model
+  (provider / model)". Not looked at in a browser. Tests: `tests/sweep-routing-rolecard.test.js`.
+- **A model that writes its own tool-result marker no longer shows it (12e19a3, a3c731c).** A live answer began with
+  `<<<AEON-TOOL-RESULT ... >>>` around the text of a failed recall, as if a tool had returned it; no tool had, the model
+  copied the shape printed in the `## TOOLS` rules. Markers in the model's own text are now dropped before they reach the
+  screen, the saved feed or the history, and one `result-marker` notice is raised per turn; the rules also tell the model
+  not to write one (not measured to lower how often it does). Not covered: a marker split across an auto-continue seam,
+  and turns with tools off. Tests: `tests/result-marker-echo.test.js` (58586fc adds tests for the Claude notice, the
+  native-tool remedy and the embed cut warning).
 
 **A new block costs one rebuild, not two.** AEON rewrites a block's `block.manifest.json` the first time it
 boots (routes written in, keys re-ordered), so the same manifest had two byte forms and a block's first restart
