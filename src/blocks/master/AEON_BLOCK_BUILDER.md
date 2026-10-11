@@ -54,6 +54,8 @@ npm run aeon new <id>
 2. **`index.jsx`** — default-export exactly one React component. Relative `fetch()` only (`/api/<id>/...`), with `credentials: 'same-origin'` — the sign-in is an HttpOnly cookie the browser sends for you; add no auth header of your own. Send `x-aeon-self-reported: 1` on every call whose failure you show inline, so AEON's global red banner does not repeat it (a 4xx, 501 or 503 you explain stays yours; any other 5xx still banners). Text fields that can hold more than a line are growing `<textarea>`s; long values wrap. No secrets, no `VITE_` secrets, no hardcoded host or port. Import React, `lucide-react` and `src/kernel` only — an import from `src/components` (the aurora library included) is a HIGH lint finding today and promote refuses the block.
 3. **`api/<id>.cjs`** (optional) — `module.exports = (deps) => router`. The router is mounted at `/api` (and `/block/<id>`), so **every route path starts with `/<id>/`**: `router.get('/<id>/status')` answers `/api/<id>/status`; a bare `'/status'` would answer `/api/status` and collide with any other block that did the same. `deps` carries only what the manifest declares: `blockStorage` when `filesystem` is `read`/`write`; `kernelLLM` when `ai: true`; and for every block `blockSettings()` (its declared settings) and `lifecycle` (`setInterval`/`setTimeout`/`onCleanup`/`isRunning` — the only way to run a job on a schedule; Stop pauses it). The Master README's "What a block can use from AEON" lists the rest and what AEON does not provide (no approval queue, spend cap or on-screen notification for a block's own actions). Expose `GET /<id>/widget` returning JSON if the manifest has a `widget` section. Never compute a storage path; use `deps.blockStorage.readJSON/writeJSON(...)` — writes are atomic, and a file that will not parse is moved aside (`<name>.unreadable-<time>`) before you get your fallback, so a read → change → write cannot erase it. No `:param` segments in route paths (`?id=` instead; the boot proof calls declared paths literally). When an AI route has no model assigned, answer 424 with a sentence saying so.
 4. **`README.md`** — one paragraph: owns, reads, writes.
+4a. **Write for the re-render and the real limits (2026-10).** AEON re-renders every block on its audit poll (about every 5 s). Define components at module scope, never inside another component: an inner component is a new function each render and remounts its subtree (Calendar's grid snapped back to 7 AM). Keep scroll position, open editors and drafts in state that survives a remount. Count the real unit of every limit (a model's tokens, not characters; occurrences, not a fixed cap) and say in the UI when something was cut: a silent limit is a defect (Voice Studio lost up to 62% of a narration at a 300-character chunk). Send strings, never objects, to the audit log. When a model, engine or dependency is missing, answer 424 or 423 with a sentence, never 501 or another 5xx: the store's boot proof reads any 5xx as "did not boot".
+4b. **Upgrades keep data.** If the block stores data, version its schema, take a one-time backup before the first migration, and test an upgrade from the previous version's real files. Persistence is proven by restarting the server and reading the data back.
 5. **Icon** — `public/brand/block-icons/<id>.svg` (square, single colour, no background) and `png/<id>.png`. If you cannot produce one, set `nav.icon` to a lucide-react name and say so in the report.
 - **Exit check:** all four files exist; `index.jsx` has one default export; `api/<id>.cjs` (if present) exports a function; the manifest parses as JSON.
 - **On failure:** fix the file named by the check.
@@ -136,6 +138,20 @@ In a fresh clone with an isolated `AEON_HOME` and the operator auth guard **on**
 - **Exit check:** installs, starts, every route answers as declared, UI renders with no console errors.
 - **On failure:** fix the block, return to Phase D.
 
+### Phase H4 — Store release
+Only after H3 passed on a person other than the author's machine.
+1. Bump the manifest `version`, rebuild the cartridge (`aeon pack <id>`), record `shasum -a 256` and the byte size.
+2. Copy the cartridge and the block's sources into the private `aeon-store` (`cartridges/` and `packs/<id>/`); move the previous cartridge to `_superseded/`; keep one `INSTALL_GUIDE.md` beside `cartridges/`. Never commit `docs/BLOCKS.md` changes from a drive build, and never put an operator-private block in a pack or on GitHub.
+3. Paid cartridges are never hosted on the website. In the site catalog (`store/products.json`) set the product live only after the Gumroad link exists, then rebuild the catalog and push the site repo with the GitHub no-reply identity.
+4. Gumroad (the operator does this by hand; the API cannot create products or upload files): title, price, cover 1920x1080 and thumbnail 1200x1200, description with a plain "not verified" list, the 7-day refund line, the buyer file. Then download the buyer file and check `shasum -a 256` equals the recorded hash. A listing that still carries the previous version's file is a defect that sells a bug.
+- **Exit check:** the downloaded buyer file hashes to the recorded value; the store repo is committed; the site catalog matches the listing.
+- **On failure:** do not announce the block; fix the file or the listing and re-check.
+
+### Phase H5 — Record
+Write the build order and the day's EOD: what was measured and how, what was only claimed, what the operator confirmed with his own eyes (label it his statement, not your measurement), the AEON core changes you wanted but did not make (listed for him to decide, never done in the block's branch), and the cost. Give the operator the open to-do list, with the stranger install named if it has not happened.
+- **Exit check:** the record exists under the dated reports folder and names every "Not done" item from Phase I.
+- **On failure:** write it before ending the session.
+
 ### Phase I — Report
 Produce the final report in this exact shape and stop:
 ```
@@ -151,7 +167,8 @@ Lifecycle: stop → 503 · start → JSON
 Tests: tests/<id>.test.js N/N · gates 4/4
 Boot proof: stage live|queued, boot.ok, N probes
 Private-data scan: clean (archive <sha256 prefix>)
-Stranger install: guard on, N/N routes, UI renders
+Stranger install: guard on, N/N routes, UI renders (by whom)
+Store release: cartridge <file> sha256 <prefix> · buyer file re-hashed | not released
 Not done: … (each with the phase it stopped in and the exact message)
 ```
 "DONE" is only allowed when every exit check in A–H3 passed in this run. Otherwise "PARTIAL", with the list.
@@ -167,7 +184,10 @@ Not done: … (each with the phase it stopped in and the exact message)
 7. **Depend only on `deps`.** Never `require` into `src/kernel/`, `server/`, `services/` or another block by relative path (`require('../../../kernel/...')`). The kernel is refactored and pruned; `deps` (scoped by your manifest permissions) is the only surface it promises to keep. On 2026-09-20 two store packs failed the install boot proof because a kernel file they required by path had been retired. If you need a capability `deps` does not provide, stop that block and report the gap — do not restore or reimplement a kernel file.
 8. **No private data, ever.** A block ships no `data/`, no `training/`, no `.aeon.runtime.json`, no real names, emails, phone numbers, home-directory paths, or keys. Sample data is synthetic and labelled. Never print, store, or test a key you find — record file and pattern only and stop.
 9. **No router-level middleware.** Never `router.use(express.json())` (or any `router.use(fn)`). Put the parser on the routes that need it — `router.post('/x', express.json({ limit: '64kb' }), handler)`. Older AEON kernels treat a router-level middleware as matching every URL, so a stopped, freshly installed block answered `/api/auth/login` with 503 and locked the operator out (2026-09-20). Use per-route parsing and explicit body checks; do not depend on a newer kernel.
-10. If a check cannot run in your environment (no shell, no server), say exactly that in the report and mark PARTIAL. Do not describe a result you did not see.
+10. **Never dispatch a block's tests from inside a live install.** Run them in a scratch clone; running the suite inside an install writes a disposable stub home into its root.
+11. **Test agents are silent.** Any test touching audio mutes media and the AudioContext and proves playback by `currentTime`, not by sound on the operator's speakers.
+12. **Say what you did not see.** A failure that appears right after a change is not always the change (a sandbox blocked `iconutil` once); check before touching working code, and report a sandbox-blocked suite as blocked, never as passing.
+13. If a check cannot run in your environment (no shell, no server), say exactly that in the report and mark PARTIAL. Do not describe a result you did not see.
 
 ## 4. Manifest skeleton (1.1.0 — mirrors `src/blocks/_template/block.manifest.json`)
 
