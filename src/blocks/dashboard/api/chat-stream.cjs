@@ -23,6 +23,7 @@ const agentTools = require('../../../kernel/agentTools.cjs');
 const agentTurn = require('../../../kernel/agentTurn.cjs');
 const agentWorkspace = require('../../../kernel/agentWorkspace.cjs');
 const toolProtocol = require('../../../kernel/toolProtocol.cjs');
+const chatHistoryKernel = require('../../../kernel/chatHistory.cjs');
 const continuation = require('../../../kernel/continuation.cjs');
 
 module.exports = function ({ kernelLLM, loadSettings: loadSettingsDep, VAULT_ROOT, fetchWebSearch, requestIndex, writeOSAudit }) {
@@ -255,9 +256,10 @@ module.exports = function ({ kernelLLM, loadSettings: loadSettingsDep, VAULT_ROO
           // neutralised like a recalled passage (context.cjs) or a result.
           + kernelContext.FORMATTING + workspace.text + (toolbox ? toolbox.promptText() : '') + toolProtocol.neutralise(mem.text) },
         // A turn the terminal tagged with an agent set to Local only reaches
-        // only a Local only agent's model (one feed can switch agents).
-        ...agentsKernel.shareableTurns(history, agent, agents).slice(-20)
-          .map(m => ({ role: m.role === 'error' || m.role === 'system' ? 'user' : m.role, content: m.content })),
+        // only a Local only agent's model (one feed can switch agents). An
+        // assistant turn brings a bounded record of the tools behind it, so the
+        // model can see its own earlier reads (kernel/chatHistory.cjs).
+        ...chatHistoryKernel.historyMessages(history, agent, agents),
         // Retrieved documents ride with the user's turn, not as a system
         // message: they are material for THIS question, and a system turn
         // would imply they outrank the operator's own instructions.
