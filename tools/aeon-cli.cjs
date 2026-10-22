@@ -411,9 +411,18 @@ const commands = {
     else if (/\.aeon$/i.test(arg) && fs.existsSync(arg)) source = { base64: fs.readFileSync(arg).toString('base64') };
     else if (/\.aeon$/i.test(arg)) { console.error(`\n  ${c.red('✗')} no such cartridge file: ${arg}\n`); process.exit(1); }
     else source = { name: arg };
-    await dispatchAndRender(client, render, 'master.install', '', {
+    const res = await dispatchAndRender(client, render, 'master.install', '', {
       json: flags.json, yes: flags.yes, body: source, label: 'installing',
     });
+    // Only a block that went live has files in src/blocks to compile in. One
+    // waiting in the approval queue is not there yet; a refusal or a "no" set
+    // its own exit code above. The screen is found by a build-time glob, so a
+    // live block has no UI until the interface is rebuilt.
+    const out = res && res.ok ? res.data?.data : null;
+    if (out && out.ok !== false && out.stage === 'live') {
+      await rebuildUI(ROOT, { json: flags.json, id: out.blockId || arg });
+      if (!flags.json) console.log('');
+    }
   },
 
   /**
@@ -438,10 +447,15 @@ const commands = {
     }
     const res = await client.withAuth(() => client.request('POST', '/api/store/update', { name: arg }));
     const d = res.data || {};
-    if (flags.json) { console.log(JSON.stringify(d, null, 2)); if (!res.ok) process.exitCode = 1; return; }
+    if (flags.json) {
+      console.log(JSON.stringify(d, null, 2));
+      if (!res.ok) { process.exitCode = 1; return; }
+      if (d.ok !== false && d.updated) await rebuildUI(ROOT, { json: true, id: arg });
+      return;
+    }
     if (!res.ok || d.ok === false) { console.error(`\n  ${c.red('✗')} ${d.error || `failed (${res.status})`}\n`); process.exitCode = 1; return; }
     console.log(`\n  ${c.green('✓')} ${d.message}`);
-    if (d.updated) console.log(`  ${c.dim('then: npm run build, and reload the tab, for the screen to follow')}`);
+    if (d.updated) await rebuildUI(ROOT, { id: arg });
     console.log('');
   },
 
@@ -537,6 +551,62 @@ const commands = {
     await dispatchAndRender(client, render, arg, rest, { json: flags.json, yes: flags.yes });
   },
 };
+
+/**
+ * Compile the interface after `aeon install` / `aeon update` changed which
+ * block source files exist. The screen is discovered by a build-time glob
+ * (src/kernel/blockRegistry.js), so without a rebuild the block is on disk and
+ * in the API but silently absent from the UI.
+ *
+ * The block is already in place when this runs, so a failure is a warning with
+ * the manual fallback, never a throw: it resolves true when the build passed
+ * and false when it did not (no npm, no package.json, non-zero exit, timeout).
+ * With --json the progress lines go to stderr so stdout stays parseable.
+ */
+async function rebuildUI(appRoot = ROOT, { json = false, id = '' } = {}) {
+  const { spawn } = require('child_process');
+  const { c } = require('./terminal/client.cjs');
+  const say = json ? console.error : console.log;
+  const fallback = `the block is installed; run ${c.bold('npm run build')} by hand to finish, then reload the tab`;
+  const warn = (why, tail) => {
+    say(`  ${c.yellow('!')} the interface did not rebuild (${why}) — ${fallback}`);
+    if (tail) say(c.dim(tail.split('\n').filter(Boolean).slice(-12).map((l) => `    ${l}`).join('\n')));
+    return false;
+  };
+
+  if (!fs.existsSync(path.join(appRoot, 'package.json'))) return warn(`no package.json in ${appRoot}`);
+  say(`  ${c.dim('Rebuilding the interface…')}`);
+  const started = Date.now();
+
+  return new Promise((resolve) => {
+    let tail = '';
+    let settled = false;
+    const finish = (ok, why) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (!ok) return resolve(warn(why, tail));
+      say(`  ${c.green('✓')} Rebuilt in ${Math.round((Date.now() - started) / 1000)}s — reload the tab to see ${id || 'it'}.`);
+      resolve(true);
+    };
+    const keep = (buf) => { tail = (tail + buf).slice(-4000); };
+
+    let child;
+    try {
+      // `npm` is npm.cmd on Windows, which Node only starts through a shell.
+      child = spawn('npm', ['run', 'build'], {
+        cwd: appRoot, env: process.env, shell: process.platform === 'win32',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    } catch (e) { return resolve(warn(e.message)); }
+
+    const timer = setTimeout(() => { try { child.kill(); } catch {} finish(false, 'timed out after 10 minutes'); }, 10 * 60 * 1000);
+    child.stdout.on('data', keep);
+    child.stderr.on('data', keep);
+    child.on('error', (e) => finish(false, e.code === 'ENOENT' ? 'npm was not found' : e.message));
+    child.on('close', (code, signal) => finish(code === 0, signal ? `stopped by ${signal}` : `exit ${code}`));
+  });
+}
 
 // Shared dispatch + render path for `run` and for NL routing.
 async function dispatchAndRender(client, render, cmdOrId, argText, { json, yes, renderer, label, body } = {}) {
