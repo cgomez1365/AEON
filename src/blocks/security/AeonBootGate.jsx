@@ -444,6 +444,37 @@ function theMark(ctx, k, p, T, still) {
 const GATE_FILL = 0.62, GATE_CY = 0.44;
 const markScale = (w, h, fill) => Math.min(w, h) / 512 * (fill ?? 0.86);
 
+/**
+ * Did the canvas actually paint the mark? On some platforms (the Windows boot
+ * screen is the known case) the Canvas-2D mark comes up blank while the rest of
+ * the gate renders, so we need to detect that once, after the first paint, and
+ * swap in the static SVG fallback (public/brand/aeon-mark/aeon-mark.svg) — the
+ * same art the canvas is drawing, which renders identically everywhere.
+ *
+ * Called once with the live 2D context and the CSS-pixel width/height plus dpr
+ * (canvas backing store is w*dpr x h*dpr). Return true if a mark was drawn,
+ * false if the canvas looks blank.
+ */
+function markLooksRendered(ctx, w, h, dpr) {
+  try {
+    const cx = Math.round(w / 2 * dpr);
+    const cy = Math.round(h * GATE_CY * dpr);
+    const patch = Math.max(4, Math.round(6 * dpr));
+    const { data } = ctx.getImageData(cx - patch, cy - patch, patch * 2, patch * 2);
+    let max = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i] > max) max = data[i];
+      if (data[i + 1] > max) max = data[i + 1];
+      if (data[i + 2] > max) max = data[i + 2];
+    }
+    // The chevron fills the center near-white over #07080d; a patch that never
+    // gets brighter than ~40 is bare background, so nothing was drawn.
+    return max >= 40;
+  } catch {
+    return true; // a failed check must never hide a mark that did render
+  }
+}
+
 function drawFinal(ctx, w, h, t, opts) {
   const T = opts.theme;
   const k = markScale(w, h, opts.fill);
@@ -484,6 +515,7 @@ export default function AeonBootGate({ onAuthed }) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [recoveryOpen, setRecoveryOpen] = useState(false);
+  const [markFailed, setMarkFailed] = useState(false); // canvas mark came up blank (e.g. Windows) → show static SVG fallback
 
   // ── Canvas motion — the mark on the banner's loop ─────────────────────────
   useEffect(() => {
@@ -545,11 +577,21 @@ export default function AeonBootGate({ onAuthed }) {
       drawFinal(ctx, w, h, t, { level: 3, stream: true, fill: GATE_FILL, cy: GATE_CY, theme, still });
     };
 
+    let markChecked = false, markOk = true;
     function frame(now) {
       const t = (now - start) / 1000;
       paint(t);
+      // One-time check, once the theme is loaded and the first real frame is down.
+      if (!markChecked && theme && t > 0.6) {
+        markChecked = true;
+        if (!markLooksRendered(ctx, w, h, dpr)) {
+          markOk = false;
+          setMarkFailed(true);               // swap canvas → static SVG fallback
+          if (!revealed) { revealed = true; setReady(true); } // reveal now; the animation is gone
+        }
+      }
       if (!revealed && t > 3.75) { revealed = true; setReady(true); }
-      raf = requestAnimationFrame(frame);
+      if (markOk) raf = requestAnimationFrame(frame); // stop animating a blank/hidden canvas
     }
 
     const onResize = () => {
@@ -659,11 +701,21 @@ export default function AeonBootGate({ onAuthed }) {
         <div ref={el => (orbRefs.current[2] = el)} className="aeon-boot-orb aeon-boot-orb--emerald" data-depth="40" />
       </div>
       <canvas
-        ref={canvasRef} className="aeon-boot-canvas" tabIndex={0} role="button"
+        ref={canvasRef} className="aeon-boot-canvas" tabIndex={markFailed ? -1 : 0} role="button"
         aria-label="Animated AEON mark. Activate to sign in."
+        style={markFailed ? { display: 'none' } : undefined}
         onClick={() => ready && openAuth()}
         onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && ready) { e.preventDefault(); openAuth(); } }}
       />
+      {markFailed && (
+        <img
+          className="aeon-boot-mark-fallback" src="/brand/aeon-mark/aeon-mark.svg"
+          alt="" role="button" tabIndex={0}
+          aria-label="AEON mark. Activate to sign in."
+          onClick={() => ready && openAuth()}
+          onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && ready) { e.preventDefault(); openAuth(); } }}
+        />
+      )}
       <div className={`aeon-boot-copy${ready ? ' ready' : ''}`}>
         <AeonLockup className="aeon-boot-brand" />
         <div className="aeon-boot-tag">Modular. Local. Yours.</div>
