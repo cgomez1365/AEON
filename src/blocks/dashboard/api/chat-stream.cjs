@@ -24,6 +24,7 @@ const agentTurn = require('../../../kernel/agentTurn.cjs');
 const agentWorkspace = require('../../../kernel/agentWorkspace.cjs');
 const toolProtocol = require('../../../kernel/toolProtocol.cjs');
 const chatHistoryKernel = require('../../../kernel/chatHistory.cjs');
+const autoExtract = require('../../../kernel/autoExtract.cjs');
 const continuation = require('../../../kernel/continuation.cjs');
 
 module.exports = function ({ kernelLLM, loadSettings: loadSettingsDep, VAULT_ROOT, fetchWebSearch, requestIndex, writeOSAudit }) {
@@ -408,7 +409,21 @@ module.exports = function ({ kernelLLM, loadSettings: loadSettingsDep, VAULT_ROO
           const internalHeaders = kernelContext.forwardedAuth({
             authorization: req.headers.authorization, cookie: req.headers.cookie,
           });
-          setImmediate(async () => {
+          // Three guards (kernel/autoExtract.cjs), checked before the model is
+          // asked anything, so a reply that will not be mined costs no call:
+          // a pasted document or a reply made of tool output is not the
+          // operator speaking, and each store has an hourly allowance. Each
+          // skip is logged (R-05). The near-duplicate guard is in /memory/add.
+          const scopeKey = `${VAULT_ROOT || ''}|${agent && !agent.self ? agent.id : 'shared'}`;
+          const skip = autoExtract.skipReason({
+            message, reply: fullText, toolChars: autoExtract.toolOutputChars(toolbox ? toolbox.outcomes() : []),
+          });
+          // (No `return` here: this is the route handler, and res.end() is below.)
+          if (skip) {
+            console.log(`[AUTO-MEMORY] skipped: ${skip}.`);
+          } else if (!autoExtract.budget.remaining(scopeKey)) {
+            console.log(`[AUTO-MEMORY] skipped: the limit of ${autoExtract.MAX_PER_HOUR} automatic memories per hour is used up for this memory; room again in about ${autoExtract.budget.minutesToRoom(scopeKey)} min.`);
+          } else setImmediate(async () => {
             try {
               // D2a #10 — the extractor is told whose voice to write in.
               // It was producing "your name is Cristian", which reads as the
@@ -454,20 +469,33 @@ Assistant replied: ${fullText.slice(0, 1000)}`;
                   console.warn('[AUTO-MEMORY] model did not return parseable JSON:', pe.message);
                 }
                 let saved = 0;
-                for (const fact of facts.slice(0, 3)) {
+                let already = 0;
+                for (const fact of facts.slice(0, autoExtract.MAX_FACTS_PER_REPLY)) {
                   if (!fact?.text || fact.text.length <= 5) continue;
+                  // Re-read each time: another reply's extraction may be spending the same allowance.
+                  if (!autoExtract.budget.remaining(scopeKey)) {
+                    console.log(`[AUTO-MEMORY] stopped at the limit of ${autoExtract.MAX_PER_HOUR} automatic memories per hour.`);
+                    break;
+                  }
                   try {
                     const r = await fetch(`${kernelBase}/api/memory/add`, {
                       method: 'POST', headers: internalHeaders,
                       body: JSON.stringify({ text: fact.text, category: fact.category || 'fact', source: 'auto-extract', ...(agent && !agent.self ? { agent: agent.id } : {}) }),
                     });
-                    if (r.ok) saved++;
-                    else console.warn('[AUTO-MEMORY] /memory/add refused:', r.status, (await r.text()).slice(0, 160));
+                    const raw = await r.text();
+                    if (!r.ok) { console.warn('[AUTO-MEMORY] /memory/add refused:', r.status, raw.slice(0, 160)); continue; }
+                    let answer = {};
+                    try { answer = JSON.parse(raw) || {}; } catch { /* an answer that is not JSON still means it was accepted */ }
+                    // Said already (exactly, or nearly): nothing was written, so it spends no allowance.
+                    if (answer.deduped) { already++; continue; }
+                    saved++;
+                    autoExtract.budget.record(scopeKey, 1);
                   } catch (ae) {
                     console.warn('[AUTO-MEMORY] /memory/add unreachable:', ae.message);
                   }
                 }
-                if (facts.length && !saved) {
+                if (already) console.log(`[AUTO-MEMORY] ${already} fact(s) already remembered; not saved again.`);
+                if (facts.length && !saved && !already) {
                   console.warn(`[AUTO-MEMORY] extracted ${facts.length} fact(s) and saved none.`);
                 }
               } else {
