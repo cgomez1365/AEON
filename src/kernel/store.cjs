@@ -241,7 +241,7 @@ async function updateFromStore(pipeline, id, {
     result = await pipeline.submitBuild('store', {
       spec: `BGI Store update: ${id} ${installed} → ${item.version}`,
       manifest, files, meta: { cartridge: `store:${item.file}`, sha, update: { from: installed } },
-    }, { operator });
+    }, { operator, deferUiRebuild: true });
   } catch (e) {
     result = { ok: false, stage: 'submit', error: e.message };
   }
@@ -262,9 +262,17 @@ async function updateFromStore(pipeline, id, {
   }
 
   if (wasRunning) { try { rs.setRunning(id, true, { operator, allowAuto: true }); } catch {} }
+  // The new version is promoted and, if it was running, running again. Only now
+  // rebuild the interface (it can take minutes — the pack must not sit stopped
+  // for it). A failed rebuild is reported, never rolled back: the update stands.
+  let uiRebuilt = result.uiRebuilt;
+  if (typeof pipeline.rebuildUI === 'function') {
+    try { uiRebuilt = await pipeline.rebuildUI(id); }
+    catch (e) { uiRebuilt = { ok: false, error: e && e.message ? e.message : String(e) }; }
+  }
   return {
     ok: true, updated: true, id, from: installed, to: item.version, sha, keptAt,
-    uiRebuilt: result.uiRebuilt,
+    uiRebuilt,
     running: !!rs.isRunning?.(id),
     message: `${id} updated ${installed} → ${item.version} (verified against the store). The previous version is kept at ${keptAt}.`
       + (wasRunning ? ' It is running again.' : ' It is stopped; start it when ready.'),

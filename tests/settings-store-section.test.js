@@ -93,3 +93,46 @@ describe('Settings → Blocks → From the store', () => {
     expect(headers.every((h) => h === '1')).toBe(true);
   });
 });
+
+// The server rebuilds the interface itself when a block goes live and answers
+// with uiRebuilt, so the page no longer sends the operator off to restart AEON
+// first — it says what happened, and only a skipped or failed build points at
+// closing AEON and opening it again (which rebuilds on start) or npm run build.
+describe('what the page says about the interface rebuild', () => {
+  it('rebuilt: reload the tab', () => {
+    expect(lc.describeUiRebuild({ ok: true, ms: 7000 })).toBe('AEON rebuilt the interface — reload this tab to see the new screen.');
+    expect(lc.describeInstall('calendar', { stage: 'live', uiRebuilt: { ok: true } }))
+      .toMatch(/installed and stopped[\s\S]*Press Start to run it\. AEON rebuilt the interface — reload this tab/);
+  });
+
+  it('skipped: not rebuilt, with the reason and the two ways to catch up', () => {
+    const t = lc.describeUiRebuild({ ok: false, skipped: true, reason: 'this install cannot rebuild the interface (no build tooling)' });
+    expect(t).toMatch(/^The interface was not rebuilt \(this install cannot rebuild the interface/);
+    expect(t).toMatch(/Close AEON and open it again/);
+    expect(t).toMatch(/npm run build/);
+  });
+
+  it('failed: says the build failed, why, and that the block is installed', () => {
+    const t = lc.describeUiRebuild({ ok: false, error: 'Error: Unexpected token' });
+    expect(t).toMatch(/^The interface build failed \(Error: Unexpected token\); the block is installed\./);
+    expect(t).not.toMatch(/did not run/);
+  });
+
+  it('a queued install says the interface rebuilds when it is approved; no answer reads as not rebuilt', () => {
+    expect(lc.describeInstall('calendar', { stage: 'queued' })).toMatch(/AEON rebuilds the interface when you approve/);
+    expect(lc.describeUiRebuild(undefined)).toMatch(/not rebuilt/);
+  });
+
+  it('an update carries the rebuild outcome in its message, and nothing extra when it was already current', async () => {
+    const fetchImpl = async (u) => ({
+      ok: true, status: 200,
+      json: async () => (u.endsWith('/update')
+        ? { ok: true, updated: true, message: 'calendar updated 0.2.0 → 0.3.0.', uiRebuilt: { ok: true, ms: 2000 } }
+        : {}),
+    });
+    const r = await lc.createLifecycleClient({ fetchImpl }).update('calendar');
+    expect(r.message).toBe('calendar updated 0.2.0 → 0.3.0. AEON rebuilt the interface — reload this tab to see the new screen.');
+    const current = await lc.createLifecycleClient({ fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ ok: true, upToDate: true, message: 'already current' }) }) }).update('calendar');
+    expect(current.message).toBe('already current');
+  });
+});

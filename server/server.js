@@ -49,6 +49,12 @@ require('dotenv').config({ path: ENV_FILE });
 
 const isVercel = require('../src/kernel/runtime.cjs').isCloud();
 
+// The interface rebuild (src/kernel/uiBuild.cjs) is created with the build
+// pipeline further down. Restart and shutdown stop a build in flight, so it
+// cannot race the launcher's own rebuild into the same dist/.
+let _uiBuilder = null;
+const _stopUiBuild = () => { try { _uiBuilder?.kill(); } catch { /* nothing running */ } };
+
 // Respect PORT env (test boots, alternate deploys); default stays 3001. Read
 // here, after the .env load, because the home lock below records it.
 const PORT = Number(process.env.PORT) || 3001;
@@ -371,6 +377,7 @@ const baseDeps = {
   getCloudProviderMetadata: () => cloudCredentialStore.metadata(),
   vaultSeal: vaultCrypto.seal, vaultUnseal: vaultCrypto.unseal,
   requestRestart: () => {
+    _stopUiBuild();
     const restartScript = path.join(ROOT, 'restart.bat');
     if (fs.existsSync(restartScript)) {
       require('child_process').spawn('cmd.exe', ['/c', restartScript], {
@@ -435,6 +442,7 @@ try {
   const _approvals = require('../src/kernel/approvals.cjs');
   const _ideMode = require('../src/kernel/ideMode.cjs');
   const { createBuildPipeline } = require('../src/kernel/buildPipeline.cjs');
+  const { createUiBuilder } = require('../src/kernel/uiBuild.cjs');
   const _vault = require('../src/kernel/vault.cjs');
   // A kernel rescan remounts block APIs; commands are scanned by the command
   // registry, which nothing told — after a block left, its /commands stayed
@@ -442,52 +450,16 @@ try {
   // registry is created further down, so it is looked up at call time.
   const _commandRescan = () => { try { return _routerDeps.commandRescan?.(); } catch (e) { console.warn('[CMD REGISTRY] rescan failed:', e.message); } };
   // A block's screen is found by a build-time glob (blockRegistry.js), so a block
-  // that just went live has no UI until the interface is rebuilt. Every live
-  // transition (CLI, browser install box, approval queue) reaches here through
-  // the pipeline's rebuildUI hook. The block is already live when this runs, so
-  // it resolves — never rejects — and one build runs at a time.
-  let _uiBuildChain = Promise.resolve();
-  const _say = (type, msg) => { try { global.broadcastTerminalEvent?.(type, msg); } catch {} };
-  const _rebuildUI = (blockId) => {
-    if (isVercel) return Promise.resolve({ ok: false, skipped: true, reason: 'vercel' });
-    const run = () => new Promise((resolve) => {
-      const started = Date.now();
-      let tail = '';
-      let settled = false;
-      const finish = (result, type, msg) => {
-        if (settled) return;
-        settled = true;
-        _say(type, msg);
-        resolve(result);
-      };
-      _say('INFO', `[UI BUILD] rebuilding the interface for ${blockId || 'a new block'}…`);
-      let child;
-      try {
-        // `npm` is npm.cmd on Windows, which Node only starts through a shell.
-        child = require('child_process').spawn('npm', ['run', 'build'], {
-          cwd: ROOT, env: process.env, shell: process.platform === 'win32',
-          stdio: ['ignore', 'ignore', 'pipe'],
-        });
-      } catch (e) {
-        return finish({ ok: false, error: e.message }, 'WARN', `[UI BUILD] could not start npm run build: ${e.message}`);
-      }
-      child.stderr.on('data', (buf) => { tail = (tail + buf).slice(-4000); });
-      child.on('error', (e) => {
-        const why = e.code === 'ENOENT' ? 'npm was not found' : e.message;
-        finish({ ok: false, error: why }, 'WARN', `[UI BUILD] failed: ${why} — run npm run build by hand`);
-      });
-      child.on('close', (code) => {
-        const ms = Date.now() - started;
-        if (code === 0) return finish({ ok: true, ms }, 'OK', `[UI BUILD] interface rebuilt in ${Math.round(ms / 1000)}s — reload the tab to see ${blockId || 'the new block'}`);
-        const last = tail.split('\n').map((l) => l.trim()).filter(Boolean).pop() || `exit ${code}`;
-        finish({ ok: false, code, error: last }, 'WARN', `[UI BUILD] failed (exit ${code}): ${last} — run npm run build by hand`);
-      });
-    });
-    _uiBuildChain = _uiBuildChain.then(run, run);
-    return _uiBuildChain;
-  };
+  // that just went live has no UI until the interface is rebuilt. The pipeline
+  // calls this hook where an install or an update goes live; uiBuild.cjs owns
+  // how (npm lookup, timeout, one build at a time) and never rejects.
+  _uiBuilder = createUiBuilder({
+    root: ROOT,
+    say: (level, msg) => { try { global.broadcastTerminalEvent?.(level, msg); } catch { /* the bus is optional */ } },
+    log: console,
+  });
   const _pipeline = createBuildPipeline({
-    rebuildUI: _rebuildUI,
+    rebuildUI: (blockId) => _uiBuilder.build(blockId),
     getVaultSecrets: async () => { try { return await _vault.listRefs(supabase); } catch { return []; } },
     rescan: (reason) => { const r = loader.rescan(reason); _commandRescan(); return r; },
     // M3 — what is already served, so a staged block colliding with it is
@@ -836,6 +808,7 @@ process.on('uncaughtException', (err) => {
 // hang-up handlers near the top call it.
 async function shutdown(sig) {
   console.log(`${sig} signal received: closing server.`);
+  _stopUiBuild();
   // Phase 6: shut down native local runtime (llama.cpp worker thread) before exit.
   try {
     const lr = require('../services/local-runtime/index.cjs');

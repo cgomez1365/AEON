@@ -62,12 +62,29 @@ function createBuildPipeline({
   // colliding before it is promoted rather than after.
   getLiveRoutes = () => [],
   // A promoted block's UI only enters the bundle at build time (blockRegistry.js
-  // globs src/blocks/*/index.jsx), so once a block goes live the interface has
-  // to be rebuilt. The server wires this hook; every live transition passes
-  // through the two call sites below (auto-promote and approveBuild), so the
-  // CLI, the browser install box and the approval queue are all covered.
+  // globs src/blocks/*/index.jsx), so a block that goes live needs the interface
+  // rebuilt. The server wires this hook (src/kernel/uiBuild.cjs). It runs on the
+  // two paths through which installs and updates go live — the LOW auto-promote
+  // in submitBuild and approveBuild — and its result rides back as uiRebuilt.
+  // Other ways the block set changes (restore, uninstall, `aeon promote`) do not
+  // pass through here and do not rebuild.
   rebuildUI = async () => ({ ok: false, skipped: true, reason: 'no rebuildUI hook' }),
 } = {}) {
+
+  /**
+   * Run the rebuild hook. The block is already live when this is called, so a
+   * hook that throws or rejects is reported as a failed rebuild — it never
+   * turns a finished install into an error. Also exported (as rebuildUI) so a
+   * caller that deferred the rebuild can run it once its own steps are done.
+   */
+  async function runRebuild(blockId) {
+    try {
+      const ui = await rebuildUI(blockId);
+      return ui && typeof ui === 'object' ? ui : { ok: false, skipped: true, reason: 'the rebuild hook gave no answer' };
+    } catch (e) {
+      return { ok: false, error: e && e.message ? e.message : String(e) };
+    }
+  }
 
   /**
    * Master M2 — run every gate against an in-memory envelope and write nothing.
@@ -140,8 +157,14 @@ function createBuildPipeline({
     };
   }
 
-  /** The single entry point for all four build sources. */
-  async function submitBuild(source, payload, { operator = 'operator' } = {}) {
+  /**
+   * The single entry point for all four build sources.
+   *
+   * deferUiRebuild: a LOW auto-promote then skips the interface rebuild and
+   * answers uiRebuilt { pending: true }; the caller finishes its own steps
+   * (updateFromStore restarts the running pack first) and calls rebuildUI().
+   */
+  async function submitBuild(source, payload, { operator = 'operator', deferUiRebuild = false } = {}) {
     // W5 — admin provisioned at FIRST block install, never assumed.
     const { provisioned } = approvals.ensureAdmin(operator);
 
@@ -196,7 +219,7 @@ function createBuildPipeline({
       // Mounted code the operator hasn't started never handles a request.
       runState.registerManual(staged.id, { by: `pipeline:${envelope.source}`, reset: true });
       const scan = rescan(`build:${staged.id}`);
-      const ui = await rebuildUI(staged.id);
+      const ui = deferUiRebuild ? { pending: true } : await runRebuild(staged.id);
       return { ok: true, stage: 'live', blockId: staged.id, verdict, boot, promoted: true, rescan: scan, uiRebuilt: ui, adminProvisioned: provisioned,
                runState: runState.isRunning(staged.id) ? 'running' : 'stopped', note: `manual-start block — POST /api/build/blocks/${staged.id}/start to begin serving` };
     }
@@ -242,15 +265,16 @@ function createBuildPipeline({
     }
     runState.registerManual(item.blockId, { by: `pipeline:approved`, reset: true });
     const scan = rescan(`approve:${item.blockId}`);
-    const ui = await rebuildUI(item.blockId);
     // One-shot: a Tier 3 approval consumes IDE mode and disarms it immediately,
     // so the kernel-editable window can never be left open after the install it
-    // was turned on for.
+    // was turned on for. This runs BEFORE the interface rebuild, which can take
+    // minutes: the window closes the instant the install is promoted.
     let ideModeAutoDisabled = false;
     if (tier3 && ideMode.isActive()) {
       ideMode.setActive(false, { operator: approver, reason: `one-shot: auto-disabled after Tier 3 approval of ${item.blockId}` });
       ideModeAutoDisabled = true;
     }
+    const ui = await runRebuild(item.blockId);
     return { ok: true, stage: 'live', blockId: item.blockId, approval: decision.item, rescan: scan, uiRebuilt: ui, ideModeAutoDisabled,
              runState: runState.isRunning(item.blockId) ? 'running' : 'stopped',
              note: `manual-start block — POST /api/build/blocks/${item.blockId}/start to begin serving${ideModeAutoDisabled ? ' · IDE mode auto-disabled' : ''}` };
@@ -263,7 +287,7 @@ function createBuildPipeline({
     return { ok: true, blockId: decision.item.blockId, approval: decision.item, note: 'block left in staging/ for inspection or manual removal' };
   }
 
-  return { submitBuild, validateBuild, approveBuild, rejectBuild };
+  return { submitBuild, validateBuild, approveBuild, rejectBuild, rebuildUI: runRebuild };
 }
 
 module.exports = { createBuildPipeline, stageEnvelope };

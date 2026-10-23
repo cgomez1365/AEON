@@ -16,6 +16,7 @@
 'use strict';
 
 const { c } = require('./client.cjs');
+const { installFacts } = require('./install-report.cjs');
 
 // ── box drawing ─────────────────────────────────────────────────────────────
 // Width is measured on the ANSI-stripped string; escape codes occupy no
@@ -205,6 +206,23 @@ function markdown(text) {
   return out.join('\n');
 }
 
+// ── install ─────────────────────────────────────────────────────────────────
+/**
+ * `aeon install` result: block, stage, risk, the first few reasons, the approval
+ * id when queued. The raw result carries the whole verdict, every route probe
+ * and the approval — a wall of JSON that buried the one line telling the
+ * operator what to do next. That line is printed by the caller, after this.
+ */
+function installCard(payload) {
+  const f = installFacts(payload?.data ?? payload);
+  const risk = f.score ? ` · risk ${f.score === 'HIGH' ? c.red(f.score) : f.score === 'MEDIUM' ? c.yellow(f.score) : c.green(f.score)}` : '';
+  const out = [`  ${c.bold(f.head)} ${c.dim('·')} ${f.stage}${risk}`];
+  for (const r of f.reasons) out.push(`    ${c.dim('•')} ${r}`);
+  if (f.moreReasons) out.push(`    ${c.dim(`… and ${f.moreReasons} more`)}`);
+  if (f.approvalId) out.push(`  ${c.dim('approval')} ${f.approvalId}`);
+  return out.join('\n');
+}
+
 // ── progress ────────────────────────────────────────────────────────────────
 function progress(pct, label = '') {
   const p = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
@@ -267,7 +285,10 @@ function auto(payload, { renderer = null, query = null, json = false } = {}) {
       case 'markdown':       return markdown(d.text ?? d.content ?? d.markdown ?? String(d));
       case 'table':          return table(Array.isArray(d) ? d : d.rows || d.items || []);
       case 'raw-json':       return JSON.stringify(payload, null, 2);
+      case 'install':        return installCard(payload);
     }
+    // A pipeline result (aeon install, aeon run /install, the shell): stage + verdict + block.
+    if (d.stage && d.blockId && d.verdict) return installCard(payload);
     if (d.grade !== undefined || d.score !== undefined && d.breakdown) return gradeCard(payload);
     if (Array.isArray(d.results) || Array.isArray(d.hits) || Array.isArray(d.matches)) return searchResults(payload, { query });
     if (Array.isArray(d) && d.length && typeof d[0] === 'object') return table(d);
@@ -302,6 +323,6 @@ function auto(payload, { renderer = null, query = null, json = false } = {}) {
 }
 
 module.exports = {
-  box, bar, gradeCard, searchResults, table, markdown, progress, spinner, auto,
+  box, bar, gradeCard, searchResults, table, markdown, installCard, progress, spinner, auto,
   wrapText, strip, width, pad, stopActiveSpinner,
 };

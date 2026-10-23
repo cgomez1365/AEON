@@ -27,6 +27,9 @@ const { lintBlock, promoteBlock, ensureStagingDir, BLOCKS_DIR, STAGING_DIR } = r
 const argv = process.argv.slice(2);
 const [cmd, arg] = argv;
 const ROOT = path.join(__dirname, '..');
+const { uiRebuildReport, startHint } = require('./terminal/install-report.cjs');
+// install and update wait for the server's interface rebuild before they answer.
+const BUILD_WAIT_MS = 600000;
 
 const flags = {
   json:  argv.includes('--json'),
@@ -411,19 +414,24 @@ const commands = {
     else if (/\.aeon$/i.test(arg) && fs.existsSync(arg)) source = { base64: fs.readFileSync(arg).toString('base64') };
     else if (/\.aeon$/i.test(arg)) { console.error(`\n  ${c.red('✗')} no such cartridge file: ${arg}\n`); process.exit(1); }
     else source = { name: arg };
+    // The server rebuilds the interface before it answers (a full build, a
+    // minute or more), so the wait is 10 minutes, not the usual 3.
     const res = await dispatchAndRender(client, render, 'master.install', '', {
-      json: flags.json, yes: flags.yes, body: source, label: 'installing',
+      json: flags.json, yes: flags.yes, body: source, label: 'installing', renderer: 'install', timeout: BUILD_WAIT_MS,
     });
     // The server rebuilds the interface itself when a block goes live (the
-    // screen is found by a build-time glob), at the single place every block
-    // goes live — so this only reports what it did. A block waiting in the
-    // approval queue is not live yet; a refusal or a "no" set its own exit code.
+    // screen is found by a build-time glob), at the pipeline's live transitions
+    // — so this only reports what it did. A block waiting in the approval queue
+    // is not live yet. A refusal sets the exit code inside dispatchAndRender; a
+    // declined confirmation returns null there (nothing was installed, exit 0).
     const out = res && res.ok ? res.data?.data : null;
     if (out && out.ok !== false && !flags.json) {
       const id = out.blockId || arg;
-      if (out.stage === 'live') reportUiRebuild(c, out.uiRebuilt, id);
-      else if (out.stage === 'queued') {
-        console.log(`  ${c.dim(`${id} needs review — approve it in Settings → Agent, then it installs and the interface rebuilds automatically.`)}`);
+      if (out.stage === 'live') {
+        reportUiRebuild(c, out.uiRebuilt, id);
+        console.log(`  ${c.dim(startHint(id))}`);
+      } else if (out.stage === 'queued') {
+        console.log(`  ${c.dim(`${id} needs review — approve it in Settings → Agent, then it installs and the interface rebuilds automatically. After that: aeon block start ${id}`)}`);
       }
       console.log('');
     }
@@ -449,7 +457,8 @@ const commands = {
       console.error(`usage: aeon update <id>   ${c.dim('# newest version from the store (AEON_STORE)')}`);
       process.exit(1);
     }
-    const res = await client.withAuth(() => client.request('POST', '/api/store/update', { name: arg }));
+    // The update includes the interface rebuild (a minute or more): wait 10 minutes.
+    const res = await client.withAuth(() => client.request('POST', '/api/store/update', { name: arg }, { timeout: BUILD_WAIT_MS }));
     const d = res.data || {};
     if (flags.json) {
       console.log(JSON.stringify(d, null, 2));
@@ -459,7 +468,10 @@ const commands = {
     if (!res.ok || d.ok === false) { console.error(`\n  ${c.red('✗')} ${d.error || d.data?.error || d.message || `failed (${res.status})`}\n`); process.exitCode = 1; return; }
     console.log(`\n  ${c.green('✓')} ${d.message}`);
     // The server rebuilds the interface when the new version goes live.
-    if (d.updated) reportUiRebuild(c, d.uiRebuilt, arg);
+    if (d.updated) {
+      reportUiRebuild(c, d.uiRebuilt, arg);
+      if (!d.running) console.log(`  ${c.dim(startHint(arg))}`);
+    }
     console.log('');
   },
 
@@ -482,7 +494,8 @@ const commands = {
       console.log(`  ${c.bold(String(it.id).padEnd(16))} ${String(it.version).padEnd(8)} ${state}  ${c.dim(it.description || '')}`);
       for (const w of it.warnings || []) console.log(`  ${' '.repeat(26)}${c.yellow('!')} ${w}`);
     }
-    console.log(`\n  ${c.dim('install one: aeon install <id>  ·  then: aeon block start <id>, npm run build, reload')}\n`);
+    console.log(`\n  ${c.dim('install one: aeon install <id>  ·  if it waits for review, approve it in Settings → Agent  ·  then: aeon block start <id>')}`);
+    console.log(`  ${c.dim('the interface rebuilds by itself after an install or update — reload the tab to see it')}\n`);
   },
 
   async block() {
@@ -558,26 +571,24 @@ const commands = {
 
 /**
  * Say what the server did about the interface after a block went live. The
- * server runs the rebuild itself (server.js rebuildUI hook, called from the
- * build pipeline's two live transitions), so install and update only report
- * the result it sent back as `uiRebuilt`.
+ * server runs the rebuild itself (the build pipeline's rebuildUI hook, at its
+ * live transitions), so install and update only report the `uiRebuilt` it sent
+ * back — as one of three outcomes (install-report.cjs): rebuilt, not rebuilt,
+ * or ran and failed.
  */
 function reportUiRebuild(c, ui, id) {
-  if (ui && ui.ok) {
-    console.log(`  ${c.dim(`interface rebuilt in ${Math.round((ui.ms || 0) / 1000)}s — reload the tab to see ${id}`)}`);
-  } else if (ui && ui.skipped) {
-    console.log(`  ${c.dim('then: npm run build, and reload the tab, for the screen to follow')}`);
-  } else {
-    console.log(`  ${c.red('✗')} the interface rebuild did not run${ui && ui.error ? ` (${ui.error})` : ''} — ${id} is installed; run npm run build by hand, then reload the tab`);
-  }
+  const r = uiRebuildReport(ui, id);
+  if (r.kind === 'rebuilt') console.log(`  ${c.dim(r.text)}`);
+  else if (r.kind === 'skipped') console.log(`  ${c.yellow('!')} ${r.text}`);
+  else console.log(`  ${c.red('✗')} ${r.text}`);
 }
 
 // Shared dispatch + render path for `run` and for NL routing.
-async function dispatchAndRender(client, render, cmdOrId, argText, { json, yes, renderer, label, body } = {}) {
+async function dispatchAndRender(client, render, cmdOrId, argText, { json, yes, renderer, label, body, timeout = 180000 } = {}) {
   const { c } = client;
   const spin = render.spinner(label || 'working');
   let res;
-  try { res = await client.dispatch(cmdOrId, argText, { timeout: 180000, body }); }
+  try { res = await client.dispatch(cmdOrId, argText, { timeout, body }); }
   finally { spin.stop(); }
 
   // The kernel owns the confirmation gate (428). The CLI only relays it —
@@ -588,7 +599,7 @@ async function dispatchAndRender(client, render, cmdOrId, argText, { json, yes, 
       if (!/^y(es)?$/i.test(answer.trim())) { console.log(`  ${c.dim('cancelled')}\n`); return null; }
     }
     const spin2 = render.spinner(label || 'working');
-    try { res = await client.dispatch(cmdOrId, argText, { confirmed: true, timeout: 180000, body }); }
+    try { res = await client.dispatch(cmdOrId, argText, { confirmed: true, timeout, body }); }
     finally { spin2.stop(); }
   }
 
