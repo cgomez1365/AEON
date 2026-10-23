@@ -264,6 +264,7 @@ async function updateFromStore(pipeline, id, {
   if (wasRunning) { try { rs.setRunning(id, true, { operator, allowAuto: true }); } catch {} }
   return {
     ok: true, updated: true, id, from: installed, to: item.version, sha, keptAt,
+    uiRebuilt: result.uiRebuilt,
     running: !!rs.isRunning?.(id),
     message: `${id} updated ${installed} → ${item.version} (verified against the store). The previous version is kept at ${keptAt}.`
       + (wasRunning ? ' It is running again.' : ' It is stopped; start it when ready.'),

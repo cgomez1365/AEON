@@ -59,8 +59,8 @@ module.exports = function createBuildRouter(deps) {
     res.json(item);
   });
 
-  router.post('/queue/:id/approve', (req, res) => {
-    const result = pipeline.approveBuild(req.params.id, { approver: operator(req), note: req.body?.note });
+  router.post('/queue/:id/approve', async (req, res) => {
+    const result = await pipeline.approveBuild(req.params.id, { approver: operator(req), note: req.body?.note });
     res.status(result.ok ? 200 : result.tier3 ? 403 : 422).json(result);
   });
 

@@ -441,7 +441,53 @@ try {
   // listed and answered "Command failed (404)" (measured 2026-09-23). The
   // registry is created further down, so it is looked up at call time.
   const _commandRescan = () => { try { return _routerDeps.commandRescan?.(); } catch (e) { console.warn('[CMD REGISTRY] rescan failed:', e.message); } };
+  // A block's screen is found by a build-time glob (blockRegistry.js), so a block
+  // that just went live has no UI until the interface is rebuilt. Every live
+  // transition (CLI, browser install box, approval queue) reaches here through
+  // the pipeline's rebuildUI hook. The block is already live when this runs, so
+  // it resolves — never rejects — and one build runs at a time.
+  let _uiBuildChain = Promise.resolve();
+  const _say = (type, msg) => { try { global.broadcastTerminalEvent?.(type, msg); } catch {} };
+  const _rebuildUI = (blockId) => {
+    if (isVercel) return Promise.resolve({ ok: false, skipped: true, reason: 'vercel' });
+    const run = () => new Promise((resolve) => {
+      const started = Date.now();
+      let tail = '';
+      let settled = false;
+      const finish = (result, type, msg) => {
+        if (settled) return;
+        settled = true;
+        _say(type, msg);
+        resolve(result);
+      };
+      _say('INFO', `[UI BUILD] rebuilding the interface for ${blockId || 'a new block'}…`);
+      let child;
+      try {
+        // `npm` is npm.cmd on Windows, which Node only starts through a shell.
+        child = require('child_process').spawn('npm', ['run', 'build'], {
+          cwd: ROOT, env: process.env, shell: process.platform === 'win32',
+          stdio: ['ignore', 'ignore', 'pipe'],
+        });
+      } catch (e) {
+        return finish({ ok: false, error: e.message }, 'WARN', `[UI BUILD] could not start npm run build: ${e.message}`);
+      }
+      child.stderr.on('data', (buf) => { tail = (tail + buf).slice(-4000); });
+      child.on('error', (e) => {
+        const why = e.code === 'ENOENT' ? 'npm was not found' : e.message;
+        finish({ ok: false, error: why }, 'WARN', `[UI BUILD] failed: ${why} — run npm run build by hand`);
+      });
+      child.on('close', (code) => {
+        const ms = Date.now() - started;
+        if (code === 0) return finish({ ok: true, ms }, 'OK', `[UI BUILD] interface rebuilt in ${Math.round(ms / 1000)}s — reload the tab to see ${blockId || 'the new block'}`);
+        const last = tail.split('\n').map((l) => l.trim()).filter(Boolean).pop() || `exit ${code}`;
+        finish({ ok: false, code, error: last }, 'WARN', `[UI BUILD] failed (exit ${code}): ${last} — run npm run build by hand`);
+      });
+    });
+    _uiBuildChain = _uiBuildChain.then(run, run);
+    return _uiBuildChain;
+  };
   const _pipeline = createBuildPipeline({
+    rebuildUI: _rebuildUI,
     getVaultSecrets: async () => { try { return await _vault.listRefs(supabase); } catch { return []; } },
     rescan: (reason) => { const r = loader.rescan(reason); _commandRescan(); return r; },
     // M3 — what is already served, so a staged block colliding with it is

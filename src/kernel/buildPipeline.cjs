@@ -61,6 +61,12 @@ function createBuildPipeline({
   // Master M3 — the live route surface, so a staged block can be refused for
   // colliding before it is promoted rather than after.
   getLiveRoutes = () => [],
+  // A promoted block's UI only enters the bundle at build time (blockRegistry.js
+  // globs src/blocks/*/index.jsx), so once a block goes live the interface has
+  // to be rebuilt. The server wires this hook; every live transition passes
+  // through the two call sites below (auto-promote and approveBuild), so the
+  // CLI, the browser install box and the approval queue are all covered.
+  rebuildUI = async () => ({ ok: false, skipped: true, reason: 'no rebuildUI hook' }),
 } = {}) {
 
   /**
@@ -190,7 +196,8 @@ function createBuildPipeline({
       // Mounted code the operator hasn't started never handles a request.
       runState.registerManual(staged.id, { by: `pipeline:${envelope.source}`, reset: true });
       const scan = rescan(`build:${staged.id}`);
-      return { ok: true, stage: 'live', blockId: staged.id, verdict, boot, promoted: true, rescan: scan, adminProvisioned: provisioned,
+      const ui = await rebuildUI(staged.id);
+      return { ok: true, stage: 'live', blockId: staged.id, verdict, boot, promoted: true, rescan: scan, uiRebuilt: ui, adminProvisioned: provisioned,
                runState: runState.isRunning(staged.id) ? 'running' : 'stopped', note: `manual-start block — POST /api/build/blocks/${staged.id}/start to begin serving` };
     }
 
@@ -210,7 +217,7 @@ function createBuildPipeline({
   }
 
   /** Explicit human click. Approve = promote → rescan → live. */
-  function approveBuild(approvalId, { approver = 'operator', note } = {}) {
+  async function approveBuild(approvalId, { approver = 'operator', note } = {}) {
     const item = approvals.getItem(approvalId);
     if (!item) return { ok: false, error: `approval ${approvalId} not found` };
     if (item.status !== 'pending') return { ok: false, error: `approval already ${item.status}` };
@@ -235,6 +242,7 @@ function createBuildPipeline({
     }
     runState.registerManual(item.blockId, { by: `pipeline:approved`, reset: true });
     const scan = rescan(`approve:${item.blockId}`);
+    const ui = await rebuildUI(item.blockId);
     // One-shot: a Tier 3 approval consumes IDE mode and disarms it immediately,
     // so the kernel-editable window can never be left open after the install it
     // was turned on for.
@@ -243,7 +251,7 @@ function createBuildPipeline({
       ideMode.setActive(false, { operator: approver, reason: `one-shot: auto-disabled after Tier 3 approval of ${item.blockId}` });
       ideModeAutoDisabled = true;
     }
-    return { ok: true, stage: 'live', blockId: item.blockId, approval: decision.item, rescan: scan, ideModeAutoDisabled,
+    return { ok: true, stage: 'live', blockId: item.blockId, approval: decision.item, rescan: scan, uiRebuilt: ui, ideModeAutoDisabled,
              runState: runState.isRunning(item.blockId) ? 'running' : 'stopped',
              note: `manual-start block — POST /api/build/blocks/${item.blockId}/start to begin serving${ideModeAutoDisabled ? ' · IDE mode auto-disabled' : ''}` };
   }
