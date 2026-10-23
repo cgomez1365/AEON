@@ -15,8 +15,24 @@
 export const SELF_REPORTED = { 'x-aeon-self-reported': '1' };
 
 // True tonight: stop/start/remove/restore change the kernel at once, but the
-// block list and nav in the UI are built into the bundle.
+// block list and nav in the UI are built into the bundle. (An install or an
+// update is different: the server rebuilds the interface itself — see
+// describeUiRebuild.)
 export const UI_NOTE = 'Close AEON and open it again to load the new screen — it rebuilds the interface on start. (Settings → Restart does the same.)';
+
+/**
+ * What the server did about the interface when a block went live — its
+ * `uiRebuilt` answer (src/kernel/uiBuild.cjs), in the operator's words:
+ * rebuilt (reload the tab), not rebuilt (no build tools here), or ran and
+ * failed. In the last two the block is installed; the interface catches up
+ * when AEON is closed and opened again, or `npm run build` is run.
+ */
+export function describeUiRebuild(ui) {
+  if (ui && ui.ok) return 'AEON rebuilt the interface — reload this tab to see the new screen.';
+  const catchUp = 'Close AEON and open it again (it rebuilds the interface on start), or run npm run build in the AEON folder, then reload this tab.';
+  if (!ui || ui.skipped) return `The interface was not rebuilt${ui && ui.reason ? ` (${ui.reason})` : ''}. ${catchUp}`;
+  return `The interface build failed (${ui.error || 'see the AEON log'}); the block is installed. ${catchUp}`;
+}
 
 /** 'Running' | 'Stopped' from a kernel state object. */
 export function runLabel(state) {
@@ -96,7 +112,7 @@ export function createLifecycleClient({ base = '', fetchImpl } = {}) {
     storeList: () => request('GET', '/api/store/source'),
     update: async (id) => {
       const r = await request('POST', '/api/store/update', { name: String(id || '') });
-      return r.ok ? { ...r, message: r.data.message } : r;
+      return r.ok ? { ...r, message: r.data.updated ? `${r.data.message} ${describeUiRebuild(r.data.uiRebuilt)}` : r.data.message } : r;
     },
     install: async (id) => {
       const r = await request('POST', '/api/store/install', { name: String(id || '') });
@@ -108,7 +124,7 @@ export function createLifecycleClient({ base = '', fetchImpl } = {}) {
 /** Operator-facing sentence for a store install (the airlock's verdict). */
 export function describeInstall(id, data = {}) {
   const sha = data.sha ? ` Verified against the store (SHA-256 ${String(data.sha).slice(0, 12)}…).` : '';
-  if (data.stage === 'live') return `${id} installed and stopped, as every new block lands.${sha} Press Start to run it. ${UI_NOTE}`;
-  if (data.stage === 'queued') return `${id} is waiting for your approval (its permissions need a review) — approve it in Settings → Agent, then Start it.${sha}`;
+  if (data.stage === 'live') return `${id} installed and stopped, as every new block lands.${sha} Press Start to run it. ${describeUiRebuild(data.uiRebuilt)}`;
+  if (data.stage === 'queued') return `${id} is waiting for your approval (its permissions need a review) — approve it in Settings → Agent, then Start it. AEON rebuilds the interface when you approve.${sha}`;
   return `${id}: ${data.stage || 'installed'}.${sha} ${UI_NOTE}`;
 }

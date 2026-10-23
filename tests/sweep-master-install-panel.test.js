@@ -230,10 +230,13 @@ describe('Master → Install, wired as the helpers say', () => {
     expect(code).toMatch(/const SELF_REPORTED = \{ 'x-aeon-self-reported': '1' \};/);
   });
 
-  it('says the block lands stopped, and that its screen needs AEON closed and opened again — not that AEON starts it', () => {
+  it('says the block lands stopped, and reports what the server did about the interface — not that AEON starts it', () => {
     expect(code).not.toMatch(/starts it, and opens its screens/);
     expect(code).toMatch(/It then lands stopped/);
-    expect(chooser).toMatch(/start it in Settings → Blocks\. \$\{UI_NOTE\}/);
+    expect(chooser).toMatch(/start it in Settings → Blocks\. \$\{uiNote\(ui\)\}/);
+    // The server rebuilds the interface itself now; the fallback (build skipped
+    // or failed) is to close and reopen AEON, which rebuilds on start.
+    expect(code).toMatch(/AEON rebuilt the interface — reload this tab/);
     expect(code).toMatch(/Close AEON and open it again/);
     expect(code).not.toMatch(/no restart needed/i);
   });

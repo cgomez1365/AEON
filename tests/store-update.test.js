@@ -50,19 +50,23 @@ const runState = { isRunning: (id) => running.has(id), setRunning: (id, on) => {
 // A stub airlock: validateBuild reports a score; submitBuild "promotes" by
 // writing the block into BLOCKS the way the real pipeline does, or fails at boot
 // leaving the attempt in staging.
-function pipeline({ score = 'LOW', outcome = 'live' } = {}) {
+function pipeline({ score = 'LOW', outcome = 'live', rebuild } = {}) {
   const calls = [];
+  const submitOpts = [];
   return {
-    calls,
+    calls, submitOpts,
     validateBuild: async () => ({ ok: true, errors: [], score, verdict: { score } }),
-    submitBuild: async (_src, build) => {
+    // The real pipeline's rebuildUI never rejects; `rebuild` may throw to prove the caller copes anyway.
+    ...(rebuild ? { rebuildUI: async (id) => { events.push(`rebuild:${id}:running=${running.has(id)}`); return rebuild(id); } } : {}),
+    submitBuild: async (_src, build, o) => {
       calls.push(build.meta);
+      submitOpts.push(o);
       events.push('submit');
       if (outcome === 'live') {
         fs.mkdirSync(path.join(BLOCKS, ID), { recursive: true });
         fs.writeFileSync(path.join(BLOCKS, ID, 'block.manifest.json'), JSON.stringify(build.manifest));
         running.delete(ID);               // every promoted block lands stopped
-        return { ok: true, stage: 'live' };
+        return rebuild ? { ok: true, stage: 'live', uiRebuilt: { pending: true } } : { ok: true, stage: 'live' };
       }
       fs.mkdirSync(path.join(STAGING, ID), { recursive: true });
       fs.writeFileSync(path.join(STAGING, ID, 'block.manifest.json'), JSON.stringify(build.manifest));
@@ -96,6 +100,35 @@ describe('updateFromStore', () => {
     // The old version's routes are unmounted before the new one is proofed —
     // otherwise the proof sees them as a live collision (measured, 2026-09-23).
     expect(events.slice(0, 2)).toEqual([`rescan:update-aside:${ID}`, 'submit']);
+  });
+
+  // The interface rebuild takes a minute or more. A pack that was running must
+  // be running again BEFORE it, not stopped for the length of a build; and a
+  // rebuild that fails is reported, never a reason to roll the update back.
+  it('defers the interface rebuild until the running pack is restarted, then reports it', async () => {
+    writeStore(); install('1.0.0'); running.add(ID);
+    const p = pipeline({ rebuild: async () => ({ ok: true, ms: 4200 }) });
+    const r = await store.updateFromStore(p, ID, opts());
+    expect(p.submitOpts[0]).toMatchObject({ deferUiRebuild: true });
+    expect(events.slice(-2)).toEqual(['submit', `rebuild:${ID}:running=true`]);
+    expect(r).toMatchObject({ ok: true, updated: true, running: true, uiRebuilt: { ok: true, ms: 4200 } });
+  });
+
+  it('a failed interface rebuild is reported and does not roll the update back', async () => {
+    writeStore(); install('1.0.0'); running.add(ID);
+    const r = await store.updateFromStore(pipeline({ rebuild: async () => ({ ok: false, code: 1, error: 'Error: vite failed' }) }), ID, opts());
+    expect(r).toMatchObject({ ok: true, updated: true, to: '1.1.0', uiRebuilt: { ok: false, error: 'Error: vite failed' } });
+    expect(r.rolledBack).toBeUndefined();
+    expect(installedVersion()).toBe('1.1.0');
+    expect(running.has(ID)).toBe(true);
+    expect(fs.readdirSync(REMOVED).some((f) => f.includes('-failed-update'))).toBe(false);
+  });
+
+  it('a rebuild hook that throws is reported the same way', async () => {
+    writeStore(); install('1.0.0');
+    const r = await store.updateFromStore(pipeline({ rebuild: async () => { throw new Error('spawn exploded'); } }), ID, opts());
+    expect(r).toMatchObject({ ok: true, updated: true, uiRebuilt: { ok: false, error: 'spawn exploded' } });
+    expect(installedVersion()).toBe('1.1.0');
   });
 
   it('nothing to do when the newest version is installed', async () => {

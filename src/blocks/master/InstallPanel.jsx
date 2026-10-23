@@ -45,8 +45,14 @@ const DIM = { fontSize: 12.5, color: 'var(--dim, #9aa3b2)' };
 // unreadable store — the same header Settings → Blocks sends on these routes.
 const SELF_REPORTED = { 'x-aeon-self-reported': '1' };
 // Said with every install that lands: the block list and nav are compiled into
-// the screen bundle (Settings → Blocks says the same).
-const UI_NOTE = 'Close AEON and open it again to load the new screen — it rebuilds the interface on start. (Settings → Restart does the same.)';
+// the screen bundle, so the server rebuilds the interface itself and answers
+// with what it did (`uiRebuilt`; Settings → Blocks says the same).
+function uiNote(ui) {
+  if (ui && ui.ok) return 'AEON rebuilt the interface — reload this tab to see the new screen.';
+  const catchUp = 'Close AEON and open it again (it rebuilds the interface on start), or run npm run build in the AEON folder, then reload this tab.';
+  if (!ui || ui.skipped) return `The interface was not rebuilt${ui && ui.reason ? ` (${ui.reason})` : ''}. ${catchUp}`;
+  return `The interface build failed (${ui.error || 'see the AEON log'}); the block is installed. ${catchUp}`;
+}
 const FIELD = {
   width: '100%', boxSizing: 'border-box', padding: '8px 10px', borderRadius: 6, fontSize: 13, fontFamily: 'inherit',
   background: 'rgba(0,0,0,0.25)', color: 'var(--text, #e6edf3)', border: '1px solid var(--line, #272d39)',
@@ -91,7 +97,7 @@ export function classifySource(raw) {
 export function installOutcome(d, cls) {
   const p = (d && d.purchase) || {};
   const id = d?.blockId || p.id || cls?.body?.name || null;
-  return { id, label: p.label || id, detail: p.version ? `v${p.version}` : '', queued: d?.stage === 'queued' };
+  return { id, label: p.label || id, detail: p.version ? `v${p.version}` : '', queued: d?.stage === 'queued', ...(d?.uiRebuilt ? { ui: d.uiRebuilt } : {}) };
 }
 
 /**
@@ -336,7 +342,7 @@ export default function InstallPanel({ onInstalled, onBlockLayoutChange }) {
         </p>
       )}
       {result && result.ok && (
-        <SectionChooser blockId={result.id} label={result.label} detail={result.detail} queued={result.queued}
+        <SectionChooser blockId={result.id} label={result.label} detail={result.detail} queued={result.queued} ui={result.ui}
           onBlockLayoutChange={onBlockLayoutChange} onDone={() => setResult(null)} />
       )}
     </div>
@@ -352,7 +358,7 @@ export default function InstallPanel({ onInstalled, onBlockLayoutChange }) {
  * can never delete a key. A full replace is only safe from the full layout,
  * so this writes nothing until it has read the saved one.
  */
-function SectionChooser({ blockId, label, detail, queued, onBlockLayoutChange, onDone }) {
+function SectionChooser({ blockId, label, detail, queued, ui, onBlockLayoutChange, onDone }) {
   const [layout, setLayout] = useState(null);   // null until the saved layout is read
   const [readErr, setReadErr] = useState('');
   const [chosen, setChosen] = useState(null);    // the section id picked or created
@@ -409,8 +415,8 @@ function SectionChooser({ blockId, label, detail, queued, onBlockLayoutChange, o
       <p style={{ display: 'flex', alignItems: 'flex-start', gap: 8, margin: 0, fontWeight: 600, fontSize: 13 }}>
         <Check size={14} aria-hidden="true" />
         {queued
-          ? `${label} is waiting for your approval — its permissions need a review. Approve it in Settings → Agent, then start it.`
-          : `${label} is installed${detail ? ` (${detail})` : ''}. It lands stopped: start it in Settings → Blocks. ${UI_NOTE}`}
+          ? `${label} is waiting for your approval — its permissions need a review. Approve it in Settings → Agent (AEON rebuilds the interface then), then start it.`
+          : `${label} is installed${detail ? ` (${detail})` : ''}. It lands stopped: start it in Settings → Blocks. ${uiNote(ui)}`}
       </p>
       {readErr ? (
         <p role="alert" style={{ ...DIM, color: 'var(--warning, #fab219)', margin: '8px 0 0' }}>
