@@ -35,8 +35,8 @@
 /* Static SVG mark shown when the animated canvas fails to paint (the Windows
    boot-screen case). Same art the canvas draws, placed where the canvas mark
    sits: centred horizontally, GATE_CY (0.44) down, sized to markScale (0.62). */
-.aeon-boot-mark-fallback { position: absolute; z-index: 1; left: 50%; top: 44%; transform: translate(-50%, -50%); width: min(62vw, 62vh); height: auto; aspect-ratio: 1 / 1; cursor: pointer; }
-.aeon-boot-mark-fallback:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent, #00f2ff); border-radius: 8px; }
+.aeon-boot-mark-fallback { position: absolute; z-index: 1; left: 50%; top: 44%; transform: translate(-50%, -50%); width: min(62vw, 62vh); height: auto; aspect-ratio: 1 / 1; cursor: pointer; overflow: visible; filter: drop-shadow(0 0 7px color-mix(in srgb, var(--accent, #00f2ff) 40%, transparent)); }
+.aeon-boot-mark-fallback:focus-visible { outline: 2px solid var(--accent, #00f2ff); outline-offset: 6px; border-radius: 50%; }
 
 .aeon-boot-copy { position: absolute; z-index: 2; left: 50%; bottom: 4.5%; width: min(92vw, 680px); transform: translateX(-50%); text-align: center; pointer-events: none; }
 .aeon-boot-copy > * { opacity: 0; transform: translateY(10px); transition: opacity 1.7s ease, transform 1.7s cubic-bezier(.2, .75, .25, 1); will-change: opacity, transform; }

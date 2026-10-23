@@ -515,6 +515,36 @@ function AeonLockup({ className = '' }) {
   );
 }
 
+/**
+ * The mark as a still SVG, for machines whose canvas does not paint the chevron.
+ * It is drawn from the SAME geometry constants the canvas uses (MARK, CHEVRON_D),
+ * and it REPLACES the canvas (the canvas is hidden) rather than sitting beside it,
+ * so the emblem still appears exactly once and the gate still loads no image.
+ * `palette` is the theme the canvas was using when it failed (white chevron on
+ * dark, ink on light), so the fallback matches the page.
+ */
+function MarkStill({ palette, onActivate }) {
+  const P = palette || MARK_DARK;
+  const RAD = Math.PI / 180;
+  const nodes = MARK.nodeAng.map((a) => [256 + MARK.nodeR * Math.cos(a * RAD), 256 + MARK.nodeR * Math.sin(a * RAD)]);
+  return (
+    <svg
+      className="aeon-boot-mark-fallback" viewBox="0 0 512 512" role="button" tabIndex={0}
+      aria-label="AEON mark. Activate to sign in."
+      onClick={onActivate}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onActivate(); } }}
+    >
+      <circle cx="256" cy="256" r={MARK.ringR} fill="none" stroke={P.ring} strokeWidth={MARK.ringW}
+        strokeDasharray={`${MARK.dash[0]} ${MARK.dash[1]}`} transform={`rotate(${MARK.ringRot} 256 256)`} />
+      {nodes.map(([x, y], i) => (
+        <circle key={i} cx={x} cy={y} r={MARK.nodeSize} fill="none" stroke={P.node} strokeWidth={MARK.nodeW} />
+      ))}
+      <circle cx="256" cy="256" r={MARK.innerR} fill="none" stroke={P.inner} strokeWidth={MARK.innerW} />
+      <path d={CHEVRON_D} fill={P.chev} />
+    </svg>
+  );
+}
+
 export default function AeonBootGate({ onAuthed }) {
   const canvasRef = useRef(null);
   const orbRefs = useRef([]);
@@ -596,7 +626,7 @@ export default function AeonBootGate({ onAuthed }) {
         markChecked = true;
         if (!markLooksRendered(ctx, w, h, dpr, theme.chev)) {
           markOk = false;
-          setMarkFailed(true);               // swap canvas → static SVG fallback
+          setMarkFailed({ ring: theme.ring, node: theme.node, inner: theme.inner, chev: theme.chev }); // swap canvas → still SVG in the same palette
           if (!revealed) { revealed = true; setReady(true); } // reveal now; the animation is gone
         }
       }
@@ -717,15 +747,7 @@ export default function AeonBootGate({ onAuthed }) {
         onClick={() => ready && openAuth()}
         onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && ready) { e.preventDefault(); openAuth(); } }}
       />
-      {markFailed && (
-        <img
-          className="aeon-boot-mark-fallback" src="/brand/aeon-mark/aeon-mark.svg"
-          alt="" role="button" tabIndex={0}
-          aria-label="AEON mark. Activate to sign in."
-          onClick={() => ready && openAuth()}
-          onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && ready) { e.preventDefault(); openAuth(); } }}
-        />
-      )}
+      {markFailed && <MarkStill palette={markFailed} onActivate={() => ready && openAuth()} />}
       <div className={`aeon-boot-copy${ready ? ' ready' : ''}`}>
         <AeonLockup className="aeon-boot-brand" />
         <div className="aeon-boot-tag">Modular. Local. Yours.</div>
