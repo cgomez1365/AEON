@@ -445,31 +445,41 @@ const GATE_FILL = 0.62, GATE_CY = 0.44;
 const markScale = (w, h, fill) => Math.min(w, h) / 512 * (fill ?? 0.86);
 
 /**
- * Did the canvas actually paint the mark? On some platforms (the Windows boot
- * screen is the known case) the Canvas-2D mark comes up blank while the rest of
- * the gate renders, so we need to detect that once, after the first paint, and
- * swap in the static SVG fallback (public/brand/aeon-mark/aeon-mark.svg) — the
- * same art the canvas is drawing, which renders identically everywhere.
+ * Did the canvas actually paint the chevron? On some machines (the Windows boot
+ * screen is the known case) the chevron comes up missing while the rest of the
+ * gate renders, so we check once, after the first paint, and swap in the static
+ * SVG mark (public/brand/aeon-mark/aeon-mark.svg) — the same art, drawn by the
+ * browser's own image decoder instead of this canvas.
  *
- * Called once with the live 2D context and the CSS-pixel width/height plus dpr
- * (canvas backing store is w*dpr x h*dpr). Return true if a mark was drawn,
- * false if the canvas looks blank.
+ * It looks for the chevron's OWN colour (T.chev: white on dark, ink on light) on
+ * three points of its solid body. A bare "is anything bright here" read is not
+ * enough: the cyan HUD lines cross the same spot and satisfy it even when the
+ * chevron and inner ring are gone (found by blocking only the cached layer's
+ * drawImage in a real browser). Two of the three points must match.
+ *
+ * `chev` is the theme's chevron colour as #rrggbb; anything we cannot judge
+ * returns true, because a check that fails must never hide a mark that rendered.
+ * Canvas backing store is w*dpr x h*dpr; the mark sits at (w/2, h*GATE_CY).
  */
-function markLooksRendered(ctx, w, h, dpr) {
+function markLooksRendered(ctx, w, h, dpr, chev) {
   try {
-    const cx = Math.round(w / 2 * dpr);
-    const cy = Math.round(h * GATE_CY * dpr);
-    const patch = Math.max(4, Math.round(6 * dpr));
-    const { data } = ctx.getImageData(cx - patch, cy - patch, patch * 2, patch * 2);
-    let max = 0;
-    for (let i = 0; i < data.length; i += 4) {
-      if (data[i] > max) max = data[i];
-      if (data[i + 1] > max) max = data[i + 1];
-      if (data[i + 2] > max) max = data[i + 2];
+    const m = /^#?([0-9a-f]{6})$/i.exec(String(chev || '').trim());
+    if (!m) return true;
+    const want = [0, 2, 4].map((i) => parseInt(m[1].slice(i, i + 2), 16));
+    const k = markScale(w, h, GATE_FILL) * dpr;                  // mark units -> device pixels
+    const cx = w / 2 * dpr, cy = h * GATE_CY * dpr;
+    const r = Math.max(2, Math.round(2 * dpr));
+    let hits = 0;
+    // Apex, left leg and right leg, in the mark's own 512-unit box (centre 256,256).
+    for (const [px, py] of [[256, 212], [209, 300], [303, 300]]) {
+      const x = Math.round(cx + (px - 256) * k), y = Math.round(cy + (py - 256) * k);
+      const { data } = ctx.getImageData(x - r, y - r, r * 2 + 1, r * 2 + 1);
+      for (let i = 0; i < data.length; i += 4) {
+        if (data[i + 3] >= 200 && Math.abs(data[i] - want[0]) <= 80
+            && Math.abs(data[i + 1] - want[1]) <= 80 && Math.abs(data[i + 2] - want[2]) <= 80) { hits++; break; }
+      }
     }
-    // The chevron fills the center near-white over #07080d; a patch that never
-    // gets brighter than ~40 is bare background, so nothing was drawn.
-    return max >= 40;
+    return hits >= 2;
   } catch {
     return true; // a failed check must never hide a mark that did render
   }
@@ -584,7 +594,7 @@ export default function AeonBootGate({ onAuthed }) {
       // One-time check, once the theme is loaded and the first real frame is down.
       if (!markChecked && theme && t > 0.6) {
         markChecked = true;
-        if (!markLooksRendered(ctx, w, h, dpr)) {
+        if (!markLooksRendered(ctx, w, h, dpr, theme.chev)) {
           markOk = false;
           setMarkFailed(true);               // swap canvas → static SVG fallback
           if (!revealed) { revealed = true; setReady(true); } // reveal now; the animation is gone
