@@ -44,6 +44,11 @@ const ELLIPSIS = '…';
 const oneLine = (s) => toolProtocol.neutralise(String(s ?? '')).replace(/\s+/g, ' ').trim();
 const cut = (s, n) => (s.length > n ? `${s.slice(0, Math.max(0, n - 1)).trimEnd()}${ELLIPSIS}` : s);
 
+/** The chips of a reply that are worth a line: an object with a non-empty label. Anything else is ignored. */
+const validTools = (tools) => (Array.isArray(tools)
+  ? tools.filter((t) => t && typeof t === 'object' && typeof t.label === 'string' && t.label.trim())
+  : []);
+
 /**
  * The record of one reply's tools, as text for the model. '' when there is
  * nothing to record. `tools`: [{ label, ok, out }] — anything else is ignored.
@@ -52,8 +57,7 @@ const cut = (s, n) => (s.length > n ? `${s.slice(0, Math.max(0, n - 1)).trimEnd(
  * At most MAX_TOOLS lines, the last ones; the whole text is at most TURN_CHARS.
  */
 function digestText(tools, omitted = 0) {
-  if (!Array.isArray(tools)) return '';
-  const valid = tools.filter((t) => t && typeof t === 'object' && typeof t.label === 'string' && t.label.trim());
+  const valid = validTools(tools);
   const rows = valid.slice(-MAX_TOOLS);
   if (!rows.length) return '';
   const earlier = Math.max(0, Math.floor(Number(omitted) || 0)) + valid.length - rows.length;
@@ -84,4 +88,25 @@ function historyMessages(history, agent, agents, { max = MAX_TURNS } = {}) {
   });
 }
 
-module.exports = { digestText, historyMessages, MAX_TURNS, MAX_TOOLS, TURN_CHARS, RESULT_CHARS, LABEL_CHARS };
+/**
+ * The tools the model was shown as already used, as [{ tool, ok }]: the same turns
+ * historyMessages sends (agents.shareableTurns, the last `max`), assistant turns only, the
+ * last MAX_TOOLS of each — what digestText put in front of it, no more. A tool is named by the
+ * first word of its chip label; a name that is not a tool is ignored. claimCheck takes this so
+ * "I read that file last turn" is not reported as a claim nothing backs. Because it goes
+ * through shareableTurns, a Local only agent's reads back that agent's claims and no other's.
+ */
+function earlierTools(history, agent, agents, { max = MAX_TURNS } = {}) {
+  const turns = agentsKernel.shareableTurns(Array.isArray(history) ? history : [], agent, agents).slice(-max);
+  const out = [];
+  for (const m of turns) {
+    if (m.role !== 'assistant') continue;
+    for (const t of validTools(m.tools).slice(-MAX_TOOLS)) {
+      const tool = String(t.label).trim().split(/\s+/)[0];
+      if (toolProtocol.TOOL_NAMES.includes(tool)) out.push({ tool, ok: !!t.ok });
+    }
+  }
+  return out;
+}
+
+module.exports = { digestText, earlierTools, historyMessages, MAX_TURNS, MAX_TOOLS, TURN_CHARS, RESULT_CHARS, LABEL_CHARS };
