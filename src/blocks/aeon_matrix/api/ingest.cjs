@@ -369,7 +369,14 @@ module.exports = function ingestFactory(deps) {
   };
 
   let embedWarnedOnce = false;
-  async function buildEntry(fullPath, relPosix, text, stat) {
+  // R-05: a window that fails to embed is logged EVERY time, by file, and
+  // reported to the caller through `out.chunkError`. It used to fall into the
+  // summary's catch: one warning per process, blaming a missing model, and a
+  // scan result that counted the document as fully embedded.
+  function logChunkFailure(relPosix, e) {
+    console.warn(`[SECOND BRAIN] Could not embed the windows of ${relPosix}: ${e.message} — it keeps its summary vector; the next scan retries the windows.`);
+  }
+  async function buildEntry(fullPath, relPosix, text, stat, out = {}) {
     const summary = deriveSummary(text);
     const entry = {
       path: relPosix,
@@ -385,9 +392,15 @@ module.exports = function ingestFactory(deps) {
       const { vector, model } = await embedFn(summary, { kind: 'document' });
       entry.embedding = vector;
       entry.embeddingModel = model;
-      const rec = await buildChunks(text, embedFn);
-      if (rec) { chunks()[relPosix] = rec; entry.chunks = rec.chunks.length; }
-      else { delete chunks()[relPosix]; entry.chunks = 0; }
+      try {
+        const rec = await buildChunks(text, embedFn);
+        if (rec) { chunks()[relPosix] = rec; entry.chunks = rec.chunks.length; }
+        else { delete chunks()[relPosix]; entry.chunks = 0; }
+      } catch (e) {
+        // entry.chunks stays undefined: the marker the chunk backfill keys on.
+        logChunkFailure(relPosix, e);
+        out.chunkError = e.message;
+      }
     } catch (e) {
       if (!embedWarnedOnce) {
         embedWarnedOnce = true;
@@ -487,7 +500,14 @@ module.exports = function ingestFactory(deps) {
     // operator withheld them since (a memory switched off, an agent set to
     // Local only). They are counted in deleted too — they left the index —
     // but the files themselves are untouched.
-    const results = { ingested: 0, embedded: 0, skipped: 0, deleted: 0, withheld: 0, errors: [] };
+    // chunkFailed counts documents whose windows could not be embedded this
+    // run (first ingest or chunk backfill); chunkErrors names the first few.
+    const results = { ingested: 0, embedded: 0, skipped: 0, deleted: 0, withheld: 0, chunkFailed: 0, chunkErrors: [], errors: [] };
+    const CHUNK_ERRORS_KEPT = 20;
+    const countChunkFailure = (relPosix, message) => {
+      results.chunkFailed++;
+      if (results.chunkErrors.length < CHUNK_ERRORS_KEPT) results.chunkErrors.push({ file: relPosix, error: message });
+    };
     if (isVercel) {
       const r = { ...results, reason: 'cloud env — vault lives on the local filesystem only' };
       onEvent({ done: true, ...r });
@@ -560,7 +580,9 @@ module.exports = function ingestFactory(deps) {
               && existing.embeddingModel && existing.embeddingModel !== currentSpace) {
             try {
               const text = await extractText(full);
-              const fresh = await buildEntry(full, relPosix, text, stat);
+              const built = {};
+              const fresh = await buildEntry(full, relPosix, text, stat, built);
+              if (built.chunkError && Array.isArray(fresh.embedding) && fresh.embedding.length) countChunkFailure(relPosix, built.chunkError);
               // buildEntry swallows an embed failure and returns an entry with
               // NO vector. Replacing the document with that turned a stale but
               // searchable entry into an unsearchable one whenever the model
@@ -588,9 +610,11 @@ module.exports = function ingestFactory(deps) {
           if (existing && typeof existing.summary === 'string' && /^---\s/.test(existing.summary)) {
             try {
               const text = await extractText(full);
-              const fresh = await buildEntry(full, relPosix, text, stat);
+              const built = {};
+              const fresh = await buildEntry(full, relPosix, text, stat, built);
               const hasVector = Array.isArray(fresh.embedding) && fresh.embedding.length > 0;
               if (hasVector || !Array.isArray(existing.embedding)) {
+                if (built.chunkError) countChunkFailure(relPosix, built.chunkError);
                 index.documents[relPosix] = fresh;
                 results.ingested++;
                 if (hasVector) results.embedded++;
@@ -604,17 +628,25 @@ module.exports = function ingestFactory(deps) {
           // have needed them. Costs a re-extract; that is the price of not
           // re-indexing 1,377 documents from scratch.
           if (existing && Array.isArray(existing.embedding) && existing.chunks === undefined) {
-            try {
-              const text = await extractText(full);
-              const rec = await buildChunks(text, injectedEmbed || embed);
-              if (rec) { chunks()[relPosix] = rec; existing.chunks = rec.chunks.length; }
-              else existing.chunks = 0;
-              existing.updatedAt = Date.now();
-              results.ingested++;
-              onEvent({ file: relPosix, action: 'chunk-backfill', chunks: existing.chunks });
-              if (results.ingested % 10 === 0) checkpoint();
-              continue;
-            } catch { /* no embedder, or unreadable — try again next scan */ }
+            let text = null;
+            try { text = await extractText(full); } catch { /* unreadable — try again next scan */ }
+            if (text !== null) {
+              try {
+                const rec = await buildChunks(text, injectedEmbed || embed);
+                if (rec) { chunks()[relPosix] = rec; existing.chunks = rec.chunks.length; }
+                else existing.chunks = 0;
+                existing.updatedAt = Date.now();
+                results.ingested++;
+                onEvent({ file: relPosix, action: 'chunk-backfill', chunks: existing.chunks });
+                if (results.ingested % 10 === 0) checkpoint();
+                continue;
+              } catch (e) {
+                // R-05: was an empty catch. Still recoverable next scan.
+                logChunkFailure(relPosix, e);
+                countChunkFailure(relPosix, e.message);
+                onEvent({ file: relPosix, action: 'chunk-backfill-failed', chunkError: e.message });
+              }
+            }
           }
           results.skipped++;
           continue;
@@ -626,7 +658,9 @@ module.exports = function ingestFactory(deps) {
           continue;
         }
 
-        const entry = await buildEntry(full, relPosix, text, stat);
+        const built = {};
+        const entry = await buildEntry(full, relPosix, text, stat, built);
+        if (built.chunkError) countChunkFailure(relPosix, built.chunkError);
         index.documents[relPosix] = entry;
         manifest[relPosix] = { hash, indexedAt: Date.now() };
         results.ingested++;
@@ -635,7 +669,7 @@ module.exports = function ingestFactory(deps) {
         // embedded" in the panel even when the vector was written.
         const embedded = Array.isArray(entry.embedding) && entry.embedding.length > 0;
         if (embedded) results.embedded++;
-        onEvent({ file: relPosix, embedded });
+        onEvent({ file: relPosix, embedded, ...(built.chunkError ? { chunkError: built.chunkError } : {}) });
         checkpoint();
       } catch (err) {
         results.errors.push({ file: relPosix, error: err.message });
@@ -1066,6 +1100,10 @@ module.exports = function ingestFactory(deps) {
       // /index-brain went round in a circle (A047).
       lines.push(`${plural(unembedded, 'document')} in the index ${unembedded === 1 ? 'has' : 'have'} no embedding yet and none could be made — no embedding model answered, so /recall and /ask cannot find ${unembedded === 1 ? 'it' : 'them'} by meaning. Install nomic-embed-text in Cookbook (about 150 MB, runs on CPU) or assign the Embedding role in Settings, then run /index-brain again.`);
     }
+    if (r.chunkFailed > 0) {
+      const named = (r.chunkErrors || []).slice(0, 3).map((e) => `${e.file} (${e.error})`).join('; ');
+      lines.push(`The windows of ${plural(r.chunkFailed, 'document')} could not be embedded: ${named}${r.chunkFailed > 3 ? '; …' : ''}. ${r.chunkFailed === 1 ? 'It keeps its' : 'They keep their'} summary vector, but /ask cannot cite passages from ${r.chunkFailed === 1 ? 'it' : 'them'} until the next /index-brain embeds the windows.`);
+    }
     const errs = r.errors || [];
     if (errs.length) {
       lines.push(`${plural(errs.length, 'file')} could not be read: ${errs.slice(0, 3).map((e) => `${e.file} (${e.error})`).join('; ')}${errs.length > 3 ? '; …' : ''}.`);
@@ -1146,6 +1184,10 @@ module.exports = function ingestFactory(deps) {
         embedded: withVector.length,
         missing: docs.length - withVector.length,
         stale: stale.length,
+        // Documents with a summary vector whose windows were never embedded
+        // (`chunks` undefined: a window failed, or indexed before windows).
+        // The next run's chunk backfill works on these.
+        chunksMissing: withVector.filter(d => d.chunks === undefined).length,
         // What the next run would work on. Without an embedder nothing can be
         // embedded, so it is 0 — the remedy is a model, not another run.
         pending: r.ok ? (docs.length - withVector.length) + stale.length : 0,

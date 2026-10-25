@@ -11,8 +11,10 @@
  * `existing.chunks === undefined`. This drives that path end to end, over the
  * index a previous run left on disk, the way a restart does.
  *
- * Also pins what the index status does NOT say: it counts document vectors, so
- * it reads clean while windows are missing.
+ * Also pins what `embedding.missing` does NOT say: it counts document vectors,
+ * so it reads 0 while windows are missing. Since 2026-10-25 the failure is
+ * reported elsewhere — `chunkFailed`/`chunkErrors` in the scan result and
+ * `embedding.chunksMissing` in index-status (chunk-embed-failure-surfaced.test.js).
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createRequire } from 'module';
@@ -79,7 +81,8 @@ describe('windows that failed to embed are rebuilt by the next index pass', () =
     const h = await boot(refusing);
     const events = await h.scan();
     const done = events.find((e) => e.done);
-    expect(done.errors).toEqual([]);                 // the failure was swallowed, not reported
+    expect(done.errors).toEqual([]);                 // not a file error: the file was read
+    expect(done.chunkFailed).toBe(1);                // the window failure is counted (R-05)
     expect(done.embedded).toBe(1);                   // counted as embedded: the summary vector is there
     const doc = readIndex();
     expect(Array.isArray(doc.embedding)).toBe(true);
@@ -94,6 +97,7 @@ describe('windows that failed to embed are rebuilt by the next index pass', () =
     expect(s.embedding.documents).toBe(1);
     expect(s.embedding.embedded).toBe(1);
     expect(s.embedding.missing).toBe(0);             // counts document vectors only
+    expect(s.embedding.chunksMissing).toBe(1);       // the windows are counted separately
     expect(readChunks()['dock.md']).toBeUndefined(); // and the windows are not there
   });
 
