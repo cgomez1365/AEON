@@ -465,8 +465,8 @@ async function discoverModelCatalogue(provider, base_url, apiKey) {
   if (custom) {
     const check = checkBaseUrl(base_url);
     if (!check.ok) return { error: check.error };
-    // A user-supplied host must never be paired with a transport that puts the
-    // key in the query string — that is how a key ends up in an access log.
+    // A user-supplied host must never be handed a Google key: Gemini's
+    // transport only ever talks to Google's own address.
     if (profile.style === 'gemini') {
       return { error: 'A custom address cannot be used with this provider.' };
     }
@@ -482,11 +482,18 @@ async function discoverModelCatalogue(provider, base_url, apiKey) {
       } catch { return { models: [], free: [] }; }
     }
     if (profile.style === 'gemini') {
-      const r = await Promise.race([fetch(`${base}/models?key=${apiKey}`), timeout(8000)]);
+      // The key goes in the x-goog-api-key header, never in the URL: a query
+      // string lands in proxy and access logs and in any error that quotes
+      // the URL back (a14).
+      const r = await Promise.race([
+        fetch(`${base}/models`, { headers: { 'x-goog-api-key': apiKey || '' } }),
+        timeout(8000),
+      ]);
       const d = await r.json();
       // Google answers a bad key with { error: { message } } and no models.
       // That used to come back as an empty list — the same shape as success.
       if (d.error) return { error: d.error.message || 'Gemini rejected the API key.' };
+      if (r.ok === false) return { error: `Gemini answered HTTP ${r.status}` };
       // ListModels rows carry name, token limits and supported generation
       // methods — no price. Google's free tier is granted per API KEY and per
       // project, not per model, so nothing here can say which models are free
@@ -556,8 +563,8 @@ async function discoverModelCatalogue(provider, base_url, apiKey) {
     if (!ids.length) return { error: 'Connected, but this service listed no models. Type the model name yourself.', manual: true };
     return { models: ids, free: ordered.filter(e => e.free).map(e => e.id) };
   } catch (e) {
-    // NEVER return e.message raw — the gemini branch above puts the key in the
-    // URL, and fetch failures quote the URL back in the message.
+    // NEVER return e.message raw — fetch failures quote the URL back in the
+    // message, and an operator-typed URL may carry credentials.
     const name = e?.name === 'TimeoutError' || /abort/i.test(e?.name || '') ? 'timeout' : (e?.cause?.code || e?.code || '');
     if (name === 'timeout') return { error: 'That address took too long to respond. Check it is correct and the server is running.' };
     if (name === 'ENOTFOUND' || name === 'EAI_AGAIN') return { error: 'No server found at that address — check the Base URL for a typo.' };
