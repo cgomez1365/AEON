@@ -12,6 +12,52 @@ tagged; until then its heading says so.
      is added here before tagging, and the heading's "not tagged yet" is replaced by
      the date. -->
 
+## 3.4.0 — not tagged yet
+
+<!-- From v3.3.3 (2e94ce7, 2026-10-05) to 4860aba: 34 commits (`git rev-list --count v3.3.3..4860aba`), 27 of them
+     changes and 7 merge commits (80b2870, 220b4f9, c4a48b3, a40fcb7, 3794912, 8501e54, b40cab3: main merged into each
+     branch so it could fast-forward), then the release commit that holds this note. History is not squashed. -->
+
+**A block you install shows up without a rebuild.** `aeon install` and `aeon update`, the browser's install box and
+an approval in Settings now rebuild the interface on the server, so a new block has its screen without closing AEON
+(15e2095, 97af0c3, e4be10e).
+
+**The model remembers what its tools returned.** Each reply's tool results are kept in the chat history as a short,
+bounded record, so the next turn can cite the file it read a moment ago instead of disowning it (2f5e88d). The claim
+check accepts "I read that earlier" when the record backs it (8fb771d).
+
+**Memory stops filling up with noise.** Auto-extract skips pasted documents and tool output, drops near-duplicates of
+what it already holds, and saves at most 6 memories per store per hour (be89b6d).
+
+**Indexing over a hosted embedder says how long it will take, and waits out rate limits.** A time estimate shows
+before a scan starts. A rate-limit answer (HTTP 429) is now *paced*: AEON reads Retry-After, waits and retries,
+instead of saving a document with no vector (da10ee0). A window that fails to embed is logged by file, counted, and
+shown in the index result, the report, Settings' LAST RUN line and the index status, where before it was dropped
+silently (4af6577). A changed file whose windows fail to re-embed no longer keeps window records that point into its
+old text (da10ee0). Not yet run against a real hosted endpoint; the estimate for a PDF counts file bytes, so it runs
+long.
+
+**Gemini keys never travel in a URL.** Settings → Test now goes through the kernel like every other call (23cc9ee).
+Every Gemini call sends the key in the `x-goog-api-key` header, not in the address, where it could land in proxy
+logs and error messages (c037e40), and the model-list request always uses Google's own address (8e7aee6). The
+Gemini fallback model is pinned to `gemini-2.5-flash` instead of the moving `gemini-flash-latest` alias (19fc393).
+
+**Windows boot screen.** When the canvas paints blank, the boot screen draws the mark as an inline SVG (9fe10d5,
+e7b99ba, 09d8631). Checked in CI only; not yet re-tested on a real Windows machine.
+
+**Security and dependencies.** vite, dompurify and shell-quote patched (f4fcd66). Two new high-severity
+denial-of-service advisories fixed: multer 2.5.0 and body-parser 1.20.9 (bc94c78). @grpc/grpc-js 1.14.6 through an
+override, and its audit exception removed (2879eb2). fast-copy 4.3.0, fast-uri 3.1.9, ip-address 10.7.5 and
+serialize-javascript 7.1.4 (f538a54, 5734fd0, 0d0b63f, c5bcdce). vitest 4.1.12 (4860aba). Eleven minor and patch
+bumps, with @napi-rs/canvas held at 1.0.11 because 1.0.12 changes the rendered icons (7c876bc). `npm audit` reports
+0 vulnerabilities and no Dependabot alert is open.
+
+**For developers.** The test suite no longer writes into the install, and a global check fails any run that does
+(c307fd6). `.github/AGENTS.md` says data roots default to the AEON home, never the install (4f5fd8d). The master
+block builder gained store-release and record phases (bb82a47). npm 10.9.2 crashes when it builds this dependency
+tree from scratch; the lockfile is written with npm 11 and npm 10 reads it unchanged, which the Node 22.13 CI leg
+checks (4860aba).
+
 ## 3.3.3 — update of 2026-10-05 (the number stays 3.3.3; the tag was moved to this)
 
 <!-- From the first v3.3.3 tag (18dcaed, 2026-10-04) to a26af72: 18 commits (`git rev-list --count 18dcaed..a26af72`),

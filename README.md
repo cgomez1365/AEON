@@ -33,7 +33,7 @@
 ## Get started (no technical skills needed)
 
 1. **Install Node.js** (one time): [nodejs.org](https://nodejs.org) → the **LTS** download → install with all defaults. **On macOS 11 to 13.4**, choose **Node 22 LTS** instead: the newest LTS needs macOS 13.5 (see [Requirements](#requirements)).
-2. **Download AEON**: the [latest release](https://github.com/cgomez1365/AEON/releases/latest) (v3.3.3) → **Source code (zip)**. Or, for the latest code rather than a release, the green **Code** button above → **Download ZIP**. Unzip anywhere (Desktop is fine).
+2. **Download AEON**: the [latest release](https://github.com/cgomez1365/AEON/releases/latest) (v3.4.0) → **Source code (zip)**. Or, for the latest code rather than a release, the green **Code** button above → **Download ZIP**. Unzip anywhere (Desktop is fine).
 3. **Launch it**:
    - **Windows** — double-click `LAUNCH.bat`
    - **macOS** — double-click `launch.command` (a browser-downloaded copy is blocked the first time — see [First launch on macOS](#first-launch-on-macos-gatekeeper))
@@ -121,7 +121,7 @@ then launch as usual. `git pull` leaves your installed packs alone (git does not
 **If you downloaded a ZIP:**
 
 1. Rename your AEON folder, for example to `AEON-old`. Do not delete it yet.
-2. Unzip the new version next to it. GitHub names the folder after what you downloaded: `AEON-3.3.3` for the 3.3.3 release, `AEON-main` for **Code → Download ZIP**. The name does not matter, and you can rename it to `AEON`.
+2. Unzip the new version next to it. GitHub names the folder after what you downloaded: `AEON-3.4.0` for the 3.4.0 release, `AEON-main` for **Code → Download ZIP**. The name does not matter, and you can rename it to `AEON`.
 3. Copy each pack you installed from `AEON-old/src/blocks/` into the new folder's `src/blocks/` — that is, every folder there that the new `src/blocks/` does not already have. If you have builds waiting for approval, copy `AEON-old/staging/` too.
 4. Launch from the new folder. It has no dependencies or interface yet, so the launcher installs and builds them; the first launch takes a few minutes. It also points the Desktop icon at the new folder.
 5. Once your Vault, keys and packs are all there, delete `AEON-old`.
@@ -185,7 +185,7 @@ Runs on your computer. Your keys stay on it. Your documents stay on it too, unle
 
 ## Add a block from the store
 
-Blocks sold at [brokengearindustries.com/store](https://www.brokengearindustries.com/store) arrive as one `.aeon` file and need AEON **3.3.3** (the release, or a current `git pull`).
+Blocks sold at [brokengearindustries.com/store](https://www.brokengearindustries.com/store) arrive as one `.aeon` file and need AEON **3.3.3 or newer** (the release, or a current `git pull`).
 
 1. In AEON open **Master → Install from the store** and drag the `.aeon` file onto the drop box. (Or, in your computer's own terminal — not AEON's — run `aeon install /path/to/the-file.aeon`.)
 2. AEON checks the file and boots it once before adding it. A block that brings its own engine (Voice Studio's speech engine is about 440 MB) asks for one click to approve the download first.

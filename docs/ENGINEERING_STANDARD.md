@@ -191,7 +191,7 @@ in the commit that replaces the CHANGELOG's "not tagged yet" with the date
 tag while the heading still says "not tagged yet"). Until then the reading below is
 the latest one recorded, of the release line before it.
 
-**Current reading — v3.3.3 as updated 2026-10-05 (second update), CI run 37403174715 on `10217c0`
+**Current reading — v3.3.3, as updated 2026-10-05 (second update), CI run 37403174715 on `10217c0`
 ("Changelog: add the Settings banner fix and correct the commit count to 43"), the last commit before the
 v3.3.3 tag was moved again; the last code commit is `1a73a12`, and the commit after `10217c0` changes only the
 CHANGELOG and this reading. Started 2026-10-06 02:14 UTC (2026-10-05 19:14 US Pacific time), all six jobs
