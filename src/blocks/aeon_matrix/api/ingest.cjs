@@ -216,7 +216,14 @@ module.exports = function ingestFactory(deps) {
     //
     // Default is the real embedder, so production is unchanged.
     embed: injectedEmbed,
+    // BO-EMB T5(b) seams. `embedPlan` answers which embedder serves the role
+    // and its requests-per-minute limit, for the up-front estimate; `sleep`
+    // is the wait between a rate-limited call and its retry. Tests inject a
+    // fake clock through it; production waits for real.
+    embedPlan: injectedPlan,
+    sleep: injectedSleep,
   } = deps;
+  const sleep = injectedSleep || ((ms) => new Promise((r) => { const t = setTimeout(r, ms); t.unref?.(); }));
 
   const DATA_ROOT  = injectedDataRoot || path.join(__dirname, '..', 'data');
   const BRAIN_DIR  = VAULT_ROOT || path.join(DATA_ROOT, 'Vault');
@@ -376,7 +383,7 @@ module.exports = function ingestFactory(deps) {
   function logChunkFailure(relPosix, e) {
     console.warn(`[SECOND BRAIN] Could not embed the windows of ${relPosix}: ${e.message} — it keeps its summary vector; the next scan retries the windows.`);
   }
-  async function buildEntry(fullPath, relPosix, text, stat, out = {}) {
+  async function buildEntry(fullPath, relPosix, text, stat, out = {}, embedFn = injectedEmbed || embed) {
     const summary = deriveSummary(text);
     const entry = {
       path: relPosix,
@@ -388,7 +395,6 @@ module.exports = function ingestFactory(deps) {
       updatedAt: Date.now(),
     };
     try {
-      const embedFn = injectedEmbed || embed;
       const { vector, model } = await embedFn(summary, { kind: 'document' });
       entry.embedding = vector;
       entry.embeddingModel = model;
@@ -398,10 +404,22 @@ module.exports = function ingestFactory(deps) {
         else { delete chunks()[relPosix]; entry.chunks = 0; }
       } catch (e) {
         // entry.chunks stays undefined: the marker the chunk backfill keys on.
+        // a17: the record of the windows built BEFORE goes too. Its offsets
+        // point into the old text; left in place, retrieval sliced the new
+        // text at them and cited a passage no vector describes.
+        delete chunks()[relPosix];
         logChunkFailure(relPosix, e);
         out.chunkError = e.message;
       }
     } catch (e) {
+      // The summary failed, so no window was even tried. An old window record
+      // is just as stale (a17) and is dropped, and that is a window failure
+      // the scan counts. A caller that keeps the OLD entry instead (space
+      // migration) puts the record back: see keepOldChunks.
+      if (chunks()[relPosix]) {
+        delete chunks()[relPosix];
+        out.chunkError = `windows not re-embedded: ${e.message}`;
+      }
       if (!embedWarnedOnce) {
         embedWarnedOnce = true;
         console.warn('[SECOND BRAIN] Embedding unavailable (no model assigned to the embed role) — entries will index without vectors:', e.message);
@@ -493,6 +511,106 @@ module.exports = function ingestFactory(deps) {
     } catch { return true; } // cannot tell — let the scan decide
   }
 
+  // ── BO-EMB T5(b): estimate first, rate limits paced ──────────────────────
+
+  // Which embedder this run will use and its requests-per-minute limit. A
+  // caller that injects an embedder without a plan (every older test) gets
+  // "no limit", so the seam that keeps tests off the network is not undone
+  // by a role lookup here.
+  async function planFor() {
+    try {
+      if (injectedPlan) return { rpm: 0, ...(await injectedPlan()) };
+      if (injectedEmbed) return { ok: true, provider: 'injected', local: true, rpm: 0, waitNowMs: 0 };
+      return { rpm: 0, ...(await require('../../../kernel/embed.cjs').embedPlan()) };
+    } catch (e) {
+      return { ok: false, rpm: 0, waitNowMs: 0, error: e.message };
+    }
+  }
+
+  // Window calls a file of `bytes` will need: chunkText's stride over the
+  // text, capped. Bytes stand in for extracted characters, which is exact
+  // for text files and an over-count for PDFs (the estimate errs long).
+  function windowsFor(bytes) {
+    if (!(bytes > CHUNK_CHARS)) return 0;
+    return Math.min(CHUNK_CAP, Math.ceil((bytes - CHUNK_OVERLAP) / (CHUNK_CHARS - CHUNK_OVERLAP)));
+  }
+
+  /**
+   * How many embed calls this scan will make, and at the plan's limit how
+   * long they take. Read-only: stats the files, reads no text, calls nothing.
+   * The same branches as the scan: new or changed files, vectors owed, space
+   * migration, windows owed. The +1 is the scan's space probe.
+   */
+  function estimateScan(files, manifest, index, plan) {
+    let embedSpace = null;
+    try { ({ embedSpace } = require('../../../kernel/embed.cjs')); } catch { /* no space check */ }
+    const space = plan.model && embedSpace ? embedSpace(plan.model) : null;
+    let documents = 0;
+    let calls = 1;
+    for (const full of files) {
+      let stat;
+      try { stat = fs.statSync(full); } catch { continue; }
+      const rel = vaultRelative(full);
+      const known = manifest[rel] ? compareFile(manifest[rel].hash, stat) : 'changed';
+      const existing = index.documents[rel];
+      let n = 0;
+      if (known === 'changed') n = 1 + windowsFor(stat.size);
+      else if (existing && !Array.isArray(existing.embedding) && existing.summary) n = 1;
+      else if (existing && space && existing.embeddingModel && existing.embeddingModel !== space) n = 1 + windowsFor(stat.size);
+      else if (existing && typeof existing.summary === 'string' && /^---\s/.test(existing.summary)) n = 1 + windowsFor(stat.size);
+      else if (existing && Array.isArray(existing.embedding) && existing.chunks === undefined) n = windowsFor(stat.size);
+      if (n > 0) { documents++; calls += n; }
+    }
+    const rpm = Number(plan.rpm) > 0 ? Number(plan.rpm) : 0;
+    // A per-minute window: `rpm` calls go at once, the next `rpm` a minute
+    // later. Plus whatever the shared bucket (chat uses it too) already owes.
+    const ms = rpm ? Math.floor((calls - 1) / rpm) * 60_000 + (Number(plan.waitNowMs) || 0) : null;
+    return { documents, calls, rpm, ms, provider: plan.provider || null, local: !!plan.local };
+  }
+
+  function describeEstimate(e) {
+    if (!e.documents) return 'Estimate: nothing new to embed.';
+    const head = `Estimate: ${plural(e.documents, 'document')} to embed, ${plural(e.calls, 'embedding call')}${e.provider ? ` on ${e.provider}` : ''}`;
+    if (e.ms === null) return `${head}. ${e.local ? 'It runs on this computer, so there is no rate limit to wait on.' : 'No requests-per-minute limit is set, so the time depends on the endpoint.'}`;
+    const min = Math.round(e.ms / 60_000);
+    const time = e.ms < 60_000 ? 'under a minute'
+      : min < 120 ? `about ${min} min` : `about ${Math.floor(min / 60)} h ${min % 60} min`;
+    return `${head} at ${e.rpm} a minute: ${time}.`;
+  }
+
+  // A rate limit is waited out, not reported as a failure. The kernel throws
+  // `rateLimited` on HTTP 429 and `localThrottle` when the operator's own
+  // per-minute budget would have to wait longer than it allows. Each is
+  // retried after a wait: the provider's Retry-After when it sent one, the
+  // pacer's own figure, or a backoff that starts at one call's share of the
+  // minute and doubles. Past PACE_RETRIES the error goes on to the caller,
+  // which reports it as the failure it now is.
+  const PACE_RETRIES = 8;
+  const PACE_MAX_WAIT_MS = 60_000;
+  const paceable = (e) => !!(e && (e.rateLimited || e.localThrottle || e.code === 'embed_rate_limited'));
+  function pacedEmbedder(fn, rpm, onPaced) {
+    const step = rpm > 0 ? Math.ceil(60_000 / rpm) : 2_000;
+    return async (text, opts) => {
+      for (let attempt = 1; ; attempt++) {
+        try {
+          return await fn(text, opts);
+        } catch (e) {
+          if (!paceable(e) || attempt > PACE_RETRIES) throw e;
+          const hinted = Number(e.retryAfterMs) > 0 ? Number(e.retryAfterMs) : (e.localThrottle && Number(e.waitMs) > 0 ? Number(e.waitMs) : 0);
+          const waitMs = Math.min(PACE_MAX_WAIT_MS, hinted || step * 2 ** (attempt - 1));
+          try { onPaced({ waitMs, attempt, reason: e.localThrottle ? 'local_limit' : 'rate_limited' }); } catch { /* a notice never breaks the call */ }
+          await sleep(waitMs);
+        }
+      }
+    };
+  }
+
+  // Put back the window record of an entry the scan decided to KEEP: the
+  // file is unchanged, so its offsets still hold (see buildEntry, a17).
+  function keepOldChunks(relPosix, rec) {
+    if (rec && !chunks()[relPosix]) chunks()[relPosix] = rec;
+  }
+
   async function _runScan(onEvent = () => {}, listed = new Map()) {
     // embedded counts vectors WRITTEN this run — first ingest, backfill, or space
     // migration. ingested alone could not say whether a model was involved.
@@ -502,7 +620,10 @@ module.exports = function ingestFactory(deps) {
     // but the files themselves are untouched.
     // chunkFailed counts documents whose windows could not be embedded this
     // run (first ingest or chunk backfill); chunkErrors names the first few.
-    const results = { ingested: 0, embedded: 0, skipped: 0, deleted: 0, withheld: 0, chunkFailed: 0, chunkErrors: [], errors: [] };
+    // paced counts the times the embedder said "too many requests" (HTTP 429,
+    // or the local requests-per-minute budget gave up) and the scan waited and
+    // retried; pacedMs is the time spent waiting. A paced call is not a failure.
+    const results = { ingested: 0, embedded: 0, skipped: 0, deleted: 0, withheld: 0, chunkFailed: 0, chunkErrors: [], errors: [], paced: 0, pacedMs: 0, estimate: null };
     const CHUNK_ERRORS_KEPT = 20;
     const countChunkFailure = (relPosix, message) => {
       results.chunkFailed++;
@@ -521,12 +642,33 @@ module.exports = function ingestFactory(deps) {
     const files = walkVault(BRAIN_DIR, listed);
     const seen = new Set();
 
+    // BO-EMB T5(b): say how long this will take BEFORE the first call. A
+    // hosted embedder at 40 requests a minute needs ~13 minutes for 500
+    // documents; an operator who learns that halfway through has already paid
+    // for half a run they might not have started.
+    const plan = await planFor();
+    results.estimate = estimateScan(files, manifest, index, plan);
+    onEvent({ estimate: results.estimate, message: describeEstimate(results.estimate) });
+
+    // Every embed call this scan makes goes through the pacer: a rate limit
+    // is waited out and retried, and reported as paced — not swallowed into
+    // a document indexed without its vector.
+    let currentFile = null;
+    const embedFn = pacedEmbedder(injectedEmbed || embed, plan.rpm, ({ waitMs, attempt, reason }) => {
+      results.paced++;
+      results.pacedMs += waitMs;
+      onEvent({
+        paced: true, file: currentFile, waitMs, attempt, reason,
+        message: `paced: ${reason === 'local_limit' ? 'your requests-per-minute limit for this endpoint is used up' : 'the embedding endpoint is rate limiting this run'} — waiting ${Math.ceil(waitMs / 1000)}s, then retrying${currentFile ? ` ${currentFile}` : ''}`,
+      });
+    });
+
     // The space the active embedder writes into. Vectors tagged with any other
     // space are re-embedded below rather than compared against (R08). Learned
     // once per scan with one throwaway embed; no embedder means no migration
     // this pass, and no error — the vector backfill already covers that case.
     let currentSpace = null;
-    try { ({ model: currentSpace } = await (injectedEmbed || embed)('aeon space probe', { kind: 'document' })); } catch { currentSpace = null; }
+    try { ({ model: currentSpace } = await embedFn('aeon space probe', { kind: 'document' })); } catch { currentSpace = null; }
 
     // Persists manifest + index + status after every file so a cancel/crash
     // mid-run never loses progress and never redoes already-completed work.
@@ -543,6 +685,7 @@ module.exports = function ingestFactory(deps) {
     for (const full of files) {
       const relPosix = vaultRelative(full);
       seen.add(relPosix);
+      currentFile = relPosix;
       try {
         const stat = fs.statSync(full);
         const hash = fileHash(stat);
@@ -560,7 +703,7 @@ module.exports = function ingestFactory(deps) {
               // exists to keep tests off the network was bypassed on precisely
               // the path the Index panel's embed push drives. Production is
               // unchanged — nothing injects there.
-              const { vector, model } = await (injectedEmbed || embed)(existing.summary, { kind: 'document' });
+              const { vector, model } = await embedFn(existing.summary, { kind: 'document' });
               existing.embedding = vector;
               existing.embeddingModel = model;
               existing.updatedAt = Date.now();
@@ -578,10 +721,11 @@ module.exports = function ingestFactory(deps) {
           // re-indexes by hand is a chore the scan can do itself.
           if (existing && Array.isArray(existing.embedding) && currentSpace
               && existing.embeddingModel && existing.embeddingModel !== currentSpace) {
+            const oldChunks = chunks()[relPosix];
             try {
               const text = await extractText(full);
               const built = {};
-              const fresh = await buildEntry(full, relPosix, text, stat, built);
+              const fresh = await buildEntry(full, relPosix, text, stat, built, embedFn);
               if (built.chunkError && Array.isArray(fresh.embedding) && fresh.embedding.length) countChunkFailure(relPosix, built.chunkError);
               // buildEntry swallows an embed failure and returns an entry with
               // NO vector. Replacing the document with that turned a stale but
@@ -596,8 +740,11 @@ module.exports = function ingestFactory(deps) {
                 if (results.ingested % 10 === 0) checkpoint();
                 continue;
               }
+              // The old entry stays, and so does the window record that
+              // belongs to it (the file is unchanged, its offsets still hold).
+              keepOldChunks(relPosix, oldChunks);
               onEvent({ file: relPosix, action: 'space-migrate-kept', from: existing.embeddingModel, to: currentSpace });
-            } catch { /* unreadable or no embedder — leave it, try next scan */ }
+            } catch { keepOldChunks(relPosix, oldChunks); /* unreadable or no embedder — leave it, try next scan */ }
           }
           // Frontmatter refresh: an entry derived before titles and summaries
           // skipped YAML frontmatter still carries a summary that opens with
@@ -608,10 +755,11 @@ module.exports = function ingestFactory(deps) {
           // summary no longer starts with the fence. A fresh entry that could
           // not be embedded never replaces one that carries a vector.
           if (existing && typeof existing.summary === 'string' && /^---\s/.test(existing.summary)) {
+            const oldChunks = chunks()[relPosix];
             try {
               const text = await extractText(full);
               const built = {};
-              const fresh = await buildEntry(full, relPosix, text, stat, built);
+              const fresh = await buildEntry(full, relPosix, text, stat, built, embedFn);
               const hasVector = Array.isArray(fresh.embedding) && fresh.embedding.length > 0;
               if (hasVector || !Array.isArray(existing.embedding)) {
                 if (built.chunkError) countChunkFailure(relPosix, built.chunkError);
@@ -622,7 +770,8 @@ module.exports = function ingestFactory(deps) {
                 if (results.ingested % 10 === 0) checkpoint();
                 continue;
               }
-            } catch { /* unreadable — leave it, try next scan */ }
+              keepOldChunks(relPosix, oldChunks);
+            } catch { keepOldChunks(relPosix, oldChunks); /* unreadable — leave it, try next scan */ }
           }
           // Chunk backfill: indexed before windows existed, or too short to
           // have needed them. Costs a re-extract; that is the price of not
@@ -632,7 +781,7 @@ module.exports = function ingestFactory(deps) {
             try { text = await extractText(full); } catch { /* unreadable — try again next scan */ }
             if (text !== null) {
               try {
-                const rec = await buildChunks(text, injectedEmbed || embed);
+                const rec = await buildChunks(text, embedFn);
                 if (rec) { chunks()[relPosix] = rec; existing.chunks = rec.chunks.length; }
                 else existing.chunks = 0;
                 existing.updatedAt = Date.now();
@@ -659,7 +808,7 @@ module.exports = function ingestFactory(deps) {
         }
 
         const built = {};
-        const entry = await buildEntry(full, relPosix, text, stat, built);
+        const entry = await buildEntry(full, relPosix, text, stat, built, embedFn);
         if (built.chunkError) countChunkFailure(relPosix, built.chunkError);
         index.documents[relPosix] = entry;
         manifest[relPosix] = { hash, indexedAt: Date.now() };
@@ -1099,6 +1248,9 @@ module.exports = function ingestFactory(deps) {
       // "0 embedded, 1 unchanged" and nothing else, so /ask's advice to run
       // /index-brain went round in a circle (A047).
       lines.push(`${plural(unembedded, 'document')} in the index ${unembedded === 1 ? 'has' : 'have'} no embedding yet and none could be made — no embedding model answered, so /recall and /ask cannot find ${unembedded === 1 ? 'it' : 'them'} by meaning. Install nomic-embed-text in Cookbook (about 150 MB, runs on CPU) or assign the Embedding role in Settings, then run /index-brain again.`);
+    }
+    if (r.paced > 0) {
+      lines.push(`The embedding endpoint asked AEON to slow down ${plural(r.paced, 'time')}; the scan was paced: it waited ${Math.ceil((r.pacedMs || 0) / 1000)}s in all and retried. A pause is not a failure.`);
     }
     if (r.chunkFailed > 0) {
       const named = (r.chunkErrors || []).slice(0, 3).map((e) => `${e.file} (${e.error})`).join('; ');
