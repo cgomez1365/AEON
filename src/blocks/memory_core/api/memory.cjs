@@ -37,6 +37,7 @@ const { estimateTokens } = require('../../../kernel/tokens.cjs');
 const blockSettings = require('../../../kernel/blockSettings.cjs');
 const sections = require('../../../kernel/memorySections.cjs');
 const agentWorkspace = require('../../../kernel/agentWorkspace.cjs');
+const autoExtract = require('../../../kernel/autoExtract.cjs');
 const crypto = require('crypto');
 
 /**
@@ -345,6 +346,16 @@ module.exports = function createMemoryRouter(deps) {
       // its stored wording. `text` above is the operator's.
       if (dupe.active === false) Object.assign(out, { modelText: savedSays(category || 'fact', normalized, text).join('\n'), modelActive: newMemoriesOn() });
       return res.json(out);
+    }
+    // The extractor alone is held to more than an exact repeat: a fact one of
+    // this store's memories already says (on or off) is not saved again. What
+    // the operator saves by hand is theirs to repeat (kernel/autoExtract.cjs).
+    if (source === 'auto-extract') {
+      const near = autoExtract.isNearDuplicate(normalized.text, all.map((x) => x && x.text));
+      const have = near.duplicate && all.find((x) => x && x.text === near.match);
+      if (have) {
+        return res.json({ ok: true, memory: have, deduped: true, near: true, text: `Already remembered (a near-duplicate of an existing memory) — nothing new saved: ${have.text}` });
+      }
     }
     const m = {
       id: newId(), text: normalized.text,

@@ -3937,6 +3937,7 @@ export default function SystemSettings() {
                   <div style={{ fontSize: '13px' }}>
                     +{brainStatus.lastResult.ingested || 0} · skip {brainStatus.lastResult.skipped || 0} · del {brainStatus.lastResult.deleted || 0}
                     {brainStatus.lastResult.errors?.length ? ` · ${brainStatus.lastResult.errors.length} errors` : ''}
+                    {brainStatus.lastResult.chunkFailed ? ` · ${brainStatus.lastResult.chunkFailed} without passages (windows failed to embed)` : ''}
                   </div>
                 </div>
               )}

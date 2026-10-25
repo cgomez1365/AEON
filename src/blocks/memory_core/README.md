@@ -181,7 +181,7 @@ the index is decided by `src/kernel/vaultPrivacy.cjs`.
 | Method | Path | Notes |
 |---|---|---|
 | `GET` | `/api/memory` | List, pinned first then newest. Query: `?type=`, `?category=`, `?q=` (every word, any order, in text + title; a `q` that is only a category word is a section lookup). Returns `memories` (each with `active` and `tokens`), a `summary` (total, on, off, tokens of the on ones), `text` for the terminal chip, and `modelText` — what the terminal may read back into the conversation (without switched-off memories; `null` for a Local only agent). |
-| `POST` | `/api/memory/add` | Create. Body: `{text, category?, type?, title?, tags?, pinned?, source?, refs?, active?}`. `text` must be 6+ chars. Deduped on trimmed, lower-cased text — a repeat is a no-op and its `text` says so; a repeat of a switched-off memory also carries `modelText` and `modelActive` — what a new save would have said — which is all an agent's `memory_save` tool tells the model, so a model cannot learn that an Off memory exists. A linked store answers 409. Every response carries a one-line `text` for the terminal chip. **Path is a contract**: the chat auto-extract posts here. |
+| `POST` | `/api/memory/add` | Create. Body: `{text, category?, type?, title?, tags?, pinned?, source?, refs?, active?}`. `text` must be 6+ chars. Deduped on trimmed, lower-cased text — a repeat is a no-op and its `text` says so; a repeat of a switched-off memory also carries `modelText` and `modelActive` — what a new save would have said — which is all an agent's `memory_save` tool tells the model, so a model cannot learn that an Off memory exists. A linked store answers 409. Every response carries a one-line `text` for the terminal chip. From the auto-extract (`source: "auto-extract"`) only, a near-duplicate of an existing memory of that store (on or off) also answers `deduped` and `near` and saves nothing. **Path is a contract**: the chat auto-extract posts here. |
 | `PUT` | `/api/memory/:id` | Edit any of `text, category, type, title, tags, pinned, active`. |
 | `POST` | `/api/memory/:id/pin` | Toggle pin. |
 | `POST` | `/api/memory/:id/active` | The switch: `{active: true\|false}` sets it, no body flips it. |
@@ -220,6 +220,11 @@ kernel, not over HTTP:
    `POST /api/memory/add`, as the agent and with its privacy. It runs for the
    operator's own AEON when **Save memories automatically** is on, and for
    another agent when its own "Captures memories from its chats" box is ticked.
+   It takes at most 3 facts per reply and is held to three limits
+   (`src/kernel/autoExtract.cjs`, every skip logged as `[AUTO-MEMORY] skipped`):
+   no extraction when the message is a paste (over 1,500 characters) or the
+   reply is mostly tool output; a fact that a memory of the same store already
+   says is not saved again; and at most 6 automatic memories per store per hour.
 
 ## Settings
 
