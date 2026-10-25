@@ -425,9 +425,49 @@ export function turnForServer(t, maxChars = Infinity) {
   return { role: t.role, content: content.length > maxChars ? content.slice(0, maxChars) : content, ...(typeof t.agent === 'string' ? { agent: t.agent } : {}) };
 }
 
-/** The last `n` turns of the feed, for the chat stream's history. */
+// A finished TOOL chip: the call and what it really returned.
+const isToolChip = (e) => e && e.type === 'chip' && e.kind === 'TOOL' && (e.status === 'ok' || e.status === 'fail');
+
+// What a turn's tool record may weigh on the wire. The server bounds what the
+// model reads (kernel/chatHistory.cjs); this only keeps a 4,000-character
+// result from riding along on every later request.
+const TOOLS_SENT = 4;
+const TOOL_LABEL_SENT = 200;
+const TOOL_OUT_SENT = 400;
+
+/** The last tools of one reply, as the server's `tools` field reads them. */
+function toolRecordOf(chips) {
+  return {
+    tools: chips.slice(-TOOLS_SENT).map((c) => ({
+      label: String(c.label ?? '').slice(0, TOOL_LABEL_SENT), ok: c.status === 'ok', out: String(c.output ?? '').slice(0, TOOL_OUT_SENT),
+    })),
+    ...(chips.length > TOOLS_SENT ? { toolsOmitted: chips.length - TOOLS_SENT } : {}),
+  };
+}
+
+/**
+ * The last `n` turns of the feed, for the chat stream's history.
+ *
+ * A TOOL chip is not a turn, but it is what the assistant's words were built
+ * from: left out, the next turn's model sees "I read the file" with nothing
+ * behind it and takes its own true statement back (2026-10-21). The chips above
+ * an answer ride on that answer as `tools`; the server frames and bounds them
+ * (kernel/chatHistory.cjs). They travel on the turn, so whatever keeps the turn
+ * from a model (agents.shareableTurns) keeps its tool results from it too.
+ * Chips of a reply that never answered are dropped at the next turn.
+ */
 export function chatHistory(feed, n = 20) {
-  return (Array.isArray(feed) ? feed : []).filter(isTurn).slice(-n).map((t) => turnForServer(t));
+  const turns = [];
+  let chips = [];
+  for (const e of Array.isArray(feed) ? feed : []) {
+    if (isToolChip(e)) { chips.push(e); continue; }
+    if (!isTurn(e)) continue;
+    const turn = turnForServer(e);
+    if (e.role === 'assistant' && chips.length) Object.assign(turn, toolRecordOf(chips));
+    chips = [];
+    turns.push(turn);
+  }
+  return turns.slice(-n);
 }
 
 // ── Agent tools and auto-continue (3.3.0) ─────────────────────────────
