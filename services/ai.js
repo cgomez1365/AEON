@@ -653,19 +653,16 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     return typeof prompt === 'string' ? prompt : JSON.stringify(prompt);
   };
 
-  // BO-SHIP P9 — default to the alias, not a version number.
+  // The model every Gemini fallback asks for when none is configured (a16).
   //
-  // This defaulted to 'gemini-flash-latest', which Google has RETIRED: every
-  // request answers HTTP 404 "This model is no longer available". The keys
-  // authenticate fine — 404, not 401 — so the failure reads as a broken
-  // provider rather than a stale model name, and the fallback chain then
-  // reports whatever the next provider says.
-  //
-  // A pinned Gemini version is the opposite trade-off from the llama.cpp
-  // converter (P4), and deliberately so. There, pinning prevents executing
-  // code nobody reviewed. Here, a pinned version simply ROTS — Google removes
-  // it on a schedule — and the alias is the only value that keeps working.
-  const geminiRequest = async (prompt, modelName = 'gemini-flash-latest', retries = 0, opts = {}) => {
+  // BO-SHIP P9 chose the 'gemini-flash-latest' alias so a pinned version could
+  // not rot. But the alias moves with Google's releases and may already
+  // resolve to a 3.x model, and 3.x is not proven to work here (the CEO's key
+  // failed gemini-3.8-flash and the alias; see gemini-thinking-responses.test.js).
+  // House rule: stay on gemini-2.5-flash until a 3.x repro exists. Change it
+  // here, in one place, when that rule changes.
+  const GEMINI_DEFAULT_MODEL = 'gemini-2.5-flash';
+  const geminiRequest = async (prompt, modelName = GEMINI_DEFAULT_MODEL, retries = 0, opts = {}) => {
     if (GEMINI_KEY_POOL.length === 0) throw new Error('No Gemini API keys configured in .env');
     if (retries >= GEMINI_KEY_POOL.length) {
       markUnhealthy('gemini', 429, 'key pool exhausted');
@@ -1777,7 +1774,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       let served = 0;
       const co = { ...o, credential_ref, onToken: (t) => { served++; o.onToken?.(t); } };
       const run =
-        style === 'gemini' ? streamGemini(messages, c.model || 'gemini-flash-latest', base, key, co)
+        style === 'gemini' ? streamGemini(messages, c.model || GEMINI_DEFAULT_MODEL, base, key, co)
         : style === 'anthropic' ? streamClaude(messages, c.model || 'claude-sonnet-5', key, co)
         : streamOpenAICompat(messages, c.model, base, key, co);
       // Past the first token the operator has already seen text; a retry on
@@ -1793,7 +1790,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   // a caller names is an endpoint in the registry.
   const LEGACY_CHAIN_PROVIDERS = new Set(['groq', 'gemini', 'openrouter', 'local', 'claude']);
 
-  const _STREAM_FALLBACK_MODELS = { groq: 'openai/gpt-oss-120b', gemini: 'gemini-flash-latest', openrouter: 'openai/gpt-4o-mini', local: undefined };
+  const _STREAM_FALLBACK_MODELS = { groq: 'openai/gpt-oss-120b', gemini: GEMINI_DEFAULT_MODEL, openrouter: 'openai/gpt-4o-mini', local: undefined };
   // Which provider and model a role uses is what Settings declares
   // (settings.models[role], else chat). The registry supplies that provider's
   // address, model list and key pool. It used to be the other way round: the
@@ -2618,7 +2615,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
         if (cand.resolved) return { text: await _dispatchResolved(prompt, cand.resolved, o), model: cand.resolved.model };
         const m = cand.model;
         if (p === 'groq') return { text: await groqRequest(prompt, m || 'openai/gpt-oss-120b', 0, o), model: m };
-        if (p === 'gemini') return { text: await geminiRequest(prompt, m || 'gemini-flash-latest', 0, o), model: m };
+        if (p === 'gemini') return { text: await geminiRequest(prompt, m || GEMINI_DEFAULT_MODEL, 0, o), model: m };
         if (p === 'openrouter') return { text: await openRouterRequest(prompt, m, o), model: m };
         if (p === 'openai') {
           const om = m || 'gpt-4o-mini';
