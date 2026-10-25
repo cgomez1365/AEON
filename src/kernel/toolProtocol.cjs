@@ -619,11 +619,11 @@ function systemText({ tools = [], agentsAllowed = [], limits = {}, folder = 'Aeo
 
 const CLAIMS = [
   // A Vault search backs a Vault claim only, a web search a web claim only.
-  { group: 'search', tools: ['vault_search'],
+  { group: 'search', tools: ['vault_search'], earlier: true,
     re: /\bI (?:have |'ve |’ve )?(?:searched|looked (?:up|through)|checked) (?:your|the) (?:vault|documents|files|notes|second brain)\b/i },
-  { group: 'web search', tools: ['web_search'],
+  { group: 'web search', tools: ['web_search'], earlier: true,
     re: /\bI (?:have |'ve |’ve )?(?:searched|looked (?:up|through)|checked) (?:on )?(?:the )?(?:web|internet|online)\b/i },
-  { group: 'read', tools: ['vault_read', 'vault_list'],
+  { group: 'read', tools: ['vault_read', 'vault_list'], earlier: true,
     re: /\bI (?:have |'ve |’ve )?(?:read|opened) (?:the|your) (?:file|document|pdf|note)\b/i },
   { group: 'save', tools: ['memory_save', 'artifact_save', 'scratchpad_write'],
     re: /\bI (?:have |'ve |’ve )?(?:saved|stored|written|wrote|noted|remembered) (?:it |this |that )?(?:to|in) (?:my |your )?(?:memory|scratchpad|vault|folder|artifact)\b/i },
@@ -631,11 +631,16 @@ const CLAIMS = [
 
 /**
  * Notices for claims the model made that no tool backs this turn.
- * outcomes: [{ tool, ok }]. agentNames: names an "I asked <name>" may use.
+ * outcomes: [{ tool, ok }] — this reply's tools. agentNames: names an "I asked <name>" may use.
+ * earlier: [{ tool, ok }] — the tools the history showed the model as already used
+ * (chatHistory.earlierTools). It backs a claim of READING or SEARCHING ("I read the file
+ * earlier"), which A7 now lets a follow-up turn make truthfully. It never backs a save or an
+ * ask: those change something, and an old one must not hide a made-up new one.
  */
-function claimCheck(text, outcomes = [], { agentNames = [] } = {}) {
+function claimCheck(text, outcomes = [], { agentNames = [], earlier = [] } = {}) {
   const s = String(text || '');
   const okTools = new Set((outcomes || []).filter((o) => o && o.ok).map((o) => o.tool));
+  const earlierOk = new Set((earlier || []).filter((o) => o && o.ok).map((o) => o.tool));
   const groups = [...CLAIMS];
   const names = (agentNames || []).filter(Boolean).map((n) => String(n).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
   if (names.length) {
@@ -646,9 +651,10 @@ function claimCheck(text, outcomes = [], { agentNames = [] } = {}) {
     const m = g.re.exec(s);
     if (!m) continue;
     if (g.tools.some((t) => okTools.has(t))) continue;
+    if (g.earlier && g.tools.some((t) => earlierOk.has(t))) continue;
     out.push({
       level: 'warn', code: 'unbacked-claim',
-      message: `No ${g.group} tool succeeded in this reply — "${m[0]}" is the model's claim, not something AEON did.`,
+      message: `No ${g.group} tool succeeded in this reply${g.earlier ? ' or in the earlier ones the model was shown' : ''} — "${m[0]}" is the model's claim, not something AEON did.`,
     });
   }
   return out;

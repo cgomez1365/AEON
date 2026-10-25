@@ -10,6 +10,9 @@ export default defineConfig({
     // cannot create secrets/ or data/ inside the install it is testing.
     // See tests/setup-isolation.js for why this cannot be done per file.
     setupFiles: ['./tests/setup-isolation.js'],
+    // Fails the run if any path appeared in the install that was not there
+    // before it. setupFiles redirects the roots; this proves nothing slipped past.
+    globalSetup: ['./tests/install-guard.global.mjs'],
     testTimeout: 10000,
     // BO-SHIP P10 — bound the worker pool.
     //

@@ -67,9 +67,18 @@ describe('POST /tunnel/start requests the binary THIS machine can run', () => {
   // spawn() and this test's fetch stub would see nothing). If it ever fails
   // with an empty `requested` array, tools/bin/ has a real cloudflared in
   // it — delete it and re-run.
+  //
+  // The route mkdirSyncs that real tools/bin before it fetches. When this test
+  // is what created it, it removes it again (empty: the fetch is refused), so
+  // the suite leaves the install as it found it (install-guard.global.mjs).
+  const BIN_DIR = path.join(path.dirname(require.resolve('../package.json')), 'tools', 'bin');
   let origFetch;
-  beforeEach(() => { origFetch = globalThis.fetch; });
-  afterEach(() => { globalThis.fetch = origFetch; });
+  let binExisted;
+  beforeEach(() => { origFetch = globalThis.fetch; binExisted = fs.existsSync(BIN_DIR); });
+  afterEach(() => {
+    globalThis.fetch = origFetch;
+    if (!binExisted) { try { fs.rmdirSync(BIN_DIR); } catch { /* not created, or not empty — the guard names it */ } }
+  });
 
   it('fetches the URL cloudflaredTarget() computed for the real host, never the old hardcoded Windows one', async () => {
     const wanted = cloudflaredTarget(); // this test process's real platform/arch
