@@ -12,11 +12,12 @@ tagged; until then its heading says so.
      is added here before tagging, and the heading's "not tagged yet" is replaced by
      the date. -->
 
-## 3.4.0 — not tagged yet
+## 3.4.0 — 2026-10-25
 
 <!-- From v3.3.3 (2e94ce7, 2026-10-05) to 4860aba: 34 commits (`git rev-list --count v3.3.3..4860aba`), 27 of them
      changes and 7 merge commits (80b2870, 220b4f9, c4a48b3, a40fcb7, 3794912, 8501e54, b40cab3: main merged into each
-     branch so it could fast-forward), then the release commit that holds this note. History is not squashed. -->
+     branch so it could fast-forward), then the release commit 4e2f660 and the commit that dates this heading and
+     records 4e2f660's CI run in docs/ENGINEERING_STANDARD.md (the v3.4.0 tag). History is not squashed. -->
 
 **A block you install shows up without a rebuild.** `aeon install` and `aeon update`, the browser's install box and
 an approval in Settings now rebuild the interface on the server, so a new block has its screen without closing AEON
