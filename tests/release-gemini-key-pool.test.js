@@ -71,7 +71,9 @@ let badAnswer = GOOGLE_400;
 const fake = express();
 fake.use(express.json());
 fake.post(/:(stream)?[gG]enerateContent$/, (req, res) => {
-  const key = String(req.query.key || '');
+  // a14: the key travels in the x-goog-api-key header; a key in the query
+  // string would be a regression, so it is not read from there.
+  const key = String(req.get('x-goog-api-key') || '');
   keysSeen.push(key);
   if (key !== GOOD) return res.status(400).json(badAnswer);
   if (/streamGenerateContent$/.test(req.path)) {

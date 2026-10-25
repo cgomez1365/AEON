@@ -681,7 +681,8 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
       return await localNativeRequest(prompt, undefined, { ...opts, returnMeta: false });
     }
     const apiKey = getActiveKey();
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
+    // The key rides in the x-goog-api-key header, never the URL (a14).
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent`;
     const _t0 = Date.now();
     const flatText = _flatPrompt(prompt, opts);
     const contents = [{ parts: [{ text: flatText }] }];
@@ -692,7 +693,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     try {
       const response = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey || '' },
         body: JSON.stringify({ contents, generationConfig: { maxOutputTokens: opts.max_tokens || 4096 } }),
         signal: fetchTimeout(opts),
       });
@@ -1260,7 +1261,8 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
   const genericGeminiRequest = async (prompt, model, baseUrl, apiKey, opts = {}) => {
     const _t0 = Date.now();
     const base = (baseUrl || 'https://generativelanguage.googleapis.com/v1beta').replace(/\/$/, '');
-    const url = `${base}/models/${model}:generateContent?key=${apiKey}`;
+    // The key rides in the x-goog-api-key header, never the URL (a14).
+    const url = `${base}/models/${model}:generateContent`;
     const flatText = _flatPrompt(prompt, opts);
     const contents = [{ parts: [{ text: flatText }] }];
     if (opts.system) contents.unshift({ role: 'user', parts: [{ text: opts.system }] });
@@ -1269,7 +1271,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     await _paceFor(opts, _paceKey(base, 'gemini', opts.credential_ref || opts.pace_ref), 'gemini');
     const maxTokens = opts.max_tokens || 4096;
     const response = await fetch(url, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey || '' },
       body: JSON.stringify({ contents, generationConfig: { maxOutputTokens: maxTokens } }),
       signal: fetchTimeout(opts),
     });
@@ -1560,7 +1562,8 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     const contents = messages
       .filter(m => m.role !== 'system')
       .map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: String(m.content ?? '') }] }));
-    const url = `${base}/models/${model}:streamGenerateContent?alt=sse&key=${apiKey}`;
+    // The key rides in the x-goog-api-key header, never the URL (a14).
+    const url = `${base}/models/${model}:streamGenerateContent?alt=sse`;
     const maxTokens = opts.max_tokens || 4096;
     // Before the connect clock starts: waiting on the operator's own limit is
     // not a provider that failed to answer.
@@ -1569,7 +1572,7 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     let response;
     try {
       response = await fetch(url, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey || '' },
         body: JSON.stringify({
           contents,
           ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),
@@ -2332,10 +2335,11 @@ module.exports = ({ supabase, writeOSAudit, TOKEN_LEDGER_FILE, loadSettings, aeo
     if (provider === 'gemini') {
       const apiKey = getActiveKey();
       if (!apiKey) throw new Error('No Gemini API keys configured in .env');
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+      // The key rides in the x-goog-api-key header, never the URL (a14).
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
       await _paceNamed('gemini', opts, model, 'https://generativelanguage.googleapis.com/v1beta');
       const response = await fetch(url, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
         body: JSON.stringify({ contents: [{ parts: [{ text: prompt }, { inline_data: { mime_type: mimeType, data: b64 } }] }] }),
       });
       if (!response.ok) {

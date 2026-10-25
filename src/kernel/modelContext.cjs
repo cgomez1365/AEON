@@ -153,9 +153,9 @@ function stripSlash(u) { return String(u).replace(/\/+$/, ''); }
 function catalogueRequest(provider, base_url, apiKey) {
   const key = apiKey ? String(apiKey) : '';
   if (provider === 'gemini') {
-    // Never the caller's base_url: the key rides in the query string, so it
-    // may only ever be sent to Google itself.
-    return { url: `${GEMINI_BASE}/models?key=${encodeURIComponent(key)}`, headers: {} };
+    // Never the caller's base_url: a Google key may only ever be sent to
+    // Google itself. In the x-goog-api-key header, never the URL (a14).
+    return { url: `${GEMINI_BASE}/models`, headers: key ? { 'x-goog-api-key': key } : {} };
   }
   if (provider === 'claude' || provider === 'anthropic') {
     return {
