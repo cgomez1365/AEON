@@ -99,6 +99,9 @@ export default function IndexPanel() {
 
           if (ev.done) { setResult(ev); continue; }
           if (ev.joined) { push({ kind: 'note', text: ev.message }); continue; }
+          // BO-EMB T5(b): the estimate comes first; a rate limit is a pause, not a failure.
+          if (ev.estimate) { push({ kind: 'note', text: ev.message }); continue; }
+          if (ev.paced === true) { push({ kind: 'note', text: ev.message }); continue; }
           if (ev.error) { bump('failed'); push({ kind: 'error', text: `${ev.file} — ${ev.error}` }); continue; }
           if (ev.deleted) { bump('deleted'); push({ kind: 'deleted', text: ev.file }); continue; }
           if (ev.action === 'embed-backfill') { bump('embedded'); push({ kind: 'embed', text: ev.file }); continue; }

@@ -84,7 +84,7 @@ work, depending on kernel mount order):
 | POST | `/crn/second-brain/ingest/document` | Create a ToC entry (and file, if content is given) — **never overwrites** an existing file. `file_path` may carry the graph's `Vault/` prefix |
 | PUT | `/crn/second-brain/ingest/document` | Overwrite an existing file's content and re-embed it — used by Edit mode. Update-only: a path that is not a file answers 404 and writes nothing |
 | DELETE | `/crn/second-brain/ingest/document` | Remove a doc's ToC + manifest entry |
-| POST | `/crn/second-brain/ingest/scan-docs` | Incremental re-index, streamed via SSE (Index panel). `?format=summary` (the terminal's `/scan`, `/index-brain`) answers one JSON body with counts and a one-line `text` |
+| POST | `/crn/second-brain/ingest/scan-docs` | Incremental re-index, streamed via SSE (Index panel). The first event is an `estimate` (documents, embed calls, the embedder's requests-per-minute limit, time); a rate limit mid-run is a `paced` event (waits, then retries) and is counted in `paced`/`pacedMs`, not as a failure. `?format=summary` (the terminal's `/scan`, `/index-brain`) answers one JSON body with counts and a one-line `text` |
 | GET | `/crn/second-brain/index-status` | Last index run stats (doc count, errors) |
 | POST | `/crn/second-brain/retrieve` | Semantic retrieval, no intent gate (block-namespaced) |
 | ~~POST~~ | ~~`/search`~~ | **Deleted 2026-08-16 (§21).** Its only caller was `NeuralTerminal.jsx`, removed the same day. The recall gate and the `/matrix ` bypass live on in `dashboard/api/chat.cjs`, which re-implements them locally; retrieval itself is unchanged on `/crn/second-brain/retrieve`. |

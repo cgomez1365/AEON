@@ -1,10 +1,5 @@
 const fs = require('fs');
 const path = require('path');
-// How much of a catalogue survives, and which rows the provider priced at
-// zero. Shared with /api/connections/discover so the two model pickers cannot
-// drift apart. See src/kernel/modelCatalogue.cjs for why free is read from
-// price and not from the ":free" suffix.
-const { MAX_MODELS, isFreeModelRow, freeFirst } = require('../../../kernel/modelCatalogue.cjs');
 
 /**
  * Is this request from the machine AEON runs on?
@@ -835,36 +830,43 @@ module.exports = (app, deps) => {
       return null;
     };
 
-    try {
-      if (id === 'groq') {
-        const key = await resolveKey('groq', ['GROQ_API_KEY']);
-        if (!key) return res.json({ ok: false, error: 'No Groq key (set GROQ_API_KEY or add a connection)' });
-        const r = await Promise.race([
-          fetch('https://api.groq.com/openai/v1/models', { headers: { Authorization: `Bearer ${key}` } }),
-          timeout(8000)
-        ]);
-        const data = await r.json();
-        // Groq publishes no per-model price, so no `free` key is sent: free on
-        // Groq is a property of the key, not the model. Alphabetical is
-        // display order only.
-        return res.json({ ok: r.ok, models: (data.data || []).map(m => m.id).sort().slice(0, MAX_MODELS), latency_ms: 0 });
-      }
+    // Which providers the Test button lists through the kernel, where each
+    // one's key is looked for, and what the UI has always been sent.
+    const KERNEL_TESTED = {
+      groq:       { envKeys: ['GROQ_API_KEY'], missing: 'No Groq key (set GROQ_API_KEY or add a connection)', alphabetical: true, extra: { latency_ms: 0 } },
+      gemini:     { envKeys: ['GEMINI_PAID_KEY', 'GEMINI_FREE_KEY_1'], missing: 'No Gemini key configured', alphabetical: true },
+      openai:     { envKeys: ['OPENAI_API_KEY'], missing: 'No OpenAI key (set OPENAI_API_KEY or add a connection)', alphabetical: true },
+      claude:     { envKeys: ['ANTHROPIC_API_KEY'], missing: 'No Anthropic key (set ANTHROPIC_API_KEY or add a connection)' },
+      grok:       { envKeys: ['GROK_API_KEY'], missing: 'No Grok key (set GROK_API_KEY or add a connection)', alphabetical: true },
+      openrouter: { envKeys: ['OPENROUTER_API_KEY'], missing: 'No OpenRouter key (set OPENROUTER_API_KEY or add a connection)', free: true },
+    };
 
-      if (id === 'gemini') {
-        const key = await resolveKey('gemini', ['GEMINI_PAID_KEY', 'GEMINI_FREE_KEY_1']);
-        if (!key) return res.json({ ok: false, error: 'No Gemini key configured' });
-        const r = await Promise.race([
-          fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${key}`),
-          timeout(8000)
-        ]);
-        const data = await r.json();
-        // Same as Groq: the tier lives on the project, not on the model row.
-        // A rejected key answers 400 API_KEY_INVALID; the Test button showed
-        // only "Gemini: Failed" until the reason was passed on (A041).
+    try {
+      // Cloud model providers go through the kernel: discoverModelCatalogue
+      // (src/kernel/endpoints.cjs) is the one transport for listing a
+      // provider's models, the same one /api/connections/discover uses. This
+      // route only resolves the key and keeps the shape the Settings UI reads.
+      // It used to hold its own six vendor fetches, and the Gemini one sent
+      // the key as ?key= in the URL (a14).
+      if (Object.prototype.hasOwnProperty.call(KERNEL_TESTED, id)) {
+        const spec = KERNEL_TESTED[id];
+        const key = await resolveKey(id, spec.envKeys);
+        if (!key) return res.json({ ok: false, error: spec.missing });
+        const found = await kernelEndpoints.discoverModelCatalogue(id, null, key);
+        if (!found || found.error || !Array.isArray(found.models)) {
+          // A rejected key answers with the provider's reason (A041).
+          return res.json({ ok: false, models: [], error: (found && found.error) || `${id}: no model list came back` });
+        }
+        // Groq, OpenAI, Grok and Gemini publish no per-model price, so no
+        // `free` key is sent and alphabetical is display order only. Anthropic
+        // and OpenRouter keep the order the kernel returns (newest-first;
+        // free-first by price), and only OpenRouter can honestly say `free`.
+        const models = spec.alphabetical ? [...found.models].sort() : found.models;
         return res.json({
-          ok: r.ok,
-          models: (data.models || []).map(m => m.name.replace('models/', '')).sort().slice(0, MAX_MODELS),
-          ...(r.ok ? {} : { error: data?.error?.message || `Gemini answered HTTP ${r.status}` }),
+          ok: true,
+          models,
+          ...(spec.free ? { free: Array.isArray(found.free) ? found.free : [] } : {}),
+          ...(spec.extra || {}),
         });
       }
 
@@ -905,41 +907,6 @@ module.exports = (app, deps) => {
         return res.json({ ok: cdpKeyExists(), note: cdpKeyExists() ? 'CDP key file found' : 'cdp_api_key.json not found in <AEON>/secrets' });
       }
 
-      if (id === 'openai') {
-        const key = await resolveKey('openai', ['OPENAI_API_KEY']);
-        if (!key) return res.json({ ok: false, error: 'No OpenAI key (set OPENAI_API_KEY or add a connection)' });
-        const r = await Promise.race([
-          fetch('https://api.openai.com/v1/models', { headers: { Authorization: `Bearer ${key}` } }),
-          timeout(8000)
-        ]);
-        const data = await r.json();
-        return res.json({ ok: r.ok, models: (data.data || []).map(m => m.id).sort().slice(0, MAX_MODELS) });
-      }
-
-      if (id === 'claude') {
-        const key = await resolveKey('claude', ['ANTHROPIC_API_KEY']);
-        if (!key) return res.json({ ok: false, error: 'No Anthropic key (set ANTHROPIC_API_KEY or add a connection)' });
-        const r = await Promise.race([
-          fetch('https://api.anthropic.com/v1/models', { headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01' } }),
-          timeout(8000)
-        ]);
-        const data = await r.json();
-        // Anthropic returns newest-first, which is more useful here than
-        // alphabetical, so this one keeps the provider's own order.
-        return res.json({ ok: r.ok, models: (data.data || []).map(m => m.id).slice(0, MAX_MODELS) });
-      }
-
-      if (id === 'grok') {
-        const key = await resolveKey('grok', ['GROK_API_KEY']);
-        if (!key) return res.json({ ok: false, error: 'No Grok key (set GROK_API_KEY or add a connection)' });
-        const r = await Promise.race([
-          fetch('https://api.x.ai/v1/models', { headers: { Authorization: `Bearer ${key}` } }),
-          timeout(8000)
-        ]);
-        const data = await r.json();
-        return res.json({ ok: r.ok, models: (data.data || []).map(m => m.id).sort().slice(0, MAX_MODELS) });
-      }
-
       // The keyed web-search providers: a one-result search, so a refused key
       // is found here rather than as a silent fall-through to DuckDuckGo.
       // Only on an explicit {probe:true}: Settings posts here for EVERY
@@ -961,27 +928,6 @@ module.exports = (app, deps) => {
           const data = await r.json();
           return res.json({ ok: true, models: (data.data || []).map(m => m.id) });
         } catch { return res.json({ ok: false, error: `LM Studio not reachable at ${host}` }); }
-      }
-
-      if (id === 'openrouter') {
-        const key = await resolveKey('openrouter', ['OPENROUTER_API_KEY']);
-        if (!key) return res.json({ ok: false, error: 'No OpenRouter key (set OPENROUTER_API_KEY or add a connection)' });
-        const r = await Promise.race([
-          fetch('https://openrouter.ai/api/v1/models', { headers: { Authorization: `Bearer ${key}` } }),
-          timeout(8000)
-        ]);
-        const data = await r.json();
-        // OpenRouter is the one provider here that publishes a price per
-        // model, so it is the one that can honestly say which are free. Sort
-        // the ROWS before mapping to ids — the price lives on the row.
-        const rows = freeFirst((data.data || []), isFreeModelRow).slice(0, MAX_MODELS);
-        return res.json({
-          ok: r.ok,
-          models: rows.map(m => m.id),
-          // No `free` key at all means "this provider does not say", which is
-          // what every other branch above means by omitting it.
-          free: rows.filter(isFreeModelRow).map(m => m.id),
-        });
       }
 
       res.json({ ok: false, error: `Unknown provider: ${id}` });

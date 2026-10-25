@@ -44,6 +44,12 @@ const REPORT_AFTER_VITE6 = {
   vulnerabilities: Object.fromEntries(Object.entries(REPORT_AT_LAUNCH.vulnerabilities)
     .filter(([name]) => name !== 'vite' && name !== 'esbuild')),
 };
+// The same report after the @grpc/grpc-js override (2026-10-25): grpc-js and
+// the firebase entries it dragged in are gone too.
+const REPORT_AFTER_GRPC = {
+  vulnerabilities: Object.fromEntries(Object.entries(REPORT_AFTER_VITE6.vulnerabilities)
+    .filter(([name]) => !['@grpc/grpc-js', '@firebase/firestore', 'firebase'].includes(name))),
+};
 const dayAfter = (iso) => new Date(Date.parse(`${iso}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
 
 describe('audit gate', () => {
@@ -52,25 +58,32 @@ describe('audit gate', () => {
     expect(typeof gate.evaluate).toBe('function');
   });
 
-  it('passes on 2026-10-03 with the advisories open after the vite 6.4.3 upgrade', () => {
-    const r = gate.evaluate(REPORT_AFTER_VITE6, '2026-10-03');
+  it('passes with the advisories open after the @grpc/grpc-js override', () => {
+    const r = gate.evaluate(REPORT_AFTER_GRPC, '2026-10-25');
     expect(r.blocking).toEqual([]);
     expect(r.expired).toEqual([]);
     expect(r.unused).toEqual([]);
     expect(r.ok).toBe(true);
-    expect(r.accepted.map(a => a.id).sort()).toEqual([1240623]);
+    expect(r.accepted).toEqual([]);
+  });
+
+  it('no longer accepts the grpc-js advisory the override fixed: it blocks if it comes back', () => {
+    expect(Object.keys(gate.ACCEPTED)).not.toContain('1240623');
+    const r = gate.evaluate(REPORT_AFTER_VITE6, '2026-10-25');
+    expect(r.blocking.map(b => b.id)).toEqual([1240623]);
+    expect(r.ok).toBe(false);
   });
 
   it('no longer accepts the vite advisory 6.4.3 fixed: it blocks if it comes back', () => {
     expect(Object.keys(gate.ACCEPTED)).not.toContain('1123525');
     const r = gate.evaluate(REPORT_AT_LAUNCH, '2026-10-03');
-    expect(r.blocking.map(b => b.id)).toEqual([1123525]);
+    expect(r.blocking.map(b => b.id).sort()).toEqual([1123525, 1240623]);
     expect(r.ok).toBe(false);
   });
 
   it('still fails the day after an acceptance\'s review date', () => {
     for (const [id, a] of Object.entries(gate.ACCEPTED)) {
-      const r = gate.evaluate(REPORT_AFTER_VITE6, dayAfter(a.review));
+      const r = gate.evaluate(REPORT_AFTER_GRPC, dayAfter(a.review));
       expect(r.expired.map(e => String(e.id)), id).toContain(id);
       expect(r.ok, id).toBe(false);
     }

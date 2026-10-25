@@ -30,7 +30,10 @@ module.exports = (app, deps) => {
   const resolvedRoot = isVercel
     ? '/tmp/aeon_writer'
     : (typeof getBlockDataFile === 'function' ? getBlockDataFile('writer') : null)
-      || path.join(__dirname, '..', '..', '..', '..', 'data', 'writer');
+      // No host root: the data root aeonHome resolves (<home>/data, DATA_PATH,
+      // or the install's data/ only for a portable install), never the
+      // install by default.
+      || path.join(require('../../../kernel/aeonHome.cjs').roots({ appRoot: path.join(__dirname, '..', '..', '..', '..') }).data, 'writer');
 
   if (typeof resolvedRoot !== 'string' || !resolvedRoot) {
     throw new Error(

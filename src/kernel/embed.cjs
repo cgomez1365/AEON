@@ -17,7 +17,7 @@
 'use strict';
 
 const endpoints = require('./endpoints.cjs');
-const { pace, paceKey } = require('./pacing.cjs');
+const { pace, paceKey, waitEstimateMs } = require('./pacing.cjs');
 
 const { EMBED_ROLE } = endpoints;
 
@@ -58,6 +58,19 @@ async function embedLocal(text) {
     'Try again in a moment. If it keeps failing, restart AEON, or check Cookbook → Active for the embedding model.');
 }
 
+/**
+ * The provider's Retry-After, in ms, or 0. Seconds or an HTTP date (RFC 9110).
+ * The indexer waits this long before retrying a 429 instead of guessing.
+ */
+function retryAfterMs(res) {
+  const raw = res && res.headers && typeof res.headers.get === 'function' ? res.headers.get('retry-after') : null;
+  if (!raw) return 0;
+  const secs = Number(raw);
+  if (Number.isFinite(secs) && secs >= 0) return Math.round(secs * 1000);
+  const at = Date.parse(raw);
+  return Number.isFinite(at) ? Math.max(0, at - Date.now()) : 0;
+}
+
 /** OpenAI-compatible /v1/embeddings — the shape every generic endpoint speaks. */
 async function embedOpenAICompatible(text, { base_url, apiKey, model }) {
   const url = `${String(base_url).replace(/\/$/, '')}/embeddings`;
@@ -90,6 +103,8 @@ async function embedOpenAICompatible(text, { base_url, apiKey, model }) {
     if (res.status === 429) {
       const e = embedError('embed_rate_limited', 'The embedding endpoint is rate limiting this run.', 'Lower the requests-per-minute for this endpoint in Settings → Keys, or install a local embedding model in Cookbook.');
       e.rateLimited = true;
+      const after = retryAfterMs(res);
+      if (after) e.retryAfterMs = after;
       throw e;
     }
     throw embedError(
@@ -118,6 +133,8 @@ async function embedGeminiTransport(text, { base_url, apiKey, model }) {
     if (res.status === 429) {
       const e = embedError('embed_rate_limited', 'The embedding endpoint is rate limiting this run.', 'Lower the requests-per-minute for this endpoint in Settings → Keys, or install a local embedding model in Cookbook.');
       e.rateLimited = true;
+      const after = retryAfterMs(res);
+      if (after) e.retryAfterMs = after;
       throw e;
     }
     throw embedError('embed_failed', `Embedding endpoint returned ${res.status}.`);
@@ -243,6 +260,25 @@ async function kernelEmbed(text, { supabase = null, kind = 'document', localOnly
   return { vector, model: space, provider: r.provider };
 }
 
+/**
+ * Which embedder an indexing run would use, and how fast it may go — for the
+ * estimate the indexer shows BEFORE it starts (BO-EMB T5(b)). Makes no embed
+ * call and consumes no budget. `rpm` is the operator's requests-per-minute
+ * limit (0 = none set, or local); `waitNowMs` is how long until the shared
+ * bucket, which chat draws on too, takes one more call.
+ * @returns {Promise<{ok:boolean, provider?:string, model?:string, local?:boolean, rpm:number, waitNowMs:number, error?:string}>}
+ */
+async function embedPlan({ supabase = null } = {}) {
+  const r = await endpoints.resolveForRole(EMBED_ROLE, supabase);
+  if (!r.ok) return { ok: false, rpm: 0, waitNowMs: 0, error: r.error || 'No embedding model is available.' };
+  if (r.provider === 'local') return { ok: true, provider: 'local', model: r.model, local: true, rpm: 0, waitNowMs: 0 };
+  const rpm = Number(r.rpm_limit) > 0 ? Number(r.rpm_limit) : 0;
+  return {
+    ok: true, provider: r.provider, model: r.model, local: isLocalEmbedder(r), rpm,
+    waitNowMs: rpm ? waitEstimateMs(paceKey(r.base_url, r.provider, r.credential_ref), rpm) : 0,
+  };
+}
+
 /** Can embedding run right now? Sync, local registry only — mirrors the badge path. */
 function embedReadiness() {
   return endpoints.describeRoleLocal(EMBED_ROLE);
@@ -279,4 +315,4 @@ function explainEmbedFailure(e, readiness = embedReadiness) {
   };
 }
 
-module.exports = { kernelEmbed, embedReadiness, embedError, taskPrefix, embedSpace, explainEmbedFailure };
+module.exports = { kernelEmbed, embedPlan, embedReadiness, embedError, taskPrefix, embedSpace, explainEmbedFailure, retryAfterMs };

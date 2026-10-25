@@ -314,7 +314,7 @@ describe('lookup — where each provider is asked, and how the key travels', () 
     return calls;
   };
 
-  it('Gemini: always Google\'s own host, key URL-encoded in the query, "models/" stripped', async () => {
+  it('Gemini: always Google\'s own host, key in the x-goog-api-key header (never the URL), "models/" stripped', async () => {
     const calls = stub({ models: [{ name: 'models/gemini-flash-latest', inputTokenLimit: 1048576 }] });
     const mc = load();
     const got = await mc.lookup({ provider: 'gemini', model: 'gemini-flash-latest', base_url: 'http://127.0.0.1:9/v1', apiKey: 'k&1' });
@@ -323,8 +323,10 @@ describe('lookup — where each provider is asked, and how the key travels', () 
     const u = new URL(calls[0].url);
     expect(u.hostname).toBe('generativelanguage.googleapis.com');
     expect(u.pathname).toMatch(/\/models$/);
-    expect(calls[0].url).toContain('key=k%261');
-    expect(u.searchParams.get('key')).toBe('k&1');
+    // a14: a key in a query string lands in access logs; it travels as a header.
+    expect(u.searchParams.has('key')).toBe(false);
+    expect(calls[0].url).not.toContain('k%261');
+    expect(new Headers(calls[0].init.headers).get('x-goog-api-key')).toBe('k&1');
   });
 
   for (const provider of ['claude', 'anthropic']) {
