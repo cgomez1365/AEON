@@ -46,23 +46,12 @@ const AUDIT_COMMAND = 'npm audit --json';
  *
  * Removed 2026-10-03: 1123525 (vite, dev server server.fs.deny bypass). vite
  * is 6.4.3 now, which fixes it, and npm audit no longer reports it.
+ *
+ * Removed 2026-10-25: 1240623 (@grpc/grpc-js getAuthContext). package.json
+ * "overrides" pins @grpc/grpc-js ^1.14.5 under firebase's ~1.9.0 range
+ * (1.14.6 installed), and npm audit no longer reports it.
  */
-const ACCEPTED = {
-  1240623: {
-    pkg: '@grpc/grpc-js',
-    reason: 'getAuthContext can report an unauthorized peer certificate as '
-          + 'authorized. Published after fe93dbf; reviewed 2026-09-30. AEON '
-          + 'never loads @grpc/grpc-js: it arrives only through firebase -> '
-          + '@firebase/firestore, whose Node build requires it. AEON imports '
-          + 'firebase only in browser code (src/kernel/firebase.js and three '
-          + 'React files); Vite bundles firestore\'s browser build, which does '
-          + 'not use grpc-js (the built dist/ contains no grpc-js code), and no '
-          + 'Node code in AEON requires firebase. No fix is available: the '
-          + 'latest firebase (12.19.0) still pins @grpc/grpc-js ~1.9.0, and '
-          + '1.9.16 is the last 1.9.x.',
-    review: '2026-10-31',
-  },
-};
+const ACCEPTED = {};
 
 function audit() {
   // npm audit exits non-zero when it finds anything — that is the normal case

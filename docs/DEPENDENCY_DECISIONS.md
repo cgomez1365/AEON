@@ -17,6 +17,12 @@ security advisories.
 vite advisory or the moderate vite/esbuild ones listed here, so the vite
 acceptance is removed. One acceptance is left, grpc-js through firebase.
 
+**2026-10-25:** firebase 13.1.0 (`@firebase/firestore` 4.19.0) still pins
+`@grpc/grpc-js ~1.9.0`, so an npm `overrides` entry lifts grpc-js to `^1.14.5`
+(fixed in 1.13.6 / 1.14.5; GHSA-m9gg-hp2v-232j, GHSA-f596-whhp-79r4). `npm audit`
+no longer reports grpc-js, and the grpc-js acceptance is removed. The gate has no
+acceptances left.
+
 The gate's two acceptances (vite 1123525, react-router 1124282) were dated
 2026-10-01, so the CI `security` leg would have gone red from 2026-10-02 (UTC)
 on an unchanged tree. On 2026-09-30 a new high advisory in `@grpc/grpc-js`
@@ -32,7 +38,7 @@ advisories.
 | Advisory | Severity | Package | Decision | Why AEON is not exposed |
 |---|---|---|---|---|
 | 1123525 (GHSA-fx2h-pf6j-xcff) | high | vite 5.4.21 | **acceptance removed** 2026-10-03: fixed by vite 6.4.3, which AEON now uses | Until then: `server.fs.deny` bypass in the Vite **dev server**. The customer path (`launch.js`) runs `vite build`, then `node server/server.js`, which serves `dist/` through Express; the dev server never starts. It runs only under `npm start` / `npm run dev`, which listen on 127.0.0.1 only (`vite.config.js` `server.host`, since 6defca4), so the remaining exposure is a contributor on Windows who starts the dev server with `--host` on an untrusted network. |
-| 1240623 (GHSA-m9gg-hp2v-232j) | high | @grpc/grpc-js 1.9.16 | accepted to 2026-10-31 | Published after `fe93dbf`. grpc-js arrives only through `firebase` → `@firebase/firestore`, whose **Node** build requires it. AEON imports firebase only in browser code (`src/kernel/firebase.js` and three React files); Vite bundles firestore's browser build, which does not use grpc-js — the built `dist/` contains no grpc-js code — and no Node code in AEON requires firebase. No fix exists yet: the latest firebase (12.19.0) still pins `@grpc/grpc-js ~1.9.0`, and 1.9.16 is the last 1.9.x. |
+| 1240623 (GHSA-m9gg-hp2v-232j) | high | @grpc/grpc-js 1.9.16 | **acceptance removed** 2026-10-25: `package.json` `overrides` pins `@grpc/grpc-js` `^1.14.5` (1.14.6 installed); `npm audit` no longer reports it | Until then: Published after `fe93dbf`. grpc-js arrives only through `firebase` → `@firebase/firestore`, whose **Node** build requires it. AEON imports firebase only in browser code (`src/kernel/firebase.js` and three React files); Vite bundles firestore's browser build, which does not use grpc-js — the built `dist/` contains no grpc-js code — and no Node code in AEON requires firebase. No fix exists yet: the latest firebase (12.19.0) still pins `@grpc/grpc-js ~1.9.0`, and 1.9.16 is the last 1.9.x. |
 | 1124282 | — | react-router | **acceptance removed** | npm audit no longer reports it against react-router 7.18.2. A dead acceptance would silently cover the advisory if it came back. |
 
 Below the gate's threshold (moderate), recorded so they are known, not
@@ -45,7 +51,8 @@ None is reported after the vite 6.4.3 upgrade (2026-10-03):
 
 **Unblocked when:** firebase ships a firestore that depends on a fixed
 grpc-js, or AEON drops firebase. (The other half, vite 6.4.3, was done on
-2026-10-03.)
+2026-10-03.) Done another way on 2026-10-25: the `overrides` entry. Drop it
+once firestore's own range admits a fixed grpc-js.
 
 ---
 

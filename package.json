@@ -97,6 +97,7 @@
   "keywords": [],
   "type": "commonjs",
   "overrides": {
+    "@grpc/grpc-js": "^1.14.5",
     "nanoid": "^3.3.17"
   }
 }
