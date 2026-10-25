@@ -486,7 +486,10 @@ async function discoverModelCatalogue(provider, base_url, apiKey) {
       // string lands in proxy and access logs and in any error that quotes
       // the URL back (a14).
       const r = await Promise.race([
-        fetch(`${base}/models`, { headers: { 'x-goog-api-key': apiKey || '' } }),
+        // Always Google's own address: a custom base for Gemini was refused
+        // above, so no user-supplied value ever reaches this URL (CodeQL
+        // js/request-forgery on #45 could not see that guard).
+        fetch(`${profile.base}/models`, { headers: { 'x-goog-api-key': apiKey || '' } }),
         timeout(8000),
       ]);
       const d = await r.json();
