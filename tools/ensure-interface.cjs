@@ -22,16 +22,30 @@ const WHY = {
 // The drive carries its own Node and npm and has no `npm` on PATH, so a
 // launcher points AEON_NPM_CLI at its npm-cli.js; elsewhere plain `npm` works.
 function defaultRun(root, env = process.env) {
-  const cli = env.AEON_NPM_CLI;
-  if (cli && fs.existsSync(cli)) {
-    const sep = process.platform === 'win32' ? ';' : ':';
-    execFileSync(process.execPath, [cli, 'run', 'build'], {
-      cwd: root, stdio: 'inherit',
-      env: { ...env, PATH: path.dirname(process.execPath) + sep + (env.PATH || '') },
-    });
+  const cmd = npmCliBuild(env);
+  if (cmd) {
+    execFileSync(cmd.command, cmd.args, { cwd: root, stdio: 'inherit', env: cmd.env });
   } else {
     execSync('npm run build', { cwd: root, stdio: 'inherit', shell: true });
   }
+}
+
+/**
+ * The drive's own way to run `npm run build`: this Node, running the npm-cli.js
+ * AEON_NPM_CLI names, with this Node's folder first on PATH (so npm's child
+ * scripts find the same `node`). null when AEON_NPM_CLI is unset or missing —
+ * the caller then uses plain `npm`. Shared by defaultRun (blocking, at launch)
+ * and the server's non-blocking rebuild (src/kernel/uiBuild.cjs).
+ */
+function npmCliBuild(env = process.env) {
+  const cli = env.AEON_NPM_CLI;
+  if (!cli || !fs.existsSync(cli)) return null;
+  const sep = process.platform === 'win32' ? ';' : ':';
+  return {
+    command: process.execPath,
+    args: [cli, 'run', 'build'],
+    env: { ...env, PATH: path.dirname(process.execPath) + sep + (env.PATH || '') },
+  };
 }
 
 /** The build tool is a dev dependency; a drive installed with --omit=dev cannot rebuild. */
@@ -59,7 +73,7 @@ function ensureInterface(root, { run, say = () => {}, warnFn = () => {}, env = p
   return { built: true, ok: true, reason: state.reason };
 }
 
-module.exports = { ensureInterface, canBuild, defaultRun };
+module.exports = { ensureInterface, canBuild, defaultRun, npmCliBuild };
 
 if (require.main === module) {
   const root = path.resolve(__dirname, '..');

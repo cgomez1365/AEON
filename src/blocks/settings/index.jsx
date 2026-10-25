@@ -5,7 +5,7 @@ import { matchesModelQuery, modelAfterProviderSwitch, snapshotRole, revertRefuse
 import { BLOCKS as INSTALLED_BLOCKS } from '../../kernel/blockRegistry';
 import { BlockIcon } from '../../components/BlockIcon';
 import { applyAppearance, applyThemeBuilder } from '../../kernel/appearance';
-import { createLifecycleClient, runLabel, UI_NOTE as LIFECYCLE_UI_NOTE } from './blockLifecycle';
+import { createLifecycleClient, runLabel, describeUiRebuild, UI_NOTE as LIFECYCLE_UI_NOTE } from './blockLifecycle';
 import { createLoginGuardClient, loginGuardText } from './loginGuard';
 import { requestRestart } from '../../utils/restartRequest.js';
 
@@ -724,6 +724,7 @@ function BuildQueuePanel() {
   const [askPw, setAskPw] = useState(false);                // password prompt open
   const [pw, setPw] = useState('');
   const [ideBusy, setIdeBusy] = useState(false);
+  const [approved, setApproved] = useState('');             // what the last approval did, interface included
 
   const load = useCallback(() => {
     fetch('/api/build/queue').then(r => r.json()).then(d => setItems(d.items || [])).catch(() => {});
@@ -739,6 +740,8 @@ function BuildQueuePanel() {
       const r = await fetch(`/api/build/queue/${id}/${verb}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
       const d = await r.json();
       if (!r.ok) window.alert(d.error || `${verb} failed`);
+      // The server rebuilds the interface before it answers an approval; say what it did.
+      else if (verb === 'approve') setApproved(`${d.blockId} approved and installed (stopped — start it below). ${describeUiRebuild(d.uiRebuilt)}`);
     } catch {}
     setBusy(false); load();   // reload picks up the one-shot IDE auto-disable after a Tier 3 approve
   };
@@ -801,6 +804,7 @@ function BuildQueuePanel() {
           )}
         </div>
       )}
+      {approved && <div role="status" style={{ fontSize: 12, marginBottom: 8, padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border, #1f2937)' }}>{approved}</div>}
       {pending.length === 0 && <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>No builds waiting for your approval.</div>}
       {pending.map(item => (
         <div key={item.id} style={{ border: '1px solid var(--border, #1f2937)', borderRadius: 8, padding: 10, marginBottom: 8 }}>
@@ -3058,7 +3062,7 @@ function StorePacksSection({ client, ids, busy, setBusy, onChange }) {
     if (!window.confirm(`Update "${it.label || it.id}" from ${it.installedVersion} to ${it.version}?\n\nThe current version is kept aside and put back if the new one fails. Its data stays where it is.`)) return;
     setBusy(`${it.id}:update`);
     const r = await client.update(it.id);
-    setNotes(n => ({ ...n, [it.id]: { ok: r.ok, text: r.ok ? `${r.message} ${LIFECYCLE_UI_NOTE}` : r.error } }));
+    setNotes(n => ({ ...n, [it.id]: { ok: r.ok, text: r.ok ? r.message : r.error } }));
     setBusy(null);
     load(); onChange();
   };

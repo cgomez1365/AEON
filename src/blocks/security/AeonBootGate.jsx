@@ -444,6 +444,47 @@ function theMark(ctx, k, p, T, still) {
 const GATE_FILL = 0.62, GATE_CY = 0.44;
 const markScale = (w, h, fill) => Math.min(w, h) / 512 * (fill ?? 0.86);
 
+/**
+ * Did the canvas actually paint the chevron? On some machines (the Windows boot
+ * screen is the known case) the chevron comes up missing while the rest of the
+ * gate renders, so we check once, after the first paint, and swap in the static
+ * SVG mark (public/brand/aeon-mark/aeon-mark.svg) — the same art, drawn by the
+ * browser's own image decoder instead of this canvas.
+ *
+ * It looks for the chevron's OWN colour (T.chev: white on dark, ink on light) on
+ * three points of its solid body. A bare "is anything bright here" read is not
+ * enough: the cyan HUD lines cross the same spot and satisfy it even when the
+ * chevron and inner ring are gone (found by blocking only the cached layer's
+ * drawImage in a real browser). Two of the three points must match.
+ *
+ * `chev` is the theme's chevron colour as #rrggbb; anything we cannot judge
+ * returns true, because a check that fails must never hide a mark that rendered.
+ * Canvas backing store is w*dpr x h*dpr; the mark sits at (w/2, h*GATE_CY).
+ */
+function markLooksRendered(ctx, w, h, dpr, chev) {
+  try {
+    const m = /^#?([0-9a-f]{6})$/i.exec(String(chev || '').trim());
+    if (!m) return true;
+    const want = [0, 2, 4].map((i) => parseInt(m[1].slice(i, i + 2), 16));
+    const k = markScale(w, h, GATE_FILL) * dpr;                  // mark units -> device pixels
+    const cx = w / 2 * dpr, cy = h * GATE_CY * dpr;
+    const r = Math.max(2, Math.round(2 * dpr));
+    let hits = 0;
+    // Apex, left leg and right leg, in the mark's own 512-unit box (centre 256,256).
+    for (const [px, py] of [[256, 212], [209, 300], [303, 300]]) {
+      const x = Math.round(cx + (px - 256) * k), y = Math.round(cy + (py - 256) * k);
+      const { data } = ctx.getImageData(x - r, y - r, r * 2 + 1, r * 2 + 1);
+      for (let i = 0; i < data.length; i += 4) {
+        if (data[i + 3] >= 200 && Math.abs(data[i] - want[0]) <= 80
+            && Math.abs(data[i + 1] - want[1]) <= 80 && Math.abs(data[i + 2] - want[2]) <= 80) { hits++; break; }
+      }
+    }
+    return hits >= 2;
+  } catch {
+    return true; // a failed check must never hide a mark that did render
+  }
+}
+
 function drawFinal(ctx, w, h, t, opts) {
   const T = opts.theme;
   const k = markScale(w, h, opts.fill);
@@ -474,6 +515,36 @@ function AeonLockup({ className = '' }) {
   );
 }
 
+/**
+ * The mark as a still SVG, for machines whose canvas does not paint the chevron.
+ * It is drawn from the SAME geometry constants the canvas uses (MARK, CHEVRON_D),
+ * and it REPLACES the canvas (the canvas is hidden) rather than sitting beside it,
+ * so the emblem still appears exactly once and the gate still loads no image.
+ * `palette` is the theme the canvas was using when it failed (white chevron on
+ * dark, ink on light), so the fallback matches the page.
+ */
+function MarkStill({ palette, onActivate }) {
+  const P = palette || MARK_DARK;
+  const RAD = Math.PI / 180;
+  const nodes = MARK.nodeAng.map((a) => [256 + MARK.nodeR * Math.cos(a * RAD), 256 + MARK.nodeR * Math.sin(a * RAD)]);
+  return (
+    <svg
+      className="aeon-boot-mark-fallback" viewBox="0 0 512 512" role="button" tabIndex={0}
+      aria-label="AEON mark. Activate to sign in."
+      onClick={onActivate}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onActivate(); } }}
+    >
+      <circle cx="256" cy="256" r={MARK.ringR} fill="none" stroke={P.ring} strokeWidth={MARK.ringW}
+        strokeDasharray={`${MARK.dash[0]} ${MARK.dash[1]}`} transform={`rotate(${MARK.ringRot} 256 256)`} />
+      {nodes.map(([x, y], i) => (
+        <circle key={i} cx={x} cy={y} r={MARK.nodeSize} fill="none" stroke={P.node} strokeWidth={MARK.nodeW} />
+      ))}
+      <circle cx="256" cy="256" r={MARK.innerR} fill="none" stroke={P.inner} strokeWidth={MARK.innerW} />
+      <path d={CHEVRON_D} fill={P.chev} />
+    </svg>
+  );
+}
+
 export default function AeonBootGate({ onAuthed }) {
   const canvasRef = useRef(null);
   const orbRefs = useRef([]);
@@ -484,6 +555,7 @@ export default function AeonBootGate({ onAuthed }) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [recoveryOpen, setRecoveryOpen] = useState(false);
+  const [markFailed, setMarkFailed] = useState(false); // canvas mark came up blank (e.g. Windows) → show static SVG fallback
 
   // ── Canvas motion — the mark on the banner's loop ─────────────────────────
   useEffect(() => {
@@ -545,11 +617,21 @@ export default function AeonBootGate({ onAuthed }) {
       drawFinal(ctx, w, h, t, { level: 3, stream: true, fill: GATE_FILL, cy: GATE_CY, theme, still });
     };
 
+    let markChecked = false, markOk = true;
     function frame(now) {
       const t = (now - start) / 1000;
       paint(t);
+      // One-time check, once the theme is loaded and the first real frame is down.
+      if (!markChecked && theme && t > 0.6) {
+        markChecked = true;
+        if (!markLooksRendered(ctx, w, h, dpr, theme.chev)) {
+          markOk = false;
+          setMarkFailed({ ring: theme.ring, node: theme.node, inner: theme.inner, chev: theme.chev }); // swap canvas → still SVG in the same palette
+          if (!revealed) { revealed = true; setReady(true); } // reveal now; the animation is gone
+        }
+      }
       if (!revealed && t > 3.75) { revealed = true; setReady(true); }
-      raf = requestAnimationFrame(frame);
+      if (markOk) raf = requestAnimationFrame(frame); // stop animating a blank/hidden canvas
     }
 
     const onResize = () => {
@@ -659,11 +741,13 @@ export default function AeonBootGate({ onAuthed }) {
         <div ref={el => (orbRefs.current[2] = el)} className="aeon-boot-orb aeon-boot-orb--emerald" data-depth="40" />
       </div>
       <canvas
-        ref={canvasRef} className="aeon-boot-canvas" tabIndex={0} role="button"
+        ref={canvasRef} className="aeon-boot-canvas" tabIndex={markFailed ? -1 : 0} role="button"
         aria-label="Animated AEON mark. Activate to sign in."
+        style={markFailed ? { display: 'none' } : undefined}
         onClick={() => ready && openAuth()}
         onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && ready) { e.preventDefault(); openAuth(); } }}
       />
+      {markFailed && <MarkStill palette={markFailed} onActivate={() => ready && openAuth()} />}
       <div className={`aeon-boot-copy${ready ? ' ready' : ''}`}>
         <AeonLockup className="aeon-boot-brand" />
         <div className="aeon-boot-tag">Modular. Local. Yours.</div>

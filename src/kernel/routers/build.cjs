@@ -23,11 +23,17 @@ module.exports = function createBuildRouter(deps) {
   const { pipeline, approvals, ideMode, kernelRescan } = deps;
   const operator = (req) => req.headers['x-aeon-operator'] || 'operator';
 
+  // Express 4 does not catch a rejected async handler: without the try/catch a
+  // throw leaves the request unanswered (and the page's button disabled).
   router.post('/submit', async (req, res) => {
     const { source, ...payload } = req.body || {};
     if (!source) return res.status(400).json({ error: 'source required (kernelLLM|userKey|local|paste)' });
-    const result = await pipeline.submitBuild(source, payload, { operator: operator(req) });
-    res.status(result.ok ? 200 : 422).json(result);
+    try {
+      const result = await pipeline.submitBuild(source, payload, { operator: operator(req) });
+      res.status(result.ok ? 200 : 422).json(result);
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
   });
 
   // Master M1 — turn scaffold options into an envelope payload. Emits files,
@@ -59,9 +65,13 @@ module.exports = function createBuildRouter(deps) {
     res.json(item);
   });
 
-  router.post('/queue/:id/approve', (req, res) => {
-    const result = pipeline.approveBuild(req.params.id, { approver: operator(req), note: req.body?.note });
-    res.status(result.ok ? 200 : result.tier3 ? 403 : 422).json(result);
+  router.post('/queue/:id/approve', async (req, res) => {
+    try {
+      const result = await pipeline.approveBuild(req.params.id, { approver: operator(req), note: req.body?.note });
+      res.status(result.ok ? 200 : result.tier3 ? 403 : 422).json(result);
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
   });
 
   router.post('/queue/:id/reject', (req, res) => {
