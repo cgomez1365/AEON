@@ -84,7 +84,8 @@ module.exports = (app, deps) => {
         isVercel
           ? '/tmp/aeon_writer'
           : (typeof deps?.getBlockDataFile === 'function' ? deps.getBlockDataFile('writer') : null)
-            || path.join(__dirname, '..', '..', '..', '..', 'data', 'writer'),
+            // Same fallback as writer.js: aeonHome's data root, not the install.
+            || path.join(require('../../../kernel/aeonHome.cjs').roots({ appRoot: path.join(__dirname, '..', '..', '..', '..') }).data, 'writer'),
       ).fs;
 
   try { fs.mkdirSync(''); } catch {}

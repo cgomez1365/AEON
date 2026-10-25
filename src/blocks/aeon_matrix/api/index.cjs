@@ -23,7 +23,11 @@ module.exports = function secondBrainFactory(deps) {
   const LIBRARY_DIR   = path.join(BRAIN_DIR, 'Reading_Library');
   const ARTIFACTS_DIR = path.join(BRAIN_DIR, 'Saved_Artifacts');
   // This block's own operational state (narrator progress, the OCR cache).
-  const BLOCK_DATA    = deps?.getDataFile ? deps.getDataFile('aeon_matrix') : path.join(__dirname, '..', 'data');
+  // A caller that hands DATA_ROOT and no getDataFile (ingest.cjs takes the
+  // same pair) gets its state there, not in src/blocks/aeon_matrix/data.
+  const BLOCK_DATA    = deps?.getDataFile ? deps.getDataFile('aeon_matrix')
+    : deps?.DATA_ROOT ? path.join(deps.DATA_ROOT, 'aeon_matrix')
+    : path.join(__dirname, '..', 'data');
 
   // Guarantee data directories exist on boot — user's data must never 404.
   for (const dir of [BRAIN_DIR, LIBRARY_DIR, ARTIFACTS_DIR, BLOCK_DATA]) {
