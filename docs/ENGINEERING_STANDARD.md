@@ -191,7 +191,23 @@ in the commit that replaces the CHANGELOG's "not tagged yet" with the date
 tag while the heading still says "not tagged yet"). Until then the reading below is
 the latest one recorded, of the release line before it.
 
-**Current reading — v3.4.0, CI run 40244405971 on `4e2f660` ("Release 3.4.0"), the release commit; the commit
+**Current reading — v3.5.0, CI run 40269749917 on `f74cb1e` ("Changelog: cite the privacy-claims fix in 3.5.0"),
+the last commit before the v3.5.0 tag; the commit after it, which carries the tag, changes only the CHANGELOG
+heading and this reading. Started 2026-10-26 04:34 UTC (2026-10-25 21:34 US Pacific time), all six jobs green:**
+392 test files and 4,177 tests on every build leg, 0 failures. Skips differ by platform:
+
+| Leg | Passed | Skipped | What the skips are |
+|---|---|---|---|
+| Ubuntu, Node 24 | 4,172 | 5 | tests that need macOS or Windows |
+| Ubuntu, Node 26 | 4,172 | 5 | the same five |
+| Ubuntu, Node 22.13 floor | 4,172 | 5 | the same five |
+| macOS, Node 24 | 4,176 | 1 | the real-PowerShell Desktop shortcut |
+| Windows, Node 24 | 4,077 | 100 | tests marked POSIX-only or macOS-only, 5 whole files among them |
+
+The security job (dependency audit gate) passed, and so did CodeQL (run 40269749741). Taken from the run's own
+logs.
+
+**Previous reading — v3.4.0, CI run 40244405971 on `4e2f660` ("Release 3.4.0"), the release commit; the commit
 after it, which carries the v3.4.0 tag, changes only the CHANGELOG heading and this reading. Started 2026-10-25
 23:21 UTC (16:21 US Pacific time), all six jobs green:** 391 test files and 4,160 tests on every build leg,
 0 failures. Skips differ by platform:

@@ -12,10 +12,11 @@ tagged; until then its heading says so.
      is added here before tagging, and the heading's "not tagged yet" is replaced by
      the date. -->
 
-## 3.5.0 — not tagged yet
+## 3.5.0 — 2026-10-25
 
 <!-- From v3.4.0 (fa6f2a0, 2026-10-25) to a9f3a77: 3 commits (`git rev-list --count v3.4.0..a9f3a77`), then the release
-     commit 8ba1e03, the privacy-claims fix c471773 and the commit that cites it. History is not squashed. -->
+     commit 8ba1e03, the privacy-claims fix c471773, the commit that cites it (f74cb1e, whose CI run is the 3.5.0
+     reading) and the commit that dates this heading (the v3.5.0 tag). History is not squashed. -->
 
 **AEON asks you to accept its license agreement before first use.** The first time AEON opens, it shows the AEON
 License Agreement ([EULA.md](EULA.md)), and again whenever the agreement's version changes. Until it is accepted,
