@@ -15,7 +15,7 @@ tagged; until then its heading says so.
 ## 3.5.0 — not tagged yet
 
 <!-- From v3.4.0 (fa6f2a0, 2026-10-25) to a9f3a77: 3 commits (`git rev-list --count v3.4.0..a9f3a77`), then the release
-     commit that holds this note. History is not squashed. -->
+     commit 8ba1e03, the privacy-claims fix c471773 and the commit that cites it. History is not squashed. -->
 
 **AEON asks you to accept its license agreement before first use.** The first time AEON opens, it shows the AEON
 License Agreement ([EULA.md](EULA.md)), and again whenever the agreement's version changes. Until it is accepted,
@@ -29,6 +29,11 @@ its links open the published copies of the license, terms and privacy notice (d2
 LICENSE (now v1.2) and the Terms of Use no longer say that no paid blocks are on sale, which had been untrue since
 2026-10-04; both point at the agreement (0d01304). The licensor named in the agreement and the LICENSE is Broken Gear
 Industries (a9f3a77).
+
+**Privacy claims carry their guardrail.** The agreement (now version 1.1) says plainly that a cloud AI provider
+you add a key for receives what AEON sends it, and that **Settings → Models → Local only** keeps every model call on
+your computer. The privacy notice no longer says the block store is not open. A check now fails if the README, the
+privacy notice or the agreement says what stays on your computer without naming Local only (c471773).
 
 **Upgrading.** Existing installs show the agreement once on the first start after updating. A headless install
 (a server with no browser) needs `aeon eula accept` or `AEON_ACCEPT_EULA=1.1` before its API answers again.
