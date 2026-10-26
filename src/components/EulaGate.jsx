@@ -24,7 +24,17 @@ const S = {
   btnGhost: { background: 'transparent', border: '1px solid #33445c', color: '#8aa0b8', padding: '9px 20px', borderRadius: 6, cursor: 'pointer', fontSize: 13 },
   msgErr: { color: '#ff4455', fontSize: 12.5, marginTop: 12 },
   msgInfo: { color: '#8aa0b8', fontSize: 12.5, marginTop: 12 },
+  link: { color: '#00f2ff' },
 };
+
+// EULA.md links its sibling files (LICENSE, TERMS_OF_USE.md, PRIVACY.md) by
+// relative path, which the AEON server does not serve. Point those at the
+// published copies; absolute links and mail links are kept as written.
+const REPO = 'https://github.com/cgomez1365/AEON/blob/main/';
+function Link({ href = '', children }) {
+  const abs = /^(https?:|mailto:)/i.test(href) ? href : REPO + href.replace(/^\.?\//, '');
+  return <a href={abs} target="_blank" rel="noopener noreferrer" style={S.link}>{children}</a>;
+}
 
 export default function EulaGate({ children }) {
   const [state, setState] = useState({ loading: true, accepted: true });
@@ -82,7 +92,7 @@ export default function EulaGate({ children }) {
             : `Please read the agreement (version ${state.version}) and accept it to use AEON. You only do this once per version.`}
         </p>
         <div style={S.text} tabIndex={0} aria-label="Agreement text">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{state.text}</ReactMarkdown>
+          <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: Link }}>{state.text}</ReactMarkdown>
         </div>
         <label style={S.row}>
           <input type="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} aria-label="I agree" />

@@ -6,7 +6,6 @@ import DesktopLayout from "./components/DesktopLayout";
 import MobileLayout from "./components/MobileLayout";
 import AuthGate from "./components/AuthGate";
 import CloudSetupGate from "./components/CloudSetupGate";
-import EulaGate from "./components/EulaGate";
 import { shouldBannerResponse, describeResponseBanner, decideNetworkBanner, isSelfReported } from "./utils/interceptorPolicy";
 // Boot-time appearance lives in the kernel, shared with Settings → Appearance.
 // It used to be a private copy here, which is how theme and sidebar width came
@@ -250,17 +249,15 @@ export default function App() {
                 {toastMessage}
               </div>
             )}
-            <EulaGate>
-              <CloudSetupGate>
-                <AuthGate>
-                  {isMobile ? (
-                    <MobileLayout chatHistory={chatHistory} auditLogs={auditLogs} />
-                  ) : (
-                    <DesktopLayout chatHistory={chatHistory} auditLogs={auditLogs} />
-                  )}
-                </AuthGate>
-              </CloudSetupGate>
-            </EulaGate>
+            <CloudSetupGate>
+              <AuthGate>
+                {isMobile ? (
+                  <MobileLayout chatHistory={chatHistory} auditLogs={auditLogs} />
+                ) : (
+                  <DesktopLayout chatHistory={chatHistory} auditLogs={auditLogs} />
+                )}
+              </AuthGate>
+            </CloudSetupGate>
           </>
         </AeonProvider>
       </AuthProvider>

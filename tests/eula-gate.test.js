@@ -176,11 +176,12 @@ describe('where the gate is wired', () => {
     expect(src).toMatch(/eulaRequired:/);
   });
 
-  it('the interface shows the agreement before setup and sign-in, with no Skip', () => {
-    const app = read('src/App.jsx');
-    expect(app.indexOf('<EulaGate>')).toBeGreaterThan(-1);
-    expect(app.indexOf('<EulaGate>')).toBeLessThan(app.indexOf('<CloudSetupGate>'));
-    expect(app.indexOf('</CloudSetupGate>')).toBeLessThan(app.indexOf('</EulaGate>'));
+  it('the interface shows the agreement before anything else mounts, with no Skip', () => {
+    // Outermost, around <App />: App's providers and timers call the API on mount,
+    // and before acceptance every one of those calls would be a 428.
+    const main = read('src/main.jsx');
+    expect(main).toMatch(/<EulaGate>\s*<App \/>\s*<\/EulaGate>/);
+    expect(read('src/App.jsx')).not.toMatch(/EulaGate/);
     const gateUi = read('src/components/EulaGate.jsx');
     expect(gateUi).not.toMatch(/skip/i);
     expect(gateUi).toMatch(/I agree, continue/);

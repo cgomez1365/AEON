@@ -1,6 +1,7 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App.jsx'
+import EulaGate from './components/EulaGate.jsx'
 import './aurora.css'
 
 
@@ -52,7 +53,10 @@ class ErrorBoundary extends React.Component {
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <ErrorBoundary>
-      <App />
+      {/* Outermost: nothing in App mounts, fetches or polls until the agreement is accepted. */}
+      <EulaGate>
+        <App />
+      </EulaGate>
     </ErrorBoundary>
   </React.StrictMode>,
 )
