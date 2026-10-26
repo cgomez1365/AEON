@@ -1,8 +1,8 @@
 # AEON — Privacy notice
 
-*Last changed 2026-10-04 · applies to AEON · Broken Gear Industries*
+*Last changed 2026-10-25 · applies to AEON · Broken Gear Industries*
 
-This notice covers the AEON software: what it keeps on your machine, and what it sends over the network and to whom. It does not cover any website. The block store is not open, and nothing is for sale; if a store or website collects anything from you, it will need its own notice.
+This notice covers the AEON software: what it keeps on your machine, and what it sends over the network and to whom. It does not cover any website, or the store and checkout where blocks are sold, which have their own terms.
 
 ## The short version
 

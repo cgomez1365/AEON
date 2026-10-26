@@ -52,6 +52,16 @@ describe('shipped legal text', () => {
     expect(read('PRIVACY.md')).toContain(ISSUES);
   });
 
+  it('every document that says what stays on your computer also says only Local only keeps model calls there', () => {
+    // Owner, 2026-10-25: "private" needs a guardrail. With a cloud key, content
+    // leaves; only Settings → Models → Local only keeps every model call local.
+    for (const f of ['README.md', 'PRIVACY.md', 'EULA.md']) {
+      expect(read(f), f).toMatch(/Local only/);
+    }
+    expect(read('EULA.md')).toMatch(/cloud AI provider you add a key for receives what AEON sends it/);
+    expect(read('PRIVACY.md')).not.toMatch(/The block store is not open|nothing is for sale/);
+  });
+
   it('package.json: no email in author, license defers to LICENSE', () => {
     const pkg = JSON.parse(read('package.json'));
     expect(String(pkg.author)).not.toMatch(/@/);

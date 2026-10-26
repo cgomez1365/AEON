@@ -31,7 +31,7 @@ LICENSE (now v1.2) and the Terms of Use no longer say that no paid blocks are on
 Industries (a9f3a77).
 
 **Upgrading.** Existing installs show the agreement once on the first start after updating. A headless install
-(a server with no browser) needs `aeon eula accept` or `AEON_ACCEPT_EULA=1.0` before its API answers again.
+(a server with no browser) needs `aeon eula accept` or `AEON_ACCEPT_EULA=1.1` before its API answers again.
 
 ## 3.4.0 — 2026-10-25
 

@@ -16,8 +16,8 @@ const DATE_RE = /^\*Last changed (\d{4}-\d\d-\d\d) ·.*\*$/m;
 
 // The date and the text it dates. Change both together.
 const PINNED = {
-  date: '2026-10-04',
-  bodySha256: '339b5fa86753a3e9b50fd409b3e696ba6974f25b6f16ddfdd46384a0dc4148f4',
+  date: '2026-10-25',
+  bodySha256: '72325232e3fa8888a8a7dfbbb77a60afa4780ee4c96664bd9e48539a72df2482',
 };
 
 describe('PRIVACY.md — its "Last changed" date moves with its text', () => {
