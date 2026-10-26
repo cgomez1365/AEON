@@ -2,7 +2,7 @@
 
 **Version 1.0 · 2026-10-25**
 
-This agreement is between you and Cristian Gomez, doing business as Broken Gear Industries ("we", "us"). AEON asks you to accept it the first time it starts, and again whenever this version number changes. By choosing **I agree**, you accept this agreement, the [AEON Community License](LICENSE), the [Terms of Use](TERMS_OF_USE.md) and the [Privacy notice](PRIVACY.md). If you do not agree, do not use AEON.
+This agreement is between you and Broken Gear Industries ("BGI", "we", "us"). AEON asks you to accept it the first time it starts, and again whenever this version number changes. By choosing **I agree**, you accept this agreement, the [AEON Community License](LICENSE), the [Terms of Use](TERMS_OF_USE.md) and the [Privacy notice](PRIVACY.md). If you do not agree, do not use AEON.
 
 ## 1. AEON itself
 AEON is free to use under the [AEON Community License](LICENSE): you may install it, use it, and change it for your own personal, internal, educational or non-profit use. You may not sell it, redistribute it, or repackage it into a product for others without our written permission.

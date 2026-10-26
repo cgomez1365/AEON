@@ -56,6 +56,8 @@ describe('EULA.md', () => {
     expect(cur.version).toMatch(/^\d+\.\d+$/);
     expect(cur.sha256).toMatch(/^[0-9a-f]{64}$/);
     expect(cur.text).toMatch(/Broken Gear Industries/);
+    // Owner, 2026-10-25: the licensor is Broken Gear Industries; no personal name in what users accept.
+    for (const f of ['EULA.md', 'LICENSE']) expect(read(f), f).not.toMatch(/Cristian|Gomez/);
     expect(cur.text).toMatch(/licensed, not sold/);
     expect(cur.text).toMatch(/within 7 days of purchase/);
     expect(cur.text).toContain(`AEON_ACCEPT_EULA=${cur.version}`);
