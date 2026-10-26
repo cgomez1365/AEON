@@ -276,6 +276,14 @@ app.get('/', (req, res, next) => {
 // Tunnel Bearer gate on /api
 app.use('/api', security.tunnelGate);
 
+// ── AEON License Agreement gate (EULA.md) — ahead of every API route ──
+// Until the operator accepts the current version, the kernel and block APIs
+// answer 428 EULA_REQUIRED. /api/ping and /api/eula* stay open so the
+// interface and the terminal can show and accept it (src/kernel/eula.cjs).
+const _eula = require('../src/kernel/eula.cjs');
+_eula.mount(app);
+app.use(_eula.middleware);
+
 // ── Dynamic earlyware — kernel hook for drag-in blocks (e.g. Security) ──
 // Registered HERE, ahead of every router and block mount, but the list is
 // mutable: a block mounted later can push a middleware and it still runs
@@ -413,6 +421,7 @@ app.get('/api/ping', (req, res) => {
     version: require('../package.json').version,
     portable: process.env.AEON_PORTABLE === 'true',
     authRequired,
+    eulaRequired: (() => { try { return !_eula.status().accepted; } catch { return true; } })(),
     uptime: Math.floor(process.uptime()),
   });
 });

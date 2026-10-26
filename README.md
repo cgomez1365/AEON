@@ -38,6 +38,7 @@
    - **Windows** — double-click `LAUNCH.bat`
    - **macOS** — double-click `launch.command` (a browser-downloaded copy is blocked the first time — see [First launch on macOS](#first-launch-on-macos-gatekeeper))
    - **Linux** — run `./launch.sh`
+   - The first time it opens, AEON shows its license agreement ([EULA.md](EULA.md)): read it and choose **I agree, continue**. On a machine with no browser, run `aeon eula accept`.
 
    The first launch installs AEON's dependencies (about 1 GB on disk) and builds its interface, so it takes a few minutes and needs the internet; later launches skip both.
 

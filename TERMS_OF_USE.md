@@ -1,8 +1,8 @@
 # AEON — Terms of Use
 
-*Last changed 2026-09-30 · applies to AEON · Broken Gear Industries*
+*Last changed 2026-10-25 · applies to AEON · Broken Gear Industries*
 
-By downloading, installing, or running AEON you agree to these terms and to the [LICENSE](LICENSE).
+The first time AEON starts, it asks you to accept the [AEON License Agreement](EULA.md). It includes these terms, the [LICENSE](LICENSE) and the [Privacy notice](PRIVACY.md).
 
 ## 1. What AEON is
 AEON is a self-hosted, modular AI workspace. It runs on **your** machine (or a host **you** control). Broken Gear Industries operates no servers on your behalf, and the AEON software sends it none of your data. What the software does send, and to whom, is set out in the [Privacy notice](PRIVACY.md).
@@ -21,7 +21,7 @@ Models you download through Cookbook come under their makers' licenses, not this
 ## 5. No redistribution
 AEON is free to use, not free to redistribute or sell. See [LICENSE](LICENSE) Section 2.
 
-No paid blocks are on sale yet. When a paid block goes on sale, it will come with its own license terms, published before anyone can buy it.
+Paid blocks are sold at [brokengearindustries.com/store](https://www.brokengearindustries.com/store) and licensed under the [AEON License Agreement](EULA.md) (section 2), with a 7-day refund (section 3).
 
 ## 6. No warranty, no liability
 To the extent permitted by law, AEON is provided as-is, and we're not liable for lost data, API costs, provider outages, AI output, or anything that results from using the software. Full text in [LICENSE](LICENSE) Sections 5–6.

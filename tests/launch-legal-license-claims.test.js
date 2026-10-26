@@ -43,7 +43,7 @@ describe('the portable drive README', () => {
 });
 
 describe('the shipped legal and project files', () => {
-  it.each(['README.md', 'LICENSE', 'TERMS_OF_USE.md', 'PRIVACY.md', 'package.json'])('%s claims no other licence', (f) => {
+  it.each(['README.md', 'LICENSE', 'TERMS_OF_USE.md', 'PRIVACY.md', 'EULA.md', 'package.json'])('%s claims no other licence', (f) => {
     expect(read(f)).not.toMatch(/Apache-2\.0|\bMIT License\b|"license":\s*"(MIT|Apache-2\.0)"/);
   });
 });

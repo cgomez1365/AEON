@@ -342,6 +342,61 @@ const commands = {
   },
 
   /**
+   * aeon eula            whether the AEON License Agreement (EULA.md) is accepted
+   * aeon eula accept     read it, type "I agree" (or pass --yes), and it is recorded
+   *
+   * Talks to /api/eula*, which answer before acceptance, so it works while every
+   * other command gets 428 EULA_REQUIRED. With no server running it records the
+   * acceptance in this install's AEON home directly (src/kernel/eula.cjs).
+   */
+  async eula() {
+    const client = require('./terminal/client.cjs');
+    const { c } = client;
+    const eula = require('../src/kernel/eula.cjs');
+    const p = await client.ping();
+    let remote = null;
+    if (p.connected) {
+      const r = await client.request('GET', '/api/eula');
+      if (r.ok && r.data?.version) remote = r.data;
+    }
+    const version = remote?.version || eula.current().version;
+    const accepted = remote ? remote.accepted === true : eula.status().accepted;
+    const where = remote ? `${client.baseUrl()}/api/eula` : eula.EULA_FILE;
+
+    if (argv[1] !== 'accept') {
+      if (flags.json) return console.log(JSON.stringify({ version, accepted, text: where }, null, 2));
+      console.log(`\n  ${c.bold('AEON License Agreement')} ${c.dim('version')} ${version}`);
+      console.log(`  ${c.dim('text   ')} ${eula.EULA_FILE}`);
+      console.log(`  ${c.dim('status ')} ${accepted ? c.green('accepted') : c.yellow('not accepted')}`);
+      if (!accepted) console.log(`\n  ${c.dim('read it, then:')} ${c.neon('aeon eula accept')}`);
+      console.log('');
+      return;
+    }
+    if (accepted) { console.log(`\n  ${c.green('✓')} version ${version} is already accepted\n`); return; }
+
+    console.log(`\n  ${c.bold('AEON License Agreement')}, version ${version}`);
+    console.log(`  ${c.dim('read it first:')} ${eula.EULA_FILE}\n`);
+    if (!flags.yes) {
+      const answer = await client.prompt(`  Type "I agree" to accept version ${version}: `);
+      if (String(answer).trim().toLowerCase() !== 'i agree') {
+        console.log(`\n  ${c.yellow('!')} not accepted; AEON stays locked until you do\n`);
+        process.exit(1);
+      }
+    }
+    if (p.connected) {
+      const r = await client.request('POST', '/api/eula/accept', { version, source: 'cli' });
+      if (!r.ok) {
+        console.error(`\n  ${c.red('✗')} ${r.data?.hint || r.data?.detail || r.data?.error || `HTTP ${r.status}`}\n`);
+        process.exit(1);
+      }
+      console.log(`\n  ${c.green('✓')} accepted version ${r.data.version} ${c.dim(r.data.acceptedAt || '')}\n`);
+      return;
+    }
+    const rec = eula.accept(version, { source: 'cli' });
+    console.log(`\n  ${c.green('✓')} accepted version ${rec.version} ${c.dim(`recorded in ${eula.recordPath()}`)}\n`);
+  },
+
+  /**
    * aeon agent "<goal>" [--steps N] [-y]
    *
    * Multi-step: the model plans, calls one registered command, reads the real
@@ -678,6 +733,7 @@ ${c.bold('CONSOLE')} ${c.dim('(operate a running AEON, no browser)')}
   aeon update <id>          update an installed pack to the store's newest version
   aeon block ${c.dim('<stop|start|remove|restore> <id>')}   a block's lifecycle; ${c.dim('aeon block removed')} lists copies
   aeon login ${c.dim('|')} logout       manage this terminal's session
+  aeon eula ${c.dim('[accept]')}       the AEON License Agreement: status, or accept it
 
 ${c.bold('BLOCK AUTHORING')} ${c.dim('(deterministic, never calls a model)')}
   aeon new <id>             scaffold into staging/

@@ -55,3 +55,10 @@ process.env.DATA_PATH = path.join(root, 'data');
 for (const dir of [process.env.AEON_SECRETS_DIR, process.env.DATA_PATH]) {
   try { fs.mkdirSync(dir, { recursive: true }); } catch {}
 }
+
+// The suite runs as an operator who has accepted the current AEON License
+// Agreement (src/kernel/eula.cjs): without this every test that calls the API
+// would get 428 EULA_REQUIRED. Same mechanism a headless install uses, pinned to
+// the exact version, so a new EULA version still has to be re-accepted.
+// tests/eula-gate.test.js deletes it to test the gate itself.
+process.env.AEON_ACCEPT_EULA = require('../src/kernel/eula.cjs').current().version;

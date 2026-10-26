@@ -16,7 +16,7 @@ import { fileURLToPath } from 'url';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8');
-const SHIPPED = ['LICENSE', 'TERMS_OF_USE.md', 'PRIVACY.md', 'package.json'];
+const SHIPPED = ['LICENSE', 'TERMS_OF_USE.md', 'PRIVACY.md', 'EULA.md', 'package.json'];
 const ISSUES = 'https://github.com/cgomez1365/AEON/issues';
 
 describe('shipped legal text', () => {
@@ -31,8 +31,14 @@ describe('shipped legal text', () => {
       expect(t, f).not.toMatch(/End User License Agreement supplied/i);
       expect(t, f).not.toMatch(/carry their own EULA/i);
     }
-    expect(read('LICENSE')).toMatch(/No paid blocks are on sale yet/);
-    expect(read('TERMS_OF_USE.md')).toMatch(/No paid blocks are on sale yet/);
+    // 2026-10-25: paid blocks have been on sale since 2026-10-04, so "no paid
+    // blocks are on sale yet" had become false. Both now point at the agreement
+    // that licenses them, which AEON asks the operator to accept (EULA.md).
+    expect(read('LICENSE')).not.toMatch(/No paid blocks are on sale yet|No official block\s+store is open/);
+    expect(read('TERMS_OF_USE.md')).not.toMatch(/No paid blocks are on sale yet/);
+    expect(read('LICENSE')).toMatch(/AEON License\s+Agreement \(EULA\.md\)/);
+    expect(read('TERMS_OF_USE.md')).toContain('(EULA.md)');
+    expect(read('EULA.md')).toContain('(LICENSE)');
   });
 
   it('no dead contact: not the retired pages.dev store, not the unregistered brokengear.io', () => {
