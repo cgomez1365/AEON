@@ -27,8 +27,8 @@ Fixes land on `main` and in the next release. Older releases are not patched.
 
 | Version | Supported |
 |---|---|
-| 3.4.x | Yes |
-| 3.3.x and older | No — upgrade to the [latest release](https://github.com/cgomez1365/AEON/releases/latest) |
+| 3.5.x | Yes |
+| 3.4.x and older | No — upgrade to the [latest release](https://github.com/cgomez1365/AEON/releases/latest) |
 
 3.0.0 lacks security fixes made since (among them an auth-guard bypass and an
 unauthenticated `/ws` socket). See *Updating AEON* in the [README](../README.md#updating-aeon).

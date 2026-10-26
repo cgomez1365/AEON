@@ -12,6 +12,27 @@ tagged; until then its heading says so.
      is added here before tagging, and the heading's "not tagged yet" is replaced by
      the date. -->
 
+## 3.5.0 — not tagged yet
+
+<!-- From v3.4.0 (fa6f2a0, 2026-10-25) to a9f3a77: 3 commits (`git rev-list --count v3.4.0..a9f3a77`), then the release
+     commit that holds this note. History is not squashed. -->
+
+**AEON asks you to accept its license agreement before first use.** The first time AEON opens, it shows the AEON
+License Agreement ([EULA.md](EULA.md)), and again whenever the agreement's version changes. Until it is accepted,
+AEON's API answers "agreement required" (HTTP 428), so no screen, terminal command or script can use AEON without
+it. Your acceptance (the version, a fingerprint of the text and the time) is recorded in your AEON home and sent
+nowhere. On a machine with no browser, run `aeon eula accept`, or set `AEON_ACCEPT_EULA` to the version number
+(0d01304). The agreement screen comes before anything else loads, so nothing in AEON starts before you accept, and
+its links open the published copies of the license, terms and privacy notice (d234203).
+
+**The agreement covers paid blocks.** Blocks bought at the store are licensed per buyer, with a 7-day refund. The
+LICENSE (now v1.2) and the Terms of Use no longer say that no paid blocks are on sale, which had been untrue since
+2026-10-04; both point at the agreement (0d01304). The licensor named in the agreement and the LICENSE is Broken Gear
+Industries (a9f3a77).
+
+**Upgrading.** Existing installs show the agreement once on the first start after updating. A headless install
+(a server with no browser) needs `aeon eula accept` or `AEON_ACCEPT_EULA=1.0` before its API answers again.
+
 ## 3.4.0 — 2026-10-25
 
 <!-- From v3.3.3 (2e94ce7, 2026-10-05) to 4860aba: 34 commits (`git rev-list --count v3.3.3..4860aba`), 27 of them

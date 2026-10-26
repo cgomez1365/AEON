@@ -1,6 +1,6 @@
 /**
- * 3.4.0 — tool results kept in chat history, quieter memory, paced hosted indexing, Gemini keys out of
- * URLs, blocks that rebuild the interface on install (3.3.3 was a contact address and the block store). The version is bumped in both package files
+ * 3.5.0 — AEON asks for its license agreement (EULA.md) before first use (3.4.0 was tool results in chat
+ * history, paced hosted indexing and Gemini keys out of URLs). The version is bumped in both package files
  * and the CHANGELOG has the release's section (its heading says "not tagged
  * yet" until the tag exists). release-text-claims.test.js checks the three
  * agree with each other; this pins the number.
@@ -13,21 +13,22 @@ import { fileURLToPath } from 'url';
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8');
 
-describe('version 3.4.0', () => {
-  it('package.json and both version fields of package-lock.json say 3.4.0', () => {
+describe('version 3.5.0', () => {
+  it('package.json and both version fields of package-lock.json say 3.5.0', () => {
     const pkg = JSON.parse(read('package.json'));
     const lock = JSON.parse(read('package-lock.json'));
-    expect(pkg.version).toBe('3.4.0');
-    expect(lock.version).toBe('3.4.0');
-    expect(lock.packages[''].version).toBe('3.4.0');
+    expect(pkg.version).toBe('3.5.0');
+    expect(lock.version).toBe('3.5.0');
+    expect(lock.packages[''].version).toBe('3.5.0');
   });
 
-  it('CHANGELOG.md has a 3.4.0 section, newest first, and keeps 3.3.3 and 3.3.0', () => {
+  it('CHANGELOG.md has a 3.5.0 section, newest first, and keeps 3.4.0, 3.3.3 and 3.3.0', () => {
     const log = read('CHANGELOG.md');
+    expect(log).toMatch(/^## 3\.5\.0\b/m);
     expect(log).toMatch(/^## 3\.4\.0\b/m);
     expect(log).toMatch(/^## 3\.3\.3\b/m);
     expect(log).toMatch(/^## 3\.3\.0\b/m);
-    expect(/^## (\d+\.\d+\.\d+)\b/m.exec(log)[1]).toBe('3.4.0');
+    expect(/^## (\d+\.\d+\.\d+)\b/m.exec(log)[1]).toBe('3.5.0');
   });
 
   it('the 3.3.0 notes say what agents can NOT do', () => {
