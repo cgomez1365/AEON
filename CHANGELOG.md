@@ -12,10 +12,10 @@ tagged; until then its heading says so.
      is added here before tagging, and the heading's "not tagged yet" is replaced by
      the date. -->
 
-## 3.5.1 — not tagged yet
+## 3.5.1 — 2026-10-26
 
-<!-- From v3.5.0 (14c17bb, 2026-10-25) to cd6ff08: 1 commit, then the release commit that holds this note. History is not
-     squashed. -->
+<!-- From v3.5.0 (14c17bb, 2026-10-25) to cd6ff08: 1 commit, then the release commit f1b34ac (whose CI run is the 3.5.1 reading)
+     and the commit that dates this heading (the v3.5.1 tag). History is not squashed. -->
 
 **AEON is for adults (18+).** The license agreement (now version 1.2), the Terms of Use, the privacy notice and the
 README say you must be 18 or older, or the age of majority where you live if that is higher. Accepting the
