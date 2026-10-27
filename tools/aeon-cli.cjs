@@ -368,7 +368,7 @@ const commands = {
       console.log(`\n  ${c.bold('AEON License Agreement')} ${c.dim('version')} ${version}`);
       console.log(`  ${c.dim('text   ')} ${eula.EULA_FILE}`);
       console.log(`  ${c.dim('status ')} ${accepted ? c.green('accepted') : c.yellow('not accepted')}`);
-      if (!accepted) console.log(`\n  ${c.dim('read it, then:')} ${c.neon('npm run aeon -- eula accept')} ${c.dim(`(in the AEON folder), or set AEON_ACCEPT_EULA=${version} before AEON starts`)}`);
+      if (!accepted) console.log(`\n  ${c.dim('read it, then:')} ${c.neon('npm run aeon -- eula accept')} ${c.dim(`(in the AEON folder). On a headless install, AEON_ACCEPT_EULA=${version} set before AEON starts is your acceptance, including that you are 18 or older.`)}`);
       console.log('');
       return;
     }

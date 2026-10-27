@@ -10,7 +10,7 @@ updates:
       minor-and-patch:
         update-types: ["minor", "patch"]
     ignore:
-      # Pinned at 1.0.11: 1.0.12+ renders the brand icons differently (tests/brand-mark.test.js). To lift: bump on its own branch, run npm run brand:icons, CI.
+      # Pinned at 1.0.11: 1.0.12 and 1.0.13 render the brand icons differently (tests/brand-mark.test.js, 7c876bc). To lift: bump on its own branch, run npm run brand:icons, CI.
       - dependency-name: "@napi-rs/canvas"
     labels: ["dependencies"]
 

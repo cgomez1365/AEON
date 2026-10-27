@@ -532,7 +532,7 @@ async function main() {
     info('With Settings -> Models -> Local only on, every model call stays on');
     info('this computer or your own network. Install models from the Cookbook');
     info(`block inside AEON; they are stored in your AEON home (${homeBoot.roots.home}).`);
-    info('Until then AEON uses cloud AI (Gemini, Groq, OpenRouter).');
+    info('Until then AEON uses cloud AI (Gemini, Groq, OpenRouter) if you add a key and Local only is off.');
   }
 
   // ── 3. .env onboarding ────────────────────────────────────────────────────

@@ -79,10 +79,10 @@ unmerged on 2026-10-03.
 
 - The bump is `^5.4.21 → ^8.2.0` — a **three-major** jump, not one.
 - Vite 8 replaces the esbuild/rollup pipeline with **rolldown**.
-- `npm run build` fails at `[plugin vite-plugin-pwa:build]`. `vite-plugin-pwa`
+- `npm run build` failed at `[plugin vite-plugin-pwa:build]` (2026-08-04). `vite-plugin-pwa`
   is how AEON ships its service worker and offline precache; a failing build is
   not a partial degradation, it is no artifact at all.
-- `vite-plugin-pwa@1.3.0` is the **latest published version** and its
+- `vite-plugin-pwa@1.3.0` was then the **latest published version** and its
   `peerDependencies` claim `vite: "… || ^8.0.0"`. It declares support it does
   not deliver — the same overclaiming class this build order exists to remove,
   arriving from upstream.
@@ -94,9 +94,11 @@ urgent were closed by vite 6.4.3 (2026-10-03, below). Deferring vite 8 leaves
 no vite advisory open, and `npm run scan:audit` holds no vite acceptance: if
 one is reported again, the gate fails.
 
-**Unblocked when:** `vite-plugin-pwa` ships a release that genuinely builds
-under rolldown. Re-test with `npm run build`; if it produces `dist/sw.js`, take
-the upgrade.
+**Unblocked when:** under vite 8, `npm run build` exits 0 with a precache close
+to the vite 6 count (2026-10-27 re-test, below). That needs the `vite.config.js`
+`manualChunks` change, `@vitejs/plugin-react-swc` 4.x, a lockfile npm 10 leaves
+unchanged, and a full CI run. `dist/sw.js` alone is not proof: a failed build
+still wrote one.
 
 **2026-10-27 re-test (measured).** A scratch copy of `72e20be` on macOS, Node
 24.20.0, npm 11.19.0, with
@@ -199,7 +201,7 @@ and the CI run on each branch, against `main` = `72e20be`.
   **closed** unmerged on 2026-10-27. Four build legs failed
   `tests/brand-mark.test.js` ("stale icons"); the Node 22.13 leg stopped
   earlier, at the npm 10 lockfile check (run 40460955039). `package.json`
-  pins canvas at exactly 1.0.11 because 1.0.12 and later render the brand
+  pins canvas at exactly 1.0.11 because 1.0.12 and 1.0.13 render the brand
   icons differently (main commit `7c876bc`). `.github/dependabot.yml` now
   ignores `@napi-rs/canvas`. To lift: bump it on its own branch, run
   `npm run brand:icons`, commit the new icons, and let CI pass.
@@ -215,7 +217,7 @@ and the CI run on each branch, against `main` = `72e20be`.
   yet explained.
 - **#64** `googleapis` 173 → 188, major: CI green.
 
-0 open Dependabot alerts (the 2026-10-27 read-only check). `npm audit` on
+0 open Dependabot alerts (measured 2026-10-27). `npm audit` on
 `72e20be` reports 0 advisories (measured 2026-10-27).
 
 Branches on origin: `main` and the five Dependabot branches of #60 to #64 (#60's
