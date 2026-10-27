@@ -12,6 +12,17 @@ tagged; until then its heading says so.
      is added here before tagging, and the heading's "not tagged yet" is replaced by
      the date. -->
 
+## 3.5.1 — not tagged yet
+
+<!-- From v3.5.0 (14c17bb, 2026-10-25) to cd6ff08: 1 commit, then the release commit that holds this note. History is not
+     squashed. -->
+
+**AEON is for adults (18+).** The license agreement (now version 1.2), the Terms of Use, the privacy notice and the
+README say you must be 18 or older, or the age of majority where you live if that is higher. Accepting the
+agreement, by the I-agree box, by `aeon eula accept` or by `AEON_ACCEPT_EULA=1.2` on a headless install, confirms it.
+This is a self-declaration, not an identity or age check. Because the agreement's version changed, AEON asks
+everyone to accept it once more on the first start after updating (cd6ff08).
+
 ## 3.5.0 — 2026-10-25
 
 <!-- From v3.4.0 (fa6f2a0, 2026-10-25) to a9f3a77: 3 commits (`git rev-list --count v3.4.0..a9f3a77`), then the release
