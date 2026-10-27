@@ -39,10 +39,9 @@ logic of its own. `server.cjs` at the repo root is a one-line shim that re-expor
    `/events`, with `/api/system`, `/api/llm-telemetry` and `/api/blocks` as aliases.
 10. **Token analytics** and the **Second Brain** routes, then the boot index: an incremental
     Vault scan 15 seconds after start, plus a nightly re-index at 03:00.
-11. **Autopilot** (`tools/autopilot-daemon.cjs`).
-12. **Frontend.** When `dist/` exists, it is served statically with an SPA fallback for any
+11. **Frontend.** When `dist/` exists, it is served statically with an SPA fallback for any
     path that is not `/api`, `/core`, `/events`, `/ws` or `/block`.
-13. **Listen** on `PORT` (default 3001), then attach the WebSocket at `/ws`
+12. **Listen** on `PORT` (default 3001), then attach the WebSocket at `/ws`
     (`src/kernel/ws.cjs`).
 
 ## LLM layer

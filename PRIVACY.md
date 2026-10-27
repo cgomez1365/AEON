@@ -43,7 +43,6 @@ Cookbook's Download tab uses Hugging Face's own tools, which save models in the 
 - **Web search.** With a Tavily, Serper or Brave key, your search query goes to that service. **With no search key, or when those services fail, the query goes to DuckDuckGo.** A search in Orion Search then opens the top three web results from their own sites to read them for its answer; each of those sites sees your IP address and a request that names AEON.
 - **Supabase** — only if you connect your own Supabase project. The features you turn on there, such as cloud sync, send that data to your project. Cloud sync of the Vault skips a switched-off memory and a Local only agent's folder, and on its next push deletes the copies of them it uploaded earlier.
 - **Firebase** — only if AEON is built with your own Firebase project's settings. The page then talks to your project for sign-in and session records, and Firebase Analytics reports to your project unless you switch tracking off in Settings.
-- **YouTube** — only if you add YouTube credentials and ask the media pipeline to upload a video.
 - **Cloudflare** — only if you turn on remote access (Quick Tunnel) in Settings. AEON downloads Cloudflare's `cloudflared` program from GitHub, and traffic to your AEON then passes through Cloudflare.
 - **A block store** — only if you set `AEON_STORE` to a web address. AEON then downloads the catalog and packs from that address.
 

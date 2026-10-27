@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { StatCard, Card } from '../../components/aurora';
-import { Activity, Zap, Radio, BarChart3, Wifi, WifiOff, Server, Flame, Calendar, LayoutGrid, Plus, Trash2, Pencil } from 'lucide-react';
+import { Activity, Zap, Radio, BarChart3, Wifi, WifiOff, Flame, Calendar, LayoutGrid, Plus, Trash2, Pencil } from 'lucide-react';
 import { AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { getEffectiveBlockGroups } from '../../kernel/blockRegistry.js';
 import { BlockIcon, SectionIcon } from '../../components/BlockIcon.jsx';
@@ -48,7 +48,6 @@ export default function Dashboard({ chatHistory = [], auditLogs = [], blockLayou
   // one place a block's icon can be changed. Saving refreshes the shell's
   // icon map, so the sidebar and every other consumer update at once.
   const [iconTarget, setIconTarget] = useState(null); // the block being edited
-  const [autopilot, setAutopilot] = useState(null);
   // { ok, status, uptime } from /api/llm-telemetry; status 0 = no answer.
   const [probe, setProbe] = useState(null);
   const serverUp = !!probe?.ok;
@@ -143,13 +142,6 @@ export default function Dashboard({ chatHistory = [], auditLogs = [], blockLayou
         setProbe({ ok: true, status: r.status, uptime: d.uptime });
       } else setProbe({ ok: false, status: r.status });
     } catch { setProbe({ ok: false, status: 0 }); }
-
-    // Video autopilot (tools/autopilot-daemon.cjs, mounted by the kernel)
-    try {
-      const r = await fetch('/api/autopilot/status');
-      setAutopilot(r.ok ? await r.json() : null);
-    } catch { setAutopilot(null); }
-
   }, []);
 
   // Everything below the KPI row that counts calls reads the activity block's
@@ -232,7 +224,6 @@ export default function Dashboard({ chatHistory = [], auditLogs = [], blockLayou
         <StatCard label="Spend today" value={spend.value} accent="amber" sub={spend.sub} icon={<Zap size={14} aria-hidden="true" />} />
         <StatCard label="LLM calls today" value={callsToday.value} accent={heatmapSummary?.today?.errors ? 'coral' : 'cyan'} sub={callsToday.sub} icon={<Activity size={14} aria-hidden="true" />} />
         <StatCard label="Server" value={server.value} accent={server.accent} sub={server.sub} icon={serverUp ? <Wifi size={14} aria-hidden="true" /> : <WifiOff size={14} aria-hidden="true" />} />
-        <StatCard label="Video autopilot" value={autopilot?.status || '—'} accent={autopilot?.producerRunning ? 'emerald' : 'cyan'} sub={autopilot ? `${autopilot.totalProduced || 0} produced · ${autopilot.totalUploaded || 0} uploaded` : 'Not answering'} icon={<Server size={14} aria-hidden="true" />} />
       </div>
 
       {/* ═══ INSTALLED BLOCKS — auto-organized from the block registry ═══ */}

@@ -174,7 +174,6 @@ module.exports = (app, deps) => {
       coingecko: ['COINGECKO_API_KEY'],
       coinbase: ['COINBASE_API_KEY', 'COINBASE_API_SECRET'],
       canva: ['CANVA_CLIENT_SECRET'],
-      youtube: ['YOUTUBE_API_KEY', 'YOUTUBE_CLIENT_SECRET', 'YOUTUBE_REFRESH_TOKEN'],
     };
     try {
       const endpointsMod = require(path.join(__dirname, '..', '..', '..', 'kernel', 'endpoints.cjs'));
@@ -547,7 +546,6 @@ module.exports = (app, deps) => {
       lmstudio:   { keys: [], kind: 'local', icon: '🖥️', base: `${kernelEndpoints.lmStudioHost()}/v1` },
       supabase:   { keys: ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY'], kind: 'infra', icon: '🟢', allRequired: true },
       firebase:   { keys: ['VITE_FIREBASE_PROJECT_ID'], kind: 'infra', icon: '🔥' },
-      youtube:    { keys: ['YOUTUBE_REFRESH_TOKEN'], kind: 'service', icon: '📺' },
       coingecko:  { keys: ['COINGECKO_API_KEY'], kind: 'service', icon: '🦎' },
       coinbase:   { keys: [], kind: 'service', icon: '🪙', detect: cdpKeyExists() },
       canva:      { keys: ['CANVA_CLIENT_SECRET'], kind: 'service', icon: '🎨' },
@@ -622,10 +620,6 @@ module.exports = (app, deps) => {
       }
       if (id === 'local') {
         if (env.AEON_LLM_BACKEND) details.backend = env.AEON_LLM_BACKEND;
-      }
-      if (id === 'youtube') {
-        if (env.YOUTUBE_CHANNEL_HANDLE) details.channelHandle = env.YOUTUBE_CHANNEL_HANDLE;
-        if (env.YOUTUBE_CHANNEL_ACCOUNT) details.email = env.YOUTUBE_CHANNEL_ACCOUNT;
       }
       if (id === 'gemini') {
         details.keyCount = [env.GEMINI_PAID_KEY, env.GEMINI_FREE_KEY_1, env.GEMINI_FREE_KEY_2, env.GEMINI_FREE_KEY_3].filter(Boolean).length;
@@ -749,12 +743,6 @@ module.exports = (app, deps) => {
       local: {
         configured: (() => { try { return require(path.join(APP_ROOT, 'services', 'storage.js')).getLocalRuntimeRegistry().activeRuntime() !== null; } catch { return false; } })(),
         model: firstLocalModel(),
-      },
-      youtube: {
-        configured: !!env.YOUTUBE_REFRESH_TOKEN,
-        channelHandle: env.YOUTUBE_CHANNEL_HANDLE || null,
-        channelId: env.YOUTUBE_CHANNEL_ID || null,
-        email: env.YOUTUBE_CHANNEL_ACCOUNT || null,
       },
       coingecko: {
         configured: !!env.COINGECKO_API_KEY,
@@ -897,10 +885,6 @@ module.exports = (app, deps) => {
 
       if (id === 'firebase') {
         return res.json({ ok: cloudCredentials.metadata().firebase.configured, note: 'Web Config presence verified' });
-      }
-
-      if (id === 'youtube') {
-        return res.json({ ok: !!env.YOUTUBE_REFRESH_TOKEN, note: 'OAuth token presence verified' });
       }
 
       if (id === 'coinbase') {

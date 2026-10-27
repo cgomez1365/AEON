@@ -97,7 +97,7 @@ exists nowhere, so it always said `$0/mo`).
 
 ## Fixed in this pass
 - **Hardcoded `http://localhost:3001`** in `GET /api/telemetry/live` — now
-  built from `process.env.AEON_KERNEL_URL || \`http://localhost:${process.env.PORT || 3001}\`` (matches the pattern in `tools/autopilot-daemon.cjs`). Considered
+  built from `process.env.AEON_KERNEL_URL || \`http://localhost:${process.env.PORT || 3001}\`` (the same `AEON_KERNEL_URL`-then-`PORT` pattern as `src/kernel/context.cjs`). Considered
   calling the kernel telemetry handler in-process instead of an HTTP hop, but
   blocks are mounted in isolation by `src/kernel/blockHost.cjs` with no
   shared handler references passed into `deps` — reaching into

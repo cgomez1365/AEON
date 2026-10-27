@@ -101,11 +101,6 @@ const CAPABILITIES = {
     summary: 'Let the agent save facts to memory on its own.',
     pending: 'This switch does not govern agents\' memory saves. In chat, each agent saves facts to its own memory with its memory_save tool, and every save is shown in the terminal — turn agent tools on or off in Settings → Blocks → Memory Core → "Let agents use AEON\'s tools in chat"; "New memories start on" applies to what they save. Memory Core\'s automatic capture runs after a conversation.',
   },
-  tool_autopilot: {
-    default: false, implemented: false,
-    summary: 'Let the agent start and stop the autopilot pipeline.',
-    pending: 'No autopilot tool is installed.',
-  },
   tool_deploy: {
     default: false, implemented: false,
     summary: 'Let the agent deploy to Vercel, Cloudflare, or another host.',

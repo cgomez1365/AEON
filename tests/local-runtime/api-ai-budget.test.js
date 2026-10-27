@@ -105,7 +105,7 @@ describe('/api/ai local path — the budget must survive the seam', () => {
   });
 
   it('forwards a small explicit ceiling without inflating it', async () => {
-    // tools/autopilot-daemon.cjs asks for 30. It must get 30.
+    // A caller that asks for 30 must get 30.
     h = aiWithRecordedRuntime();
     await h.ai.localNativeRequest('ping', 'stub-model', { max_tokens: 30 });
     const asked = h.calls[0].maxTokens ?? h.calls[0].max_tokens;

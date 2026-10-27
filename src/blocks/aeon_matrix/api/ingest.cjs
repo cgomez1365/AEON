@@ -956,7 +956,7 @@ module.exports = function ingestFactory(deps) {
   // Body: { file_path, content? } — content optional, reads from disk if omitted;
   // if content is given and no file exists yet, it's written to disk first so
   // the ToC entry always has a real, readable file behind it.
-  // Also used by other blocks (autopilot, writer, etc.) to push produced content in.
+  // Also used by other blocks (writer, etc.) to push produced content in.
   // POST /crn/second-brain/upload — put a file INTO the second brain.
   //
   // `/upload <file>` was an Auto-Pilot cloud push that did nothing on a local

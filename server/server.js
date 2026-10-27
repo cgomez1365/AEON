@@ -2,7 +2,7 @@
  * AEON Jarvis OS — Server Composition Root
  * The old 1,586-line server.cjs monolith, rebuilt on the aeon-213 skeleton:
  *   security/security.js  — enforcement middleware + audit + SDI
- *   services/*            — storage, cloud (optional), ai, search, media, system
+ *   services/*            — storage, cloud (optional), ai, search, system
  *   server/block-loader.js — cartridge discovery + sandbox + block host
  * This file only composes: build deps → apply security → mount routers →
  * mount blocks → listen. No business logic lives here.
@@ -230,10 +230,6 @@ const search = require('../services/search.js')({
   writeOSAudit: security.writeOSAudit,
   kernelLLM: ai.kernelLLM,
 });
-const media = require('../services/media.js')({
-  ROOT,
-  writeOSAudit: security.writeOSAudit,
-});
 const system = require('../services/system.js')({
   ROOT,
   getLocalFile: storage.getLocalFile,
@@ -375,8 +371,6 @@ const baseDeps = {
   aeonTerminalStream, TERMINAL_HISTORY_FILE: storage.TERMINAL_HISTORY_FILE,
   SDI_SCHEMAS: security.SDI_SCHEMAS, SDI_VIOLATION_LOG: storage.SDI_VIOLATION_LOG,
   runReaper: system.runReaper,
-  activeStreams: media.activeStreams, processingJobs: media.processingJobs,
-  finalizeVideoStitch: media.finalizeVideoStitch,
   VAULT_ROOT: storage.VAULT_ROOT, DATA_ROOT: storage.DATA_ROOT,
   getVaultFile: storage.getVaultFile, getDataFile: storage.getDataFile,
   getBlockVaultFile: storage.getBlockVaultFile, getBlockDataFile: storage.getBlockDataFile,
@@ -659,13 +653,6 @@ if (_sbIngestAtBoot) try {
 }
 
 console.log('[KERNEL] Route namespaces mounted: /core, /core/telemetry, /api/ai, /blocks, /events');
-
-// Auto-Pilot daemon
-try {
-  require('../tools/autopilot-daemon.cjs').setupAutopilot(app);
-} catch (e) {
-  console.error('[AEON] Failed to mount Auto-Pilot daemon:', e);
-}
 
 // ── Serve the built SPA (tunnel + production) ──
 const DIST = path.join(ROOT, 'dist');

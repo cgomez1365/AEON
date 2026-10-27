@@ -25,12 +25,10 @@ below.
     list price (gemini, groq); others count $0 and the card says so.
   - **LLM calls today** — requests, tokens and failures from the ledger.
   - **Server** — ONLINE / SIGNED OUT (401) / UNREACHABLE / HTTP n.
-  - **Video autopilot** — `tools/autopilot-daemon.cjs` status (a YouTube
-    video producer mounted by the kernel; nothing here starts it).
   - Heatmap, 7d/30d/90d chart, Models tab (all-time ledger mix) and the
     failed-call list all read the activity block's ledger-derived routes, so
     they agree with each other and with `<db>/llm_calls.jsonl`.
-  Polls `/api/llm-telemetry` + `/api/autopilot/status` every 5 s and the
+  Polls `/api/llm-telemetry` every 5 s and the
   analytics every 30 s. When the activity block is missing, each panel says
   so instead of "Loading…" (the Supabase fallback only runs when
   `VITE_SUPABASE_URL` is set).
@@ -167,8 +165,7 @@ below.
 
 The frontend (`index.jsx`) additionally reads routes owned by other
 blocks — all legitimate kernel/block aliases, not dead calls:
-`/api/llm-telemetry` and `/api/autopilot/status` (kernel telemetry +
-`tools/autopilot-daemon.cjs`), and `/api/token-analytics/heatmap` +
+`/api/llm-telemetry` (kernel telemetry), and `/api/token-analytics/heatmap` +
 `/api/token-analytics/summary` (the `activity` block). The live feed's
 `auditLogs` prop comes from `GET /api/audit`, fetched by `src/App.jsx` and
 served by the `activity` block.
@@ -185,8 +182,7 @@ dual-mounted at `/block/dashboard/*` as well as `/api` (see
 - `AEON_KERNEL_URL` / `PORT` — used to build the base URL for in-process
   kernel loopback calls (`/api/orion-scrape`, `/api/crn/second-brain/retrieve`,
   `/api/ai`, `/api/memory/add`). Defaults to
-  `` `http://localhost:${process.env.PORT || 3001}` `` when unset — same
-  pattern as `tools/autopilot-daemon.cjs`.
+  `` `http://localhost:${process.env.PORT || 3001}` `` when unset.
 - `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` — read directly in the
   browser (`index.jsx`, via `src/config.js`) as the fallback path when the
   primary `/api/token-analytics/*` fetches fail.
@@ -208,8 +204,7 @@ dual-mounted at `/block/dashboard/*` as well as `/api` (see
 - **Hardcoded `http://127.0.0.1:3001`** in `api/chat.cjs` (`/scrape` and
   Second Brain recall loopback calls, 2 sites) and in `api/chat-stream.cjs`
   (auto-memory-extraction loopback, 2 sites) — all four now built from
-  `process.env.AEON_KERNEL_URL || \`http://localhost:${process.env.PORT || 3001}\``,
-  matching the pattern already used in `tools/autopilot-daemon.cjs`.
+  `process.env.AEON_KERNEL_URL || \`http://localhost:${process.env.PORT || 3001}\``.
 - **`index.jsx`** had no hardcoded fetch URLs (every fetch was already
   relative `/api/...`), but the "Server" KPI card's status text hardcoded
   the display string `"localhost:3001"` — changed to the port-agnostic

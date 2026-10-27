@@ -910,7 +910,7 @@ function AccountIdentities({ endpoints, nervousSystem }) {
   });
   const ENV_KEY_HINTS = {
     coingecko: 'COINGECKO_API_KEY', coinbase: 'COINBASE_API_KEY', canva: 'CANVA_CLIENT_SECRET',
-    youtube: 'YOUTUBE_API_KEY', cloudflare: 'CLOUDFLARE_ACCOUNT_ID',
+    cloudflare: 'CLOUDFLARE_ACCOUNT_ID',
     groq: 'GROQ_API_KEY', gemini: 'GEMINI_FREE_KEY_1', openai: 'OPENAI_API_KEY',
     claude: 'ANTHROPIC_API_KEY', grok: 'GROK_API_KEY', openrouter: 'OPENROUTER_API_KEY',
   };
@@ -3891,7 +3891,6 @@ export default function SystemSettings() {
             <CapabilityToggle capKey="tool_email" label="Email dispatch" onMsg="Email on" offMsg="Email off" />
             <CapabilityToggle capKey="tool_crm" label="CRM management" onMsg="CRM on" offMsg="CRM off" />
             <CapabilityToggle capKey="tool_memory" label="Memory management" onMsg="Memory on" offMsg="Memory off" />
-            <CapabilityToggle capKey="tool_autopilot" label="Autopilot control" onMsg="Autopilot on" offMsg="Autopilot off" />
             <CapabilityToggle capKey="tool_deploy" label="Deploy" onMsg="Deploy on" offMsg="Deploy off" />
           </div>
         </>

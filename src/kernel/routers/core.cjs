@@ -60,7 +60,6 @@ module.exports = function createCoreRouter(deps) {
     try { const storage = require('../../../services/storage.js'); providers.local = storage.getLocalRuntimeRegistry().activeRuntime() !== null; } catch { providers.local = false; }
     providers.supabase = !!(env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY);
     providers.firebase = !!env.VITE_FIREBASE_PROJECT_ID;
-    providers.youtube = !!env.YOUTUBE_REFRESH_TOKEN;
     providers.coingecko = !!env.COINGECKO_API_KEY;
     providers.coinbase = cdpKeyExists();
     providers.canva = !!env.CANVA_CLIENT_SECRET;

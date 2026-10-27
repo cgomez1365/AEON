@@ -29,7 +29,7 @@ const OUT  = process.argv[4] || path.join(AEON, 'data', 'dead-endpoints.json');
 const DANGEROUS = [
   '/restart', '/os/shell', '/api/exec', '/kill-pid', '/delete-cache',
   '/install-runtime', '/model/download', '/model/serve', '/flush', '/lock',
-  '/autopilot/', '/transcribe', '/api/build/', '/store/install', '/store/publish',
+  '/transcribe', '/api/build/', '/store/install', '/store/publish',
   '/god/file-drop', '/god/file-save', '/god/model-swap', '/commands/dispatch',
   '/vault-push', '/ingest/', '/scan-all', '/system/scan', '/settings/secrets',
 ];

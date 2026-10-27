@@ -1,11 +1,11 @@
 /**
  * Fleet Control — live ops for everything that runs: LLM engines, provider
- * health, key pools, the video autopilot, this machine's hardware fit, and
+ * health, key pools, this machine's hardware fit, and
  * every agent with what it was last asked (Memory Core's GET /api/agents).
  * Read-only by design: it reports what exists and never calls what doesn't.
  */
 import React, { useState, useEffect, useCallback } from 'react';
-import { Activity, Radio, RefreshCw, Server, BarChart3, Wifi, WifiOff, KeyRound, HeartPulse, Rocket, Cpu, Bot, Star, Lock } from 'lucide-react';
+import { Activity, Radio, RefreshCw, BarChart3, Wifi, WifiOff, KeyRound, HeartPulse, Rocket, Cpu, Bot, Star, Lock } from 'lucide-react';
 import { AGENT_SELECT_EVENT } from '../../utils/terminalAgent.js';
 import { serverStatus, providerRows, providerCard, hardwareSummary } from './health.js';
 
@@ -14,7 +14,6 @@ const DOT = { healthy: '#00ff40', cooling: '#f44336', unconfigured: 'rgba(255,25
 
 export default function FleetControl() {
   const [llm, setLlm] = useState(null);
-  const [autopilot, setAutopilot] = useState(null);
   const [health, setHealth] = useState(null);
   // Recent Agent Missions: every agent, most recently active first (Memory
   // Core's GET /api/agents). null = not loaded; a string = why it could not be.
@@ -42,10 +41,6 @@ export default function FleetControl() {
       const r = await fetch('/api/connections', { headers: { 'x-aeon-self-reported': '1' } });
       if (r.ok) { const d = await r.json(); setEndpoints(Array.isArray(d.endpoints) ? d.endpoints : []); }
     } catch {}
-    try {
-      const r = await fetch('/api/autopilot/status');
-      setAutopilot(r.ok ? await r.json() : null);
-    } catch { setAutopilot(null); }
     try {
       const r = await fetch('/api/agents', { headers: { 'x-aeon-self-reported': '1' } });
       const d = await r.json().catch(() => null);
@@ -101,7 +96,7 @@ export default function FleetControl() {
         <button onClick={() => { refresh(); loadHardware(); }} style={tinyBtn} aria-label="Refresh fleet telemetry"><RefreshCw size={12} aria-hidden="true" /></button>
       </div>
       <p style={{ fontSize: '12px', color: 'var(--text-dim)', margin: '0 0 20px 0' }}>
-        Engines, providers, key pools, the video autopilot, hardware fit and your agents — click an agent to talk to it in the terminal
+        Engines, providers, key pools, hardware fit and your agents — click an agent to talk to it in the terminal
       </p>
 
       {/* Status Cards */}
@@ -109,7 +104,6 @@ export default function FleetControl() {
         <StatusCard icon={serverUp ? Wifi : WifiOff} label="AEON Server" value={server.value} color={TONE[server.tone]} sub={server.sub} />
         <StatusCard icon={Activity} label="LLM Calls · since start" value={totalCalls.toLocaleString()} color="var(--accent)" sub={`${(totalTokens / 1000).toFixed(1)}K tokens${totalErrors ? ` · ${totalErrors} failed` : ''}`} />
         <StatusCard icon={HeartPulse} label="Providers" value={health ? provCard.value : '?'} color={TONE[health ? provCard.tone : 'idle']} sub={health ? provCard.sub : 'Provider health unavailable'} />
-        <StatusCard icon={Server} label="Video Autopilot" value={autopilot?.status || '—'} color={autopilot?.producerRunning ? '#00ff40' : String(autopilot?.status || '').startsWith('ERROR') ? '#f44336' : '#888'} sub={autopilot ? `${autopilot.totalProduced || 0} produced · ${autopilot.totalUploaded || 0} uploaded` : 'Not answering'} />
       </div>
 
       {/* Provider Health + Key Pools */}

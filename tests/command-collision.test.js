@@ -136,7 +136,7 @@ describe('slash command namespace', () => {
  *
  * This check is deliberately narrow. A broader "is this route mounted at all"
  * gate was attempted and NOT shipped — routes mounted behind a router prefix
- * (/api/autopilot/*, /api/console/*, /api/build/*) are invisible to a scanner
+ * (/api/console/*, /api/build/*) are invisible to a scanner
  * and it produced seven false positives against commands that demonstrably
  * work. §19: a gate that cries wolf gets skipped. Routes served by the KERNEL
  * are therefore accepted here; only a route implemented inside a DIFFERENT

@@ -72,9 +72,6 @@ const PROVIDER_SECRET_BASES = [
   'COINBASE_API_KEY',
   'COINBASE_API_SECRET',
   'CANVA_CLIENT_SECRET',
-  'YOUTUBE_API_KEY',
-  'YOUTUBE_CLIENT_SECRET',
-  'YOUTUBE_REFRESH_TOKEN',
   'AEON_MOBILE_SECRET',
 ];
 
@@ -510,6 +507,10 @@ function migrateEnvKeysToVault(envFile, { store = createProviderCredentialStore(
     const fix = {};
     for (const k of movedHere) {
       if (typeof held[k] !== 'string' || bogus.includes(k) || !travelsAsHeader(k)) continue;
+      // A key the allowlist no longer approves (the YouTube ones went with
+      // the video uploader, 2026-10-27) stays exactly as stored: save()
+      // refuses it and would take every other repair down with it.
+      if (!isProviderSecretKey(k)) continue;
       // A '#' with no space before it: dotenv cuts there too
       // (GROQ_API_KEY=gsk_abc#main reads as gsk_abc), and the first parser did
       // not. Re-read only when what precedes it is a provider key whose

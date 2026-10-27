@@ -30,7 +30,6 @@ const API_ENV = {
   claude:   ['ANTHROPIC_API_KEY'],
   supabase: ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY'], // all
   firebase: ['VITE_FIREBASE_PROJECT_ID'],
-  youtube:  ['YOUTUBE_REFRESH_TOKEN'],
   coinbase: ['__FILE__cdp_api_key.json'],                // desktop file, not env
   canva:    ['CANVA_API_KEY'],
 };

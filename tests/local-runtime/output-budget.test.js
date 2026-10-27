@@ -86,8 +86,7 @@ describe('output budget arithmetic', () => {
 
   it('never hands back MORE than an explicit request', () => {
     // Found double-checking D1a. The floor was being applied on top of an
-    // explicit ceiling, so a caller asking for 30 tokens got 256. There is a
-    // real one: tools/autopilot-daemon.cjs asks for 30. A budget that
+    // explicit ceiling, so a caller asking for 30 tokens got 256. A budget that
     // silently grants 8x what was asked for is the same class of defect as
     // one that silently caps it — the caller's number stopped meaning
     // anything either way.

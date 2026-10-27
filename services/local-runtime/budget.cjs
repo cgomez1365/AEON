@@ -95,7 +95,7 @@ function outputBudget(opts = {}) {
     // read `Math.max(floor, requested)`, which handed a caller asking for 30
     // tokens 256 of them — the floor is there to stop the derived remainder
     // collapsing to nothing, and has no business overriding a number the
-    // caller chose deliberately. tools/autopilot-daemon.cjs asks for 30.
+    // caller chose deliberately.
     maxTokens = Number(opts.requested);
     limitedBy = 'requested';
   }

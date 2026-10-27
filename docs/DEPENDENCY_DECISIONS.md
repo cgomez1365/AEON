@@ -215,7 +215,10 @@ and the CI run on each branch, against `main` = `72e20be`.
   (`src/blocks/aeon_matrix/api/_extract.cjs`). Its Windows leg failed on a 10 s
   timeout in `tests/local-runtime/cookbook-fit.test.js` (run 40460999447); not
   yet explained.
-- **#64** `googleapis` 173 → 188, major: CI green.
+- **#64** `googleapis` 173 → 188, major: CI green, and then moot: `googleapis`
+  left `package.json` on 2026-10-27 with the YouTube video uploader, its only
+  user (CEO: "retire"), so #64 has nothing left to bump. Dependabot closing
+  it is not yet observed.
 
 0 open Dependabot alerts (measured 2026-10-27). `npm audit` on
 `72e20be` reports 0 advisories (measured 2026-10-27).

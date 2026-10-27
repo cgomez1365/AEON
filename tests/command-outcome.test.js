@@ -170,6 +170,6 @@ describe('denial is an answer, not an error', () => {
   });
 
   it('names the command the operator refused', () => {
-    expect(describeDenial('/autopilot-start').output).toMatch(/autopilot-start/);
+    expect(describeDenial('/push').output).toMatch(/\/push was not run/);
   });
 });
