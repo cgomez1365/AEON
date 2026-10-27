@@ -105,7 +105,7 @@ function middleware(req, res, next) {
     success: false,
     error: 'EULA_REQUIRED',
     version: st.version,
-    hint: 'Accept the AEON License Agreement first: open AEON in your browser, or run `aeon eula accept`.',
+    hint: `Accept the AEON License Agreement first: open AEON in your browser, or run \`npm run aeon -- eula accept\` in the AEON folder, or set AEON_ACCEPT_EULA=${st.version} and restart AEON.`,
   });
 }
 

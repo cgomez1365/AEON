@@ -99,7 +99,7 @@ async function request(method, route, body, { timeout = 120000, raw = false } = 
     try { data = text ? JSON.parse(text) : {}; } catch { data = { text }; }
     // Every command meets the agreement gate the same way: say what to do.
     if (res.status === 428 && data?.error === 'EULA_REQUIRED') {
-      data = { ...data, error: `AEON License Agreement version ${data.version} is not accepted yet. Read it and accept: aeon eula accept (or open AEON in your browser).` };
+      data = { ...data, error: `AEON License Agreement version ${data.version} is not accepted yet. Read it and accept: open AEON in your browser, or run npm run aeon -- eula accept in the AEON folder, or set AEON_ACCEPT_EULA=${data.version} and restart AEON.` };
     }
     return { ok: res.ok, status: res.status, data };
   } catch (e) {

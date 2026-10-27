@@ -528,9 +528,10 @@ async function main() {
     ok(`Local runtime installed — ${localRuntime.runtimeId} (${localRuntime.runtimeBackend}).`);
     info('No models downloaded yet. Add one from the Cookbook block inside AEON.');
   } else {
-    info('Local models let AEON run free and private on this computer — no API');
-    info('key, no internet. Install them from the Cookbook block inside AEON;');
-    info(`everything stays in your AEON home (${homeBoot.roots.home}).`);
+    info('Local models run AEON on this computer at no cost, with no API key.');
+    info('With Settings -> Models -> Local only on, every model call stays on');
+    info('this computer or your own network. Install models from the Cookbook');
+    info(`block inside AEON; they are stored in your AEON home (${homeBoot.roots.home}).`);
     info('Until then AEON uses cloud AI (Gemini, Groq, OpenRouter).');
   }
 
@@ -547,7 +548,7 @@ async function main() {
     p('');
     info('AEON can use free cloud AI (Gemini, Groq, OpenRouter). If you already');
     info('have keys, paste them now. If not, just press Enter — you can add');
-    info('everything later inside AEON under Settings -> Account.');
+    info('everything later inside AEON under Settings -> Keys.');
     p('');
     const wizardKeys = [
       ['GEMINI_FREE_KEY_1', 'Gemini key (free at aistudio.google.com)'],
