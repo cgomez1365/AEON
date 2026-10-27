@@ -1,6 +1,6 @@
 # AEON — Privacy notice
 
-*Last changed 2026-10-26 · applies to AEON · Broken Gear Industries*
+*Last changed 2026-10-27 · applies to AEON · Broken Gear Industries*
 
 This notice covers the AEON software: what it keeps on your machine, and what it sends over the network and to whom. It does not cover any website, or the store and checkout where blocks are sold, which have their own terms.
 
@@ -67,7 +67,7 @@ These send no personal data, but like any download they show your IP address to 
 
 ## Free provider tiers
 
-Some providers use what you send on their free tiers to improve their products. For example, Google's terms for unpaid use of the Gemini API, including Google AI Studio, say Google uses the content you submit and the responses to improve its products, and that human reviewers may read them. Other providers have their own rules. Read the terms of any provider you use before sending anything private through a free tier; a paid tier or a local model avoids this.
+Some providers use what you send on their free tiers to improve their products. For example, Google's terms for unpaid use of the Gemini API, including Google AI Studio, say Google uses the content you submit and the responses to improve its products, and that human reviewers may read them. Other providers have their own rules. Read the terms of any provider you use before sending anything private through a free tier; a paid tier, or a local model with Settings → Models → **Local only** on, avoids this.
 
 ## Broken Gear Industries
 
@@ -75,6 +75,6 @@ The AEON software sends Broken Gear Industries nothing, so we hold no data about
 
 ## Questions and changes
 
-Questions: open an issue at [github.com/cgomez1365/AEON/issues](https://github.com/cgomez1365/AEON/issues). Never post keys or personal data there.
+Questions: email [aeon@brokengearindustries.com](mailto:aeon@brokengearindustries.com), or open an issue at [github.com/cgomez1365/AEON/issues](https://github.com/cgomez1365/AEON/issues) (public: never post keys or personal data there).
 
 This notice applies per version, like the [Terms of Use](TERMS_OF_USE.md). A version that changes what AEON sends will change this notice.

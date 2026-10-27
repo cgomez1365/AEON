@@ -3,7 +3,9 @@
 AEON is a local-first AI workspace: a Node.js kernel that discovers self-contained blocks,
 a React frontend that builds itself from those blocks' manifests, an encrypted vault for
 keys, and one LLM layer that routes every AI call by role. It runs on the operator's own
-machine; a cloud mirror is optional and off unless configured.
+machine; a cloud mirror is optional and off unless configured. A cloud AI provider you
+add a key for receives what AEON sends it; only Settings → Models → Local only keeps every
+model call on this computer or your own network.
 
 > Every path in this document is checked to exist by `tests/docs-truth.test.js`. It was
 > rewritten 2026-09-14 because the previous version described blocks, routes and files
