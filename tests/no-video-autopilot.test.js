@@ -77,7 +77,7 @@ describe('Video autopilot stays deleted', () => {
   });
 
   it('nothing uploads to YouTube or reads YouTube credentials', () => {
-    expect(offenders(/videos\.insert|google\.youtube\(|\bYOUTUBE_[A-Z_]+/), 'YouTube upload code or credentials').toEqual([]);
+    expect(offenders(/videos\.insert|google\.youtube\(|\bYOUTUBE_[A-Z_]+|youtube\/v3|upload\/youtube/i), 'YouTube upload code or credentials').toEqual([]);
   });
 
   it('googleapis is not a dependency and nothing requires it', () => {
@@ -103,6 +103,8 @@ describe('Video autopilot stays deleted', () => {
     const bad = DOCS.filter((f) => /autopilot|\/api\/autopilot|YOUTUBE_[A-Z_]+|media pipeline/i.test(read(f)));
     expect(bad, 'docs still describe the video uploader').toEqual([]);
     expect(read('PRIVACY.md')).not.toMatch(/YouTube/);
+    // the architecture box must not list the deleted media service
+    expect(read('docs/ARCHITECTURE.md')).not.toMatch(/services\/ — [^│\n]*\bmedia\b/);
   });
 });
 

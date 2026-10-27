@@ -23,7 +23,7 @@ model call on this computer or your own network.
 ├──────────────────────────────────────────────────────────────┤
 │ KERNEL      server/server.js — security → routers → blocks    │  commands, retrieval, build, store, console
 ├──────────────────────────────────────────────────────────────┤
-│ SERVICES    services/ — ai, storage, cloud, search, media     │  kernelLLM lives in services/ai.js
+│ SERVICES    services/ — ai, storage, cloud, search, system    │  kernelLLM lives in services/ai.js
 ├──────────────────────────────────────────────────────────────┤
 │ STORAGE     Vault · data/ · secrets/ · .env                   │  every root redirectable by env var
 ├──────────────────────────────────────────────────────────────┤
