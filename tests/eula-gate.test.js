@@ -68,6 +68,23 @@ describe('EULA.md', () => {
   });
 });
 
+describe('AEON is for adults (18+), everywhere the agreement is documented or accepted', () => {
+  // Owner, 2026-10-26: say 18+ in the agreement and on GitHub, wherever the EULA is documented.
+  // A self-declaration, not verification: it makes the agreement enforceable (a minor can
+  // usually void a contract) and states the audience.
+  it('the agreement, terms, privacy notice and README say 18 or older', () => {
+    expect(read('EULA.md')).toMatch(/You must be 18 or older, or the age of majority where you live/);
+    expect(read('TERMS_OF_USE.md')).toMatch(/you must be 18 or older/);
+    expect(read('PRIVACY.md')).toMatch(/AEON is for adults \(18 or older\)/);
+    expect(read('README.md')).toMatch(/AEON is for adults: you must be 18 or older/);
+  });
+  it('every way to accept carries the age confirmation', () => {
+    expect(read('src/components/EulaGate.jsx')).toMatch(/I am 18 or older/);
+    expect(read('tools/aeon-cli.cjs')).toMatch(/accepting confirms you are 18 or older/);
+    expect(read('EULA.md')).toMatch(/including your confirmation that you are 18 or older/);
+  });
+});
+
 describe('acceptance', () => {
   it('a fresh home has not accepted, and reading the status writes nothing', () => {
     const st = eula().status();

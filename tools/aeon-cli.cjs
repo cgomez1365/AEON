@@ -377,6 +377,7 @@ const commands = {
     console.log(`\n  ${c.bold('AEON License Agreement')}, version ${version}`);
     console.log(`  ${c.dim('read it first:')} ${eula.EULA_FILE}\n`);
     if (!flags.yes) {
+      console.log(`  ${c.dim('AEON is for adults: accepting confirms you are 18 or older (or the age of majority where you live).')}`);
       const answer = await client.prompt(`  Type "I agree" to accept version ${version}: `);
       if (String(answer).trim().toLowerCase() !== 'i agree') {
         console.log(`\n  ${c.yellow('!')} not accepted; AEON stays locked until you do\n`);

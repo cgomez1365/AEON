@@ -1,8 +1,10 @@
 # AEON — Terms of Use
 
-*Last changed 2026-10-25 · applies to AEON · Broken Gear Industries*
+*Last changed 2026-10-26 · applies to AEON · Broken Gear Industries*
 
 The first time AEON starts, it asks you to accept the [AEON License Agreement](EULA.md). It includes these terms, the [LICENSE](LICENSE) and the [Privacy notice](PRIVACY.md).
+
+**AEON is for adults:** you must be 18 or older, or the age of majority where you live if that is higher, to use it.
 
 ## 1. What AEON is
 AEON is a self-hosted, modular AI workspace. It runs on **your** machine (or a host **you** control). Broken Gear Industries operates no servers on your behalf, and the AEON software sends it none of your data. What the software does send, and to whom, is set out in the [Privacy notice](PRIVACY.md).

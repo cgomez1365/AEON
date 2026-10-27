@@ -1,6 +1,6 @@
 # AEON — Privacy notice
 
-*Last changed 2026-10-25 · applies to AEON · Broken Gear Industries*
+*Last changed 2026-10-26 · applies to AEON · Broken Gear Industries*
 
 This notice covers the AEON software: what it keeps on your machine, and what it sends over the network and to whom. It does not cover any website, or the store and checkout where blocks are sold, which have their own terms.
 
@@ -9,6 +9,7 @@ This notice covers the AEON software: what it keeps on your machine, and what it
 - **AEON sends nothing to Broken Gear Industries.** The software has no telemetry, no analytics that report to us, no account with us and no license check.
 - **What AEON keeps stays on your machine**, in one folder (the AEON home, below).
 - **AEON talks to other services when you set them up or use a feature that needs them.** Each of those services sees what AEON sends it and handles it under its own terms. Adding a cloud provider's key can be enough for AEON to send your Vault's documents to that provider to index them — see [Indexing your Vault](#services-you-set-up). **Settings → Models → Local only** keeps every model call, indexing included, on this computer or your own network.
+- **AEON is for adults (18 or older)** and is not meant for children. It collects nothing about anyone, so it holds no data about a child either.
 - **Opening AEON sends nothing by itself.** The interface's fonts and icons are served by AEON (see [Things the interface loads](#things-the-interface-loads)).
 
 ## What AEON keeps, and where

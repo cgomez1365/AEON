@@ -1,8 +1,10 @@
 # AEON License Agreement
 
-**Version 1.1 · 2026-10-25**
+**Version 1.2 · 2026-10-26**
 
 This agreement is between you and Broken Gear Industries ("BGI", "we", "us"). AEON asks you to accept it the first time it starts, and again whenever this version number changes. By choosing **I agree**, you accept this agreement, the [AEON Community License](LICENSE), the [Terms of Use](TERMS_OF_USE.md) and the [Privacy notice](PRIVACY.md). If you do not agree, do not use AEON.
+
+**AEON is for adults.** You must be 18 or older, or the age of majority where you live if that is higher, to accept this agreement and to use AEON. By accepting, you confirm that you are.
 
 ## 1. AEON itself
 AEON is free to use under the [AEON Community License](LICENSE): you may install it, use it, and change it for your own personal, internal, educational or non-profit use. You may not sell it, redistribute it, or repackage it into a product for others without our written permission.
@@ -35,7 +37,7 @@ This agreement is governed by the laws of the State of California, USA, without 
 A future version of AEON may ship a new version of this agreement. AEON will ask you to accept it before you use that version.
 
 ## Record of your acceptance
-AEON records the version you accepted and the time, in your AEON home (`legal/eula-acceptance.json`). It sends that record nowhere. On a headless or automated install, setting `AEON_ACCEPT_EULA` to this version number (for example `AEON_ACCEPT_EULA=1.1`) is your acceptance.
+AEON records the version you accepted and the time, in your AEON home (`legal/eula-acceptance.json`). It sends that record nowhere. On a headless or automated install, setting `AEON_ACCEPT_EULA` to this version number (for example `AEON_ACCEPT_EULA=1.2`) is your acceptance, including your confirmation that you are 18 or older.
 
 ---
 *Questions: [aeon@brokengearindustries.com](mailto:aeon@brokengearindustries.com) or [github.com/cgomez1365/AEON/issues](https://github.com/cgomez1365/AEON/issues) (public: never post keys or personal data there).*

@@ -96,7 +96,7 @@ export default function EulaGate({ children }) {
         </div>
         <label style={S.row}>
           <input type="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} aria-label="I agree" />
-          <span>I have read and agree to the AEON License Agreement, version {state.version}, including the Community License, Terms of Use and Privacy notice it names.</span>
+          <span>I am 18 or older (or the age of majority where I live), and I have read and agree to the AEON License Agreement, version {state.version}, including the Community License, Terms of Use and Privacy notice it names.</span>
         </label>
         {declined && (
           <p style={S.msgInfo}>AEON can't be used without the agreement. You can close this window; nothing was changed.</p>
