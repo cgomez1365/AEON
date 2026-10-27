@@ -9,9 +9,19 @@ security advisories.
 
 ---
 
-## Security acceptances in `tools/scan/audit-gate.cjs` — re-reviewed 2026-09-30
+## Security acceptances in `tools/scan/audit-gate.cjs` — none since 2026-10-25
 
-**Reviewed:** 2026-09-30 · **Review by:** 2026-10-31
+**Reviewed:** 2026-10-27 · **Review by:** none needed while the gate holds no
+acceptances
+
+**2026-10-27:** `ACCEPTED` in `tools/scan/audit-gate.cjs` is `{}`. It has been
+empty since 2026-10-25, when PR #44 added the `package.json` `overrides` entry
+that lifts `@grpc/grpc-js` to `^1.14.5` (1.14.6 installed). Measured
+2026-10-27 on `72e20be`: `npm run scan:audit` passes and `npm audit` reports 0
+advisories at any severity. A new acceptance needs a reason and a review date,
+in the gate and in the table below.
+
+History:
 
 **2026-10-03:** vite moved to 6.4.3 (below). `npm audit` no longer reports the
 vite advisory or the moderate vite/esbuild ones listed here, so the vite
@@ -58,14 +68,14 @@ once firestore's own range admits a fixed grpc-js.
 
 ## vite → 8.x — **DEFERRED**
 
-**Decided:** 2026-08-04 (BO-A3d) · **Re-reviewed:** 2026-09-30 · **Review by:** 2026-10-31
+**Decided:** 2026-08-04 (BO-A3d) · **Re-reviewed:** 2026-09-30, 2026-10-27 · **Review by:** 2026-11-30
 
 Dependabot opened a vite 8 update (`dependabot/npm_and_yarn/vite-8.1.5`), and
 prior build orders described it as "the ready-made fix for the deferred dev-only
 vite/esbuild advisories". It is not ready-made. It was **tested, not guessed
 at**, and it fails. The pull request was closed unmerged; its branch is no longer
-on origin (checked 2026-10-03). Its successor, PR #33 (vite 8.3.2), is listed at
-the end of this file.
+on origin (checked 2026-10-03). Its successor, PR #33 (vite 8.3.2), was closed
+unmerged on 2026-10-03.
 
 - The bump is `^5.4.21 → ^8.2.0` — a **three-major** jump, not one.
 - Vite 8 replaces the esbuild/rollup pipeline with **rolldown**.
@@ -87,6 +97,33 @@ one is reported again, the gate fails.
 **Unblocked when:** `vite-plugin-pwa` ships a release that genuinely builds
 under rolldown. Re-test with `npm run build`; if it produces `dist/sw.js`, take
 the upgrade.
+
+**2026-10-27 re-test (measured).** A scratch copy of `72e20be` on macOS, Node
+24.20.0, npm 11.19.0, with
+`npm i -D vite@8.3.5 vite-plugin-pwa@2.0.0 @vitejs/plugin-react-swc@4.3.3`.
+vite-plugin-pwa 2.0.0 was published 2026-10-03. plugin-react-swc 3.11.0 does
+not list vite 8 in its peers, so it went up too. Nothing from this test is
+committed.
+
+- Baseline, same copy on vite 6.4.5: `npm run build` passed and the PWA step
+  reported 49 precache entries (2357.76 KiB).
+- vite 8 as configured: `npm run build` **fails**, but no longer in
+  vite-plugin-pwa. Rolldown rejects the object form of
+  `build.rollupOptions.output.manualChunks` in `vite.config.js` ("Expected
+  Function but received Object", then
+  `TypeError: manualChunks is not a function`). The failed build still wrote a
+  `dist/sw.js`: 15 precache entries, 0.00 KiB, and no app files beside it.
+- vite 8 with `manualChunks` rewritten as a function (in the scratch copy
+  only): `npm run build` exited 0, and the PWA step reported 50 precache
+  entries (2359.90 KiB).
+- **Not measured:** the test suite, the dev server, AEON booting through
+  `launch.js`, and the npm 10 lockfile check on that tree.
+
+So `dist/sw.js` alone is not proof: a failed build wrote one. A pass is
+`npm run build` exiting 0 with a precache close to the vite 6 count. The
+deferral stands until after go-live. Taking vite 8 means the `vite.config.js`
+change, `@vitejs/plugin-react-swc` 4.x (PR #61, below), a lockfile npm 10
+leaves unchanged, and a full CI run.
 
 **A smaller step exists: vite 6.4.3 (one major, not three).** Found
 2026-09-30. Every vite advisory above stops at 6.4.2 or earlier, and vite 6.4.3
@@ -153,17 +190,41 @@ commit SHAs in both jobs: checkout `3d3c42e…` (v7.0.1) and setup-node `8207627
 
 ---
 
-## Dependabot branches on origin — checked 2026-10-03
+## Dependabot pull requests — checked 2026-10-27
 
-`git ls-remote --heads origin` on 2026-10-03 lists three branches: `main` and
-two Dependabot branches:
+Read on 2026-10-27 from the pull requests, `git ls-remote --heads origin`
+and the CI run on each branch, against `main` = `72e20be`.
 
-- `dependabot/npm_and_yarn/minor-and-patch-c4dd0af735` — the weekly
-  minor-and-patch group, PR #32 (opened 2026-10-01).
-- `dependabot/npm_and_yarn/vite-8.3.2` — opened as vite 5.4.21 → 8.3.2, PR #33
-  (2026-10-03), against the `main` of that day. `main` now has vite 6.4.3, so from
-  here it is a two-major jump. Not tested here. It stays held under the vite 8
-  entry above until `vite-plugin-pwa` builds under vite 8.
+- **#60** `@napi-rs/canvas` 1.0.11 → 1.0.13 (the weekly minor-and-patch group):
+  **closed** unmerged on 2026-10-27. Four build legs failed
+  `tests/brand-mark.test.js` ("stale icons"); the Node 22.13 leg stopped
+  earlier, at the npm 10 lockfile check (run 40460955039). `package.json`
+  pins canvas at exactly 1.0.11 because 1.0.12 and later render the brand
+  icons differently (main commit `7c876bc`). `.github/dependabot.yml` now
+  ignores `@napi-rs/canvas`. To lift: bump it on its own branch, run
+  `npm run brand:icons`, commit the new icons, and let CI pass.
+- **#61** `@vitejs/plugin-react-swc` 3.11.0 → 4.3.3, major: **held until after
+  go-live**. It fails only the Node 22.13 leg, where npm 10's
+  `npm install --package-lock-only` changes the lockfile (run 40460974894).
+  3.11.0 does not list vite 8 in its peers, so vite 8 waits on this (above).
+- **#62** `concurrently` 9.2.4 → 10.0.6, major, dev-only: CI green.
+- **#63** `pdfjs-dist` 4.10.38 → 6.4.299, two majors: **held**. It needs a
+  smoke test on a text PDF and on a scanned PDF through the OCR path
+  (`src/blocks/aeon_matrix/api/_extract.cjs`). Its Windows leg failed on a 10 s
+  timeout in `tests/local-runtime/cookbook-fit.test.js` (run 40460999447); not
+  yet explained.
+- **#64** `googleapis` 173 → 188, major: CI green.
+
+0 open Dependabot alerts (the 2026-10-27 read-only check). `npm audit` on
+`72e20be` reports 0 advisories (measured 2026-10-27).
+
+Branches on origin: `main` and the five Dependabot branches of #60 to #64 (#60's
+was still there when checked). The stale branch of PR #42 (closed 2026-10-25)
+was removed on 2026-10-27.
+
+The 2026-10-03 listing named PR #32 (the minor-and-patch group of that week)
+and PR #33 (vite 8.3.2). Both were closed unmerged: #33 on 2026-10-03, #32 on
+2026-10-06 (UTC).
 
 The branches this file listed on 2026-08-04 (`checkout-7`, `setup-node-7`,
 `concurrently-10.0.3`, `inquirer-14.0.2`, `typescript-7.0.2`, `vite-8.1.5` and
@@ -172,6 +233,5 @@ an older minor-and-patch group) are gone: the two actions bumps were merged
 hand on 2026-09-14; the older minor-and-patch group (PR #13) was superseded by
 Dependabot.
 
-The majors (vite, typescript, inquirer, concurrently) stay held; vite's reason
-is above. PR #32 is not security-driven: no advisory in the gate's table is
-closed by it.
+None of #61 to #64 is security-driven: the gate holds no acceptances and
+`npm audit` reports nothing they would close.

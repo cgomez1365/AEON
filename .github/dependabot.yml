@@ -9,6 +9,9 @@ updates:
       # Batch low-risk patch/minor bumps into one PR to cut review noise.
       minor-and-patch:
         update-types: ["minor", "patch"]
+    ignore:
+      # Pinned at 1.0.11: 1.0.12+ renders the brand icons differently (tests/brand-mark.test.js). To lift: bump on its own branch, run npm run brand:icons, CI.
+      - dependency-name: "@napi-rs/canvas"
     labels: ["dependencies"]
 
   - package-ecosystem: "github-actions"
