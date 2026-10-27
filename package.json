@@ -48,7 +48,7 @@
     "jspdf": "^4.2.1",
     "vite": "^6.4.3",
     "vite-plugin-pwa": "^1.3.0",
-    "vitest": "^4.1.12"
+    "vitest": "^5.0.5"
   },
   "dependencies": {
     "@napi-rs/canvas": "1.0.11",
