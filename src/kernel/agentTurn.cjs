@@ -214,6 +214,10 @@ async function runAgentTurn({
     // last thing the model sent, with no newline after it (common — many
     // models stop right there). That call is run like any other.
     const found = block || (tail ? tail.block : null);
+    // A bare call line (toolProtocol bareCallTool) closed the round: it is
+    // never run, and what the model wrote after it is not shown. finish()
+    // says so.
+    if (found && found.unfenced) return finish({});
     if (found) {
       if (finalRound) {
         notice('warn', 'tool-limit', `The model asked for another tool after this reply's ${toolbox.outcomes().length} tool uses; it was not run.`);
@@ -279,6 +283,10 @@ async function runAgentTurn({
   return finish({});
 
   function finish({ cancelled = false, stopped = null }) {
+    const strays = [...new Set(scanners.flatMap((sc) => sc.strays()))];
+    if (strays.length) {
+      notice('warn', 'unfenced-tool', `The model wrote a tool call (${strays.join(', ')}) as plain text instead of an aeon-tool block; AEON did not run it and left it out of the answer.`);
+    }
     if (scanners.some((sc) => sc.removed())) {
       notice('warn', 'result-marker', 'The model wrote a tool-result marker itself; AEON left it out. No tool returned that text: a real result shows as a TOOL line above the answer.');
     }

@@ -75,6 +75,9 @@ below.
     neutralised in any case). A result marker the model writes itself in its answer is
     left out of the answer, the feed and the next round (a `result-marker` notice says
     so): no tool returned that text, and a real result shows only as a TOOL line.
+    A call written as a bare JSON line without the fence (`{"tool": "artifact_save", …}`
+    on its own line, as small local models do) is never run: the line is hidden, after
+    answer text it ends the round as a block does, and an `unfenced-tool` notice says so.
     At most 6 tool calls per turn, 3 of them writes; result
     and time caps per tool; off when the chat role's model window is under 4,096 tokens, for
     non-chat roles, or with Memory Core's `agent_tools` off. Every outcome is also

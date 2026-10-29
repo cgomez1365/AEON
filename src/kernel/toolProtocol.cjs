@@ -75,6 +75,16 @@ const HEADER_CLOSE_RE = /^(.*\S)[ \t]*(`{3,}|~{3,})[ \t]*$/;
 // model is showing the operator, never a call.
 const CODE_FENCE_RE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
 const noCr = (line) => (line.endsWith('\r') ? line.slice(0, -1) : line);
+// A bare call: a line that is ONE JSON object naming one of AEON's tools,
+// written without the aeon-tool fence ({"tool": "artifact_save", ...}). Small
+// local models write this (seen 2026-10-29, Phi-4 Mini: the answer, the bare
+// line, then the answer again). It is never run: only a fenced block is a
+// call. It is hidden like a block, and, when answer text was already shown,
+// it ends the round as a block does (what follows it is the model's idea of
+// the call's payload). The start of a line that may still become one is held:
+// "{", '{"to', ... and, once '{"tool":' is there, the rest of the line.
+const BARE_HOLD_RE = /^[ \t]{0,3}\{[ \t]*(?:"(?:t(?:o(?:o(?:l(?:"[ \t]*)?)?)?)?)?)?$/;
+const BARE_START_RE = /^[ \t]{0,3}\{[ \t]*"tool"[ \t]*:/;
 
 // The code fence a completed line opens or closes: the new state.
 function nextFence(state, line) {
@@ -111,6 +121,16 @@ const ALIASES = Object.freeze({
 function normalizeTool(name) {
   const n = String(name ?? '').trim().toLowerCase().replace(/[-\s]+/g, '_');
   return ALIASES[n] || n;
+}
+
+// The tool a bare call line names (see BARE_START_RE), or null.
+function bareCallTool(line) {
+  const t = String(line ?? '').trim();
+  if (!BARE_START_RE.test(t) || !t.endsWith('}')) return null;
+  const h = parseHeader(t);
+  if (!h.ok || typeof h.value.tool !== 'string') return null;
+  const tool = normalizeTool(h.value.tool);
+  return TOOL_NAMES.includes(tool) ? tool : null;
 }
 
 // ── Header JSON, tolerantly ─────────────────────────────────────────────
@@ -299,19 +319,27 @@ function createScanner({ onText = () => {}, initialFence = null, carry = '' } = 
   // (held to the end of the line), or one run of a single fence character.
   let heldInline = false;
   let heldRun = false;
+  let heldBare = false; // a line that starts like a bare call ({"tool": ...) is held to its end
   let lineIsText = false; // a held run on this line was too long: all of it is text
+  const strays = []; // tools named by bare call lines that were hidden
 
   function releaseAll() {
     released += pending; emit(pending); pending = '';
-    heldInline = false; heldRun = false;
+    heldInline = false; heldRun = false; heldBare = false;
   }
 
   // Release whatever part of `pending` can no longer become an opener.
   // Linear in the length of a line: each character costs at most a
   // HOLD_RUN_MAX-long test.
   function settle() {
-    if (pending.length <= 1) { heldInline = false; heldRun = false; }
+    if (pending.length <= 1) { heldInline = false; heldRun = false; heldBare = false; }
     if (codeFence || lineIsText) { releaseAll(); return; }
+    if (heldBare) {
+      if (pending.length <= HOLD_LINE_MAX) return;
+      lineIsText = true; releaseAll(); return;
+    }
+    if (!released && BARE_HOLD_RE.test(pending)) return;
+    if (!released && BARE_START_RE.test(pending)) { heldBare = true; return; }
     if (heldInline) {
       if (pending.length <= HOLD_LINE_MAX) return;
       lineIsText = true; releaseAll(); return;
@@ -410,6 +438,18 @@ function createScanner({ onText = () => {}, initialFence = null, carry = '' } = 
   // Track ordinary code fences in the visible text.
   function noteFence(line) { codeFence = nextFence(codeFence, line); }
 
+  // A completed bare call line (bareCallTool): hidden, never run. After answer
+  // text it closes the round like a block ({ unfenced: true }); before any,
+  // only the line goes and the answer goes on.
+  function strayLine(line, tool) {
+    strays.push(tool);
+    released = ''; pending = ''; heldBare = false;
+    if (!(visibleText + outBuf).trim()) return null;
+    result = { raw: line.trim(), header: line.trim(), content: null, fence: '', unfenced: true, tool };
+    mode = 'done';
+    return result;
+  }
+
   function textLineDone() {
     const line = noCr(released + pending);
     const text = lineIsText;
@@ -421,7 +461,10 @@ function createScanner({ onText = () => {}, initialFence = null, carry = '' } = 
       if (open) { openBlock(open, line); return null; }
       const inline = ONE_LINE_PROSE_RE.test(line) ? null : OPENER_INLINE_RE.exec(line);
       if (inline) { openBlock(inline, line, inline[3]); return null; }
+      const bare = released ? null : bareCallTool(line);
+      if (bare) return strayLine(line, bare);
     }
+    heldBare = false;
     noteFence(line);
     emit(pending + '\n');
     released = ''; pending = '';
@@ -488,6 +531,11 @@ function createScanner({ onText = () => {}, initialFence = null, carry = '' } = 
       }
       const open = asText ? null : OPENER_RE.exec(line);
       const inline = open || asText || ONE_LINE_PROSE_RE.test(line) ? null : OPENER_INLINE_RE.exec(line);
+      const bare = open || inline || asText || released ? null : bareCallTool(line);
+      if (bare) {
+        const b = strayLine(line, bare);
+        return { block: b, unterminated: false, raw: b ? b.raw : '' };
+      }
       if (open || inline) {
         // An opener and nothing (or only a header start) after it: the model
         // stopped right there.
@@ -515,7 +563,7 @@ function createScanner({ onText = () => {}, initialFence = null, carry = '' } = 
     return { block: partial, unterminated: true, truncated: !!truncated, raw: partial.raw };
   }
 
-  return { push, end, visible: () => visibleText, removed: () => markers.removed() };
+  return { push, end, visible: () => visibleText, removed: () => markers.removed(), strays: () => strays.slice() };
 }
 
 // ── The result block fed back to the model ──────────────────────────────
@@ -661,7 +709,7 @@ function claimCheck(text, outcomes = [], { agentNames = [], earlier = [] } = {})
 }
 
 module.exports = {
-  createScanner, createMarkerFilter, parseBlock, parseHeader, repairJson, normalizeTool, wrapResult, neutralise, newNonce, codeFenceState,
+  createScanner, createMarkerFilter, parseBlock, parseHeader, repairJson, normalizeTool, bareCallTool, wrapResult, neutralise, newNonce, codeFenceState,
   systemText, claimCheck, TOOL_NAMES, WRITE_TOOLS, ALIASES,
   OPENER_RE, ONE_LINE_RE, ONE_LINE_PROSE_RE, HOLD_RE, CARRY_RE, HOLD_RUN_MAX, HOLD_LINE_MAX,
 };
