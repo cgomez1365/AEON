@@ -1,8 +1,10 @@
 /**
  * Orion Unified Search — one query, three lenses, real links on everything.
  *
- *   POST /api/orion/search { query, k? }
- *   → { ok, query, results: [{ title, url, excerpt, source, score? }] }
+ *   POST /api/orion/search { query, k?, sources?: { web?, brain?, block? } }
+ *   → { ok, query, legs, results: [{ title, url, excerpt, source, score? }] }
+ *     A source set to false is not searched at all (legs says which ran);
+ *     every source is on when `sources` is left out.
  *     source: "web" (search chain) | "brain" (Second Brain, url = file path)
  *           | "block" (installed block whose brief matches)
  *
@@ -49,9 +51,21 @@ module.exports = function (deps) {
   };
 
   router.post('/orion/search', async (req, res) => {
-    const { query, k = 5 } = req.body || {};
+    const { query, k = 5, sources: want } = req.body || {};
     if (!query || !String(query).trim()) return res.status(400).json({ ok: false, error: 'query required' });
     const q = String(query).trim();
+    // The page's WEB / BRAIN / BLOCKS chips. A chip that is off used to hide
+    // that leg's results AFTER the search: WEB off still ran the web search
+    // (about 95 s with a local model, filming 2026-10-29) and the answer
+    // still cited web pages. Off now means the leg is never run.
+    const legs = {
+      web: want?.web !== false,
+      brain: want?.brain !== false,
+      block: want?.block !== false,
+    };
+    if (!legs.web && !legs.brain && !legs.block) {
+      return res.status(400).json({ ok: false, error: 'Every source is switched off. Turn on WEB, BRAIN or BLOCKS to search.' });
+    }
 
     // Self-fetch host: on Vercel there's no persistent loopback server to hit per
     // invocation, so route back through the public host from the incoming request
@@ -68,12 +82,12 @@ module.exports = function (deps) {
       // `count=k` — the depth control (8/16/24) used to stop here: the route
       // was never told, so its provider default (3 on DDG) came back whatever
       // the page said, and the slice below had nothing more to slice.
-      jfetch(`${base}/api/search-web?q=${encodeURIComponent(q)}&synthesize=0&count=${encodeURIComponent(k)}`, {}, req, 'Web search'),
+      legs.web ? jfetch(`${base}/api/search-web?q=${encodeURIComponent(q)}&synthesize=0&count=${encodeURIComponent(k)}`, {}, req, 'Web search') : null,
       // Second Brain: RAG retrieve (returns passages with doc refs)
-      jfetch(`${base}/api/crn/second-brain/retrieve`, {
+      legs.brain ? jfetch(`${base}/api/crn/second-brain/retrieve`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query: q, k }),
-      }, req, 'The Second Brain (Aeon Matrix)'),
+      }, req, 'The Second Brain (Aeon Matrix)') : null,
       // Blocks: match the live registry briefs (local, sync, no fetch)
       //
       // Matched on TERMS, not on the whole query as one substring. The old
@@ -86,7 +100,7 @@ module.exports = function (deps) {
       // Scored rather than filtered, so the closest block sorts first: id and
       // label are what someone is naming when they type it, the brief is
       // weaker evidence.
-      Promise.resolve().then(() => {
+      !legs.block ? [] : Promise.resolve().then(() => {
         try {
           const { getBlockBriefs } = require('../../../kernel/blockAwareness.cjs');
           const terms = q.toLowerCase().match(/[a-z0-9]{2,}/g) || [];
@@ -252,7 +266,7 @@ module.exports = function (deps) {
     if (degraded.brain) lines.push('', `Second Brain: ${degraded.brain}`);
 
     res.json({
-      ok: true, query: q,
+      ok: true, query: q, legs,
       counts: { web: webBlocks.length, brain: brainDocs.length, block: (blocks || []).length },
       results,
       answer, ...(answerReason ? { answerReason } : {}),

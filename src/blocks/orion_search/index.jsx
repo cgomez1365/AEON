@@ -31,7 +31,8 @@ export default function OrionSearch() {
     try {
       const r = await fetch('/api/orion/search', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: q, k }),
+        // A chip that is off is not searched at all (orion.cjs legs).
+        body: JSON.stringify({ query: q, k, sources }),
       });
       const d = await r.json();
       if (!d.ok) throw new Error(d.error || 'search failed');
@@ -42,6 +43,10 @@ export default function OrionSearch() {
   };
 
   const visible = results ? results.results.filter(r => sources[r.source] !== false) : [];
+  // The chips changed after this search: the answer was made from the sources
+  // that were on then.
+  const legsChanged = !!results?.legs && Object.keys(SOURCE_META).some(id => (results.legs[id] !== false) !== (sources[id] !== false));
+  const countOf = (id) => (results?.legs && results.legs[id] === false ? 'off' : results?.counts?.[id]);
 
   return (
     <div style={{ padding: 24, maxWidth: 860, margin: '0 auto', fontFamily: 'var(--font-mono)', color: 'var(--text)' }}>
@@ -74,14 +79,14 @@ export default function OrionSearch() {
       </div>
 
       {/* Source filters + depth */}
-      <div role="group" aria-label="Filter results by source" style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 14, flexWrap: 'wrap' }}>
+      <div role="group" aria-label="Sources to search" style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 14, flexWrap: 'wrap' }}>
         {Object.entries(SOURCE_META).map(([id, meta]) => {
           const Icon = meta.icon;
           const on = sources[id];
           return (
             <button key={id} onClick={() => setSources(s => ({ ...s, [id]: !s[id] }))}
               aria-pressed={on}
-              aria-label={`${meta.label} results ${on ? 'shown, click to hide' : 'hidden, click to show'}`}
+              aria-label={`${meta.label} ${on ? 'on: searched, click to turn off' : 'off: not searched, click to turn on'}`}
               className="orion-focusable"
               style={{
               display: 'flex', alignItems: 'center', gap: 5, padding: '4px 11px', borderRadius: 999, fontSize: 9.5, fontWeight: 700, cursor: 'pointer',
@@ -131,8 +136,13 @@ export default function OrionSearch() {
       {results && (
         <div>
           <div style={{ fontSize: 10, color: 'var(--text-dim)', marginBottom: 10 }}>
-            {visible.length} shown · web {results.counts.web} · brain {results.counts.brain} · blocks {results.counts.block}
+            {visible.length} shown · web {countOf('web')} · brain {countOf('brain')} · blocks {countOf('block')}
           </div>
+          {legsChanged && (
+            <div role="status" style={{ fontSize: 11, color: 'var(--text-dim)', marginBottom: 10 }}>
+              Sources changed since this search: the answer below was made from the sources that were on then. Search again to redo it.
+            </div>
+          )}
 
           {/* A lens that could not run at all. The API has always reported
               this in `degraded` and nothing rendered it, so a dead web engine

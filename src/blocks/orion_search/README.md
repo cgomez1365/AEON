@@ -13,14 +13,19 @@ already exist elsewhere in AEON.
 
 ## Files
 - `index.jsx` — the search UI. A single input + Enter/click to run; a
-  per-source filter row (`WEB` / `BRAIN` / `BLOCK` toggle chips) that hides
-  results client-side without re-querying; a depth selector (`8` / `16` /
+  per-source row (`WEB` / `BRAIN` / `BLOCK` toggle chips) sent with the search
+  as `sources`: a chip that is off is not searched at all (since 2026-10-29;
+  it used to only hide rows after the web had been searched). Changed after a
+  search, a chip hides rows and a note says the answer came from the sources
+  that were on then; a depth selector (`8` / `16` /
   `24`, sent to the API as `k`); a "recent searches" chip list (client-only,
   see *Storage*); and a results list with color-coded source badges
   (cyan/green/amber) and per-result excerpts.
 - `api/orion.cjs` — the block's only route. `POST /orion/search` (dual-
   mounted by the block host, so the real reachable path is
-  `POST /api/orion/search`) takes `{ query, k? }`, fires the three lookups
+  `POST /api/orion/search`) takes `{ query, k?, sources? }`, fires the lookups whose
+  source is not `false` (all three when `sources` is left out, as the terminal's
+  `/orion` sends it; 400 when all three are off)
   below with `Promise.all`, normalizes each engine's own response shape into
   one flat `{ title, url, excerpt, source, score? }[]`, and returns
   `{ ok, query, counts: { web, brain, block }, results }`.
@@ -34,7 +39,7 @@ already exist elsewhere in AEON.
 ### This block
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/api/orion/search` | Body `{ query, k? }` (`k` defaults to 5, UI sends 8/16/24). Returns `{ ok, query, counts, results, answer, sources, text }`. `results[].source` is `"web"`, `"brain"`, or `"block"`. The model reads each Vault source's matching passage (up to 2,600 chars); `sources[].path` names the Vault file. The page shows `answer` above the result list. |
+| POST | `/api/orion/search` | Body `{ query, k?, sources?: { web?, brain?, block? } }` (`k` defaults to 5, UI sends 8/16/24; a source set to `false` is never run). Returns `{ ok, query, legs, counts, results, answer, sources, text }`; `legs` says which sources ran. `results[].source` is `"web"`, `"brain"`, or `"block"`. The model reads each Vault source's matching passage (up to 2,600 chars); `sources[].path` names the Vault file. The page shows `answer` above the result list. |
 
 ### What it calls (not this block's own code — verified live/reachable)
 | Call | Defined in | Notes |
