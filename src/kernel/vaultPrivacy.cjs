@@ -90,6 +90,20 @@ const NEVER_SHARED = [/^agents\/[^/]+\/chat_sessions(?:\/|$)/i, /^blocks\/securi
 const trimParts = (rel) => String(rel || '').split('/').map((x) => x.replace(/[. ]+$/, '')).join('/');
 const matchesNeverShared = (rel) => NEVER_SHARED.some((re) => re.test(rel) || re.test(trimParts(rel)));
 
+// AEON's own machine records: never in the Second Brain index, and never a
+// candidate for /ask, recall or Orion even while an old index still lists
+// them (found filming 2026-10-29: answers cited Agents/Aeon/missions/log.json,
+// which holds the operator's earlier prompts, and pulled a small local model
+// off topic). An agent's mission log (agents.recordMission), and a saved-chat
+// folder at any depth, not only Agents/<agent>/chat_sessions (NEVER_SHARED).
+// Narrow on purpose (P0-07): the rest of Agents/ (memories, notes, council
+// debates, mission write-ups) stays indexed. Pure: judged on the path text.
+const MACHINE_RECORDS = [/^agents\/[^/]+\/missions\/log\.json$/i, /(?:^|\/)chat_sessions(?:\/|$)/i];
+function isMachineRecord(relPosix) {
+  const rel = path.posix.normalize(`/${String(relPosix || '').replace(/\\/g, '/')}`).slice(1);
+  return MACHINE_RECORDS.some((re) => re.test(rel) || re.test(trimParts(rel)));
+}
+
 // Where removing an agent puts its folder (agents.cjs remove()).
 const REMOVED_BIN = '.removed';
 
@@ -318,4 +332,4 @@ function withheldAt(vaultRoot, absPath) {
   return createScope(vaultRoot).withheldAt(absPath);
 }
 
-module.exports = { createScope, withheld, withheldAt, NEVER_SHARED };
+module.exports = { createScope, withheld, withheldAt, NEVER_SHARED, MACHINE_RECORDS, isMachineRecord };

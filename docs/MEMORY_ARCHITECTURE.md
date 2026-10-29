@@ -45,7 +45,11 @@ indexing it would let a later answer cite an earlier model output as if it were 
 Operator turns re-enter only through an explicit `POST /crn/second-brain/ingest/chat`.
 For the same reason an agent's `scratchpad.md` and `handoffs/` are not indexed: both are
 the model's own words (`src/kernel/agentWorkspace.cjs`). An agent's `artifacts/` are
-documents it was asked to write, and are indexed.
+documents it was asked to write, and are indexed. AEON's own machine records are not
+indexed either, and are never a retrieval candidate even while an older index lists them
+(`vaultPrivacy.isMachineRecord`): an agent's mission log (`Agents/<agent>/missions/log.json`,
+the operator's earlier prompts) and a `chat_sessions` folder at any depth. The rest of
+`Agents/` (memories, notes, council debates, mission write-ups) stays indexed (P0-07).
 
 **Withheld from the index and recall** (`src/kernel/vaultPrivacy.cjs`): switched-off
 memories, a memory store that holds one, and the whole folder of an agent set to Local

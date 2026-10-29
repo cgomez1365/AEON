@@ -488,6 +488,9 @@ module.exports = function ingestFactory(deps) {
       // that leads into saved chats or security records, or a mis-cased one
       // (vaultPrivacy.NEVER_SHARED, judged as the disk resolves the path).
       if (privacy.neverShared(relPosix)) continue;
+      // AEON's own logs: mission logs and saved chats at any depth
+      // (vaultPrivacy.isMachineRecord). Agents' memories and notes stay (P0-07).
+      if (vaultPrivacy.isMachineRecord(relPosix)) continue;
       // An agent's scratchpad and handoffs are its own words (R09, as for
       // chat_sessions above): src/kernel/agentWorkspace.cjs. Its artifacts
       // are deliberate documents and stay indexed.
@@ -831,15 +834,19 @@ module.exports = function ingestFactory(deps) {
     // summary, vectors and all — would stay searchable forever. Index entries
     // with no manifest key (ingest/chat writes none) are checked too.
     const privacy = vaultPrivacy.createScope(BRAIN_DIR);
+    // AEON's own machine records an older scan indexed (a mission log) leave
+    // the same way, counted as deleted only: nobody withheld them.
     for (const rel of new Set([...Object.keys(manifest), ...Object.keys(index.documents)])) {
       const relPosix = rel.replace(/\\/g, '/');
-      if (seen.has(relPosix) || !(privacy.withheld(relPosix) || privacy.neverShared(relPosix))) continue;
+      if (seen.has(relPosix)) continue;
+      const held = privacy.withheld(relPosix) || privacy.neverShared(relPosix);
+      if (!held && !vaultPrivacy.isMachineRecord(relPosix)) continue;
       delete manifest[rel];
       delete index.documents[relPosix];
       delete chunks()[relPosix];
-      results.withheld++;
+      if (held) results.withheld++;
       results.deleted++;
-      onEvent({ file: relPosix, deleted: true, withheld: true });
+      onEvent({ file: relPosix, deleted: true, ...(held ? { withheld: true } : {}) });
       checkpoint();
     }
 

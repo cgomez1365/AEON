@@ -138,7 +138,7 @@ module.exports = function retrieveFactory(deps) {
     const documents = {};
     for (const [rel, d] of Object.entries(idx.documents)) {
       const p = d?.path || rel;
-      if (!privacy.withheld(p) && !privacy.neverShared(p)) documents[rel] = d;
+      if (!privacy.withheld(p) && !privacy.neverShared(p) && !vaultPrivacy.isMachineRecord(p)) documents[rel] = d;
     }
     return { ...idx, documents };
   }
