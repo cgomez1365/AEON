@@ -453,14 +453,26 @@ export default function CookbookHardware() {
     const interval = setInterval(pollTasks, 5000);
     return () => clearInterval(interval);
   }, [pollTasks]);
-  // Refresh runtime status when a runtime-install task finishes
+  // When a runtime or model install finishes, re-read everything it changes:
+  // the runtime status (header, model-install state), the catalogue (rows,
+  // installed marks, the machine's budget line, which says "no runtime is
+  // installed yet" until it is) and the Models tab. Only the status used to
+  // be re-read, so after the runtime installed the list stayed as it was on
+  // mount (filming 2026-10-29). Once per finished task, not on every poll.
+  const seenFinished = useRef(new Set());
   useEffect(() => {
-    const t = tasks.find(x => x.type === 'runtime-install');
-    if (t && (t.status === 'done' || t.status === 'error')) {
-      setLrInstalling(false);
-      fetchLrStatus();
+    let changed = false;
+    for (const t of tasks) {
+      if (t.type !== 'runtime-install' && t.type !== 'model-install') continue;
+      if (t.status !== 'done' && t.status !== 'error') continue;
+      const key = `${t.session_id}:${t.status}`;
+      if (seenFinished.current.has(key)) continue;
+      seenFinished.current.add(key);
+      changed = true;
+      if (t.type === 'runtime-install') setLrInstalling(false);
     }
-  }, [tasks, fetchLrStatus]);
+    if (changed) { fetchLrStatus(); fetchCatalog(); scanCached(); }
+  }, [tasks, fetchLrStatus, fetchCatalog, scanCached]);
   // Debounced hwfit search
   const hwSearchTimer = useRef(null);
   function onHwSearchChange(val) {
@@ -639,7 +651,7 @@ export default function CookbookHardware() {
               <button key={b.file} title={b.file} onClick={() => quickServe(servePick.model, b.file)}
                 style={{ ...tinyBtn, border: '1px solid var(--border, #2a2a2a)', padding: '4px 8px', color: 'var(--color-primary, #00f2ff)' }}>
                 <Play size={11} /> {b.file.replace(/\.gguf$/i, '')}
-                {b.size_bytes ? <span style={{ color: 'var(--text-dim, #888)' }}>&middot; {b.size_bytes >= 1024 ** 3 ? `${(b.size_bytes / 1024 ** 3).toFixed(1)} GB` : `${Math.max(1, Math.round(b.size_bytes / 1024 ** 2))} MB`}</span> : null}
+                {b.size_bytes ? <span style={{ color: 'var(--text-dim, #888)' }}>&middot; {b.size_bytes >= 1e9 ? `${(b.size_bytes / 1e9).toFixed(1)} GB` : `${Math.max(1, Math.round(b.size_bytes / 1e6))} MB`}</span> : null}
               </button>
             ))}
             <button onClick={() => setServePick(null)} style={{ ...tinyBtn, padding: '4px 8px' }}>Cancel</button>
@@ -697,7 +709,7 @@ export default function CookbookHardware() {
             <div style={{ ...cardStyle, marginBottom: '16px', border: '1px solid rgba(0,242,255,0.25)' }}>
               <div style={{ fontSize: '13px', fontWeight: 600, marginBottom: '4px' }}>Local AI runtime (llama.cpp)</div>
               <div style={{ fontSize: '11.5px', color: 'var(--text-dim)', lineHeight: 1.6, marginBottom: '10px' }}>
-                Not installed. Install llama.cpp to run free, private AI models locally — no API key needed.
+                Not installed. Install llama.cpp to run free AI models on this computer — no API key needed.
                 AEON manages it entirely inside its data directory.
               </div>
               <button onClick={installRuntime} disabled={lrInstalling} style={{
@@ -814,7 +826,7 @@ export default function CookbookHardware() {
                       </div>
                       <div style={{ fontSize: '10.5px', color: 'var(--text-dim)' }}>
                         {(m.capabilities || []).join(' · ') || 'model'}
-                        {m.sizeMb ? ` · ${m.sizeMb} MB` : ''}
+                        {m.sizeLabel ? ` · ${m.sizeLabel}` : (m.sizeMb ? ` · ${m.sizeMb.toLocaleString('en-US')} MB` : '')}
                       </div>
                       {/* The verdict states its numbers. "Too big" with no figures
                           is the same unhelpful failure in a nicer font. */}

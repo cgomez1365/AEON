@@ -46,6 +46,14 @@ function tasksFor(dir) {
 // them; running ones are never dropped.
 const FINISHED_KEPT = 20;
 const FINISHED_STATES = new Set(['done', 'completed', 'failed', 'error', 'stopped']);
+// A file size in decimal units, labelled as such: 1 MB = 1,000,000 bytes.
+function formatBytes(bytes) {
+  const b = Number(bytes) || 0;
+  if (b >= 1e9) return `${(b / 1e9).toFixed(1)} GB`;
+  if (b >= 1e6) return `${Math.round(b / 1e6).toLocaleString('en-US')} MB`;
+  return `${Math.max(1, Math.round(b / 1e3))} KB`;
+}
+
 function pruneFinished(tasks) {
   const finished = Object.entries(tasks)
     .filter(([, t]) => t && (t.exited || FINISHED_STATES.has(t.status)))
@@ -598,21 +606,22 @@ module.exports = function createCookbookRouter(deps) {
     return m ? m[0].toUpperCase() : '';
   }
 
-  function formatSize(bytes) {
-    if (bytes >= 1024 ** 3) return `${(bytes / (1024 ** 3)).toFixed(1)} GB`;
-    if (bytes >= 1024 ** 2) return `${Math.round(bytes / (1024 ** 2))} MB`;
-    return `${Math.max(1, Math.round(bytes / 1024))} KB`;
-  }
+  // One unit for file sizes: decimal (1 MB = 1,000,000 bytes), as the
+  // labels say and as Hugging Face lists them. These used to divide by 1024
+  // and print "MB"/"GB" (MiB/GiB under the wrong name) while the installer's
+  // own message divided by 1e6. Machine memory (RAM, VRAM) is not a file size
+  // and keeps its own reading.
+  const formatSize = formatBytes;
 
   function parseSizeStr(s) {
     const m = (s || '').match(/([\d.]+)\s*(TB|GB|MB|KB)/i);
     if (!m) return 0;
     const n = parseFloat(m[1]);
     const u = m[2].toUpperCase();
-    if (u === 'TB') return Math.round(n * 1024 ** 4);
-    if (u === 'GB') return Math.round(n * 1024 ** 3);
-    if (u === 'MB') return Math.round(n * 1024 ** 2);
-    return Math.round(n * 1024);
+    if (u === 'TB') return Math.round(n * 1e12);
+    if (u === 'GB') return Math.round(n * 1e9);
+    if (u === 'MB') return Math.round(n * 1e6);
+    return Math.round(n * 1e3);
   }
 
   function defaultHfCache() {
@@ -734,7 +743,7 @@ module.exports = function createCookbookRouter(deps) {
     }
     const dataRoot = path.resolve(reg.file, '..', '..');
     const entry = (Array.isArray(modelCatalog) ? modelCatalog : (modelCatalog.models || [])).find(m => m.id === modelId);
-    const size = entry?.bytes ? (entry.bytes >= 1e9 ? `${(entry.bytes / 1e9).toFixed(1)} GB` : `${Math.round(entry.bytes / 1e6)} MB`) : 'unknown size';
+    const size = entry?.bytes ? formatBytes(entry.bytes) : 'unknown size';
     const needsRuntime = !reg.activeRuntime();
 
     const sessionId = `local-install-${crypto.randomBytes(4).toString('hex')}`;
@@ -1206,7 +1215,10 @@ module.exports = function createCookbookRouter(deps) {
       if (task.pid) {
         try { process.kill(task.pid, 0); isAlive = true; } catch { isAlive = false; }
       }
-      const selfManaged = false;
+      // The runtime and model installers run inside this process and have no
+      // pid: their own promise sets done or error. Judged by pid they read as
+      // "stopped" on the first poll while still downloading.
+      const selfManaged = task.type === 'runtime-install' || task.type === 'model-install';
 
       let status = task.status;
       if (status === 'running' && !isAlive && !selfManaged) {
@@ -1678,8 +1690,16 @@ module.exports = function createCookbookRouter(deps) {
         const { reg, dataRoot } = regAndRoot();
         const models = modelInstaller.listCatalog(dataRoot || '')
           // catalogue is GGUF by construction; licenseTerms is what the row
-          // shows before Install (A074)
-          .map(m => ({ ...m, format: 'gguf', licenseTerms: modelLicense(m) }));
+          // shows before Install (A074). sizeMb / sizeLabel / installed are
+          // what the row reads: it read m.sizeMb and m.installed, which
+          // nothing set, so an installed model still offered "Install" beside
+          // "2 models ready" (filming 2026-10-29). Installed = verified and
+          // ready in the registry, the same test the header counts.
+          .map(m => ({
+            ...m, format: 'gguf', licenseTerms: modelLicense(m),
+            ...(Number(m.bytes) > 0 ? { sizeMb: Math.round(m.bytes / 1e6), sizeLabel: formatBytes(m.bytes) } : {}),
+            installed: m.installState === 'ready',
+          }));
 
         if (!capabilities || !fitEngine) {
           return res.json({ ok: true, models, shown: models, hidden: [], capabilities: null,
