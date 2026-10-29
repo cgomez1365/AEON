@@ -12,6 +12,29 @@ tagged; until then its heading says so.
      is added here before tagging, and the heading's "not tagged yet" is replaced by
      the date. -->
 
+## Next release — not tagged yet
+
+<!-- So far: the four fix/filming-bugs commits (303007c, de61708, 8916682, 8f93c1b), on top of fd6a9d7. The commits
+     merged to main after v3.5.1 and before fd6a9d7 are not listed here yet; the release commit names the version
+     and adds them. History is not squashed. -->
+
+**Fixes found while filming a demo (Phi-4 Mini on llama.cpp, Local only mode).**
+
+- A small local model that writes a tool call as a bare JSON line (`{"tool": "artifact_save", ...}`) instead of an
+  `aeon-tool` block no longer shows that line, or the copy of the answer it wrote after it, in the reply. The line is
+  never run: only a fenced block is a tool call. A notice names the tool the model tried to use (303007c).
+- The Second Brain no longer indexes AEON's own records: an agent's mission log (`Agents/<agent>/missions/log.json`,
+  which holds earlier prompts) and saved chats in a `chat_sessions` folder at any depth. `/ask`, recall, Orion and
+  `vault_search` stop seeing them at once, and the next scan takes an old entry out of the index. Agents' memories,
+  notes, council debates and mission write-ups stay indexed (de61708).
+- Orion Search: a source chip (WEB, BRAIN, BLOCK) that is off before you search is not searched at all. With WEB
+  off, Orion makes no web search, fetches no page, and its answer uses no web result; it used to search the web
+  anyway and only hide the rows. The terminal's `/orion` still searches all three (8916682).
+- Cookbook: a model you installed shows "installed" and every model shows its size. File sizes are decimal and
+  labelled so (1 MB = 1,000,000 bytes; they were divided by 1024 and still called MB and GB). After the runtime or a
+  model installs, the model list, the "no runtime is installed yet" line and the Models tab refresh without a reload,
+  and an install in progress no longer shows as stopped in the task list (8f93c1b).
+
 ## 3.5.1 — 2026-10-26
 
 <!-- From v3.5.0 (14c17bb, 2026-10-25) to cd6ff08: 1 commit, then the release commit f1b34ac (whose CI run is the 3.5.1 reading)
