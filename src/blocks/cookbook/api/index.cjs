@@ -1875,6 +1875,10 @@ module.exports = function createCookbookRouter(deps) {
           ok: true,
           runtimeReady: !!active,
           activeRuntime: active ? active.id : null,
+          // A shared drive can hold a runtime for another OS only: say so, so
+          // "Not installed" is not read as the drive having lost it.
+          otherOsRuntimes: active ? [] : reg.otherHostRuntimes().map(r => `${r.platform}-${r.arch}`),
+          host: `${process.platform}-${process.arch}`,
           readyModels: ready.length,
           install,
           modelInstall,

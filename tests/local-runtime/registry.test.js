@@ -384,3 +384,45 @@ describe('concurrent readers', () => {
     expect(reg.load().models.length).toBe(41);
   });
 });
+
+// A data root on a USB drive moves between a Mac and a Windows box. The
+// darwin runtime stayed "active" on win32 and Cookbook said llama.cpp was
+// installed, so it never offered the Download.
+describe('runtime per OS on a shared data root', () => {
+  const MAC = { platform: 'darwin', arch: 'x64' };
+  const WIN = { platform: 'win32', arch: 'x64' };
+  const mac = () => runtime({ id: 'llamacpp-b10216-darwin-x64-cpu', platform: 'darwin', arch: 'x64', entrypoint: 'llama-server' });
+  const win = () => runtime({ id: 'llamacpp-b10216-win32-x64-cpu', platform: 'win32', arch: 'x64', entrypoint: 'llama-server.exe' });
+
+  it('win32 with only a darwin runtime reports it missing', () => {
+    reg.upsertRuntime(mac());
+    reg.activateRuntime('llamacpp-b10216-darwin-x64-cpu');
+    expect(reg.activeRuntime(WIN)).toBeNull();
+    expect(reg.otherHostRuntimes(WIN).map(r => r.id)).toEqual(['llamacpp-b10216-darwin-x64-cpu']);
+    expect(reg.activeRuntime(MAC).id).toBe('llamacpp-b10216-darwin-x64-cpu');
+  });
+
+  it('installing the Windows runtime keeps the Mac one ready; each OS gets its own', () => {
+    reg.upsertRuntime(mac());
+    reg.activateRuntime('llamacpp-b10216-darwin-x64-cpu');
+    reg.upsertRuntime(win());
+    reg.activateRuntime('llamacpp-b10216-win32-x64-cpu');
+
+    expect(reg.load().runtimes.find(r => r.platform === 'darwin').state).toBe('ready');
+    expect(reg.activeRuntime(WIN).id).toBe('llamacpp-b10216-win32-x64-cpu');
+    expect(reg.activeRuntime(MAC).id).toBe('llamacpp-b10216-darwin-x64-cpu');
+    expect(reg.otherHostRuntimes(MAC).map(r => r.id)).toEqual(['llamacpp-b10216-win32-x64-cpu']);
+  });
+
+  it('an arch mismatch on the same OS also counts as missing', () => {
+    reg.upsertRuntime(mac());
+    reg.activateRuntime('llamacpp-b10216-darwin-x64-cpu');
+    expect(reg.activeRuntime({ platform: 'darwin', arch: 'arm64' })).toBeNull();
+  });
+
+  it('an entry with no platform recorded still serves (legacy installs)', () => {
+    reg.upsertRuntime(runtime());
+    reg.activateRuntime('llamacpp-b4321-cpu');
+    expect(reg.activeRuntime(WIN).id).toBe('llamacpp-b4321-cpu');
+  });
+});

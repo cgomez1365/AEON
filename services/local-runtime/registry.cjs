@@ -28,6 +28,20 @@ const MODEL_STATES = new Set(['staged', 'ready', 'quarantined', 'removing']);
 const BACKENDS = new Set(['cpu', 'cuda', 'metal', 'vulkan', 'rocm']);
 const CAPABILITIES = new Set(['chat', 'embed', 'vision', 'tools']);
 
+const HOST = { platform: process.platform, arch: process.arch };
+
+/**
+ * Whether a runtime entry was built for `host`. An entry that records neither
+ * field predates multi-OS drives: it was installed on this machine's OS, so it
+ * keeps working. A host with no platform (a legacy entry passed as one) matches
+ * everything, so activateRuntime's old behaviour holds for those.
+ */
+function runsOn(r, host) {
+  if (host.platform && r.platform && r.platform !== host.platform) return false;
+  if (host.arch && r.arch && r.arch !== host.arch) return false;
+  return true;
+}
+
 /**
  * Legal state transitions. Anything not listed is refused — an install that
  * jumps staged→ready without passing verification is exactly the bug the
@@ -320,10 +334,21 @@ function createRegistry(dataRoot) {
     return readyModels().filter(m => Array.isArray(m.capabilities) && m.capabilities.includes(cap));
   }
 
-  function activeRuntime() {
+  // A data root on a USB drive moves between machines. The darwin-x64 runtime
+  // set up on the iMac was still "active" when the drive was plugged into a
+  // Windows box, so Cookbook reported llama.cpp installed and offered no
+  // Download — and the binary could never run there. A runtime only counts on
+  // the platform+arch it was built for; one per OS lives side by side.
+  function activeRuntime(host = HOST) {
     const reg = load();
     if (!reg.activeRuntimeId) return null;
-    return reg.runtimes.find(r => r.id === reg.activeRuntimeId && r.state === 'ready') || null;
+    const ready = reg.runtimes.filter(r => r.state === 'ready' && runsOn(r, host));
+    return ready.find(r => r.id === reg.activeRuntimeId) || ready[ready.length - 1] || null;
+  }
+
+  /** Ready runtimes on this data root built for some OTHER platform+arch. */
+  function otherHostRuntimes(host = HOST) {
+    return load().runtimes.filter(r => r.state === 'ready' && !runsOn(r, host));
   }
 
   /** Resolve a registry entry's stored relative path to an absolute one. */
@@ -457,8 +482,11 @@ function createRegistry(dataRoot) {
       const r = reg.runtimes.find(x => x.id === id);
       if (!r) throw new RegistryError(`unknown runtime: ${id}`, 'REGISTRY_UNKNOWN_ID');
       if (r.state !== 'ready') throw new RegistryError(`runtime ${id} is "${r.state}", not "ready"`, 'REGISTRY_NOT_READY');
+      // Supersede only runtimes for the same platform+arch: installing the
+      // Windows runtime must not retire the Mac one on a shared drive.
+      const host = { platform: r.platform, arch: r.arch };
       for (const other of reg.runtimes) {
-        if (other.id !== id && other.state === 'ready') other.state = 'superseded';
+        if (other.id !== id && other.state === 'ready' && runsOn(other, host)) other.state = 'superseded';
       }
       reg.activeRuntimeId = id;
     });
@@ -467,7 +495,7 @@ function createRegistry(dataRoot) {
   return {
     file, backupFile: bak,
     read, load, write, update, cleanStaging,
-    readyModels, modelsForCapability, activeRuntime, resolveEntryPath,
+    readyModels, modelsForCapability, activeRuntime, otherHostRuntimes, resolveEntryPath,
     upsertModel, setModelState, removeModel,
     upsertRuntime, activateRuntime,
     get readOnly() { return lastReadOnly; },

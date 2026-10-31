@@ -709,7 +709,9 @@ export default function CookbookHardware() {
             <div style={{ ...cardStyle, marginBottom: '16px', border: '1px solid rgba(0,242,255,0.25)' }}>
               <div style={{ fontSize: '13px', fontWeight: 600, marginBottom: '4px' }}>Local AI runtime (llama.cpp)</div>
               <div style={{ fontSize: '11.5px', color: 'var(--text-dim)', lineHeight: 1.6, marginBottom: '10px' }}>
-                Not installed. Install llama.cpp to run free AI models on this computer — no API key needed.
+                {lrStatus.otherOsRuntimes?.length
+                  ? `Runtime missing for this OS (${lrStatus.host}). This data folder holds one for ${lrStatus.otherOsRuntimes.join(', ')} only; install this OS's beside it — your models are shared.`
+                  : 'Not installed.'}{' '}Install llama.cpp to run free AI models on this computer — no API key needed.
                 AEON manages it entirely inside its data directory.
               </div>
               <button onClick={installRuntime} disabled={lrInstalling} style={{
