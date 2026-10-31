@@ -14,7 +14,8 @@ tagged; until then its heading says so.
 
 ## Next release — not tagged yet
 
-<!-- So far: the four fix/filming-bugs commits (303007c, de61708, 8916682, 8f93c1b), on top of fd6a9d7. The commits
+<!-- So far: the four fix/filming-bugs commits (303007c, de61708, 8916682, 8f93c1b), on top of fd6a9d7, then
+     fix/runtime-per-os (2bad9a1). The commits
      merged to main after v3.5.1 and before fd6a9d7 are not listed here yet; the release commit names the version
      and adds them. History is not squashed. -->
 
@@ -34,6 +35,13 @@ tagged; until then its heading says so.
   labelled so (1 MB = 1,000,000 bytes; they were divided by 1024 and still called MB and GB). After the runtime or a
   model installs, the model list, the "no runtime is installed yet" line and the Models tab refresh without a reload,
   and an install in progress no longer shows as stopped in the task list (8f93c1b).
+
+**One drive, more than one OS.**
+
+- A local AI runtime counts only on the platform and architecture it was built for. A data folder set up on a Mac
+  and opened on Windows used to say "llama.cpp installed" and offer no download, though the Mac binary cannot run
+  there. Cookbook now says "Runtime missing for this OS", names the one the folder holds, and offers the install.
+  Installing the Windows runtime keeps the Mac one ready beside it; both use the same models (2bad9a1).
 
 ## 3.5.1 — 2026-10-26
 
