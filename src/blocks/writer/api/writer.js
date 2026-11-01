@@ -413,7 +413,13 @@ Return ONLY valid JSON.\n\nSamples:\n${corpus}`
     // string one. Refuse instead of letting `${[...]}` join it into a prompt.
     const wrong = ['prompt', 'tone', 'length', 'mode', 'draft'].find(k => body[k] != null && typeof body[k] !== 'string');
     if (wrong) return res.status(400).json({ error: `${wrong} must be a string` });
-    const { prompt, tone, length, mode = 'write', draft = '' } = body;
+    // Read each field through its own typeof: CodeQL does not follow the
+    // .find() above, and flagged a destructure of body as alert 197.
+    const prompt = typeof body.prompt === 'string' ? body.prompt : undefined;
+    const tone = typeof body.tone === 'string' ? body.tone : undefined;
+    const length = typeof body.length === 'string' ? body.length : undefined;
+    const mode = typeof body.mode === 'string' ? body.mode : 'write';
+    const draft = typeof body.draft === 'string' ? body.draft : '';
     if (!prompt && mode !== 'continue' && mode !== 'stylecheck') {
       return res.status(400).json({ error: 'prompt is required' });
     }
