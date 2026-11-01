@@ -12,12 +12,43 @@ tagged; until then its heading says so.
      is added here before tagging, and the heading's "not tagged yet" is replaced by
      the date. -->
 
-## Next release — not tagged yet
+## 3.6.0 — not tagged yet
 
-<!-- So far: the four fix/filming-bugs commits (303007c, de61708, 8916682, 8f93c1b), on top of fd6a9d7, then
-     fix/runtime-per-os (2bad9a1). The commits
-     merged to main after v3.5.1 and before fd6a9d7 are not listed here yet; the release commit names the version
-     and adds them. History is not squashed. -->
+<!-- From v3.5.1 (72e20be, 2026-10-26) to 17b2f68: 21 commits, then the release commit (whose CI run is the 3.6.0
+     reading) and the commit that dates this heading (the v3.6.0 tag). History is not squashed. -->
+
+**The video autopilot is retired.** AEON no longer starts a background job that stitched clips with FFmpeg, asked
+Groq for a title with its own key (outside Settings → Models → Local only) and uploaded the result to YouTube as a
+public video. Its routes (`/api/autopilot/*`), the media service, the YouTube uploader and the `googleapis`
+dependency are gone; your files are untouched. A test fails if any of them returns (d72822e, fd6a9d7).
+
+**Security.** The two alerts GitHub's code scanning rated critical are closed (137c71c, bf3498a):
+
+- Cookbook's serve command can no longer set a variable that changes what code the server loads (`LD_*`, `DYLD_*`,
+  `PATH`, `NODE_OPTIONS`, `PYTHONPATH` and the like): `DYLD_INSERT_LIBRARIES=… llama-server` made an allowed binary
+  load any library. `npx` is no longer an allowed command, because it downloads a package and runs it. Settings a
+  server takes (`CUDA_VISIBLE_DEVICES`, `HF_TOKEN`, `LLAMA_ARG_*`, `VLLM_*`) still work. No shell was ever involved.
+- Writer refuses a request whose prompt, draft, tone, length or mode is not text, instead of joining a list into
+  the prompt.
+- Code scanning's review of those fixes found three more in Writer, plus two it had listed since 10-03 (e17d526, 17b2f68):
+  a request sent as a list is read as empty; a critique full of unclosed `<style` tags no longer takes seconds to
+  clean up (96 KB took 1.1 s; now a single pass); a tag hidden inside another (`<<b>script>`) no longer survives
+  the cleanup, and `&amp;lt;` reads as `&lt;`, not `<`.
+
+**Auto-lock works at any setting.** Set to 10 minutes, it never locked: every request from the open window counted
+as you being there, and the window checks in every few seconds (about once a minute in the background), so only a
+1-minute setting could ever be reached. Now only your own input (pointer, keys, scroll, touch) keeps AEON unlocked;
+the window tells AEON how long ago that was. A command-line client still counts as active (105ced2).
+
+**Wording before go-live.** The README, privacy notice, launcher and license hints say only what AEON does: a
+local model keeps every call on your computer only with Local only on; the license hint names a command that exists
+(`npm run aeon -- eula accept`) and the launcher names Settings → Keys; the support address is
+aeon@brokengearindustries.com (dd08e9a, 1c38e8c, 50ad02e, 389b879). Dependency decisions are dated 2026-10-27
+(9cf017e); the dev tool `concurrently` is on 10.0.6 (14ea3f6).
+
+**Dependencies.** PDF text extraction runs on pdf.js 6.4.299 (was 4.10.38); a generated PDF reads correctly through
+AEON's text extractor (src/kernel/extract.cjs), and the Vault's PDF page tests pass. The interface builds with the SWC React plugin 4.3.3, tests run on vitest 5.0.5, and CI sets
+up Node with actions/setup-node 7.1.0. These are the five Dependabot updates that were open (77d2ce2).
 
 **Fixes found while filming a demo (Phi-4 Mini on llama.cpp, Local only mode).**
 
