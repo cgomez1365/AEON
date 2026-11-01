@@ -183,6 +183,11 @@ function createSessionValidator(options = {}) {
     return !!mobileSecret && req.headers?.authorization === `Bearer ${mobileSecret}`;
   }
 
+  function inputAgeMs(req, now) {
+    const age = Number(req.headers?.['x-aeon-input-age']);
+    return Number.isFinite(age) && age > 0 ? Math.min(age, now) : 0;
+  }
+
   function validateSession(req, policy = loadPolicy()) {
     if (isMachineSession(req)) {
       lastGlobalActivity = Date.now();
@@ -219,10 +224,16 @@ function createSessionValidator(options = {}) {
       return { ok: false, reason: 'idle' };
     }
 
-    activity.set(token, now);
-    lastGlobalActivity = now;
-    if (now - (meta.lastSeen || 0) > 30_000) {
-      meta.lastSeen = now;
+    // A background poll is not a person at the keyboard: the open UI polls
+    // every few seconds (about once a minute when its tab is hidden), so
+    // counting every request kept a 10-minute auto-lock from ever firing. The
+    // browser says how long ago its last real input was; a client that does
+    // not send it (CLI, scripts) counts as active, as before.
+    const seenAt = now - inputAgeMs(req, now);
+    activity.set(token, Math.max(activity.get(token) || 0, seenAt));
+    lastGlobalActivity = Math.max(lastGlobalActivity, seenAt);
+    if (seenAt - (meta.lastSeen || 0) > 30_000) {
+      meta.lastSeen = seenAt;
       saveUser(user);
     }
     return { ok: true, kind: 'session', user, token, meta };

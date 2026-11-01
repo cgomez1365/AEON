@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRequire } from 'module';
 import fs from 'fs';
 import os from 'os';
@@ -119,6 +119,57 @@ describe('Vault-backed session validator', () => {
     expired.sessions.valid.expires = Date.now() - 1;
     validator.saveUser(expired);
     expect(validator.validateSession(request, validator.loadPolicy()).reason).toBe('expired');
+  });
+
+  // CEO 2026-10-31: auto-lock at 10 min never fired, at 1 min it did. The open
+  // UI polls every few seconds and every poll counted as activity.
+  describe('idle auto-lock counts input, not polls', () => {
+    const T = Date.parse('2026-10-31T12:00:00Z');
+    const poll = (inputAgeMs) => ({
+      method: 'GET', path: '/api/audit', query: {},
+      headers: { authorization: 'Bearer valid', ...(inputAgeMs == null ? {} : { 'x-aeon-input-age': String(inputAgeMs) }) },
+    });
+    const policy = { guardEnabled: true, idleMinutes: 10 };
+    const sessionAt = (t) => userWithSession({ sessions: { valid: { created: t, lastSeen: t, expires: t + 86_400_000 } } });
+
+    afterEach(() => vi.useRealTimers());
+
+    it('locks after 10 minutes even with a poll every minute', () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(T);
+      validator.saveUser(sessionAt(T));
+      for (let m = 1; m <= 10; m++) {
+        vi.setSystemTime(T + m * 60_000 - 1);
+        expect(validator.validateSession(poll(m * 60_000 - 1), policy).ok).toBe(true);
+      }
+      vi.setSystemTime(T + 10 * 60_000 + 5_000);
+      expect(validator.validateSession(poll(10 * 60_000 + 5_000), policy).reason).toBe('idle');
+    });
+
+    it('stays unlocked when the person keeps using it', () => {
+      vi.useFakeTimers();
+      validator.saveUser(sessionAt(T));
+      for (let m = 1; m <= 30; m++) {
+        vi.setSystemTime(T + m * 60_000);
+        expect(validator.validateSession(poll(2_000), policy).ok).toBe(true);
+      }
+    });
+
+    it('a client without the header (CLI, scripts) still counts as active', () => {
+      vi.useFakeTimers();
+      validator.saveUser(sessionAt(T));
+      for (let m = 1; m <= 30; m++) {
+        vi.setSystemTime(T + m * 60_000);
+        expect(validator.validateSession(poll(null), policy).ok).toBe(true);
+      }
+    });
+
+    it('a bad header value counts as active instead of breaking', () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(T + 60_000);
+      validator.saveUser(sessionAt(T));
+      for (const v of ['abc', '-5', 'Infinity']) expect(validator.validateSession(poll(v), policy).ok).toBe(true);
+    });
   });
 
   it('keeps only explicit pre-auth routes open', () => {

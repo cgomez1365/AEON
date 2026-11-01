@@ -22,6 +22,21 @@ function hasSessionToken() {
   try { return !!localStorage.getItem('aeon_session_token'); } catch { return false; }
 }
 
+// Auto-lock counts people, not polls. Every same-origin request tells the
+// server how long ago the last real input was (sessionValidator.cjs), so the
+// background polls below cannot keep an idle session alive.
+let lastInputAt = Date.now();
+const INPUT_EVENTS = ['pointerdown', 'pointermove', 'keydown', 'wheel', 'touchstart'];
+const markInput = () => { lastInputAt = Date.now(); };
+function withInputAge(args) {
+  const [input, init] = args;
+  const url = typeof input === 'string' ? input : (input?.url || String(input || ''));
+  try { if (new URL(url, window.location.href).origin !== window.location.origin) return args; } catch { return args; }
+  const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+  headers.set('X-AEON-Input-Age', String(Math.max(0, Date.now() - lastInputAt)));
+  return [input, { ...init, headers }];
+}
+
 
 export default function App() {
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
@@ -164,7 +179,9 @@ export default function App() {
     };
 
     const originalFetch = window.fetch;
-    window.fetch = async function(...args) {
+    INPUT_EVENTS.forEach(e => window.addEventListener(e, markInput, { passive: true, capture: true }));
+    window.fetch = async function(...rawArgs) {
+      const args = withInputAge(rawArgs);
       const url = typeof args[0] === 'string' ? args[0] : (args[0]?.url || '');
       // The catch covers the transport call ONLY. Wrapping the banner work in
       // it too would let a render error report itself as [NETWORK DEAD] and
@@ -192,6 +209,7 @@ export default function App() {
     };
     return () => {
       window.fetch = originalFetch;
+      INPUT_EVENTS.forEach(e => window.removeEventListener(e, markInput, { capture: true }));
     };
   }, []);
 
