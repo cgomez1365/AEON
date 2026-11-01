@@ -128,3 +128,23 @@ describe('new content and feedback come back flagged, not refused', () => {
     expect(calls[0].opts.role).toBe('creative');
   });
 });
+
+// CodeQL js/type-confusion-through-parameter-tampering (alert 186): JSON lets
+// prompt/draft/tone/length/mode arrive as arrays. Refused, the model never called.
+describe('Writer generate refuses non-string fields', () => {
+  for (const field of ['prompt', 'draft', 'tone', 'length', 'mode']) {
+    it(`${field} as an array → 400`, async () => {
+      const { app, calls } = appWith(WHOLE);
+      const r = await call(app, '/api/writer/generate', { prompt: 'a note', [field]: ['a', 'b'] });
+      expect(r.status).toBe(400);
+      expect(r.body.error).toMatch(new RegExp(`${field} must be a string`));
+      expect(calls.length).toBe(0);
+    });
+  }
+
+  it('plain strings still work', async () => {
+    const { app } = appWith(WHOLE);
+    const r = await call(app, '/api/writer/generate', { mode: 'write', prompt: 'a note', tone: 'warm', length: 'short' });
+    expect(r.status).toBe(200);
+  });
+});

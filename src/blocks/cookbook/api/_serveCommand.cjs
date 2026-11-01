@@ -23,7 +23,38 @@ const path = require('path');
 // serve command legitimately needs contains any of these.
 const SHELL_METACHARS = /[`\n\r;&|<>$(){}]/;
 
-const DEFAULT_ALLOWED = ['vllm', 'llama-server', 'llama_server', 'python', 'python3', 'sglang', 'node', 'npx'];
+// npx was here: `npx <pkg>` fetches a package from npm and runs it, which no
+// model server needs. Removed 2026-10-31 (CodeQL alert 182). node stays: like
+// python it runs a file already on this computer.
+const DEFAULT_ALLOWED = ['vllm', 'llama-server', 'llama_server', 'python', 'python3', 'sglang', 'node'];
+
+/**
+ * May a leading `NAME=value` word of a serve command set this variable?
+ *
+ * The words become the spawned server's environment. Some names are not
+ * settings but code: DYLD_INSERT_LIBRARIES / LD_PRELOAD load a library into
+ * llama-server, PYTHONSTARTUP / PYTHONPATH run or shadow Python modules, and
+ * PATH swaps which binary an allowlisted name resolves to. The legitimate
+ * ones the UI and docs use: CUDA_VISIBLE_DEVICES, HF_TOKEN, LLAMA_ARG_*,
+ * VLLM_*, OMP_NUM_THREADS.
+ *
+ * @param {string} name  already matched /^[A-Za-z_][A-Za-z0-9_]*$/
+ * @returns {boolean}    true = allowed, false = the command is refused
+ */
+// Denylist, not allowlist: servers add settings faster than AEON ships, and a
+// refused CUDA_/VLLM_ variable would break a working serve. What is listed is
+// every way a variable makes the dynamic loader or an interpreter run code.
+const LOADER_ENV_PREFIXES = ['LD_', 'DYLD_'];
+const LOADER_ENV_NAMES = new Set([
+  'PATH', 'NODE_OPTIONS', 'BASH_ENV', 'ENV',
+  'PYTHONSTARTUP', 'PYTHONPATH', 'PYTHONHOME', 'PYTHONUSERBASE', 'PYTHONEXECUTABLE', 'PYTHONINSPECT',
+]);
+
+function envNameAllowed(name) {
+  const n = String(name).toUpperCase();
+  if (LOADER_ENV_PREFIXES.some(p => n.startsWith(p))) return false;
+  return !LOADER_ENV_NAMES.has(n);
+}
 
 /**
  * Split a command string into argv, honouring quotes for GROUPING ONLY.
@@ -132,6 +163,9 @@ function parseServeCommand(rawCmd, opts = {}) {
   for (; i < tok.tokens.length; i++) {
     const m = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(tok.tokens[i]);
     if (!m) break;
+    if (!envNameAllowed(m[1])) {
+      return { ok: false, status: 400, error: `cmd may not set ${m[1]}: it changes what code the server loads.` };
+    }
     env[m[1]] = m[2];
   }
 
@@ -299,6 +333,7 @@ function vramErrorMessage(fit, repoId, largestThatFits) {
 module.exports = {
   SHELL_METACHARS,
   DEFAULT_ALLOWED,
+  envNameAllowed,
   QUANT_BYTES_PER_PARAM,
   tokenizeCommand,
   parseServeCommand,

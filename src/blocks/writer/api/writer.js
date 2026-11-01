@@ -408,7 +408,12 @@ Return ONLY valid JSON.\n\nSamples:\n${corpus}`
   // ── GENERATE (write / braindump / continue / stylecheck) ─────────────────────
 
   app.post('/api/writer/generate', async (req, res) => {
-    const { prompt, tone, length, mode = 'write', draft = '' } = req.body || {};
+    const body = req.body || {};
+    // JSON lets each field arrive as an array or object; every use below is a
+    // string one. Refuse instead of letting `${[...]}` join it into a prompt.
+    const wrong = ['prompt', 'tone', 'length', 'mode', 'draft'].find(k => body[k] != null && typeof body[k] !== 'string');
+    if (wrong) return res.status(400).json({ error: `${wrong} must be a string` });
+    const { prompt, tone, length, mode = 'write', draft = '' } = body;
     if (!prompt && mode !== 'continue' && mode !== 'stylecheck') {
       return res.status(400).json({ error: 'prompt is required' });
     }

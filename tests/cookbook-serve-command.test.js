@@ -309,3 +309,30 @@ describe('vramErrorMessage — names both remedies, cheaper first', () => {
     expect(msg).toMatch(/lower -ngl/i);
   });
 });
+
+// CodeQL alert 182 (js/command-line-injection) hardening, 2026-10-31. No shell
+// was ever involved; these close what the argv path still let through.
+describe('serve command: interpreters and loader variables', () => {
+  it('npx is no longer allowed (it fetches and runs a package from npm)', () => {
+    expect(parseServeCommand('npx some-package').ok).toBe(false);
+  });
+
+  for (const name of ['DYLD_INSERT_LIBRARIES', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'DYLD_LIBRARY_PATH',
+    'PYTHONSTARTUP', 'PYTHONPATH', 'PATH', 'NODE_OPTIONS']) {
+    it(`refuses ${name}=… (it changes what code runs)`, () => {
+      const r = parseServeCommand(`${name}=/tmp/x llama-server --port 8080`);
+      expect(r.ok).toBe(false);
+      expect(r.error).toMatch(new RegExp(name));
+    });
+  }
+
+  for (const name of ['CUDA_VISIBLE_DEVICES', 'HF_TOKEN', 'LLAMA_ARG_CTX_SIZE', 'VLLM_USE_V1', 'OMP_NUM_THREADS']) {
+    it(`still allows ${name}=…`, () => {
+      expect(parseServeCommand(`${name}=1 llama-server --port 8080`).ok).toBe(true);
+    });
+  }
+
+  it('the case of a name does not get it past the check', () => {
+    expect(parseServeCommand('ld_preload=/tmp/x llama-server').ok).toBe(false);
+  });
+});
