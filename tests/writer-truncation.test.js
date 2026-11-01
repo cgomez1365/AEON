@@ -147,4 +147,48 @@ describe('Writer generate refuses non-string fields', () => {
     const r = await call(app, '/api/writer/generate', { mode: 'write', prompt: 'a note', tone: 'warm', length: 'short' });
     expect(r.status).toBe(200);
   });
+
+  it('a JSON array body is read as no fields, not as its length', async () => {
+    const { app, calls } = appWith(WHOLE);
+    const r = await call(app, '/api/writer/generate', ['a', 'b', 'c']);
+    expect(r.status).toBe(400);
+    expect(r.body.error).toMatch(/prompt is required/);
+    expect(calls.length).toBe(0);
+  });
+});
+
+describe('critique strips script and style blocks in linear time', () => {
+  const sentText = (calls) => JSON.stringify(calls.at(-1).messages);
+
+  it('drops <script>/<style> blocks and keeps the prose around them', async () => {
+    const { app, calls } = appWith(WHOLE);
+    const text = '<p>Before.</p><STYLE type="x">p{color:red}</STYLE><p>Middle.</p><script>alert(1)</script><p>After.</p>';
+    const r = await call(app, '/api/writer/improve', { text, action: 'critique' });
+    expect(r.status).toBe(200);
+    const sent = sentText(calls);
+    expect(sent).toMatch(/Before\.[\s\S]*Middle\.[\s\S]*After\./);
+    expect(sent).not.toMatch(/color:red|alert\(1\)/);
+  });
+
+  it('leaves no tag behind nested tags, and decodes each entity once', async () => {
+    const { app, calls } = appWith(WHOLE);
+    const text = '<p><<b>script>x</p><p>a &amp;lt; b &lt; c &amp; d</p>';
+    const r = await call(app, '/api/writer/improve', { text, action: 'critique' });
+    expect(r.status).toBe(200);
+    const sent = sentText(calls);
+    expect(sent).not.toMatch(/<script/);
+    expect(sent).toContain('a &lt; b < c & d');
+  });
+
+  it("a long run of unclosed '<style' (CodeQL polynomial regex) stays fast", async () => {
+    const { app, calls } = appWith(WHOLE);
+    // 96 KB, under express.json's 100 KB default. The old regex took ~1.1 s on
+    // this alone (2026-10-31, M-series Mac); the scanner takes milliseconds.
+    const text = '<style'.repeat(16_000) + '<p>tail</p>';
+    const t0 = Date.now();
+    const r = await call(app, '/api/writer/improve', { text, action: 'critique' });
+    expect(r.status).toBe(200);
+    expect(Date.now() - t0).toBeLessThan(400);
+    expect(sentText(calls)).toMatch(/tail/);
+  });
 });

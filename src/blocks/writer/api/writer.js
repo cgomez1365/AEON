@@ -150,12 +150,33 @@ OUTPUT FORMAT — the document is HTML. Return valid HTML using only these tags:
 
   // Strip tags for anything a model should read as prose rather than markup —
   // style analysis, critique, and the Memory Core record.
-  const stripHtml = (s) => String(s || '')
-    .replace(/<(script|style)[^>]*>[\s\S]*?<\/\1>/gi, ' ')
+  // <script>/<style> blocks go in one pass. The regex this replaces,
+  // /<(script|style)[^>]*>[\s\S]*?<\/\1>/gi, searched the rest of the text again
+  // for every unclosed '<style', so a long run of them took quadratic time.
+  const dropScriptStyle = (s) => {
+    const low = s.toLowerCase();
+    const open = /<(script|style)\b/g;
+    const unclosed = new Set();
+    let out = '', at = 0, m;
+    while ((m = open.exec(low))) {
+      const tag = m[1];
+      if (unclosed.has(tag)) continue;
+      const end = low.indexOf(`</${tag}>`, m.index);
+      if (end < 0) { unclosed.add(tag); continue; }
+      out += s.slice(at, m.index) + ' ';
+      at = open.lastIndex = end + tag.length + 3;
+    }
+    return out + s.slice(at);
+  };
+  const ENTITY = { nbsp: ' ', amp: '&', lt: '<', gt: '>', quot: '"' };
+  const stripHtml = (s) => dropScriptStyle(String(s || ''))
     .replace(/<br\s*\/?>/gi, '\n')
     .replace(/<\/(p|div|h[1-6]|li|blockquote)>/gi, '\n')
     .replace(/<[^>]*>/g, '')
-    .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
+    // A stray '<' or '>' left by nested tags ('<<b>script>') goes too, and
+    // entities decode in one pass so '&amp;lt;' reads '&lt;', not '<' (CodeQL 90, 97).
+    .replace(/[<>]/g, '')
+    .replace(/&(nbsp|amp|lt|gt|quot);/g, (_, e) => ENTITY[e])
     .replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
 
   // Writer used to POST to its own server at /api/kernel/llm over loopback. That
@@ -408,7 +429,8 @@ Return ONLY valid JSON.\n\nSamples:\n${corpus}`
   // ── GENERATE (write / braindump / continue / stylecheck) ─────────────────────
 
   app.post('/api/writer/generate', async (req, res) => {
-    const body = req.body || {};
+    // A JSON array body would make body.length the array's length (CodeQL).
+    const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
     // JSON lets each field arrive as an array or object; every use below is a
     // string one. Refuse instead of letting `${[...]}` join it into a prompt.
     const wrong = ['prompt', 'tone', 'length', 'mode', 'draft'].find(k => body[k] != null && typeof body[k] !== 'string');
