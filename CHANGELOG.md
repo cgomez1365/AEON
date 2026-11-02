@@ -12,10 +12,10 @@ tagged; until then its heading says so.
      is added here before tagging, and the heading's "not tagged yet" is replaced by
      the date. -->
 
-## 3.6.0 — not tagged yet
+## 3.6.0 — 2026-11-01
 
-<!-- From v3.5.1 (72e20be, 2026-10-26) to 17b2f68: 21 commits, then the release commit (whose CI run is the 3.6.0
-     reading) and the commit that dates this heading (the v3.6.0 tag). History is not squashed. -->
+<!-- From v3.5.1 (72e20be, 2026-10-26) to 17b2f68: 21 commits, then the release commit c9561e6 (whose CI run is the
+     3.6.0 reading) and the commit that dates this heading (the v3.6.0 tag). History is not squashed. -->
 
 **The video autopilot is retired.** AEON no longer starts a background job that stitched clips with FFmpeg, asked
 Groq for a title with its own key (outside Settings → Models → Local only) and uploaded the result to YouTube as a
