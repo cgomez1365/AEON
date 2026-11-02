@@ -168,14 +168,23 @@ OUTPUT FORMAT — the document is HTML. Return valid HTML using only these tags:
     }
     return out + s.slice(at);
   };
+  // Tags go in one pass too. CodeQL reads each chained .replace() alone, so a
+  // later '<'/'>' strip did not clear the tag regex before it (alert 200). A
+  // stray '<' or '>' left by nested tags ('<<b>script>') goes at the end.
+  const LINE_TAG = /^<(br\s*\/?|\/(p|div|h[1-6]|li|blockquote))>$/i;
+  const dropTags = (s) => {
+    let out = '', at = 0, lt;
+    while ((lt = s.indexOf('<', at)) >= 0) {
+      const gt = s.indexOf('>', lt);
+      if (gt < 0) break; // nothing closes after here: the rest is text
+      out += s.slice(at, lt) + (LINE_TAG.test(s.slice(lt, gt + 1)) ? '\n' : '');
+      at = gt + 1;
+    }
+    return (out + s.slice(at)).replace(/[<>]/g, '');
+  };
+  // Entities decode in one pass so '&amp;lt;' reads '&lt;', not '<' (CodeQL 97).
   const ENTITY = { nbsp: ' ', amp: '&', lt: '<', gt: '>', quot: '"' };
-  const stripHtml = (s) => dropScriptStyle(String(s || ''))
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/(p|div|h[1-6]|li|blockquote)>/gi, '\n')
-    .replace(/<[^>]*>/g, '')
-    // A stray '<' or '>' left by nested tags ('<<b>script>') goes too, and
-    // entities decode in one pass so '&amp;lt;' reads '&lt;', not '<' (CodeQL 90, 97).
-    .replace(/[<>]/g, '')
+  const stripHtml = (s) => dropTags(dropScriptStyle(String(s || '')))
     .replace(/&(nbsp|amp|lt|gt|quot);/g, (_, e) => ENTITY[e])
     .replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
 

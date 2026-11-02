@@ -180,6 +180,13 @@ describe('critique strips script and style blocks in linear time', () => {
     expect(sent).toContain('a &lt; b < c & d');
   });
 
+  it('keeps line breaks from <br> and closing tags, and drops a stray >', async () => {
+    const { app, calls } = appWith(WHOLE);
+    const r = await call(app, '/api/writer/improve', { text: '<p>One</p><p>Two<br/>Three</p> 1 > 0', action: 'critique' });
+    expect(r.status).toBe(200);
+    expect(sentText(calls)).toContain('One\\nTwo\\nThree\\n 1 0');
+  });
+
   it("a long run of unclosed '<style' (CodeQL polynomial regex) stays fast", async () => {
     const { app, calls } = appWith(WHOLE);
     // 96 KB, under express.json's 100 KB default. The old regex took ~1.1 s on
