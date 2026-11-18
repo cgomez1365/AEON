@@ -15,7 +15,7 @@ const path = require('path');
 let pdfParse = null;
 function loadExtractors() {
   if (pdfParse) return;
-  try { pdfParse = require('pdf-parse'); } catch { /* PDF support unavailable */ }
+  try { pdfParse = require('./pdfText.cjs'); } catch { /* PDF support unavailable */ }
 }
 
 const TEXT_EXT = new Set(['.md', '.txt', '.json', '.csv', '.log', '.yml', '.yaml', '.xml', '.js', '.cjs', '.mjs', '.ts', '.jsx', '.tsx', '.py', '.sh', '.css', '.sql', '.toml', '.ini', '.env', '.markdown', '.rst']);

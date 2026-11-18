@@ -404,7 +404,7 @@ module.exports = function secondBrainFactory(deps) {
       if (cached && cached.mtime === mtime) {
         return res.json({ path: filePath, text: cached.text, pages: cached.pages, cached: true });
       }
-      const pdfParse = require('pdf-parse');
+      const pdfParse = require('../../../kernel/pdfText.cjs');
       const data = await pdfParse(fs.readFileSync(resolved));
       const text = (data.text || '').trim();
       pdfTextCache.set(resolved, { mtime, text, pages: data.numpages });

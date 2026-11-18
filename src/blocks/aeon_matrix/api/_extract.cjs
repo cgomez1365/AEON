@@ -195,7 +195,7 @@ async function extractText(resolved) {
     result = { text, method: 'ocr' };
   } else if (ext === 'pdf') {
     const buf = fs.readFileSync(resolved);
-    const pdfParse = require('pdf-parse');
+    const pdfParse = require('../../../kernel/pdfText.cjs');
     let data = null;
     try { data = await pdfParse(buf); } catch {}
     const layerText = (data?.text || '').trim();
