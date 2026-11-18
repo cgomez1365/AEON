@@ -45,7 +45,7 @@ if (HOME_BOOT.migration.moved.length) console.log(`[HOME] Your data now lives in
 // install directory. See src/kernel/envFile.cjs. Default: <home>/.env.
 const ENV_FILE = envFilePath({ appRoot: ROOT });
 
-require('dotenv').config({ path: ENV_FILE });
+require('dotenv').config({ path: ENV_FILE, quiet: true });
 
 const isVercel = require('../src/kernel/runtime.cjs').isCloud();
 

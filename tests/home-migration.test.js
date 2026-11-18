@@ -77,7 +77,7 @@ function unlockFromHome(homePath) {
     const { envFilePath } = require(${JSON.stringify(path.join(REPO, 'src', 'kernel', 'envFile.cjs'))});
     const envFile = envFilePath({ appRoot: ${JSON.stringify(REPO)} });
     if (envFile !== path.join(process.env.AEON_HOME, '.env')) throw new Error('env authority did not resolve to the home: ' + envFile);
-    require(${JSON.stringify(path.join(REPO, 'node_modules', 'dotenv'))}).config({ path: envFile });
+    require(${JSON.stringify(path.join(REPO, 'node_modules', 'dotenv'))}).config({ path: envFile, quiet: true });
     if (!process.env.AEON_VAULT_MASTER_KEY) throw new Error('master key not loaded from ' + envFile);
     const v = require(${JSON.stringify(path.join(REPO, 'src', 'kernel', 'vault.cjs'))});
     const st = v.getRecoveryStatus();

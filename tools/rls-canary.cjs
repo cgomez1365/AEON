@@ -22,7 +22,7 @@
  * Run in CI/cron: same; non-zero exit fails the job (EXPOSED, or UNPROVEN with --strict).
  * Ref: docs/AEON-SECURITY-HANDOFF.md §5e (monitoring).
  */
-require('dotenv').config();
+require('dotenv').config({ quiet: true });
 
 const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
 const anon = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
