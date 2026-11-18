@@ -18,7 +18,7 @@
  */
 const fs = require('fs');
 const path = require('path');
-require('dotenv').config();
+require('dotenv').config({ quiet: true });
 
 const MIGRATIONS_DIR = path.join(__dirname, '..', 'db', 'migrations');
 const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
